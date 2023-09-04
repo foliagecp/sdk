@@ -1,0 +1,171 @@
+# JSONPath Graph Query Language - JPGQL
+## Functions
+  - [functions.graph.ll.api.query.jpgql.ctra](#Usage-of-JPGQL_CTRA-call-tree-result-aggregation)
+  - [functions.graph.ll.api.query.jpgql.dcra](#Usage-of-JPGQL_DCRA-direct-cache-result-aggregation)
+## Original jsonpath syntax:
+https://support.smartbear.com/alertsite/docs/monitors/api/endpoint/jsonpath.html
+
+## Syntax
+```<level_access><link_name>[filter][<level_access><link_name>[filter][<level_access><link_name>[filter]]...]```
+
+`level_access` – one of 2 literals:  
+`.` – next level  
+`..` – any level (first occurences on all roots only)
+
+`link_name` – text value  
+Valid characters: `a-zA-Z_-`
+
+`filter` - value in square bracket   
+Within the square brackets filtering expressions resides
+
+### Restrictions:
+1. Do not use `$` and `@` within a filter
+2. A filter may contain only predifined functions connected via `&&` and `||`
+3. Link types valid characters: `a-zA-Z_-`
+
+## Predefined functions
+### tags(tag1:string, tag2:string, ...)
+Check that a link contains all of the defined tags
+
+## Examples
+### Finds all objects from the target one via its output routes that satisfy:
+
+Any links of depth=1:  
+`.*`
+
+Any links of depth=1 that contain tag `tag1`:  
+`.*[tags('tag1')]`
+
+Link typed as `type1` at depth=1 that contain both tags `tag1` and `tag2`:  
+`.a[tags('tag1', 'tag2')]`
+
+Links at any depth that contain both tags `tag1` and `tag2`:  
+`..*[tags("tag1", "tag2")]`
+
+Routes which goes through link typed as `type1` at depth=1 and through any link with tags `tag1` and `tag2` any deeper:  
+`.type1..*[tags('tag1', "tag2")]`
+
+Routes which goes through links typed as `type1` at depth=4:  
+`.*.*.*.a`
+
+> When using `nats pub` double quotes aroung a tag must be screened right due to the nested quotes. Either use single quotes `'tag'` or triple backslash screening `\\\"tag\\\"`.
+> 
+> For e.g.:   
+> ```sh
+> nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query.jpgql.dcra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\".type2[tags('t2')]\"}}"
+>```
+
+
+# Usage of JPGQL_CTRA (call tree result aggregation)
+1. Subscribe and listen for result:
+```nats sub -s nats://nats:foliage@nats:4222 functions.graph.query.QUERYID```
+2. Call `functions.graph.ll.api.query.jpgql.ctra.<object_id>` function type on object's ID for which descendant to be created:
+
+`payload` arguments:
+```json
+	query_id: string - optional // ID for this query.
+	jpgql_query: string - required // Json path query
+	call: json - optional // A call to be done on found targets
+		typename: string - required // Typename to be called
+		payload: json - required // Data for typename to be called with
+```
+
+Small test graph shown on a picture below is created automatically on start:
+![Alt text](./pics/TestGraph.jpg)
+
+## JPGQL_CTRA query examples
+1. From the `root` at any depth find all objects preceded by link with the type `type5`  
+
+```sh
+nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\"..type5\"}}"
+```
+```json
+{"result":{"g":true},"status":"ok"}
+```
+
+2. From the `root` at any depth find all objects preceded by link which contains both tags `t1` and `t3` 
+
+```sh
+nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\"..*[tags('t1','t3')]\"}}"
+```
+```json
+{"result":{"b":true,"e":true,"g":true},"status":"ok"}
+```
+
+3. Find all `root`'s descendants
+   
+```sh
+nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\".*\"}}"
+```
+```json
+{"result":{"a":true,"b":true,"c":true},"status":"ok"}
+```
+
+4. Find all `root`'s descendants through links of type `type1` and from them get as the result all descendants through links of type `type3`
+
+```sh
+nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\".type1.type3\"}}"
+```
+```json
+{"result":{"d":true,"e":true},"status":"ok"}
+```
+
+5. From the `root` get all objects at depth=5, where `root`'s depth=0
+ 
+```sh
+nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\".*.*.*.*.*\"}}"
+```
+```json
+{"result":{"b":true,"d":true,"f":true,"h":true},"status":"ok"}
+```
+
+6. Find all `root`'s descendants through links of type `type1` then get all their descendants and from them as the result get all objects preceded by link which contains either tag `t1` or `t4`
+
+```sh
+nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\".type1.*.*[tags('t1') || tags('t4')]\"}}"
+```
+```json
+{"result":{"b":true,"f":true},"status":"ok"}
+```
+
+## JPGQL_CTRA query examples with call on targets
+Make `functions.graph.ll.api.query.jpgql.ctra` to call `functions.graph.ll.api.object.debug.print` on each found object. 
+
+Example:  
+```sh
+nats pub --count=2 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\": \"QUERYID\", \"jpgql_query\":\"..type5\", \"call\":{\"typename\": \"functions.graph.ll.api.object.debug.print\", \"payload\":{}}}}"
+```
+```
+docker logs foliage-nats-test-statefun_sf_1 --tail 100 -f
+...
+************************* Object's body (id=g):
+{}
+************************* In links:
+g.in.oid_ltp-nil.f.type5
+************************* Out links:
+g.out.ltp_oid-bdy.type2.d
+{"tags":["t5"]}
+g.out.ltp_oid-bdy.type2.h
+{"tags":[]}
+...
+```
+
+# Usage of JPGQL_DCRA (direct cache result aggregation)
+1. Subscribe and listen for result:
+```nats sub -s nats://nats:foliage@nats:4222 functions.graph.query.QUERYID```
+2. Call `functions.graph.ll.api.query.jpgql.dcra.<object_id>`:
+
+`payload` arguments:
+```json
+	query_id: string - optional // ID for this query.
+	jpgql_query: string - required // Json path query
+	call: json - optional // A call to be done on found targets
+		typename: string - required // Typename to be called
+		payload: json - required // Data for typename to be called with
+```
+
+## JPGQL_DCRA query examples
+Same as for `JPGQL_CTRA query examples`
+
+## JPGQL_DCRA query examples with call on targets
+Same as for `JPGQL_CTRA query examples with call on targets`
