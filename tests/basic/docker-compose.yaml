@@ -1,0 +1,26 @@
+version: "2.1"
+
+services:
+  nats:
+    image: nats:latest
+    command: -js -sd /data/jetstream --user nats --pass foliage
+    ports:
+      - "4222:4222"
+      - "6222:6222"
+      - "8222:8222"
+
+  io:
+    image: natsio/nats-box:latest
+    entrypoint:
+      - /bin/sh
+    tty: true
+    depends_on:
+      - nats
+
+  sf:
+    image: foliage-nats-test-statefun:latest
+    depends_on:
+      - nats
+    build:
+      context: .
+      dockerfile: Dockerfile
