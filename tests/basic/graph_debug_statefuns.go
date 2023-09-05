@@ -1,6 +1,6 @@
 // Copyright 2023 NJWS Inc.
 
-package main
+package basic
 
 import (
 	"fmt"

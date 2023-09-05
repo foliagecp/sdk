@@ -1,3 +1,5 @@
+- [Documentation](https://pkg.go.dev/github.com/foliagecp/sdk)
+
 # Foliage
 Foliage is a high-performance application platform for organizing coordinated work and interaction of a complex heterogeneous software and information systems. The platform's technology is based on the theory of heterogeneous functional graphs.
 

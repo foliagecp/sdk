@@ -2,10 +2,12 @@ module github.com/foliagecp/sdk
 
 go 1.19
 
+require json_easy v1.0.0
+
 require (
-	json_easy v1.0.0
 	github.com/PaesslerAG/gval v1.2.2 // indirect
 	github.com/PaesslerAG/jsonpath v0.1.1 // indirect
+	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/nats-io/nats.go v1.25.0 // indirect
 	github.com/nats-io/nkeys v0.4.4 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect

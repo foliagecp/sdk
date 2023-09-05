@@ -1,6 +1,6 @@
 // Copyright 2023 NJWS Inc.
 
-package main
+package basic
 
 import (
 	"fmt"
@@ -10,7 +10,7 @@ import (
 	"github.com/foliagecp/sdk/statefun"
 )
 
-func kvMuticesSimpleTest(runtime *statefun.Runtime, testDurationSec int, workersCount int, workTimeMs int, afterWorkTimeMs int) {
+func KVMuticesSimpleTest(runtime *statefun.Runtime, testDurationSec int, workersCount int, workTimeMs int, afterWorkTimeMs int) {
 	fmt.Println(">>> Test started: kv mutices")
 
 	wg := new(sync.WaitGroup)

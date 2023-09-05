@@ -1,10 +1,10 @@
 // Copyright 2023 NJWS Inc.
 
-package main
+package basic
 
 import "github.com/foliagecp/sdk/statefun/cache"
 
-func cacheTest(cacheStore *cache.CacheStore) {
+func CacheTest(cacheStore *cache.CacheStore) {
 	cacheStore.SetValue("a.b.c.d0", []byte{1, 2, 3}, true, -1, "")
 	cacheStore.SetValue("a.b.c.d1", []byte{1, 2, 3, 4}, true, -1, "")
 	cacheStore.SetValue("k1.k2", []byte{1, 2, 3, 4, 5}, true, -1, "")
