@@ -1,6 +1,6 @@
 # Customize existing
 ## Create your first foliage stateful function
-### 1. In main.go `registerFunctionTypes` function add the following code to register a new typename function:
+### 1. In main.go `RegisterFunctionTypes` function add the following code to register a new typename function:
 ```go
 // Create new typename function "functions.app1.my.typename" each stateful instance of which uses go function "myTypeFunction"
 myft := NewFunctionType(js, "functions.app1.my.typename", myTypeFunction, true)

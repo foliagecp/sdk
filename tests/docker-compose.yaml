@@ -17,10 +17,11 @@ services:
     depends_on:
       - nats
 
-  sf:
-    image: foliage-nats-test-statefun:latest
+  runtime:
+    image: foliage-sdk-tests:latest
+    command: /usr/bin/tests "${TEST_NAME:-basic}"
     depends_on:
       - nats
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: tests/Dockerfile
