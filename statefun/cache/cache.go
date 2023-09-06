@@ -341,6 +341,7 @@ func NewCacheStore(cacheConfig *CacheConfig, ctx context.Context, kv nats.KeyVal
 					fmt.Printf("storeUpdatesHandler kv.Watch error %s\n", err)
 				}
 			}
+			time.Sleep(100 * time.Millisecond) // Prevents too much processor time consumption
 		}
 	}
 	kvLazyWriter := func(cs *CacheStore) {
@@ -454,7 +455,7 @@ func NewCacheStore(cacheConfig *CacheConfig, ctx context.Context, kv nats.KeyVal
 
 				cs.valuesInCache = len(lruTimes)
 
-				time.Sleep(100 * time.Millisecond) // Prevents too many locks
+				time.Sleep(100 * time.Millisecond) // Prevents too many locks and prevents too much processor time consumption
 			}
 		}
 	}
