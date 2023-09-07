@@ -1,5 +1,7 @@
 // Copyright 2023 NJWS Inc.
 
+// Foliage graph DBMS debug package.
+// Provides debug stateful functions for the graph DBMS
 package debug
 
 import (
