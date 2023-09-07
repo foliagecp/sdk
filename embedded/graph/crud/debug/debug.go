@@ -1,6 +1,6 @@
 // Copyright 2023 NJWS Inc.
 
-package basic
+package debug
 
 import (
 	"fmt"
@@ -9,6 +9,9 @@ import (
 	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
+/*
+Prints to caonsole the content of an object the function being called on along with all its input and output links.
+*/
 func LLAPIObjectDebugPrint(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	self := contextProcessor.Self
 
@@ -29,6 +32,6 @@ func LLAPIObjectDebugPrint(executor sfplugins.StatefunExecutor, contextProcessor
 	fmt.Println()
 }
 
-func RegisterAllGraphDebugFunctionTypes(runtime *statefun.Runtime) {
+func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.debug.print", LLAPIObjectDebugPrint, statefun.NewFunctionTypeConfig())
 }
