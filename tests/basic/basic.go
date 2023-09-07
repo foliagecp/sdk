@@ -8,6 +8,7 @@ import (
 	"os"
 
 	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
+	graphCRUDDebug "github.com/foliagecp/sdk/embedded/graph/crud/debug"
 	"github.com/foliagecp/sdk/embedded/graph/jpgql"
 	statefun "github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/cache"
@@ -17,16 +18,26 @@ import (
 )
 
 var (
-	NatsURL                              string = system.GetEnvMustProceed("NATS_URL", "nats://nats:foliage@nats:4222")
-	MasterFunctionContextIncrement       bool   = system.GetEnvMustProceed("MASTER_FUNC_CONTEXT_INREMENT", true)
-	MasterFunctionContextIncrementOption int    = system.GetEnvMustProceed("MASTER_FUNC_CONTEXT_INREMENT_OPTION", 1)
-	MasterFunctionObjectContextProcess   bool   = system.GetEnvMustProceed("MASTER_FUNC_OBJECT_CONTEXT_PROCESS", false)
-	MasterFunctionJSPlugin               bool   = system.GetEnvMustProceed("MASTER_FUNC_JS_PLUGIN", false)
-	MasterFunctionLogs                   bool   = system.GetEnvMustProceed("MASTER_FUNC_LOGS", true)
-	CreateSimpleGraphTest                bool   = system.GetEnvMustProceed("CREATE_SIMPLE_GRAPH_TEST", true)
-	KVMuticesTest                        bool   = system.GetEnvMustProceed("KV_MUTICES_TEST", true)
-	KVMuticesTestDurationSec             int    = system.GetEnvMustProceed("KV_MUTICES_TEST_DURATION_SEC", 10)
-	KVMuticesTestWorkers                 int    = system.GetEnvMustProceed("KV_MUTICES_TEST_WORKERS", 4)
+	// NATS server url
+	NatsURL string = system.GetEnvMustProceed("NATS_URL", "nats://nats:foliage@nats:4222")
+	// Does the master stateful function do the increment operation on each call in its context
+	MasterFunctionContextIncrement bool = system.GetEnvMustProceed("MASTER_FUNC_CONTEXT_INREMENT", true)
+	// Default increment value
+	MasterFunctionContextIncrementOption int = system.GetEnvMustProceed("MASTER_FUNC_CONTEXT_INREMENT_OPTION", 1)
+	// Make master function read and write its object context in idle mode
+	MasterFunctionObjectContextProcess bool = system.GetEnvMustProceed("MASTER_FUNC_OBJECT_CONTEXT_PROCESS", false)
+	// Enable js plugin for the master function
+	MasterFunctionJSPlugin bool = system.GetEnvMustProceed("MASTER_FUNC_JS_PLUGIN", false)
+	// Enable logging of the master function
+	MasterFunctionLogs bool = system.GetEnvMustProceed("MASTER_FUNC_LOGS", true)
+	// Create a simple graph on runtime start
+	CreateSimpleGraphTest bool = system.GetEnvMustProceed("CREATE_SIMPLE_GRAPH_TEST", true)
+	// Test the Foliage global key/value mutices
+	KVMuticesTest bool = system.GetEnvMustProceed("KV_MUTICES_TEST", true)
+	// key/value mutices test duration
+	KVMuticesTestDurationSec int = system.GetEnvMustProceed("KV_MUTICES_TEST_DURATION_SEC", 10)
+	// key/value mutices workers to apply in the test
+	KVMuticesTestWorkers int = system.GetEnvMustProceed("KV_MUTICES_TEST_WORKERS", 4)
 )
 
 func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
@@ -86,13 +97,13 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlu
 }
 
 func RegisterFunctionTypes(runtime *statefun.Runtime) {
-	// Create new typename function "functions.app1.json.master" each stateful instance of which uses go function "MasterFunction"
+	// Create new typename function "functions.tests.basic.master" each stateful instance of which uses go function "MasterFunction"
 	ftOptions := json_easy.NewJSONObjectWithKeyValue("increment", json_easy.NewJSON(MasterFunctionContextIncrementOption))
-	ft := statefun.NewFunctionType(runtime, "functions.app1.json.master", MasterFunction, statefun.NewFunctionTypeConfig().SetOptions(&ftOptions))
+	ft := statefun.NewFunctionType(runtime, "functions.tests.basic.master", MasterFunction, statefun.NewFunctionTypeConfig().SetOptions(&ftOptions))
 	// Add TypenameExecutorPlugin which will provide StatefunExecutor for each stateful instance for this typename function (skip this if TypenameExecutorPlugin is not needed)
 
 	if MasterFunctionJSPlugin {
-		jsFileName := "statefun_context_increment.js"
+		jsFileName := "master_function_plugin.js"
 		if content, err := os.ReadFile(jsFileName); err == nil {
 			// Assign JavaScript StatefunExecutor for TypenameExecutorPlugin
 			ft.SetExecutor(jsFileName, string(content), sfPluginJS.StatefunExecutorPluginJSContructor)
@@ -102,7 +113,7 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	}
 
 	graphCRUD.RegisterAllFunctionTypes(runtime)
-	RegisterAllGraphDebugFunctionTypes(runtime)
+	graphCRUDDebug.RegisterAllFunctionTypes(runtime)
 	jpgql.RegisterAllFunctionTypes(runtime, 30)
 }
 
