@@ -7,3 +7,6 @@ Set of Foliage stateful functions in a single or distributed runtime organized i
 
 ## Foliage's adapter
 A Foliage application designed to abstract interaction with a software system allowing other Foliage applications to work with it as a part of platform's unified functional graph.
+
+## Signal
+Foliage signal is a stateful function's typename. To send a signal `S` to an object `O` means to call a stateful function with the typename `S` on object `O`.

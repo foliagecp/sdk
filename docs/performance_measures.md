@@ -10,7 +10,7 @@ The measures below were not taken from the fastest server. Practice shows that t
 > JavaScript is disabled
 
 ```sh
-nats pub --count=100000 -s nats://nats:foliage@nats:4222 functions.app1.json.master.abc "{\"payload\":{\"foo\":\"bar\"}}"
+nats pub --count=100000 -s nats://nats:foliage@nats:4222 functions.tests.basic.master.abc "{\"payload\":{\"foo\":\"bar\"}}"
 ```
 ```
 Total duration: 17338ns
