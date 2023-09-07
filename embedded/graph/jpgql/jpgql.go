@@ -16,28 +16,35 @@ import (
 )
 
 /*
-"payload" arguments:
+Uses JPGQL call-tree result aggregation algorithm to find objects
 
-	query_id: string - optional // ID for this query.
-	jpgql_query: string - required // Json path query
-	call: json - optional // A call to be done on found targets
-		typename: string - required // Typename to be called
-		payload: json - required // Data for typename to be called with
+Request:
 
-To descendants: // ID is composite: <object_id>===<process_id> - for async execution
+	payload: json - required
+		// Initial request from caller
+		query_id: string - optional // ID for this query.
+		jpgql_query: string - required // Json path query
+		call: json - optional // A call to be done on found targets
+			typename: string - required // Typename to be called
+			payload: json - required // Data for typename to be called with
 
-	query_id: string - required // ID for this query.
-	caller_aggregation_id: string - required // Id which descendants will send to caller when sending its results
-	jpgql_query: string - required // Json path query
-	call: json - optional // A call to be done on found targets
-		typename: string - required // Typename to be called
-		payload: json - required // Data for typename to be called with
+		// Self-requests to descendants: (ID is composite: <object_id>===<process_id> - for async execution)
+		query_id: string - required // ID for this query.
+		caller_aggregation_id: string - required // Id which descendants will send to caller when sending its results
+		jpgql_query: string - required // Json path query
+		call: json - optional // A call to be done on found targets
+			typename: string - required // Typename to be called
+			payload: json - required // Data for typename to be called with
 
-Reply to caller:
+	options: json - optional
+		eval_timeout_sec: int - optional // Execution timeout
 
-	query_id: string - required // ID for this query.
-	aggregation_id: string - required // Id which to use to aggregate result
-	result: []string - required // Found objects
+Reply:
+
+	payload: json
+		query_id: string // ID for this query.
+		aggregation_id: string // Id which to use to aggregate result
+		result: []string // Found objects
 */
 func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	jpgqlEvaluationTimeoutSec := 30
@@ -378,21 +385,34 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 }
 
 /*
-"payload" arguments:
+Uses JPGQL direct cache result aggregation algorithm to find objects
 
-	query_id: string - optional // ID for this query.
-	jpgql_query: string - required // Json path query
-	call: json - optional // A call to be done on found targets
-		typename: string - required // Typename to be called
-		payload: json - required // Data for typename to be called with
+Request:
 
-To descendants: // ID is composite: <object_id>===<process_id> - for async execution
+	payload: json - required
+		// Initial request from caller:
+		query_id: string - optional // ID for this query.
+		jpgql_query: string - required // Json path query
+		call: json - optional // A call to be done on found targets
+			typename: string - required // Typename to be called
+			payload: json - required // Data for typename to be called with
 
-	aggregation_id: string - required // Original ID for the search query.
-	jpgql_query: string - required // Json path query
-	call: json - optional // A call to be done on found targets
-		typename: string - required // Typename to be called
-		payload: json - required // Data for typename to be called with
+		// Self-requests to descendants: (ID is composite: <object_id>===<process_id> - for async execution)
+		aggregation_id: string - required // Original ID for the search query.
+		jpgql_query: string - required // Json path query
+		call: json - optional // A call to be done on found targets
+			typename: string - required // Typename to be called
+			payload: json - required // Data for typename to be called with
+
+	options: json - optional
+		eval_timeout_sec: int - optional // Execution timeout
+
+Reply:
+
+	payload: json
+		query_id: string // ID for this query.
+		aggregation_id: string // Id which to use to aggregate result
+		result: []string // Found objects
 */
 func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	modifiedTypename := "jpgql_dcra"
