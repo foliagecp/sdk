@@ -1,5 +1,7 @@
 
 
+// Foliage basic test package.
+// Provides the basic example of usage of the SDK.
 package basic
 
 import (
@@ -8,7 +10,7 @@ import (
 	"os"
 
 	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
-	graphCRUDDebug "github.com/foliagecp/sdk/embedded/graph/crud/debug"
+	graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
 	"github.com/foliagecp/sdk/embedded/graph/jpgql"
 	statefun "github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/cache"
@@ -113,7 +115,7 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	}
 
 	graphCRUD.RegisterAllFunctionTypes(runtime)
-	graphCRUDDebug.RegisterAllFunctionTypes(runtime)
+	graphDebug.RegisterAllFunctionTypes(runtime)
 	jpgql.RegisterAllFunctionTypes(runtime, 30)
 }
 

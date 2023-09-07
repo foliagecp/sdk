@@ -1,5 +1,7 @@
 
 
+// Foliage graph DBMS crud package.
+// Provides stateful functions of low-level crud operations for the graph DBMS
 package crud
 
 import (

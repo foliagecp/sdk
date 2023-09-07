@@ -1,5 +1,7 @@
 
 
+// Foliage statefun plugins package.
+// Provides unified interfaces for stateful functions plugins
 package plugins
 
 import (

@@ -1,5 +1,7 @@
 
 
+// Foliage primary statefun package.
+// Provides all everything that is needed for Foliage stateful functions and Foliage applications
 package statefun
 
 import (

@@ -1,5 +1,7 @@
 
 
+// Foliage primary statefun system package.
+// Provides shared system functions for statefun packages
 package system
 
 import (
