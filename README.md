@@ -79,6 +79,10 @@ For no-code/low-code statefun logic definition the following plugins are availab
 
 ## Develop using the SDK
 
+```sh
+git get github.com/foliagecp/sdk
+```
+
 1. [Find out how to work with the graph](./docs/graph_crud.md)
 2. [Foliage's Json Path Graph Query Language](./docs/jpgql.md)
 3. [Write your own application](./docs/how_to_write_an_application.md)
