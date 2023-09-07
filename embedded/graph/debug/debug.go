@@ -1,5 +1,7 @@
 
 
+// Foliage graph DBMS debug package.
+// Provides debug stateful functions for the graph DBMS
 package debug
 
 import (
