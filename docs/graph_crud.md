@@ -19,7 +19,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.objec
 - [functions.graph.ll.api.link.delete](#functionsgraphllapilinkdeleteobject_id)
 
 ### functions.graph.ll.api.object.create.<object_id>
-[Description](http://127.0.0.1:6060/pkg/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPIObjectCreate)
+[Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPIObjectCreate)
 
 Example:  
 ```sh
@@ -27,7 +27,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.objec
 ```
 
 ### functions.graph.ll.api.object.update.<object_id>
-[Description](http://127.0.0.1:6060/pkg/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPIObjectUpdate)
+[Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPIObjectUpdate)
 
 Example:  
 ```sh
@@ -35,7 +35,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.objec
 ```
 
 ### functions.graph.ll.api.object.delete.<object_id>
-[Description](http://127.0.0.1:6060/pkg/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPIObjectDelete)
+[Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPIObjectDelete)
 
 Example:  
 ```json
@@ -43,7 +43,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.objec
 ```
 
 ### functions.graph.ll.api.link.create.<object_id>
-[Description](http://127.0.0.1:6060/pkg/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPILinkCreate)
+[Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPILinkCreate)
 
 Example:  
 ```sh
@@ -51,7 +51,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.link.
 ```
 
 ### functions.graph.ll.api.link.update.<object_id>
-[Description](http://127.0.0.1:6060/pkg/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPILinkUpdate)
+[Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPILinkUpdate)
 
 Example:  
 ```sh
@@ -59,7 +59,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.link.
 ```
 
 ### functions.graph.ll.api.link.delete.<object_id>
-[Description](http://127.0.0.1:6060/pkg/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPILinkDelete)
+[Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPILinkDelete)
 
 Example:  
 ```sh
