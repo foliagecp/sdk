@@ -1,5 +1,7 @@
 // Copyright 2023 NJWS Inc.
 
+// Foliage statefun cache package.
+// Provides cache system that lives between stateful functions and NATS key/value
 package cache
 
 import (

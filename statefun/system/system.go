@@ -1,5 +1,7 @@
 // Copyright 2023 NJWS Inc.
 
+// Foliage primary statefun system package.
+// Provides shared system functions for statefun packages
 package system
 
 import (

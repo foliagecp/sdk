@@ -1,5 +1,7 @@
 // Copyright 2023 NJWS Inc.
 
+// Foliage statefun plugins package.
+// Provides unified interfaces for stateful functions plugins
 package plugins
 
 import (

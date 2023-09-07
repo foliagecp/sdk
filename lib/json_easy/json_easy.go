@@ -1,5 +1,7 @@
 // Copyright 2023 NJWS Inc.
 
+// JSON package.
+// Provides everything that is needed for ease and simple operating with JSON data
 package json_easy
 
 import (
