@@ -17,11 +17,19 @@ import (
 Creates an object in the graph with an id the function being called with. Preliminarily deletes an existing one with the same id, if present.
 If caller is not empty returns result to the caller else returns result to the nats topic.
 
-"payload" arguments:
+Request:
 
-	query_id: string - optional // ID for this query. Transaction id for operations with the cache. Do not use the same for concurrent graph modify operations.
-	body: json - required // Body for object to be created with.
-		<key>: <type> - optional // Any additional key and value to be stored in objects's body.
+	payload: json - required
+		// Initial request from caller:
+		query_id: string - optional // ID for this query. Transaction id for operations with the cache. Do not use the same for concurrent graph modify operations.
+		body: json - required // Body for object to be created with.
+			<key>: <type> - optional // Any additional key and value to be stored in objects's body.
+
+Reply:
+
+	payload: json
+		status: string
+		result: any
 */
 func LLAPIObjectCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	payload := contextProcessor.Payload
@@ -58,11 +66,19 @@ func LLAPIObjectCreate(executor sfplugins.StatefunExecutor, contextProcessor *sf
 Updates an object in the graph with an id the function being called with. Merges the old object's body with the new one. Creates a new one if the object does not exist.
 If caller is not empty returns result to the caller else returns result to the nats topic.
 
-"payload" arguments:
+Request:
 
-	query_id: string - optional // ID for this query. Transaction id for operations with the cache. Do not use the same for concurrent graph modify operations.
-	body: json - required // Body for object to be created with.
-		<key>: <type> - optional // Any additional key and value to be stored in objects's body.
+	payload: json - required
+		// Initial request from caller:
+		query_id: string - optional // ID for this query. Transaction id for operations with the cache. Do not use the same for concurrent graph modify operations.
+		body: json - required // Body for object to be created with.
+			<key>: <type> - optional // Any additional key and value to be stored in objects's body.
+
+Reply:
+
+	payload: json
+		status: string
+		result: any
 */
 func LLAPIObjectUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	payload := contextProcessor.Payload
@@ -96,9 +112,17 @@ func LLAPIObjectUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sf
 Deletes an object with an id the function being called with from the graph and deletes all links related to it.
 If caller is not empty returns result to the caller else returns result to the nats topic.
 
-"payload" arguments:
+Request:
 
-	query_id: string - optional // ID for this query. Transaction id for operations with the cache. Do not use the same for concurrent graph modify operations.
+	payload: json - required
+		// Initial request from caller:
+		query_id: string - optional // ID for this query. Transaction id for operations with the cache. Do not use the same for concurrent graph modify operations.
+
+Reply:
+
+	payload: json
+		status: string
+		result: any
 */
 func LLAPIObjectDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	errorString := ""
@@ -151,24 +175,26 @@ Creates a link of type="link_type" from an object with id the funcion being call
 Preliminarily deletes an existing link with the same type leading to the same descendant if present.
 If caller is not empty returns result to the caller else returns result to the nats topic.
 
-"payload" arguments:
+Request:
 
-	query_id: string - optional // ID for this query. Transaction id for operations with the cache. Do not use the same for concurrent graph modify operations.
-	descendant_uuid: string - optional // ID for descendant object. If not defined random UUID will be generated. If a descandant with the specified uuid does not exist - will be created with empty body.
-	link_type: string - optional // Type of link leading to descendant. If not defined random UUID will be used.
-	link_body: json - optional // Body for link leading to descendant.
-		tags: []string - optional // Defines link tags.
-		<key>: <type> - optional // Any additional key and value to be stored in link's body.
+	payload: json - required
+		// Initial request from caller:
+		query_id: string - optional // ID for this query. Transaction id for operations with the cache. Do not use the same for concurrent graph modify operations.
+		descendant_uuid: string - optional // ID for descendant object. If not defined random UUID will be generated. If a descandant with the specified uuid does not exist - will be created with empty body.
+		link_type: string - optional // Type of link leading to descendant. If not defined random UUID will be used.
+		link_body: json - optional // Body for link leading to descendant.
+			tags: []string - optional // Defines link tags.
+			<key>: <type> - optional // Any additional key and value to be stored in link's body.
 
-To descendant (GolangCallSync): // ID can be composite: <object_id>===create_in_link - for non-blocking execution on the same object
+		// Self-requests to descendants (GolangCallSync): // ID can be composite: <object_id>===create_in_link - for non-blocking execution on the same object
+			query_id: string - required // ID for this query.
+			in_link_type: string - required // Type of input link to create
 
-	query_id: string - required // ID for this query.
-	in_link_type: string - required // Type of input link to create
+Reply:
 
-From descendant to caller (GolangCallSync):
-
-	status: string - optional
-	result: any - optional
+	payload: json
+		status: string
+		result: any
 */
 func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	payload := contextProcessor.Payload
@@ -260,14 +286,22 @@ Updates a link of type="link_type" from an object with id the funcion being call
 Merges the old link's body with the new one. Creates a new one if the link does not exist.
 If caller is not empty returns result to the caller else returns result to the nats topic.
 
-"payload" arguments:
+Request:
 
-	query_id: string - optional // ID for this query. Transaction id for operations with the cache. Do not use the same for concurrent graph modify operations.
-	descendant_uuid: string - required // ID for descendant object. If a descandant with the specified uuid does not exist - will be created with empty body.
-	link_type: string - required // Type of link leading to descendant.
-	link_body: json - required // Body for link leading to descendant.
-		tags: []string - optional // Defines link tags.
-		<key>: <type> - optional // Any additional key and value to be stored in link's body.
+	payload: json - required
+		// Initial request from caller:
+		query_id: string - optional // ID for this query. Transaction id for operations with the cache. Do not use the same for concurrent graph modify operations.
+		descendant_uuid: string - required // ID for descendant object. If a descandant with the specified uuid does not exist - will be created with empty body.
+		link_type: string - required // Type of link leading to descendant.
+		link_body: json - required // Body for link leading to descendant.
+			tags: []string - optional // Defines link tags.
+			<key>: <type> - optional // Any additional key and value to be stored in link's body.
+
+Reply:
+
+	payload: json
+		status: string
+		result: any
 */
 func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	payload := contextProcessor.Payload
@@ -346,21 +380,23 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 Delete a link of type="link_type" from an object with id the funcion being called with to an object with id="descendant_uuid".
 If caller is not empty returns result to the caller else returns result to the nats topic.
 
-"payload" arguments:
+Request:
 
-	query_id: string - optional // ID for this query. Transaction id for operations with the cache. Do not use the same for concurrent graph modify operations.
-	descendant_uuid: string - required // ID for descendant object.
-	link_type: string - required // Type of link leading to descendant.
+	payload: json - required
+		// Initial request from caller:
+		query_id: string - optional // ID for this query. Transaction id for operations with the cache. Do not use the same for concurrent graph modify operations.
+		descendant_uuid: string - required // ID for descendant object.
+		link_type: string - required // Type of link leading to descendant.
 
-To descendant (GolangCallSync): // ID can be composite: <object_id>===delete_in_link - for non-blocking execution on the same object
+		// Self-requests to descendants (GolangCallSync): // ID can be composite: <object_id>===delete_in_link - for non-blocking execution on the same object
+		query_id: string - required // ID for this query.
+		in_link_type: string - required // Type of input link to delete
 
-	query_id: string - required // ID for this query.
-	in_link_type: string - required // Type of input link to delete
+Reply:
 
-From descendant to caller (GolangCallSync):
-
-	status: string - required
-	result: any - required
+	payload: json
+		status: string
+		result: any
 */
 func LLAPILinkDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	payload := contextProcessor.Payload
