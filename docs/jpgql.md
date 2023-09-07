@@ -55,23 +55,15 @@ Routes which goes through links typed as `type1` at depth=4:
 > nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query.jpgql.dcra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\".type2[tags('t2')]\"}}"
 >```
 
+# Small test graph
+Small test graph shown on a picture below is created automatically on start in the [basic](./tests/basic.md) test sample:
+![Alt text](./pics/TestGraph.jpg)
 
 # Usage of JPGQL_CTRA (call tree result aggregation)
+[Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/jpgql/#LLAPIQueryJPGQLCallTreeResultAggregation)
 1. Subscribe and listen for result:
 ```nats sub -s nats://nats:foliage@nats:4222 functions.graph.query.QUERYID```
-2. Call `functions.graph.ll.api.query.jpgql.ctra.<object_id>` function type on object's ID for which descendant to be created:
-
-`payload` arguments:
-```json
-	query_id: string - optional // ID for this query.
-	jpgql_query: string - required // Json path query
-	call: json - optional // A call to be done on found targets
-		typename: string - required // Typename to be called
-		payload: json - required // Data for typename to be called with
-```
-
-Small test graph shown on a picture below is created automatically on start:
-![Alt text](./pics/TestGraph.jpg)
+1. Call `functions.graph.ll.api.query.jpgql.ctra.<object_id>`
 
 ## JPGQL_CTRA query examples
 1. From the `root` at any depth find all objects preceded by link with the type `type5`  
@@ -151,18 +143,11 @@ g.out.ltp_oid-bdy.type2.h
 ```
 
 # Usage of JPGQL_DCRA (direct cache result aggregation)
+[Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/jpgql/#LLAPIQueryJPGQLDirectCacheResultAggregation)
+
 1. Subscribe and listen for result:
 ```nats sub -s nats://nats:foliage@nats:4222 functions.graph.query.QUERYID```
-2. Call `functions.graph.ll.api.query.jpgql.dcra.<object_id>`:
-
-`payload` arguments:
-```json
-	query_id: string - optional // ID for this query.
-	jpgql_query: string - required // Json path query
-	call: json - optional // A call to be done on found targets
-		typename: string - required // Typename to be called
-		payload: json - required // Data for typename to be called with
-```
+1. Call `functions.graph.ll.api.query.jpgql.dcra.<object_id>`:
 
 ## JPGQL_DCRA query examples
 Same as for `JPGQL_CTRA query examples`

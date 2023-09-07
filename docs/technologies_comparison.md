@@ -11,7 +11,7 @@
 | Event subscription (triggers) | No | Yes |
 | Functional graph | No | Yes |
 | Lightweight | No | Yes |
-| ARM support | No | Yes |
+| ARM non-64 | No | Yes |
 
 ### Backup & Restore & Disaster recovery
 NATS Key/Value is based on NATS JetStream. To make a backup of a bucket from KV its stream name must be used. More about backups & restore & disaster recrovey in NATS JetStream:  
