@@ -22,12 +22,13 @@ type StatefunContextProcessor struct {
 	GetObjectContext   func() *json_easy.JSON
 	SetObjectContext   func(*json_easy.JSON)
 	Call               func(string, string, *json_easy.JSON, *json_easy.JSON)
-	GolangCallSync     func(string, string, *json_easy.JSON, *json_easy.JSON) *json_easy.JSON
-	Egress             func(string, *json_easy.JSON)
-	Self               StatefunAddress
-	Caller             StatefunAddress
-	Payload            *json_easy.JSON
-	Options            *json_easy.JSON
+	// TODO: DownstreamCall(<function type>, <links filters>, <payload>, <options>)
+	GolangCallSync func(string, string, *json_easy.JSON, *json_easy.JSON) *json_easy.JSON
+	Egress         func(string, *json_easy.JSON)
+	Self           StatefunAddress
+	Caller         StatefunAddress
+	Payload        *json_easy.JSON
+	Options        *json_easy.JSON
 }
 
 type StatefunExecutor interface {
