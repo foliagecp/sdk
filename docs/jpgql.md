@@ -1,4 +1,7 @@
 # JSONPath Graph Query Language - JPGQL
+
+JPGQL is a lightweight async-parallel JSON-path like graph query language.
+
 ## Functions
   - [functions.graph.ll.api.query.jpgql.ctra](#Usage-of-JPGQL_CTRA-call-tree-result-aggregation)
   - [functions.graph.ll.api.query.jpgql.dcra](#Usage-of-JPGQL_DCRA-direct-cache-result-aggregation)
@@ -154,3 +157,24 @@ Same as for `JPGQL_CTRA query examples`
 
 ## JPGQL_DCRA query examples with call on targets
 Same as for `JPGQL_CTRA query examples with call on targets`
+
+## Comparison with other graph query languages
+| Features | AQL | JPGQL |
+|----------|:-------------:|:------:|
+| Tunable indices | Yes | No |
+| Vertex attribute filter | Yes | No |
+| Link attribute filter | Yes | Tags only |
+| Path filter | Yes | No |
+| Outbound directional search | Yes | Yes |
+| Inbound directional search | Yes | No |
+| Mixed directional search | Yes | No |
+| Query plan | Yes | No |
+| Joins | Yes | No |
+| Sorts | Yes | No |
+| Groups | Yes | No |
+| Aggregations | Yes | No |
+| Pruning | Yes | No |
+| Custom functions | Yes | No |
+| Async execution | No | Yes |
+| Parallel execution | Yes | Yes |
+| Graph traversals in a cluster | Yes | Yes |
