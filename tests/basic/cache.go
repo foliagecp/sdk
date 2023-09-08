@@ -4,7 +4,7 @@ package basic
 
 import "github.com/foliagecp/sdk/statefun/cache"
 
-func CacheTest(cacheStore *cache.CacheStore) {
+func CacheTest(cacheStore *cache.Store) {
 	cacheStore.SetValue("a.b.c.d0", []byte{1, 2, 3}, true, -1, "")
 	cacheStore.SetValue("a.b.c.d1", []byte{1, 2, 3, 4}, true, -1, "")
 	cacheStore.SetValue("k1.k2", []byte{1, 2, 3, 4, 5}, true, -1, "")

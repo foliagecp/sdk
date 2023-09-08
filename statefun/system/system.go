@@ -15,6 +15,10 @@ import (
 	"time"
 )
 
+func MsgOnErrorReturn(err error) {
+	fmt.Printf("ERROR: %s\n", err)
+}
+
 func GetEnvMustProceed[T any](key string, defaultVal T) T {
 	v, _ := GetEnv(key, defaultVal)
 	return v
@@ -121,9 +125,9 @@ func GetCurrentTimeNs() int64 {
 	return time.Now().UnixNano()
 }
 
-func GetUniqueStrId() string {
-	base_str := fmt.Sprintf("%d-%f", GetCurrentTimeNs(), rand.Float64())
-	data := []byte(base_str)
+func GetUniqueStrID() string {
+	baseStr := fmt.Sprintf("%d-%f", GetCurrentTimeNs(), rand.Float64())
+	data := []byte(baseStr)
 	hash := md5.Sum(data)
 	id := hex.EncodeToString(hash[:])
 	return id

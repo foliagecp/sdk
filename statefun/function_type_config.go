@@ -5,11 +5,11 @@ package statefun
 import "json_easy"
 
 const (
-	MAS_ACK_WAIT_TIMEOUT_MS = 10000
-	MSG_CHANNEL_SIZE        = 64
-	MSG_ACK_CHANNEL_SIZE    = 64
-	BALANCE_NEEDED          = true
-	MUTEX_LIFETIME_SEC      = 120
+	MsgAckWaitTimeoutMs = 10000
+	MsgChannelSize      = 64
+	MsgAckChannelSize   = 64
+	BalanceNeeded       = true
+	MutexLifetimeSec    = 120
 )
 
 type FunctionTypeConfig struct {
@@ -24,11 +24,11 @@ type FunctionTypeConfig struct {
 
 func NewFunctionTypeConfig() *FunctionTypeConfig {
 	return &FunctionTypeConfig{
-		msgAckWaitMs:      MAS_ACK_WAIT_TIMEOUT_MS,
-		msgChannelSize:    MSG_CHANNEL_SIZE,
-		msgAckChannelSize: MSG_ACK_CHANNEL_SIZE,
-		balanceNeeded:     BALANCE_NEEDED,
-		mutexLifeTimeSec:  MUTEX_LIFETIME_SEC,
+		msgAckWaitMs:      MsgAckWaitTimeoutMs,
+		msgChannelSize:    MsgChannelSize,
+		msgAckChannelSize: MsgAckChannelSize,
+		balanceNeeded:     BalanceNeeded,
+		mutexLifeTimeSec:  MutexLifetimeSec,
 		options:           json_easy.NewJSONObject().GetPtr(),
 	}
 }

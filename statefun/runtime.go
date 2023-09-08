@@ -13,6 +13,7 @@ import (
 
 	"github.com/foliagecp/sdk/statefun/cache"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
+	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
 )
 
@@ -21,13 +22,13 @@ type Runtime struct {
 	nc         *nats.Conn
 	js         nats.JetStreamContext
 	kv         nats.KeyValue
-	cacheStore *cache.CacheStore
+	cacheStore *cache.Store
 
 	registeredFunctionTypes map[string]*FunctionType
 
-	__gt0  int64 // Global time 0 - time of the very first message receving by any function type
-	__glce int64 // Global last call ended - time of last call of last function handling id of any function type
-	__gc   int64 // Global counter - max total id handlers for all function types
+	gt0  int64 // Global time 0 - time of the very first message receving by any function type
+	glce int64 // Global last call ended - time of last call of last function handling id of any function type
+	gc   int64 // Global counter - max total id handlers for all function types
 }
 
 func NewRuntime(config *RuntimeConfig) (r *Runtime, err error) {
@@ -64,7 +65,7 @@ func NewRuntime(config *RuntimeConfig) (r *Runtime, err error) {
 		kvExists = true
 	}
 	if !kvExists {
-		err = fmt.Errorf("Nats KV was not inited!")
+		err = fmt.Errorf("Nats KV was not inited")
 		return
 	}
 	// --------------------------------------------------------------
@@ -72,7 +73,7 @@ func NewRuntime(config *RuntimeConfig) (r *Runtime, err error) {
 	return
 }
 
-func (r *Runtime) Start(cacheConfig *cache.CacheConfig, onAfterStart func(runtime *Runtime)) (err error) {
+func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Runtime)) (err error) {
 	// Create stream if does not exist ------------------------------
 	streamExists := false
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -85,28 +86,29 @@ func (r *Runtime) Start(cacheConfig *cache.CacheConfig, onAfterStart func(runtim
 	}
 	if !streamExists {
 		var subjects []string
-		for _, function_type := range r.registeredFunctionTypes {
-			subjects = append(subjects, function_type.subject)
+		for _, functionType := range r.registeredFunctionTypes {
+			subjects = append(subjects, functionType.subject)
 		}
-		r.js.AddStream(&nats.StreamConfig{
+		_, err := r.js.AddStream(&nats.StreamConfig{
 			Name:     r.config.functionTypesStreamName,
 			Subjects: subjects,
 		})
+		system.MsgOnErrorReturn(err)
 	}
 	// --------------------------------------------------------------
 
 	fmt.Println("Initializing the cache store...")
-	r.cacheStore = cache.NewCacheStore(cacheConfig, context.Background(), r.kv)
+	r.cacheStore = cache.NewCacheStore(context.Background(), cacheConfig, r.kv)
 	fmt.Println("Cache store inited!")
 
 	// Start function subscriptions ---------------------------------
 	for _, ft := range r.registeredFunctionTypes {
-		ft.Start(r.config.functionTypesStreamName)
+		system.MsgOnErrorReturn(ft.Start(r.config.functionTypesStreamName))
 	}
 	// --------------------------------------------------------------
 
 	onAfterStart(r)
-	r.runGarbageCellector()
+	system.MsgOnErrorReturn(r.runGarbageCellector())
 
 	return
 }
@@ -115,24 +117,24 @@ func (r *Runtime) runGarbageCellector() (err error) {
 	for {
 		// Start function subscriptions ---------------------------------
 		var totalIdsGrbageCollected int
-		var totalIdHandlersRunning int
+		var totalIDHandlersRunning int
 		for _, ft := range r.registeredFunctionTypes {
-			n1, n2 := ft.gc(r.config.functionTypeIdLifetimeMs)
+			n1, n2 := ft.gc(r.config.functionTypeIDLifetimeMs)
 			totalIdsGrbageCollected += n1
-			totalIdHandlersRunning += n2
+			totalIDHandlersRunning += n2
 		}
-		if totalIdsGrbageCollected > 0 && totalIdHandlersRunning == 0 {
+		if totalIdsGrbageCollected > 0 && totalIDHandlersRunning == 0 {
 			// Result time output -----------------------------------------------------------------
-			if totalIdHandlersRunning == 0 {
-				glce := atomic.LoadInt64(&r.__glce)
-				gt0 := atomic.LoadInt64(&r.__gt0)
-				gc := atomic.LoadInt64(&r.__gc)
+			if totalIDHandlersRunning == 0 {
+				glce := atomic.LoadInt64(&r.glce)
+				gt0 := atomic.LoadInt64(&r.gt0)
+				gc := atomic.LoadInt64(&r.gc)
 
 				dt := glce - gt0
 
 				if gc > 0 && dt > 0 {
 					fmt.Printf("!!!!!!!!!!!!!!!!! %d runs, total time (ns/ms): %d/%d, function dt (ns/ms): %d/%d -> %dHz\n", gc, dt, dt/1000000, dt/gc, dt/gc/1000000, gc*1000000000/dt)
-					atomic.StoreInt64(&r.__gc, 0)
+					atomic.StoreInt64(&r.gc, 0)
 				}
 				// ------------------------------------------------------------------------------------
 			}
@@ -150,21 +152,23 @@ func (r *Runtime) IngressGolangSync(typename string, id string, payload *json_ea
 	return r.callFunctionGolangSync("ingress", "go", typename, id, payload, options)
 }
 
-func (r *Runtime) callFunction(callerTypename string, callerId string, targetTypename string, targetId string, payload *json_easy.JSON, options *json_easy.JSON) {
+func (r *Runtime) callFunction(callerTypename string, callerID string, targetTypename string, targetID string, payload *json_easy.JSON, options *json_easy.JSON) {
 	data := json_easy.NewJSONObject()
 	data.SetByPath("caller_typename", json_easy.NewJSON(callerTypename))
-	data.SetByPath("caller_id", json_easy.NewJSON(callerId))
+	data.SetByPath("caller_id", json_easy.NewJSON(callerID))
 	data.SetByPath("payload", *payload)
 	data.SetByPath("options", *options)
-	go r.nc.Publish(targetTypename+"."+targetId, data.ToBytes())
+	go func() {
+		system.MsgOnErrorReturn(r.nc.Publish(targetTypename+"."+targetID, data.ToBytes()))
+	}()
 }
 
-func (r *Runtime) callFunctionGolangSync(callerTypename string, callerId string, targetTypename string, targetId string, payload *json_easy.JSON, options *json_easy.JSON) *json_easy.JSON {
+func (r *Runtime) callFunctionGolangSync(callerTypename string, callerID string, targetTypename string, targetID string, payload *json_easy.JSON, options *json_easy.JSON) *json_easy.JSON {
 	resultJSONChannel := make(chan *json_easy.JSON, 1)
 
-	msg := &GoMsg{ResultJSONChannel: resultJSONChannel, Caller: &sfPlugins.StatefunAddress{Typename: callerTypename, ID: callerId}, Payload: payload}
+	msg := &GoMsg{ResultJSONChannel: resultJSONChannel, Caller: &sfPlugins.StatefunAddress{Typename: callerTypename, ID: callerID}, Payload: payload}
 	if targetFT, ok := r.registeredFunctionTypes[targetTypename]; ok {
-		targetFT.sendMsgToIdHandler(targetId, msg, nil)
+		targetFT.sendMsgToIDHandler(targetID, msg, nil)
 	} else {
 		return nil
 	}

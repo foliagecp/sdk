@@ -12,22 +12,22 @@ import (
 	sfSystem "github.com/foliagecp/sdk/statefun/system"
 )
 
-const QUERY_RESULT_TOPIC = "functions.graph.query"
+const QueryResultTopic = "functions.graph.query"
 
-func GetQueryId(contextProcessor *sfplugins.StatefunContextProcessor) string {
-	var queryId string
+func GetQueryID(contextProcessor *sfplugins.StatefunContextProcessor) string {
+	var queryID string
 	if s, ok := contextProcessor.Payload.GetByPath("query_id").AsString(); ok {
-		queryId = s
+		queryID = s
 	} else {
-		queryId = sfSystem.GetUniqueStrId()
+		queryID = sfSystem.GetUniqueStrID()
 	}
-	return queryId
+	return queryID
 }
 
-func ReplyQueryId(queryId string, result *json_easy.JSON, contextProcessor *sfplugins.StatefunContextProcessor) {
+func ReplyQueryID(queryID string, result *json_easy.JSON, contextProcessor *sfplugins.StatefunContextProcessor) {
 	if result != nil && contextProcessor != nil {
 		if len(contextProcessor.Caller.Typename) == 0 || len(contextProcessor.Caller.ID) == 0 {
-			contextProcessor.Egress(QUERY_RESULT_TOPIC+"."+queryId, result) // Publish result to NATS topic (no JetStream)
+			contextProcessor.Egress(QueryResultTopic+"."+queryID, result) // Publish result to NATS topic (no JetStream)
 		} else {
 			contextProcessor.Call(contextProcessor.Caller.Typename, contextProcessor.Caller.ID, result, nil)
 		}

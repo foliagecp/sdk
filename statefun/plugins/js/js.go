@@ -7,15 +7,15 @@ import (
 	"json_easy"
 
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
+	"github.com/foliagecp/sdk/statefun/system"
 	v8 "rogchap.com/v8go"
 )
 
 type StatefunExecutorPluginJS struct {
-	vw                *v8.Isolate
-	vmContect         *v8.Context
-	copiledScript     *v8.UnboundScript
-	executionTimoutMs int64
-	buildError        error
+	vw            *v8.Isolate
+	vmContect     *v8.Context
+	copiledScript *v8.UnboundScript
+	buildError    error
 
 	contextProcessor *sfPlugins.StatefunContextProcessor
 }
@@ -37,7 +37,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 		return v // you can return a value back to the JS caller if required
 	})
 	// () -> string
-	statefunGetSelfId := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	statefunGetSelfID := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		//fmt.Printf("statefun_getSelfId: %v\n", info.Args())
 		if len(info.Args()) != 0 {
 			fmt.Printf("statefun_getSelfId error: requies no arguments but got %d\n", len(info.Args()))
@@ -59,7 +59,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 		return v // you can return a value back to the JS caller if required
 	})
 	// () -> string
-	statefunGetCallerId := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	statefunGetCallerID := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		//fmt.Printf("statefun_getCallerId: %v\n", info.Args())
 		if len(info.Args()) != 0 {
 			fmt.Printf("statefun_getCallerId error: requies no arguments but got %d\n", len(info.Args()))
@@ -182,15 +182,13 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 				sfejs.contextProcessor.Call(info.Args()[0].String(), info.Args()[1].String(), &j, options)
 				v, _ := v8.NewValue(sfejs.vw, int32(0))
 				return v
-			} else {
-				fmt.Printf("statefunCall payload is not a JSON: %s\n", info.Args()[2].String())
-				v, _ := v8.NewValue(sfejs.vw, int32(3))
-				return v
 			}
-		} else {
-			v, _ := v8.NewValue(sfejs.vw, int32(2))
+			fmt.Printf("statefunCall payload is not a JSON: %s\n", info.Args()[2].String())
+			v, _ := v8.NewValue(sfejs.vw, int32(3))
 			return v
 		}
+		v, _ := v8.NewValue(sfejs.vw, int32(2))
+		return v
 	})
 	// (string, string) -> int
 	statefunEgress := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
@@ -205,15 +203,13 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 				sfejs.contextProcessor.Egress(info.Args()[0].String(), &j)
 				v, _ := v8.NewValue(sfejs.vw, int32(0))
 				return v
-			} else {
-				fmt.Printf("statefunEgress payload is not a JSON: %s\n", info.Args()[1].String())
-				v, _ := v8.NewValue(sfejs.vw, int32(3))
-				return v
 			}
-		} else {
-			v, _ := v8.NewValue(sfejs.vw, int32(2))
+			fmt.Printf("statefunEgress payload is not a JSON: %s\n", info.Args()[1].String())
+			v, _ := v8.NewValue(sfejs.vw, int32(3))
 			return v
 		}
+		v, _ := v8.NewValue(sfejs.vw, int32(2))
+		return v
 	})
 	// (string)
 	print := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
@@ -222,19 +218,19 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 	})
 
 	global := v8.NewObjectTemplate(sfejs.vw)
-	global.Set("statefun_getSelfTypename", statefunGetSelfTypenane)
-	global.Set("statefun_getSelfId", statefunGetSelfId)
-	global.Set("statefun_getCallerTypename", statefunGetCallerTypenane)
-	global.Set("statefun_getCallerId", statefunGetCallerId)
-	global.Set("statefun_getFunctionContext", statefunGetFunctionContext)
-	global.Set("statefun_setFunctionContext", statefunSetFunctionContext)
-	global.Set("statefun_getObjectContext", statefunGetObjectContext)
-	global.Set("statefun_setObjectnContext", statefunSetObjectContext)
-	global.Set("statefun_getPayload", statefunGetPayload)
-	global.Set("statefun_getOptions", statefunGetOptions)
-	global.Set("statefun_call", statefunCall)
-	global.Set("statefun_egress", statefunEgress)
-	global.Set("print", print)
+	system.MsgOnErrorReturn(global.Set("statefun_getSelfTypename", statefunGetSelfTypenane))
+	system.MsgOnErrorReturn(global.Set("statefun_getSelfId", statefunGetSelfID))
+	system.MsgOnErrorReturn(global.Set("statefun_getCallerTypename", statefunGetCallerTypenane))
+	system.MsgOnErrorReturn(global.Set("statefun_getCallerId", statefunGetCallerID))
+	system.MsgOnErrorReturn(global.Set("statefun_getFunctionContext", statefunGetFunctionContext))
+	system.MsgOnErrorReturn(global.Set("statefun_setFunctionContext", statefunSetFunctionContext))
+	system.MsgOnErrorReturn(global.Set("statefun_getObjectContext", statefunGetObjectContext))
+	system.MsgOnErrorReturn(global.Set("statefun_setObjectnContext", statefunSetObjectContext))
+	system.MsgOnErrorReturn(global.Set("statefun_getPayload", statefunGetPayload))
+	system.MsgOnErrorReturn(global.Set("statefun_getOptions", statefunGetOptions))
+	system.MsgOnErrorReturn(global.Set("statefun_call", statefunCall))
+	system.MsgOnErrorReturn(global.Set("statefun_egress", statefunEgress))
+	system.MsgOnErrorReturn(global.Set("print", print))
 
 	sfejs.vmContect = v8.NewContext(sfejs.vw, global)                                                         // new context within the VM
 	sfejs.copiledScript, sfejs.buildError = sfejs.vw.CompileUnboundScript(source, alias, v8.CompileOptions{}) // compile script to get cached data

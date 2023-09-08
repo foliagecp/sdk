@@ -20,25 +20,25 @@ import (
 )
 
 var (
-	// NATS server url
-	NatsURL string = system.GetEnvMustProceed("NATS_URL", "nats://nats:foliage@nats:4222")
-	// Does the master stateful function do the increment operation on each call in its context
+	// NatsURL - nats server url
+	NatsURL string = system.GetEnvMustProceed("NatsURL", "nats://nats:foliage@nats:4222")
+	// MasterFunctionContextIncrement - does the master stateful function do the increment operation on each call in its context
 	MasterFunctionContextIncrement bool = system.GetEnvMustProceed("MASTER_FUNC_CONTEXT_INREMENT", true)
-	// Default increment value
+	// MasterFunctionContextIncrementOption - Default increment value
 	MasterFunctionContextIncrementOption int = system.GetEnvMustProceed("MASTER_FUNC_CONTEXT_INREMENT_OPTION", 1)
-	// Make master function read and write its object context in idle mode
+	// MasterFunctionObjectContextProcess - make master function read and write its object context in idle mode
 	MasterFunctionObjectContextProcess bool = system.GetEnvMustProceed("MASTER_FUNC_OBJECT_CONTEXT_PROCESS", false)
-	// Enable js plugin for the master function
+	// MasterFunctionJSPlugin - enable js plugin for the master function
 	MasterFunctionJSPlugin bool = system.GetEnvMustProceed("MASTER_FUNC_JS_PLUGIN", false)
-	// Enable logging of the master function
+	// MasterFunctionLogs - enable logging of the master function
 	MasterFunctionLogs bool = system.GetEnvMustProceed("MASTER_FUNC_LOGS", true)
-	// Create a simple graph on runtime start
+	// CreateSimpleGraphTest - create a simple graph on runtime start
 	CreateSimpleGraphTest bool = system.GetEnvMustProceed("CREATE_SIMPLE_GRAPH_TEST", true)
-	// Test the Foliage global key/value mutices
+	// KVMuticesTest - test the Foliage global key/value mutices
 	KVMuticesTest bool = system.GetEnvMustProceed("KV_MUTICES_TEST", true)
-	// key/value mutices test duration
+	// KVMuticesTestDurationSec - key/value mutices test duration
 	KVMuticesTestDurationSec int = system.GetEnvMustProceed("KV_MUTICES_TEST_DURATION_SEC", 10)
-	// key/value mutices workers to apply in the test
+	// KVMuticesTestWorkers - key/value mutices workers to apply in the test
 	KVMuticesTestWorkers int = system.GetEnvMustProceed("KV_MUTICES_TEST_WORKERS", 4)
 )
 
@@ -108,7 +108,7 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 		jsFileName := "master_function_plugin.js"
 		if content, err := os.ReadFile(jsFileName); err == nil {
 			// Assign JavaScript StatefunExecutor for TypenameExecutorPlugin
-			ft.SetExecutor(jsFileName, string(content), sfPluginJS.StatefunExecutorPluginJSContructor)
+			system.MsgOnErrorReturn(ft.SetExecutor(jsFileName, string(content), sfPluginJS.StatefunExecutorPluginJSContructor))
 		} else {
 			fmt.Printf("ERROR: Could not load JS script: %v\n", err)
 		}

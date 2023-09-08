@@ -11,7 +11,7 @@ import (
 	"github.com/foliagecp/sdk/statefun/cache"
 )
 
-const QUERY_RESULT_TOPIC = "functions.graph.query"
+const QueryResultTopic = "functions.graph.query"
 
 var jsonPathPartsExtractRegexp *regexp.Regexp = regexp.MustCompile(`\.[*a-zA-Z0-9_-]*(\[\]|\[([^[]+]*|.*?\[.*?\].*?)\]|("(?:.|[\n])+))?`)
 var filterParseLanguage = gval.NewLanguage(gval.Base(), gval.PropositionalLogic(),
@@ -64,11 +64,11 @@ func ParseFilter(filterQuery string) (*FilterData, error) {
 	if err != nil {
 		return nil, err
 	}
-	if filterData, ok := value.(*FilterData); !ok {
+	filterData, ok := value.(*FilterData)
+	if !ok {
 		return nil, fmt.Errorf("parseFilter error: cannot parse filterData")
-	} else {
-		return filterData, nil
 	}
+	return filterData, nil
 }
 
 func GetQueryHeadAndTailsParts(query string) (string, string, string, *AnyDepthStop, error) {
@@ -90,7 +90,6 @@ func GetQueryHeadAndTailsParts(query string) (string, string, string, *AnyDepthS
 	if len(res) > 0 && len(res[0]) > 1 {
 		queryWithoutFilters = strings.Replace(queryWithoutFilters, res[0][1], "", 1)
 		queryHeadFilter = res[0][2]
-	} else {
 	}
 	queryHeadLinkType := strings.Split(queryWithoutFilters[1:], ".")[0]
 	queryTail := strings.Replace(queryWithoutFilters, "."+queryHeadLinkType, "", 1)
@@ -105,46 +104,46 @@ func GetQueryHeadAndTailsParts(query string) (string, string, string, *AnyDepthS
 	return queryHeadLinkType, queryHeadFilter, queryTail, anyDepthStop, nil
 }
 
-func GetObjectIDsFromLinkType(cacheStore *cache.CacheStore, objectId string, linkType string) map[string]int {
+func GetObjectIDsFromLinkType(cacheStore *cache.Store, objectID string, linkType string) map[string]int {
 	resultObjects := map[string]int{}
 
 	if len(linkType) == 0 { // No link type - return object itself
-		resultObjects[objectId] = 0
+		resultObjects[objectID] = 0
 		return resultObjects
 	}
 
-	linksQuery := objectId + ".out.ltp_oid-bdy.>"
+	linksQuery := objectID + ".out.ltp_oid-bdy.>"
 	if linkType != "*" {
-		linksQuery = objectId + ".out.ltp_oid-bdy." + linkType + ".>"
+		linksQuery = objectID + ".out.ltp_oid-bdy." + linkType + ".>"
 	}
 	// Get all links matching defined link type ---------------------------
 	for _, key := range cacheStore.GetKeysByPattern(linksQuery) {
 		linkKeyTokens := strings.Split(key, ".")
-		targetObjectId := linkKeyTokens[len(linkKeyTokens)-1]
-		resultObjects[targetObjectId] = 0
+		targetObjectID := linkKeyTokens[len(linkKeyTokens)-1]
+		resultObjects[targetObjectID] = 0
 	}
 	// --------------------------------------------------------------------
 
 	return resultObjects
 }
 
-func GetObjectIDsFromLinkTypeAndTag(cacheStore *cache.CacheStore, objectId string, linkType string, tag string) map[string]int {
+func GetObjectIDsFromLinkTypeAndTag(cacheStore *cache.Store, objectID string, linkType string, tag string) map[string]int {
 	if len(tag) == 0 {
-		return GetObjectIDsFromLinkType(cacheStore, objectId, linkType)
+		return GetObjectIDsFromLinkType(cacheStore, objectID, linkType)
 	}
 
 	resultObjects := map[string]int{}
 
-	linksQuery := objectId + ".out.tag_ltp_oid-nil." + tag + ".>"
+	linksQuery := objectID + ".out.tag_ltp_oid-nil." + tag + ".>"
 	if linkType != "*" {
-		linksQuery = objectId + ".out.tag_ltp_oid-nil." + tag + "." + linkType + ".*"
+		linksQuery = objectID + ".out.tag_ltp_oid-nil." + tag + "." + linkType + ".*"
 	}
 
 	// Get all links matching defined link type ---------------------------
 	for _, key := range cacheStore.GetKeysByPattern(linksQuery) {
 		if tokens := strings.Split(key, "."); len(tokens) == 6 {
-			objectId := string(tokens[len(tokens)-1])
-			resultObjects[objectId] = 0
+			objectID := string(tokens[len(tokens)-1])
+			resultObjects[objectID] = 0
 		} else {
 			fmt.Printf("ERROR getObjectIDsFromLinkTypeAndTag: linksQuery GetKeysByPattern key %s must consist from 6 tokens, but consists from %d\n", key, len(tokens))
 		}
@@ -154,51 +153,49 @@ func GetObjectIDsFromLinkTypeAndTag(cacheStore *cache.CacheStore, objectId strin
 	return resultObjects
 }
 
-func GetObjectIDsFromLinkTypeAndFilterData(cacheStore *cache.CacheStore, objectId string, linkType string, filterData *FilterData) map[string]int {
+func GetObjectIDsFromLinkTypeAndFilterData(cacheStore *cache.Store, objectID string, linkType string, filterData *FilterData) map[string]int {
 	if len(filterData.disjunctiveSlicesOfTags) == 0 {
-		return GetObjectIDsFromLinkType(cacheStore, objectId, linkType)
-	} else {
-		disjunctionResultObjects := map[string]int{}
-		for _, tags := range filterData.disjunctiveSlicesOfTags {
-			conjunctionResultObjects := map[string]int{}
-			for _, tag := range tags {
-				linksWithTypeAngTag := GetObjectIDsFromLinkTypeAndTag(cacheStore, objectId, linkType, tag)
-				for linkObjectId := range linksWithTypeAngTag {
-					if _, ok := conjunctionResultObjects[linkObjectId]; ok {
-						conjunctionResultObjects[linkObjectId] = conjunctionResultObjects[linkObjectId] + 1
-					} else {
-						conjunctionResultObjects[linkObjectId] = 1
-					}
-				}
-			}
-			for linkObjectId, tagsCount := range conjunctionResultObjects {
-				if tagsCount == len(tags) {
-					disjunctionResultObjects[linkObjectId] = 0
+		return GetObjectIDsFromLinkType(cacheStore, objectID, linkType)
+	}
+	disjunctionResultObjects := map[string]int{}
+	for _, tags := range filterData.disjunctiveSlicesOfTags {
+		conjunctionResultObjects := map[string]int{}
+		for _, tag := range tags {
+			linksWithTypeAngTag := GetObjectIDsFromLinkTypeAndTag(cacheStore, objectID, linkType, tag)
+			for linkObjectID := range linksWithTypeAngTag {
+				if _, ok := conjunctionResultObjects[linkObjectID]; ok {
+					conjunctionResultObjects[linkObjectID] = conjunctionResultObjects[linkObjectID] + 1
+				} else {
+					conjunctionResultObjects[linkObjectID] = 1
 				}
 			}
 		}
-		return disjunctionResultObjects
+		for linkObjectID, tagsCount := range conjunctionResultObjects {
+			if tagsCount == len(tags) {
+				disjunctionResultObjects[linkObjectID] = 0
+			}
+		}
 	}
+	return disjunctionResultObjects
 }
 
-func GetObjectIDsFromLinkTypeAndLinkFilterQuery(cacheStore *cache.CacheStore, objectId string, linkType string, linkFilterQuery string) map[string]int {
+func GetObjectIDsFromLinkTypeAndLinkFilterQuery(cacheStore *cache.Store, objectID string, linkType string, linkFilterQuery string) map[string]int {
 	if len(linkFilterQuery) == 0 {
-		return GetObjectIDsFromLinkType(cacheStore, objectId, linkType)
-	} else {
-		if filterData, err := ParseFilter(linkFilterQuery); err == nil {
-			return GetObjectIDsFromLinkTypeAndFilterData(cacheStore, objectId, linkType, filterData)
-		}
+		return GetObjectIDsFromLinkType(cacheStore, objectID, linkType)
+	}
+	if filterData, err := ParseFilter(linkFilterQuery); err == nil {
+		return GetObjectIDsFromLinkTypeAndFilterData(cacheStore, objectID, linkType, filterData)
 	}
 	return map[string]int{}
 }
 
-func GetObjectIDsFromLinkTypeAndLinkFilterQueryWithAnyDepthStop(cacheStore *cache.CacheStore, objectId string, linkType string, linkFilterQuery string, anyDepthStop *AnyDepthStop) map[string]int {
-	resultObjects := GetObjectIDsFromLinkTypeAndLinkFilterQuery(cacheStore, objectId, linkType, linkFilterQuery)
+func GetObjectIDsFromLinkTypeAndLinkFilterQueryWithAnyDepthStop(cacheStore *cache.Store, objectID string, linkType string, linkFilterQuery string, anyDepthStop *AnyDepthStop) map[string]int {
+	resultObjects := GetObjectIDsFromLinkTypeAndLinkFilterQuery(cacheStore, objectID, linkType, linkFilterQuery)
 
 	if anyDepthStop != nil {
-		anyDepthStopResultObjects := GetObjectIDsFromLinkTypeAndLinkFilterQuery(cacheStore, objectId, anyDepthStop.LinkType, anyDepthStop.FilterQeury)
-		for linkObjectId := range anyDepthStopResultObjects {
-			resultObjects[linkObjectId] = 1
+		anyDepthStopResultObjects := GetObjectIDsFromLinkTypeAndLinkFilterQuery(cacheStore, objectID, anyDepthStop.LinkType, anyDepthStop.FilterQeury)
+		for linkObjectID := range anyDepthStopResultObjects {
+			resultObjects[linkObjectID] = 1
 		}
 	}
 

@@ -18,7 +18,7 @@ type StatefunAddress struct {
 }
 
 type StatefunContextProcessor struct {
-	GlobalCache        *cache.CacheStore
+	GlobalCache        *cache.Store
 	GetFunctionContext func() *json_easy.JSON
 	SetFunctionContext func(*json_easy.JSON)
 	GetObjectContext   func() *json_easy.JSON
@@ -52,7 +52,7 @@ func NewTypenameExecutor(alias string, source string, executorContructorFunction
 	return &tnex
 }
 
-func (tnex *TypenameExecutorPlugin) AddForId(id string) {
+func (tnex *TypenameExecutorPlugin) AddForID(id string) {
 	if tnex.executorContructorFunction == nil {
 		fmt.Printf("Cannot create new StatefunExecutor for id=%s: missing newExecutor function\n", id)
 		tnex.idExecutors.Store(id, nil)
@@ -63,11 +63,11 @@ func (tnex *TypenameExecutorPlugin) AddForId(id string) {
 	}
 }
 
-func (tnex *TypenameExecutorPlugin) RemoveForId(id string) {
+func (tnex *TypenameExecutorPlugin) RemoveForID(id string) {
 	tnex.idExecutors.Delete(id)
 }
 
-func (tnex *TypenameExecutorPlugin) GetForId(id string) StatefunExecutor {
+func (tnex *TypenameExecutorPlugin) GetForID(id string) StatefunExecutor {
 	value, _ := tnex.idExecutors.Load(id)
 	return value.(StatefunExecutor)
 }
