@@ -1,17 +1,19 @@
-# Closest competitors technology comparison
+# Closest competitor technologies comparison
 
-## Graph database provider
+## Graph database management system
 | Features | ArangoDB | Foliage Graph DBMS (on NATS Key/Value) |
 |----------|:-------------:|:------:|
 | Graph storage |  Yes | Yes |
 | Distributed graph |    >Community only   | Yes |
 | Persistance | Yes | Yes |
 | Backup & Restore & Disaster recovery | Yes | Yes |
-| Additional functionality | JavaScript (V8) - Foxx | Golang - Foliage Runtime |
+| Additional functionality | JavaScript (V8) - Foxx | Foliage Statefuns |
 | Event subscription (triggers) | No | Yes |
 | Functional graph | No | Yes |
 | Lightweight | No | Yes |
 | ARM non-64 | No | Yes |
+
+Query languages comparison is available [here.](./jpgql.md#comparison-with-other-graph-query-languages)
 
 ### Backup & Restore & Disaster recovery
 NATS Key/Value is based on NATS JetStream. To make a backup of a bucket from KV its stream name must be used. More about backups & restore & disaster recrovey in NATS JetStream:  
