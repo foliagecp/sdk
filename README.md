@@ -4,12 +4,11 @@
 
 Foliage is a collaborative application platform built around a distributed graph database, offering a common and extensible environment for seamless automation, inter-domain connectivity, and high-performance, edge-friendly runtimes. 
 
-[![License][License-Image]][License-Url]
-![Golangci-Lint](Golangci-Lint-Url)
+[![License][License-Image]][License-Url] [![Lint][Golangci-Lint]][Golangci-Lint-Status-Url]
 
 [License-Url]: https://www.apache.org/licenses/LICENSE-2.0
 [License-Image]: https://img.shields.io/badge/License-Apache2-blue.svg
-[Golangci-Lint-Url]: https://github.com/foliagecp/sdk/actions/workflows/golangci-lint.yml/badge.svg
+[Golangci-Lint-Status-Url]: https://github.com/foliagecp/sdk/actions/workflows/golangci-lint.yml/badge.svg
 
 ## Table of Contents
 
