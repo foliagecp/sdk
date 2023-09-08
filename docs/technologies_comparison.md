@@ -10,7 +10,7 @@
 | Additional functionality | JavaScript (V8) - Foxx | Foliage Statefuns |
 | Event subscription (triggers) | No | Yes |
 | Functional graph | No | Yes |
-| Lightweight | No | Yes |
+| Lightweight | No (1GB RAM is required) | Yes |
 | ARM non-64 | No | Yes |
 
 Query languages comparison is available [here.](./jpgql.md#comparison-with-other-graph-query-languages)
