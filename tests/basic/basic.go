@@ -21,7 +21,7 @@ import (
 
 var (
 	// NatsURL - nats server url
-	NatsURL string = system.GetEnvMustProceed("NatsURL", "nats://nats:foliage@nats:4222")
+	NatsURL string = system.GetEnvMustProceed("NATS_URL", "nats://nats:foliage@nats:4222")
 	// MasterFunctionContextIncrement - does the master stateful function do the increment operation on each call in its context
 	MasterFunctionContextIncrement bool = system.GetEnvMustProceed("MASTER_FUNC_CONTEXT_INREMENT", true)
 	// MasterFunctionContextIncrementOption - Default increment value

@@ -16,7 +16,9 @@ import (
 )
 
 func MsgOnErrorReturn(err error) {
-	fmt.Printf("ERROR: %s\n", err)
+	if err != nil {
+		fmt.Printf("ERROR: %s\n", err)
+	}
 }
 
 func GetEnvMustProceed[T any](key string, defaultVal T) T {
