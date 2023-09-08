@@ -1,6 +1,6 @@
 # JSONPath Graph Query Language - JPGQL
 
-JPGQL is a lightweight async-parallel JSON-path like graph query language.
+JPGQL is a lightweight async-parallel JSON-path like graph query language. Currently it is at the very initial stage of its growth. A lot of functional features are planned to be implemented later.
 
 ## Functions
   - [functions.graph.ll.api.query.jpgql.ctra](#Usage-of-JPGQL_CTRA-call-tree-result-aggregation)
@@ -162,19 +162,16 @@ Same as for `JPGQL_CTRA query examples with call on targets`
 | Features | AQL | JPGQL |
 |----------|:-------------:|:------:|
 | Tunable indices | Yes | No |
-| Vertex attribute filter | Yes | No |
-| Link attribute filter | Yes | Tags only |
-| Path filter | Yes | No |
+| Vertex attribute filtering | Yes | No |
+| Link attribute filtering | Yes | Types & Tags only |
+| Whole path filtering | Yes | No |
 | Outbound directional search | Yes | Yes |
 | Inbound directional search | Yes | No |
-| Mixed directional search | Yes | No |
 | Query plan | Yes | No |
-| Joins | Yes | No |
-| Sorts | Yes | No |
-| Groups | Yes | No |
-| Aggregations | Yes | No |
-| Pruning | Yes | No |
-| Custom functions | Yes | No |
+| JOIN, SORT, GROUP, LIMIT, AGGREGATE, etc. | Yes | No |
+| Traverse pruning | Yes | No |
+| User-defined functions, traverse algorithm | Functions only | Yes |
+| User-defined  | No | Yes |
 | Async execution | No | Yes |
 | Parallel execution | Yes | Yes |
 | Graph traversals in a cluster | Yes | Yes |
