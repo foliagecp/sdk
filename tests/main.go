@@ -26,6 +26,7 @@ func missingTestInfo(testName string) {
 }
 
 func main() {
+	// TODO: use existing libraries for reading args
 	argsWithoutProg := os.Args[1:]
 	if len(argsWithoutProg) == 0 || argsWithoutProg[0] == "-h" || argsWithoutProg[0] == "--help" {
 		helpInfo()
@@ -45,5 +46,5 @@ func main() {
 	if err != nil {
 		log.Fatalf("ERROR: Cannon load env file %s: %s\n", envFile, err)
 	}
-	os.Chdir(fmt.Sprintf("%s/%s", TestsRootDir, testName))
+	system.MsgOnErrorReturn(os.Chdir(fmt.Sprintf("%s/%s", TestsRootDir, testName)))
 }

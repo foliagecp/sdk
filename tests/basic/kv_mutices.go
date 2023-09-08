@@ -20,7 +20,7 @@ func KVMuticesSimpleTest(runtime *statefun.Runtime, testDurationSec int, workers
 		defer wg.Done()
 
 		s := fmt.Sprintf("W%d", i)
-		for true {
+		for {
 			v, err := statefun.KeyMutexLock(runtime, "test.object", false, s)
 			if err != nil {
 				fmt.Printf("ERR KeyMutexLock test: %v\n", err)

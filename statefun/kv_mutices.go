@@ -20,17 +20,16 @@ func KeyMutexLock(runtime *Runtime, key string, errorOnLocked bool, debugCaller 
 	caller := strings.Join(debugCaller, "-")
 	kv := runtime.kv
 	mutexResetLock := func(keyMutex string, now int64) (uint64, error) {
-		lockRevisionId, err := kv.Put(keyMutex, system.Int64ToBytes(now))
+		lockRevisionID, err := kv.Put(keyMutex, system.Int64ToBytes(now))
 		if err == nil {
 			fmt.Printf("============== %s: Locked %s\n", caller, keyMutex)
-			return lockRevisionId, nil
-		} else {
-			return 0, err
+			return lockRevisionID, nil
 		}
+		return 0, err
 	}
 	mutexMereLock := func(entry nats.KeyValueEntry, now int64) (uint64, error) {
 		// Try to lock mutex by updating it with current time value using revision obtained during last Get
-		lockRevisionId, err := kv.Update(entry.Key(), system.Int64ToBytes(now), entry.Revision())
+		lockRevisionID, err := kv.Update(entry.Key(), system.Int64ToBytes(now), entry.Revision())
 		if err != nil { // If no error appeared
 			if strings.Contains(err.Error(), "nats: wrong last sequence") { // If error "wrong revision" appeared
 				fmt.Printf("ERROR mutexMereLock: tried to lock with wrong revisionId\n")
@@ -38,14 +37,14 @@ func KeyMutexLock(runtime *Runtime, key string, errorOnLocked bool, debugCaller 
 			return 0, err // Terminate with error
 		}
 		fmt.Printf("============== %s: Locked %s\n", caller, entry.Key())
-		return lockRevisionId, nil // Successfully locked
+		return lockRevisionID, nil // Successfully locked
 	}
 	mutexWaitForUnlock := func(keyMutex string) {
-		for true {
+		for {
 			if w, err := kv.Watch(keyMutex); err == nil {
-				defer w.Stop()
+				defer system.MsgOnErrorReturn(w.Stop())
 
-				for true {
+				for {
 					select {
 					case entry := <-w.Updates():
 						if entry != nil {
@@ -61,8 +60,6 @@ func KeyMutexLock(runtime *Runtime, key string, errorOnLocked bool, debugCaller 
 						return
 					}
 				}
-
-				w.Stop()
 			} else {
 				fmt.Printf("KeyMutexLock kv.Watch error %s\n", err)
 			}
@@ -73,7 +70,7 @@ func KeyMutexLock(runtime *Runtime, key string, errorOnLocked bool, debugCaller 
 	mutexResetLockNeeded := false
 
 	fmt.Printf("============== %s: Locking %s\n", caller, keyMutex)
-	for true {
+	for {
 		now := time.Now().UnixNano()
 
 		keyValueMutexOperationMutex.Lock()
@@ -110,10 +107,9 @@ func KeyMutexLock(runtime *Runtime, key string, errorOnLocked bool, debugCaller 
 		}
 		mutexWaitForUnlock(keyMutex)
 	}
-	return 0, nil
 }
 
-func KeyMutexUnlock(runtime *Runtime, key string, lockRevisionId uint64, debugCaller ...string) error {
+func KeyMutexUnlock(runtime *Runtime, key string, lockRevisionID uint64, debugCaller ...string) error {
 	caller := strings.Join(debugCaller, "-")
 	kv := runtime.kv
 
@@ -125,8 +121,8 @@ func KeyMutexUnlock(runtime *Runtime, key string, lockRevisionId uint64, debugCa
 	if err != nil {
 		return err
 	}
-	if entry.Revision() != lockRevisionId {
-		fmt.Printf("WARNING: Context mutex for key=%s with revision=%d was violated, new revision=%d!\n", key, lockRevisionId, entry.Revision())
+	if entry.Revision() != lockRevisionID {
+		fmt.Printf("WARNING: Context mutex for key=%s with revision=%d was violated, new revision=%d!\n", key, lockRevisionID, entry.Revision())
 	}
 	lockTime := system.BytesToInt64(entry.Value())
 	if lockTime != 0 {
@@ -145,14 +141,14 @@ func ContextMutexLock(ft *FunctionType, id string, errorOnLocked bool) (uint64, 
 	return KeyMutexLock(ft.runtime, ft.name+"."+id, errorOnLocked, "ContextMutexLock")
 }
 
-func ContextMutexUnlock(ft *FunctionType, id string, lockRevisionId uint64) error {
-	return KeyMutexUnlock(ft.runtime, ft.name+"."+id, lockRevisionId, "ContextMutexUnlock")
+func ContextMutexUnlock(ft *FunctionType, id string, lockRevisionID uint64) error {
+	return KeyMutexUnlock(ft.runtime, ft.name+"."+id, lockRevisionID, "ContextMutexUnlock")
 }
 
 func FunctionTypeMutexLock(ft *FunctionType, errorOnLocked bool) (uint64, error) {
 	return KeyMutexLock(ft.runtime, ft.name, errorOnLocked, "FunctionTypeMutexLock")
 }
 
-func FunctionTypeMutexUnlock(ft *FunctionType, lockRevisionId uint64) error {
-	return KeyMutexUnlock(ft.runtime, ft.name, lockRevisionId, "FunctionTypeMutexUnlock")
+func FunctionTypeMutexUnlock(ft *FunctionType, lockRevisionID uint64) error {
+	return KeyMutexUnlock(ft.runtime, ft.name, lockRevisionID, "FunctionTypeMutexUnlock")
 }
