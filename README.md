@@ -19,7 +19,8 @@ Foliage is a collaborative application platform built around a distributed graph
   - [Included tests runtime](#included-tests-runtime)
     - [1. Go to `tests` dir](#1-go-to-tests-dir)
     - [2. Build tests runtime](#2-build-tests-runtime)
-    - [3. Run](#3-run)
+    - [3. Modify .env file](#3-modify-env-file)
+    - [4. Run](#4-run)
     - [4. Stop \& clean](#4-stop--clean)
     - [5. Test samples and customization](#5-test-samples-and-customization)
   - [Develop using the SDK](#develop-using-the-sdk)
@@ -57,11 +58,14 @@ cd tests
 docker-compose build
 ```
 
-### 3. Run
+### 3. Modify .env file
+Modify `.env` file for the test you are about to run. For the test `basic` is is `./basic/.env`
+
+### 4. Run
 ```sh
 docker-compose up -d
 ```
-By default the test `basic` sample will be started. To choose another sample to start use:
+By default the test `basic` sample will be started. To choose another test sample use:
 ```
 export TEST_NAME=<name> && docker-compose up -d
 ```
