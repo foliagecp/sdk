@@ -30,7 +30,7 @@ type FunctionType struct {
 	runtime                *Runtime
 	name                   string
 	subject                string
-	config                 *FunctionTypeConfig
+	config                 FunctionTypeConfig
 	handler                FunctionHandler
 	idHandlersChannel      sync.Map
 	idHandlersLastMsgTime  sync.Map
@@ -38,7 +38,7 @@ type FunctionType struct {
 	executor               *sfPlugins.TypenameExecutorPlugin
 }
 
-func NewFunctionType(runtime *Runtime, name string, handler FunctionHandler, config *FunctionTypeConfig) *FunctionType {
+func NewFunctionType(runtime *Runtime, name string, handler FunctionHandler, config FunctionTypeConfig) *FunctionType {
 	ft := &FunctionType{
 		runtime: runtime,
 		name:    name,

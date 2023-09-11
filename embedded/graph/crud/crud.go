@@ -476,11 +476,11 @@ func LLAPILinkDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 }
 
 func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
-	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.create", LLAPIObjectCreate, statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.update", LLAPIObjectUpdate, statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.delete", LLAPIObjectDelete, statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.create", LLAPIObjectCreate, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.update", LLAPIObjectUpdate, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.delete", LLAPIObjectDelete, *statefun.NewFunctionTypeConfig())
 
-	statefun.NewFunctionType(runtime, "functions.graph.ll.api.link.create", LLAPILinkCreate, statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.ll.api.link.update", LLAPILinkUpdate, statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.ll.api.link.delete", LLAPILinkDelete, statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.ll.api.link.create", LLAPILinkCreate, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.ll.api.link.update", LLAPILinkUpdate, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.ll.api.link.delete", LLAPILinkDelete, *statefun.NewFunctionTypeConfig())
 }

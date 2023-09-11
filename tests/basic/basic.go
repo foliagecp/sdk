@@ -101,7 +101,7 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlu
 func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	// Create new typename function "functions.tests.basic.master" each stateful instance of which uses go function "MasterFunction"
 	ftOptions := json_easy.NewJSONObjectWithKeyValue("increment", json_easy.NewJSON(MasterFunctionContextIncrementOption))
-	ft := statefun.NewFunctionType(runtime, "functions.tests.basic.master", MasterFunction, statefun.NewFunctionTypeConfig().SetOptions(&ftOptions))
+	ft := statefun.NewFunctionType(runtime, "functions.tests.basic.master", MasterFunction, *statefun.NewFunctionTypeConfig().SetOptions(&ftOptions))
 	// Add TypenameExecutorPlugin which will provide StatefunExecutor for each stateful instance for this typename function (skip this if TypenameExecutorPlugin is not needed)
 
 	if MasterFunctionJSPlugin {
@@ -126,7 +126,7 @@ func Start() {
 		}
 	}
 
-	if runtime, err := statefun.NewRuntime(statefun.NewRuntimeConfigSimple(NatsURL, "basic")); err == nil {
+	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "basic")); err == nil {
 		if KVMuticesTest {
 			KVMuticesSimpleTest(runtime, KVMuticesTestDurationSec, KVMuticesTestWorkers, 1000, 200)
 		}
