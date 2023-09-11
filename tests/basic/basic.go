@@ -128,7 +128,7 @@ func Start() {
 
 	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "basic")); err == nil {
 		if KVMuticesTest {
-			KVMuticesSimpleTest(runtime, KVMuticesTestDurationSec, KVMuticesTestWorkers, 1000, 200)
+			KVMuticesSimpleTest(runtime, KVMuticesTestDurationSec, KVMuticesTestWorkers, 2, 1)
 		}
 
 		RegisterFunctionTypes(runtime)
