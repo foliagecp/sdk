@@ -14,6 +14,7 @@ import (
 
 var (
 	keyValueMutexOperationMutex *sync.Mutex = &sync.Mutex{}
+	kwWatchMutex                            = &sync.Mutex{}
 )
 
 func KeyMutexLock(runtime *Runtime, key string, errorOnLocked bool, debugCaller ...string) (uint64, error) {
@@ -32,37 +33,43 @@ func KeyMutexLock(runtime *Runtime, key string, errorOnLocked bool, debugCaller 
 		lockRevisionID, err := kv.Update(entry.Key(), system.Int64ToBytes(now), entry.Revision())
 		if err != nil { // If no error appeared
 			if strings.Contains(err.Error(), "nats: wrong last sequence") { // If error "wrong revision" appeared
-				fmt.Printf("ERROR mutexMereLock: tried to lock with wrong revisionId\n")
+				fmt.Printf("%s: ERROR mutexMereLock: tried to lock with wrong revisionId\n", caller)
 			}
 			return 0, err // Terminate with error
 		}
 		fmt.Printf("============== %s: Locked %s\n", caller, entry.Key())
 		return lockRevisionID, nil // Successfully locked
 	}
+	getKeyWatch := func(keyMutex string) (nats.KeyWatcher, error) {
+		kwWatchMutex.Lock()
+		return kv.Watch(keyMutex)
+	}
+	releaseKeyWatch := func(w nats.KeyWatcher) {
+		system.MsgOnErrorReturn(w.Stop())
+		kwWatchMutex.Unlock()
+	}
 	mutexWaitForUnlock := func(keyMutex string) {
 		for {
-			if w, err := kv.Watch(keyMutex); err == nil {
-				defer system.MsgOnErrorReturn(w.Stop())
-
-				for {
-					select {
-					case entry := <-w.Updates():
-						if entry != nil {
-							lockTime := system.BytesToInt64(entry.Value())
-							if lockTime == 0 {
-								return
-							}
-						} else {
-							break // All updates read - create new kv.Watch
-						}
-					// For too long waiting for mutex to be released, maybe it is dead and no updates will ever come - start again
-					case <-time.After(time.Duration(runtime.config.kvMutexIsOldPollingIntervalSec) * time.Second):
+			if w, err := getKeyWatch(keyMutex); err == nil {
+				entry := <-w.Updates()
+				if entry != nil {
+					lockTime := system.BytesToInt64(entry.Value())
+					if lockTime == 0 {
+						releaseKeyWatch(w)
+						return
+					}
+					if lockTime+int64(runtime.config.kvMutexLifeTimeSec)*int64(time.Second) < system.GetCurrentTimeNs() {
+						fmt.Printf("======================= %s: WAITING FOR UNLOCK DONE (MUTEX IS DEAD)\n", caller)
+						releaseKeyWatch(w)
 						return
 					}
 				}
+				releaseKeyWatch(w)
 			} else {
 				fmt.Printf("KeyMutexLock kv.Watch error %s\n", err)
 			}
+			// Maybe sleep is needed to prevent to often kv.Watch
+			// time.Sleep(100 * time.Microsecond)
 		}
 	}
 
@@ -71,7 +78,7 @@ func KeyMutexLock(runtime *Runtime, key string, errorOnLocked bool, debugCaller 
 
 	fmt.Printf("============== %s: Locking %s\n", caller, keyMutex)
 	for {
-		now := time.Now().UnixNano()
+		now := system.GetCurrentTimeNs()
 
 		keyValueMutexOperationMutex.Lock()
 
