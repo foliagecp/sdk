@@ -19,9 +19,5 @@ RUN apt update && \
     apt install ca-certificates curl -y && \
     rm -rf /var/lib/apt/lists/*
 
-ENV TESTS_ROOT_DIR /foliage_sdk_tests
 COPY --from=builder /usr/bin/tests /usr/bin/
-COPY --from=builder /usr/src/app/tests/ /foliage_sdk_tests
-# Delete all .go files from all subfolders of "foliage_sdk_tests" && delete all files in "foliage_sdk_tests"
-RUN find /foliage_sdk_tests -name "*.go" -type f | xargs rm -rf && find /foliage_sdk_tests -maxdepth 1 -type f | xargs rm -rf
 

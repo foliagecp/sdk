@@ -6,15 +6,10 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 
-	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/foliagecp/sdk/tests/basic"
-	"github.com/joho/godotenv"
 )
-
-var TestsRootDir string = system.GetEnvMustProceed("TESTS_ROOT_DIR", "./")
 
 func helpInfo() {
 	fmt.Println("usage: tests <test_name>")
@@ -40,11 +35,4 @@ func main() {
 		missingTestInfo(testName)
 		return
 	}
-
-	envFile := fmt.Sprintf("%s/%s/.env", TestsRootDir, testName)
-	err := godotenv.Load(envFile)
-	if err != nil {
-		log.Fatalf("ERROR: Cannon load env file %s: %s\n", envFile, err)
-	}
-	system.MsgOnErrorReturn(os.Chdir(fmt.Sprintf("%s/%s", TestsRootDir, testName)))
 }

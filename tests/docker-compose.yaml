@@ -19,7 +19,8 @@ services:
 
   runtime:
     image: foliage-sdk-tests:latest
-    command: /usr/bin/tests "${TEST_NAME:-basic}"
+    command: /usr/bin/tests ${TEST_NAME:-basic}
+    env_file: ./${TEST_NAME:-basic}/.env
     depends_on:
       - nats
     build:
