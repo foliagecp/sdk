@@ -65,9 +65,10 @@ func (ft *FunctionType) Start(streamName string) error {
 	if !consumerExists {
 		_, err := ft.runtime.js.AddConsumer(streamName, &nats.ConsumerConfig{
 			Name:           consumerName,
-			Durable:        "event-processor",
-			DeliverSubject: ft.subject,
+			Durable:        consumerName,
+			DeliverSubject: consumerName,
 			DeliverGroup:   consumerGroup,
+			FilterSubject:  ft.subject,
 			AckPolicy:      nats.AckExplicitPolicy,
 			AckWait:        time.Duration(ft.config.msgAckWaitMs) * time.Millisecond, // AckWait should be long due to async message Ack
 		})
@@ -81,7 +82,8 @@ func (ft *FunctionType) Start(streamName string) error {
 		func(msg *nats.Msg) {
 			system.MsgOnErrorReturn(ft.handleMsg(msg))
 		},
-		//nats.Bind(STREAM_NAME, consumerName),
+		nats.Bind(streamName, consumerName),
+		nats.ManualAck(),
 	)
 	if err != nil {
 		fmt.Printf("Invalid subscription for function type %s: %s\n", ft.name, err)
@@ -163,16 +165,16 @@ func (ft *FunctionType) sendMsgToIDHandler(id string, msg interface{}, onChannel
 
 func (ft *FunctionType) idHandler(id string, msgChannel chan interface{}) {
 	// For idHandlerNatsMsg msg ---------------------------
-	msgAcker := func(msgChannel chan *nats.Msg) {
-		for msg := range msgChannel {
+	msgAcker := func(msgAckChannel chan *nats.Msg) {
+		for msg := range msgAckChannel {
 			if msg == nil {
 				return
 			}
 			system.MsgOnErrorReturn(msg.Ack())
 		}
 	}
-	msgChannelFinal := make(chan *nats.Msg, ft.config.msgAckChannelSize)
-	go msgAcker(msgChannelFinal)
+	msgAckChannel := make(chan *nats.Msg, ft.config.msgAckChannelSize)
+	go msgAcker(msgAckChannel)
 	// ----------------------------------------------------
 
 	functionTypeIDContextProcessor := sfPlugins.StatefunContextProcessor{
@@ -195,20 +197,20 @@ func (ft *FunctionType) idHandler(id string, msgChannel chan interface{}) {
 
 	for msg := range msgChannel {
 		if msg == nil {
-			msgChannelFinal <- nil
+			msgAckChannel <- nil
 			return
 		}
 
 		switch m := msg.(type) {
 		case *nats.Msg:
-			ft.idHandlerNatsMsg(id, m, &functionTypeIDContextProcessor, msgChannelFinal)
+			ft.idHandlerNatsMsg(id, m, &functionTypeIDContextProcessor, msgAckChannel)
 		case *GoMsg:
 			ft.idHandlerGoMsg(id, m, &functionTypeIDContextProcessor)
 		}
 	}
 }
 
-func (ft *FunctionType) idHandlerNatsMsg(id string, msg *nats.Msg, functionTypeIDContextProcessor *sfPlugins.StatefunContextProcessor, msgChannelFinal chan *nats.Msg) {
+func (ft *FunctionType) idHandlerNatsMsg(id string, msg *nats.Msg, functionTypeIDContextProcessor *sfPlugins.StatefunContextProcessor, msgAckChannel chan *nats.Msg) {
 	var lockRevisionID uint64 = 0
 	if !ft.config.balanceNeeded { // Use context mutex lock if function type is not typename balanced
 		var err error
@@ -266,7 +268,7 @@ func (ft *FunctionType) idHandlerNatsMsg(id string, msg *nats.Msg, functionTypeI
 		fmt.Printf("Data for function %s with id=%s is not a JSON\n", ft.name, id)
 	}
 
-	msgChannelFinal <- msg
+	msgAckChannel <- msg
 
 	if !ft.config.balanceNeeded { // Use context mutex lock if function type is not typename balanced
 		system.MsgOnErrorReturn(ContextMutexUnlock(ft, id, lockRevisionID))
