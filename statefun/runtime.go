@@ -32,7 +32,10 @@ type Runtime struct {
 }
 
 func NewRuntime(config RuntimeConfig) (r *Runtime, err error) {
-	r = &Runtime{config: config, registeredFunctionTypes: make(map[string]*FunctionType)}
+	r = &Runtime{
+		config:                  config,
+		registeredFunctionTypes: make(map[string]*FunctionType),
+	}
 
 	r.nc, err = nats.Connect(config.natsURL)
 	if err != nil {
