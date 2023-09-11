@@ -18,7 +18,7 @@ import (
 )
 
 type Runtime struct {
-	config     *RuntimeConfig
+	config     RuntimeConfig
 	nc         *nats.Conn
 	js         nats.JetStreamContext
 	kv         nats.KeyValue
@@ -31,7 +31,7 @@ type Runtime struct {
 	gc   int64 // Global counter - max total id handlers for all function types
 }
 
-func NewRuntime(config *RuntimeConfig) (r *Runtime, err error) {
+func NewRuntime(config RuntimeConfig) (r *Runtime, err error) {
 	r = &Runtime{config: config, registeredFunctionTypes: make(map[string]*FunctionType)}
 
 	r.nc, err = nats.Connect(config.natsURL)
