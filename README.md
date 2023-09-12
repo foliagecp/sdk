@@ -1,8 +1,10 @@
+# Foliage SDK
+
 <p align="center">
   <img src="./docs/pics/logo.png" width="600" alt="Foliage Logo">
 </p>
 
-Foliage is a collaborative application platform built upon a distributed graph database, providing a unified and extensible environment for effortless automation, cross-domain connectivity, and high-performance, edge-friendly runtimes.
+[Foliage](https://www.foliage.dev/) is a collaborative application platform built upon a distributed graph database, providing a unified and extensible environment for effortless automation, cross-domain connectivity, and high-performance, edge-friendly runtimes.
 
 [![License][License-Image]][License-Url] ![Lint][Lint-Status-Image-Url]
 
@@ -12,119 +14,151 @@ Foliage is a collaborative application platform built upon a distributed graph d
 
 ## Table of Contents
 
-- [Core concepts](#core-concepts)
-  - [Abstraction](#abstraction)
-  - [Features](#features)
-- [Getting Started](#getting-started)
-  - [Included tests runtime](#included-tests-runtime)
-    - [1. Go to `tests` dir](#1-go-to-tests-dir)
-    - [2. Build tests runtime](#2-build-tests-runtime)
-    - [3. Modify .env file](#3-modify-env-file)
-    - [4. Run](#4-run)
-    - [5. Stop \& clean](#5-stop--clean)
-    - [6. Test samples and customization](#6-test-samples-and-customization)
-  - [Develop using the SDK](#develop-using-the-sdk)
-- [Stack](#stack)
-- [Roadmap](#roadmap)
-- [References](#references)
-- [License](#license)
+- [Foliage SDK](#foliage-sdk)
+  - [Table of Contents](#table-of-contents)
+  - [Introduction](#introduction)
+  - [Core Concepts](#core-concepts)
+    - [Abstraction](#abstraction)
+    - [Features](#features)
+  - [Getting Started](#getting-started)
+    - [Installation](#installation)
+    - [Running Tests](#running-tests)
+      - [1. Navigate to the `tests` directory:](#1-navigate-to-the-tests-directory)
+      - [2. Build the tests runtime:](#2-build-the-tests-runtime)
+      - [3. Modify the `.env` file:](#3-modify-the-env-file)
+      - [4. Start the tests:](#4-start-the-tests)
+      - [5. Stop and clean up:](#5-stop-and-clean-up)
+    - [Customization](#customization)
+  - [Development](#development)
+    - [Working with the SDK](#working-with-the-sdk)
+  - [Technology Stack](#technology-stack)
+  - [Roadmap](#roadmap)
+  - [References](#references)
+  - [License](#license)
+  - [Contribution](#contribution)
 
-# Core concepts
-The primary concept of Foliage, as a high-performance application platform, revolves around orchestrating the collaborative work and interactions of complex and heterogeneous software and information systems. The platform's technology is rooted in the theory of heterogeneous functional graphs.
+## Introduction
 
-## Abstraction
-Knowledge about a complex or compound system, previously stored separately, converges into a unified associative space. This enables transparent understanding of the entire system and its behavior as an inseparable whole. It also provides the capability to consider all hidden relationships and previously unpredictable features, blurring the boundary between the system model and the system itself. 
-![Alt text](./docs/pics/FoliageUnification.jpg)
+Foliage is an open-source collaborative application platform that leverages a distributed graph database. It provides a unified and extensible environment for automation, cross-domain connectivity, and high-performance, edge-friendly runtimes. Whether you're building IoT solutions, automation workflows, or edge computing applications, Foliage offers a powerful foundation.
 
-Foliage achieves transparency, consistency, and unambiguity among related system components by consolidating knowledge from different domain planes into a unified space. It uncovers previously unnoticed dependencies, some of which might have been known only to a DevOps engineer or hidden within a script. This capability enables a transparent evaluation of the entire system and facilitates the addition of new links and relationships that were challenging to implement due to the functional rigidity of the software.
-![Alt text](./docs/pics/FoliageSingleSpace.jpg)
+## Core Concepts
 
-## Features
-Explore the extensive list of features [here](./docs/features.md).
+### Abstraction
 
-# Getting Started
+Foliage introduces the concept of abstraction, where knowledge about complex systems converges into a unified associative space. This enables transparent understanding of the entire system, blurring the boundary between system models and the system itself.
+
+![Abstraction](./docs/pics/FoliageUnification.jpg)
+
+### Features
+
+Foliage offers transparency, consistency, and unambiguity among system components by consolidating knowledge from different domains into a unified space. It uncovers previously unnoticed dependencies, making system evaluation and relationship management more straightforward.
+
+![Features](./docs/pics/FoliageSingleSpace.jpg)
+
+For a comprehensive list of features, see [here](./docs/features.md).
+
+## Getting Started
+
+### Installation
+
+To get started with Foliage, clone the repository:
+
 ```sh
 git clone https://github.com/foliagecp/sdk.git
 ```
-For detailed documentation, please visit the [official docs](https://pkg.go.dev/github.com/foliagecp/sdk).
 
-## Included tests runtime
-### 1. Go to `tests` dir
-```
+For detailed installation instructions and prerequisites, visit the [official documentation](https://pkg.go.dev/github.com/foliagecp/sdk).
+
+### Running Tests
+
+Foliage provides a set of test samples to help you get familiar with the platform. To run tests, follow these steps:
+
+#### 1. Navigate to the `tests` directory:
+
+```sh
 cd tests
 ```
-### 2. Build tests runtime
+
+#### 2. Build the tests runtime:
+
 ```sh
 docker-compose build
 ```
 
-### 3. Modify .env file
-Modify the `.env` file for the test you intend to run. For the basic test, it's located at `./basic/.env`.
+#### 3. Modify the `.env` file:
 
-### 4. Run
+Customize the test environment by editing the `.env` file. For the basic test, find it at `./basic/.env`.
+
+#### 4. Start the tests:
+
 ```sh
 docker-compose up -d
 ```
-By default the test `basic` sample will be started. To choose another test sample use:
-```
-export TEST_NAME=<name> && docker-compose up -d
-```
 
-### 5. Stop & clean
+By default, the basic test sample will start. To choose another test sample, set the `TEST_NAME` environment variable before running `docker-compose up -d`.
+
+#### 5. Stop and clean up:
+
+When you're done testing, stop and clean up the environment:
+
 ```sh
 docker-compose down -v
 ```
 
-### 6. Test samples and customization 
-To gain a better understanding of the principles of development with Foliage, explore the existing test samples and learn how to customize them. Below is a list of test samples provided with the SDK: 
-- [Basic](./docs/tests/basic.md)
+### Customization
 
-For no-code/low-code statefun logic definition the following plugins are available:
-- [JavaScript](./docs/plugins/js.md)
+Explore existing test samples and learn how to customize them to better understand Foliage's development principles. Refer to the [basic test sample documentation](./docs/tests/basic.md).
 
-## Develop using the SDK
+For statefun logic definition, consider using plugins like [JavaScript](./docs/plugins/js.md).
+
+## Development
+
+### Working with the SDK
+
+To develop applications with Foliage, use the SDK:
 
 ```sh
 go get github.com/foliagecp/sdk
 ```
 
-1. [Find out how to work with the graph](./docs/graph_crud.md)
-2. [Foliage's Json Path Graph Query Language](./docs/jpgql.md)
-3. [Write your own application](./docs/how_to_write_an_application.md)
-4. [Measure performance](./docs/performance_measures.md)
+- [Learn to work with the graph](./docs/graph_crud.md)
+- Explore Foliage's JSON Path Graph Query Language (JPGQL) [here](./docs/jpgql.md)
+- Find out how to write your own application [here](./docs/how_to_write_an_application.md)
+- Measure performance with guidance [here](./docs/performance_measures.md)
 
-# Stack
-1. Backend
-    - Jetstream NATS
-    - Key/Value Store NATS
-    - WebSocket NATS
-    - GoLang
-    - JavaScript (V8)
-2. Frontend
-    - React
-    - Typescript/JavaScript
-    - WebSocket
-3. Common
-    - docker
-    - docker-compose
+## Technology Stack
 
-[Why NATS?](./docs/technologies_comparison.md)
+Foliage relies on a versatile technology stack that includes:
 
-# Roadmap
-![Roadmap](./docs/pics/Roadmap.jpg)
+- Backend
+  - Jetstream NATS
+  - Key/Value Store NATS
+  - WebSocket NATS
+  - GoLang
+  - JavaScript (V8)
+- Frontend
+  - React
+  - TypeScript/JavaScript
+  - WebSocket
+- Common
+  - Docker
+  - Docker Compose
 
-Explore our exciting roadmap for upcoming features and enhancements.
+[Learn more about our technology choices](./docs/technologies_comparison.md).
 
-# References
+## Roadmap
+
+Explore our exciting roadmap for upcoming features and enhancements by checking out the [Roadmap](./docs/pics/Roadmap.jpg).
+
+## References
+
 - [Thesaurus](./docs/thesaurus.md)
 - [Conventions](./docs/conventions.md)
 
-# License
-Unless otherwise noted, the Foliage source files are distributed
-under the Apache Version 2.0 license found in the LICENSE file.
+## License
 
+Unless otherwise noted, the Foliage source files are distributed under the Apache Version 2.0 license found in the LICENSE file.
 
+## Contribution
 
-
-
-
+Foliage welcomes contributions from the open-source community. Join us in building a collaborative application platform that empowers developers worldwide.
