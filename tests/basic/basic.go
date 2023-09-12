@@ -23,9 +23,9 @@ var (
 	// NatsURL - nats server url
 	NatsURL string = system.GetEnvMustProceed("NATS_URL", "nats://nats:foliage@nats:4222")
 	// MasterFunctionContextIncrement - does the master stateful function do the increment operation on each call in its context
-	MasterFunctionContextIncrement bool = system.GetEnvMustProceed("MASTER_FUNC_CONTEXT_INREMENT", true)
+	MasterFunctionContextIncrement bool = system.GetEnvMustProceed("MASTER_FUNC_CONTEXT_INСREMENT", true)
 	// MasterFunctionContextIncrementOption - Default increment value
-	MasterFunctionContextIncrementOption int = system.GetEnvMustProceed("MASTER_FUNC_CONTEXT_INREMENT_OPTION", 1)
+	MasterFunctionContextIncrementOption int = system.GetEnvMustProceed("MASTER_FUNC_CONTEXT_INСREMENT_OPTION", 1)
 	// MasterFunctionObjectContextProcess - make master function read and write its object context in idle mode
 	MasterFunctionObjectContextProcess bool = system.GetEnvMustProceed("MASTER_FUNC_OBJECT_CONTEXT_PROCESS", false)
 	// MasterFunctionJSPlugin - enable js plugin for the master function
