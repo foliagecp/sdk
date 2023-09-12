@@ -2,7 +2,7 @@
   <img src="./docs/pics/logo.png" width="600" alt="Foliage Logo">
 </p>
 
-Foliage is a collaborative application platform built around a distributed graph database, offering a common and extensible environment for seamless automation, inter-domain connectivity, and high-performance, edge-friendly runtimes. 
+Foliage is a collaborative application platform built upon a distributed graph database, providing a unified and extensible environment for effortless automation, cross-domain connectivity, and high-performance, edge-friendly runtimes.
 
 [![License][License-Image]][License-Url] ![Lint][Lint-Status-Image-Url]
 
@@ -30,23 +30,23 @@ Foliage is a collaborative application platform built around a distributed graph
 - [License](#license)
 
 # Core concepts
-The main concept of the Foliage as a high-performance application platform is organizing coordinated work and interaction of a complex heterogeneous software and information systems. The platform's technology is based on the theory of heterogeneous functional graphs.
+The primary concept of Foliage, as a high-performance application platform, revolves around orchestrating the collaborative work and interactions of complex and heterogeneous software and information systems. The platform's technology is rooted in the theory of heterogeneous functional graphs.
 
 ## Abstraction
-The knowledge about a complex/compound system yet stored separately moves into a single associative space. This allows to have transparent knowledge about the entire system and its behavior as one and inseparable whole; gives an ability into account all the hidden relationships and previously unpredictable features; erases the boundary between the system model and the system itself. 
+Knowledge about a complex or compound system, previously stored separately, converges into a unified associative space. This enables transparent understanding of the entire system and its behavior as an inseparable whole. It also provides the capability to consider all hidden relationships and previously unpredictable features, blurring the boundary between the system model and the system itself. 
 ![Alt text](./docs/pics/FoliageUnification.jpg)
 
-By transferring knowledge from different domain planes into a single space, Foliage endows related system components with transparency, consistency, and unambiguity. Reveals weakly detected dependencies, which could be, for example, only inside the head of a devops engineer or in some script. This allows to transparently evaluate the system as a whole and easily endow it with new links and relationships that were previously difficult to implement due to the functional rigidity of the software part.
+Foliage achieves transparency, consistency, and unambiguity among related system components by consolidating knowledge from different domain planes into a unified space. It uncovers previously unnoticed dependencies, some of which might have been known only to a DevOps engineer or hidden within a script. This capability enables a transparent evaluation of the entire system and facilitates the addition of new links and relationships that were challenging to implement due to the functional rigidity of the software.
 ![Alt text](./docs/pics/FoliageSingleSpace.jpg)
 
 ## Features
-The full list of features can be found [here.](./docs/features.md)
+Explore the extensive list of features [here](./docs/features.md).
 
 # Getting Started
 ```sh
 git clone https://github.com/foliagecp/sdk.git
 ```
-For a fully detailed documentation, please visit the  [official docs.](https://pkg.go.dev/github.com/foliagecp/sdk)
+For detailed documentation, please visit the [official docs](https://pkg.go.dev/github.com/foliagecp/sdk).
 
 ## Included tests runtime
 ### 1. Go to `tests` dir
@@ -59,7 +59,7 @@ docker-compose build
 ```
 
 ### 3. Modify .env file
-Modify `.env` file for the test you are about to run. For the test `basic` is is `./basic/.env`
+Modify the `.env` file for the test you intend to run. For the basic test, it's located at `./basic/.env`.
 
 ### 4. Run
 ```sh
@@ -76,7 +76,7 @@ docker-compose down -v
 ```
 
 ### 5. Test samples and customization 
-Learn more about existing test samples and their customization to understand the principles of the developing with the Foliage. Here is the list of test samples provided with the SDK:  
+To gain a better understanding of the principles of development with Foliage, explore the existing test samples and learn how to customize them. Below is a list of test samples provided with the SDK: 
 - [Basic](./docs/tests/basic.md)
 
 For no-code/low-code statefun logic definition the following plugins are available:
@@ -112,6 +112,8 @@ go get github.com/foliagecp/sdk
 
 # Roadmap
 ![Roadmap](./docs/pics/Roadmap.jpg)
+
+Explore our exciting roadmap for upcoming features and enhancements.
 
 # References
 - [Thesaurus](./docs/thesaurus.md)

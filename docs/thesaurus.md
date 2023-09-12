@@ -1,12 +1,24 @@
 # Thesaurus
-## Foliage stateful function (statefun)
-Foliage stateful function is a function that can be called via NATS topic by passing a signal (publishing a message). It has a typename (its address) and it is always called against a string identifier (object's identifier). Being called on the same id concurrently it always executes sequentially. For different ids it executes concurrently. Each statefun on each ids posesses its own context that persisists between the calls and restarts.
+## Foliage Stateful Functions (statefun)
 
-## Foliage application
-Set of Foliage stateful functions in a single or distributed runtime organized in a way to achieve some specific behaviour.
+A Foliage stateful function is a type of function that can be invoked via a NATS topic by sending a signal (publishing a message). It is identified by a typename, which serves as its address, and it is always invoked with a string identifier representing an object.
 
-## Foliage's adapter
-A Foliage application designed to abstract interaction with a software system allowing other Foliage applications to work with it as a part of platform's unified functional graph.
+When invoked with the same identifier concurrently, the function executes sequentially. However, for different identifiers, the executions occur concurrently.
 
-## Signal
-Foliage signal is a stateful function's typename. To send a signal `S` to an object `O` means to call a stateful function with the typename `S` on object `O`.
+Each stateful function associated with a specific identifier has its own context. This context persists between function calls and restarts, ensuring that the stateful function maintains its state across invocations.
+
+_Note: NATS is a messaging system that provides publish-subscribe and request-reply functionality._
+
+## Foliage Application
+
+A **Foliage application** consists of a set of **Foliage stateful functions** running within a single or distributed runtime. These functions are organized to achieve specific behavior or functionality.
+
+
+## Foliage's Adapter
+
+**Foliage's adapter** refers to a Foliage application specifically designed to abstract the interaction with a software system. This adaptation enables other Foliage applications to seamlessly integrate it as part of the platform's unified functional graph.
+
+
+# Signal
+
+A **Foliage signal** represents the typename of a stateful function. Sending a signal `S` to an object `O` means invoking a stateful function with the typename `S` on object `O`.

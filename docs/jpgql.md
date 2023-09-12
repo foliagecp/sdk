@@ -1,33 +1,40 @@
-# JSONPath Graph Query Language - JPGQL
+# JPGQL: JSONPath-Like Lightweight Graph Query Language
 
-JPGQL is a lightweight async-parallel JSON-path like graph query language. Currently it is at the very initial stage of its growth. A lot of functional features are planned to be implemented later.
+JPGQL is a lightweight asynchronous and parallel graph query language, similar to JSONPath. Currently, it is in its initial stages of development, with plans to implement additional functional features in the future.
+
 
 ## Functions
+
   - [functions.graph.ll.api.query.jpgql.ctra](#Usage-of-JPGQL_CTRA-call-tree-result-aggregation)
   - [functions.graph.ll.api.query.jpgql.dcra](#Usage-of-JPGQL_DCRA-direct-cache-result-aggregation)
 ## Original jsonpath syntax:
 https://support.smartbear.com/alertsite/docs/monitors/api/endpoint/jsonpath.html
 
 ## Syntax
+
+The JPGQL syntax follows this pattern:
+
 ```<level_access><link_name>[filter][<level_access><link_name>[filter][<level_access><link_name>[filter]]...]```
 
-`level_access` – one of 2 literals:  
-`.` – next level  
-`..` – any level (first occurences on all roots only)
 
-`link_name` – text value  
-Valid characters: `a-zA-Z_-`
+- `level_access` can be one of two literals:
+  - `.` for the next level
+  - `..` for any level (first occurrences on all roots only)
 
-`filter` - value in square bracket   
-Within the square brackets filtering expressions resides
+- `link_name` is a text value with valid characters: `a-zA-Z_-`
+
+- `filter` is a value enclosed in square brackets, where filtering expressions reside.
+
 
 ### Restrictions:
+
 1. Do not use `$` and `@` within a filter
 2. A filter may contain only predifined functions connected via `&&` and `||`
 3. Link types valid characters: `a-zA-Z_-`
 
 ## Predefined functions
 ### tags(tag1:string, tag2:string, ...)
+
 Check that a link contains all of the defined tags
 
 ## Examples
@@ -59,16 +66,19 @@ Routes which goes through links typed as `type1` at depth=4:
 >```
 
 # Small test graph
+
 Small test graph shown on a picture below is created automatically on start in the [basic](./tests/basic.md) test sample:
 ![Alt text](./pics/TestGraph.jpg)
 
 # Usage of JPGQL_CTRA (call tree result aggregation)
+
 [Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/jpgql/#LLAPIQueryJPGQLCallTreeResultAggregation)
 1. Subscribe and listen for result:
 ```nats sub -s nats://nats:foliage@nats:4222 functions.graph.query.QUERYID```
 1. Call `functions.graph.ll.api.query.jpgql.ctra.<object_id>`
 
 ## JPGQL_CTRA query examples
+
 1. From the `root` at any depth find all objects preceded by link with the type `type5`  
 
 ```sh
@@ -124,6 +134,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query
 ```
 
 ## JPGQL_CTRA query examples with call on targets
+
 Make `functions.graph.ll.api.query.jpgql.ctra` to call `functions.graph.ll.api.object.debug.print` on each found object. 
 
 Example:  
@@ -146,6 +157,7 @@ g.out.ltp_oid-bdy.type2.h
 ```
 
 # Usage of JPGQL_DCRA (direct cache result aggregation)
+
 [Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/jpgql/#LLAPIQueryJPGQLDirectCacheResultAggregation)
 
 1. Subscribe and listen for result:
@@ -153,12 +165,15 @@ g.out.ltp_oid-bdy.type2.h
 1. Call `functions.graph.ll.api.query.jpgql.dcra.<object_id>`:
 
 ## JPGQL_DCRA query examples
+
 Same as for `JPGQL_CTRA query examples`
 
 ## JPGQL_DCRA query examples with call on targets
+
 Same as for `JPGQL_CTRA query examples with call on targets`
 
 ## Comparison with other graph query languages
+
 | Features | AQL | JPGQL |
 |----------|:-------------:|:------:|
 | Tunable indices | Yes | No |
