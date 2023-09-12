@@ -2,7 +2,7 @@
 
 ## Foliage Control Plane
 
-The **Foliage Control Plane** represents a comprehensive set of tools and functionalities of the platform allowing to implement the listed [features](./features.md). 
+The **Foliage Control Plane** is a comprehensive set of tools and functionalities of the platform that provides a universal control environment for integrated 3rd party systems and allows to implement the listed [features](./features.md). 
 
 ## Stateful Functions (statefun)
 
