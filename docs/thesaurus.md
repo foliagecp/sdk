@@ -19,6 +19,6 @@ A **Foliage application** consists of a set of **Foliage stateful functions** ru
 **Foliage's adapter** refers to a Foliage application specifically designed to abstract the interaction with a software system. This adaptation enables other Foliage applications to seamlessly integrate it as part of the platform's unified functional graph.
 
 
-# Signal
+## Signal
 
 A **Foliage signal** represents the typename of a stateful function. Sending a signal `S` to an object `O` means invoking a stateful function with the typename `S` on object `O`.
