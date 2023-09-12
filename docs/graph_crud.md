@@ -1,4 +1,5 @@
 # Graph CRUD
+
 1. Subscribe and listen for result: 
 ```sh
 nats sub -s nats://nats:foliage@nats:4222 functions.graph.query.QUERYID
@@ -11,6 +12,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.objec
 4. Inspect nats KV store: `nats -s nats://nats:foliage@nats:4222 kv ls -v --display-value app1_kv_store` via `io` container
 
 ## Functions
+
 - [functions.graph.ll.api.object.create](#functionsgraphllapiobjectcreateobject_id) <!-- omit in toc -->
 - [functions.graph.ll.api.object.update](#functionsgraphllapiobjectupdateobject_id)
 - [functions.graph.ll.api.object.delete](#functionsgraphllapiobjectdeleteobject_id)
@@ -19,6 +21,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.objec
 - [functions.graph.ll.api.link.delete](#functionsgraphllapilinkdeleteobject_id)
 
 ### functions.graph.ll.api.object.create.<object_id>
+
 [Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPIObjectCreate)
 
 Example:  
@@ -27,6 +30,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.objec
 ```
 
 ### functions.graph.ll.api.object.update.<object_id>
+
 [Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPIObjectUpdate)
 
 Example:  
@@ -35,6 +39,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.objec
 ```
 
 ### functions.graph.ll.api.object.delete.<object_id>
+
 [Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPIObjectDelete)
 
 Example:  
@@ -43,6 +48,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.objec
 ```
 
 ### functions.graph.ll.api.link.create.<object_id>
+
 [Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPILinkCreate)
 
 Example:  
@@ -51,6 +57,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.link.
 ```
 
 ### functions.graph.ll.api.link.update.<object_id>
+
 [Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPILinkUpdate)
 
 Example:  
@@ -59,6 +66,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.link.
 ```
 
 ### functions.graph.ll.api.link.delete.<object_id>
+
 [Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPILinkDelete)
 
 Example:  
