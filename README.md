@@ -21,8 +21,8 @@ Foliage is a collaborative application platform built upon a distributed graph d
     - [2. Build tests runtime](#2-build-tests-runtime)
     - [3. Modify .env file](#3-modify-env-file)
     - [4. Run](#4-run)
-    - [4. Stop \& clean](#4-stop--clean)
-    - [5. Test samples and customization](#5-test-samples-and-customization)
+    - [5. Stop \& clean](#5-stop--clean)
+    - [6. Test samples and customization](#6-test-samples-and-customization)
   - [Develop using the SDK](#develop-using-the-sdk)
 - [Stack](#stack)
 - [Roadmap](#roadmap)
@@ -70,12 +70,12 @@ By default the test `basic` sample will be started. To choose another test sampl
 export TEST_NAME=<name> && docker-compose up -d
 ```
 
-### 4. Stop & clean
+### 5. Stop & clean
 ```sh
 docker-compose down -v
 ```
 
-### 5. Test samples and customization 
+### 6. Test samples and customization 
 To gain a better understanding of the principles of development with Foliage, explore the existing test samples and learn how to customize them. Below is a list of test samples provided with the SDK: 
 - [Basic](./docs/tests/basic.md)
 
