@@ -1,3 +1,7 @@
+
+
+// Foliage tests main package.
+// Provides configurable running of different test samples that goes along with the SDK.
 package main
 
 import (
