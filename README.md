@@ -23,11 +23,11 @@
   - [Getting Started](#getting-started)
     - [Installation](#installation)
     - [Running Tests](#running-tests)
-      - [1. Navigate to the `tests` directory:](#1-navigate-to-the-tests-directory)
-      - [2. Build the tests runtime:](#2-build-the-tests-runtime)
-      - [3. Modify the `.env` file:](#3-modify-the-env-file)
-      - [4. Start the tests:](#4-start-the-tests)
-      - [5. Stop and clean up:](#5-stop-and-clean-up)
+      - [1. Navigate to the `tests` directory](#1-navigate-to-the-tests-directory)
+      - [2. Build the tests runtime](#2-build-the-tests-runtime)
+      - [3. Modify the `.env` file](#3-modify-the-env-file)
+      - [4. Start the tests](#4-start-the-tests)
+      - [5. Stop and clean up](#5-stop-and-clean-up)
     - [Customization](#customization)
   - [Development](#development)
     - [Working with the SDK](#working-with-the-sdk)
@@ -73,23 +73,23 @@ For detailed installation instructions and prerequisites, visit the [official do
 
 Foliage provides a set of test samples to help you get familiar with the platform. To run tests, follow these steps:
 
-#### 1. Navigate to the `tests` directory:
+#### 1. Navigate to the `tests` directory
 
 ```sh
 cd tests
 ```
 
-#### 2. Build the tests runtime:
+#### 2. Build the tests runtime
 
 ```sh
 docker-compose build
 ```
 
-#### 3. Modify the `.env` file:
+#### 3. Modify the `.env` file
 
 Customize the test environment by editing the `.env` file. For the basic test, find it at `./basic/.env`.
 
-#### 4. Start the tests:
+#### 4. Start the tests
 
 ```sh
 docker-compose up -d
@@ -97,7 +97,7 @@ docker-compose up -d
 
 By default, the basic test sample will start. To choose another test sample, set the `TEST_NAME` environment variable before running `docker-compose up -d`.
 
-#### 5. Stop and clean up:
+#### 5. Stop and clean up
 
 When you're done testing, stop and clean up the environment:
 
