@@ -152,7 +152,7 @@ Explore our exciting roadmap for upcoming features and enhancements by checking 
 
 ## References
 
-- [Thesaurus](./docs/thesaurus.md)
+- [Glossary](./docs/glossary.md)
 - [Conventions](./docs/conventions.md)
 
 ## License

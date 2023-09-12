@@ -1,4 +1,4 @@
-# Thesaurus
+# Glossary
 ## Foliage Stateful Functions (statefun)
 
 A Foliage stateful function is a type of function that can be invoked via a NATS topic by sending a signal (publishing a message). It is identified by a typename, which serves as its address, and it is always invoked with a string identifier representing an object.
