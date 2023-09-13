@@ -284,70 +284,68 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *
 	cs.ctx, cs.cancel = context.WithCancel(ctx)
 
 	storeUpdatesHandler := func(cs *Store) {
-		for {
-			select {
-			case <-cs.ctx.Done():
-			default:
-				if w, err := kv.Watch(cacheConfig.kvStorePrefix + ".>"); err == nil {
-					for entry := range w.Updates() {
-						// TODO: ctx.Done() must shutdown watcher
-						// TODO: close watcher when done
-						if entry != nil {
-							key := cs.fromStoreKey(entry.Key())
-							valueBytes := entry.Value()
-							if len(valueBytes) >= 9 { // Update or delete signal from KV store
-								appendFlag := valueBytes[8]
-								kvRecordTime := int64(binary.BigEndian.Uint64(valueBytes[:8]))
+		if w, err := kv.Watch(cacheConfig.kvStorePrefix + ".>"); err == nil {
+			activeKVSync := true
+			for activeKVSync {
+				select {
+				case <-cs.ctx.Done():
+					activeKVSync = false
+				case entry := <-w.Updates():
+					if entry != nil {
+						key := cs.fromStoreKey(entry.Key())
+						valueBytes := entry.Value()
+						if len(valueBytes) >= 9 { // Update or delete signal from KV store
+							appendFlag := valueBytes[8]
+							kvRecordTime := int64(binary.BigEndian.Uint64(valueBytes[:8]))
 
-								cacheRecordTime := cs.GetValueUpdateTime(key)
-								if kvRecordTime > cacheRecordTime {
-									if appendFlag == 1 {
-										//fmt.Printf("---CACHE_KV TF UPDATE: %s, %d, %d\n", key, kvRecordTime, appendFlag)
-										cs.SetValue(key, valueBytes[9:], false, kvRecordTime, "")
-									} else { // Someone else (other module) deleted a key from the cache
-										//fmt.Printf("---CACHE_KV TF DELETE: %s, %d, %d\n", key, kvRecordTime, appendFlag)
-										system.MsgOnErrorReturn(kv.Delete(entry.Key()))
+							cacheRecordTime := cs.GetValueUpdateTime(key)
+							if kvRecordTime > cacheRecordTime {
+								if appendFlag == 1 {
+									//fmt.Printf("---CACHE_KV TF UPDATE: %s, %d, %d\n", key, kvRecordTime, appendFlag)
+									cs.SetValue(key, valueBytes[9:], false, kvRecordTime, "")
+								} else { // Someone else (other module) deleted a key from the cache
+									//fmt.Printf("---CACHE_KV TF DELETE: %s, %d, %d\n", key, kvRecordTime, appendFlag)
+									system.MsgOnErrorReturn(kv.Delete(entry.Key()))
 
-										//cs.rootValue.purgeReady
-										//if csv := cs.getLastKeyCacheStoreValue(key); csv != nil {
-										//	csv.Purge(true)
-										//}
-									}
-								} else if kvRecordTime == cacheRecordTime { // KV confirmes update
-									if appendFlag == 0 {
-										system.MsgOnErrorReturn(kv.Delete(entry.Key()))
-									}
-									if csv := cs.getLastKeyCacheStoreValue(key); csv != nil {
-										csv.Lock("storeUpdatesHandler")
-										csv.syncedWithKV = true
-										csv.TryPurgeConfirm(false)
-										csv.Unlock("storeUpdatesHandler")
-									}
-									//fmt.Printf("---CACHE_KV TF TOO OLD: %s, %d, %d\n", key, kvRecordTime, appendFlag)
+									//cs.rootValue.purgeReady
+									//if csv := cs.getLastKeyCacheStoreValue(key); csv != nil {
+									//	csv.Purge(true)
+									//}
 								}
-							} else if len(valueBytes) == 0 { // Complete delete signal from KV store
+							} else if kvRecordTime == cacheRecordTime { // KV confirmes update
+								if appendFlag == 0 {
+									system.MsgOnErrorReturn(kv.Delete(entry.Key()))
+								}
 								if csv := cs.getLastKeyCacheStoreValue(key); csv != nil {
-									csv.Lock("storeUpdatesHandler complete_delete")
+									csv.Lock("storeUpdatesHandler")
 									csv.syncedWithKV = true
-									csv.TryPurgeReady(false)
 									csv.TryPurgeConfirm(false)
-									csv.Unlock("storeUpdatesHandler complete_delete")
+									csv.Unlock("storeUpdatesHandler")
 								}
-								//fmt.Printf("---CACHE_KV EMPTY: %s\n", key)
-								// Deletion notify - omitting cause value must already be deleted from the cache
-							} else {
-								//fmt.Printf("---CACHE_KV !T!F: %s\n", key)
-								fmt.Printf("ERROR storeUpdatesHandler: received value without time and append flag!\n")
+								//fmt.Printf("---CACHE_KV TF TOO OLD: %s, %d, %d\n", key, kvRecordTime, appendFlag)
 							}
+						} else if len(valueBytes) == 0 { // Complete delete signal from KV store
+							if csv := cs.getLastKeyCacheStoreValue(key); csv != nil {
+								csv.Lock("storeUpdatesHandler complete_delete")
+								csv.syncedWithKV = true
+								csv.TryPurgeReady(false)
+								csv.TryPurgeConfirm(false)
+								csv.Unlock("storeUpdatesHandler complete_delete")
+							}
+							//fmt.Printf("---CACHE_KV EMPTY: %s\n", key)
+							// Deletion notify - omitting cause value must already be deleted from the cache
 						} else {
-							close(cs.initChan)
+							//fmt.Printf("---CACHE_KV !T!F: %s\n", key)
+							fmt.Printf("ERROR storeUpdatesHandler: received value without time and append flag!\n")
 						}
+					} else {
+						close(cs.initChan)
 					}
-				} else {
-					fmt.Printf("storeUpdatesHandler kv.Watch error %s\n", err)
 				}
 			}
-			time.Sleep(100 * time.Millisecond) // Prevents too much processor time consumption
+			system.MsgOnErrorReturn(w.Stop())
+		} else {
+			fmt.Printf("storeUpdatesHandler kv.Watch error %s\n", err)
 		}
 	}
 	kvLazyWriter := func(cs *Store) {
