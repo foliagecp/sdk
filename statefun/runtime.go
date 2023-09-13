@@ -159,8 +159,12 @@ func (r *Runtime) callFunction(callerTypename string, callerID string, targetTyp
 	data := json_easy.NewJSONObject()
 	data.SetByPath("caller_typename", json_easy.NewJSON(callerTypename))
 	data.SetByPath("caller_id", json_easy.NewJSON(callerID))
-	data.SetByPath("payload", *payload)
-	data.SetByPath("options", *options)
+	if payload != nil {
+		data.SetByPath("payload", *payload)
+	}
+	if options != nil {
+		data.SetByPath("options", *options)
+	}
 	go func() {
 		system.MsgOnErrorReturn(r.nc.Publish(targetTypename+"."+targetID, data.ToBytes()))
 	}()
