@@ -301,7 +301,7 @@ func (ft *FunctionType) idHandlerGoMsg(id string, msg *GoMsg, functionTypeIDCont
 func (ft *FunctionType) gc(functionTypeIDLifetimeMs int) (garbageCollected int, handlersRunning int) {
 	now := time.Now().UnixNano()
 
-	ft.idHandlersLastMsgTime.Range(func(key, value any) bool {
+	ft.idHandlersLastMsgTime.Range(func(key, value interface{}) bool {
 		id := key.(string)
 		lastMsgTime := value.(int64)
 		if lastMsgTime+int64(functionTypeIDLifetimeMs)*int64(time.Millisecond) < now {
