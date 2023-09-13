@@ -170,6 +170,7 @@ func (r *Runtime) callFunction(callerTypename string, callerID string, targetTyp
 	}()
 }
 
+// TODO: return error also
 func (r *Runtime) callFunctionGolangSync(callerTypename string, callerID string, targetTypename string, targetID string, payload *json_easy.JSON, options *json_easy.JSON) *json_easy.JSON {
 	resultJSONChannel := make(chan *json_easy.JSON, 1)
 
