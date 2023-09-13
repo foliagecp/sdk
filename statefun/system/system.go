@@ -15,6 +15,62 @@ import (
 	"time"
 )
 
+func CreateDimSizeChannel[T interface{}](maxBufferElements int, onBufferOverflow func()) (in chan T, out chan T) {
+	in = make(chan T)
+	out = make(chan T)
+	notifier := make(chan bool)
+
+	var buffer []T
+
+	puller := func(notifier chan bool) {
+		defer close(notifier) // notifier channel is being closed
+		for {
+			val, ok := <-in
+			if !ok { // in channel is closed
+				return
+			}
+			buffer = append(buffer, val)
+			if len(buffer) > maxBufferElements {
+				if onBufferOverflow != nil {
+					onBufferOverflow()
+				}
+			}
+
+			select {
+			case notifier <- true:
+			default:
+				continue
+			}
+
+			/*fmt.Printf("%d, %d\n", len(notifier), cap(notifier))
+			if len(notifier) < cap(notifier) { // If room is available in the notifier channel
+				notifier <- true
+			}*/
+		}
+	}
+	pusher := func(notifier chan bool) {
+		defer close(out) // out channel is being closed
+		for {
+			if len(buffer) == 0 {
+				_, ok := <-notifier
+				if !ok { // notifier channel is closed
+					return
+				}
+			}
+			out <- buffer[0]
+			if len(buffer) == 1 {
+				buffer = nil
+			} else {
+				buffer = buffer[1:]
+			}
+		}
+	}
+	go puller(notifier)
+	go pusher(notifier)
+
+	return
+}
+
 func MsgOnErrorReturn(err error) {
 	if err != nil {
 		fmt.Printf("ERROR: %s\n", err)
