@@ -13,8 +13,8 @@ import (
 )
 
 var (
-	keyValueMutexOperationMutex *sync.Mutex = &sync.Mutex{}
-	kwWatchMutex                            = &sync.Mutex{}
+	keyValueMutexOperationMutex sync.Mutex
+	kwWatchMutex                sync.Mutex
 )
 
 func KeyMutexLock(runtime *Runtime, key string, errorOnLocked bool, debugCaller ...string) (uint64, error) {
