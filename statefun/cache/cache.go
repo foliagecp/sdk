@@ -42,14 +42,7 @@ type StoreValue struct {
 }
 
 func notifySubscriber(c chan KeyValue, key interface{}, value interface{}) {
-	guaranteedDelivery := func(channel chan KeyValue, k interface{}, v interface{}) {
-		channel <- KeyValue{Key: k, Value: v}
-	}
-	if len(c) < cap(c) { // If room is available in the channel
-		guaranteedDelivery(c, key, value)
-	} else {
-		go guaranteedDelivery(c, key, value) // Runs in a separate thread cause notifySubscriber must be non blocking operation
-	}
+	c <- KeyValue{Key: key, Value: value}
 }
 
 func (csv *StoreValue) Lock(caller string) {
@@ -140,7 +133,7 @@ func (csv *StoreValue) Put(value interface{}, updateInKV bool, customPutTime int
 	csv.syncedWithKV = !updateInKV
 
 	if csv.parent != nil {
-		csv.parent.notifyUpdates.Range(func(k, v interface{}) bool {
+		csv.parent.notifyUpdates.Range(func(_, v interface{}) bool {
 			notifySubscriber(v.(chan KeyValue), key, value)
 			return true
 		})
@@ -160,7 +153,7 @@ func (csv *StoreValue) collectGarbage() {
 	}
 
 	noNotifySubscribers := true
-	csv.notifyUpdates.Range(func(k, v interface{}) bool {
+	csv.notifyUpdates.Range(func(_, _ interface{}) bool {
 		noNotifySubscribers = false
 		return false
 	})
@@ -222,7 +215,7 @@ func (csv *StoreValue) Delete(updateInKV bool, customDeleteTime int64) {
 	csv.Unlock("Delete")
 
 	if csv.parent != nil {
-		csv.parent.notifyUpdates.Range(func(k, v interface{}) bool {
+		csv.parent.notifyUpdates.Range(func(_, v interface{}) bool {
 			notifySubscriber(v.(chan KeyValue), key, nil)
 			return true
 		})
@@ -484,9 +477,14 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *
 // callbackID - unique id for this subscription
 func (cs *Store) SubscribeLevelCallback(key string, callbackID string) chan KeyValue {
 	if _, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true); parentCacheStoreValue != nil {
-		callbackChannel := make(chan KeyValue, cs.cacheConfig.levelSubscriptionChannelSize)
-		parentCacheStoreValue.notifyUpdates.Store(callbackID, callbackChannel)
-		return callbackChannel
+
+		onBufferOverflow := func() {
+			fmt.Printf("WARNING: SubscribeLevelCallback SubscriptionNotificationsBuffer overflow for key=%s!\n", key)
+		}
+		callbackChannelIn, callbackChannelOut := system.CreateDimSizeChannel[KeyValue](cs.cacheConfig.levelSubscriptionNotificationsBufferMaxSize, onBufferOverflow)
+		parentCacheStoreValue.notifyUpdates.Store(callbackID, callbackChannelIn)
+
+		return callbackChannelOut
 	}
 	return nil
 }
