@@ -148,7 +148,7 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 
 		getQuery := func() (string, error) {
 			jpQuery, ok := payload.GetByPath("jpgql_query").AsString()
-			if ok || len(jpQuery) == 0 {
+			if !ok || len(jpQuery) == 0 {
 				return "", fmt.Errorf("Error LLAPIQueryJPGQLCallTreeResultAggregation: \"jpgql_query\" must be a string with len>0")
 			}
 			return jpQuery, nil
