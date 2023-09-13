@@ -7,6 +7,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
 
 	"github.com/foliagecp/sdk/tests/basic"
 )
@@ -31,5 +32,11 @@ func main() {
 	default:
 		fmt.Printf("Test named \"%s\" not found!\n", testName)
 		return
+	}
+
+	err := os.Chdir(fmt.Sprintf("./%s", testName))
+	if err != nil {
+		fmt.Printf("ERROR: Could not chdir to test \"%s\": %s\n", testName, err)
+		os.Exit(1)
 	}
 }
