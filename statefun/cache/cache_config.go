@@ -3,22 +3,22 @@
 package cache
 
 const (
-	KVStorePrefix                = "store"
-	LRUSize                      = 1000000
-	LevelSubscriptionChannelSize = 64
+	KVStorePrefix                               = "store"
+	LRUSize                                     = 1000000
+	LevelSubscriptionNotificationsBufferMaxSize = 30000 // ~16Mb: elemenets := 16 * 1024 * 1024 / (64 + 512), where 512 - avg value size, 64 - avg key size
 )
 
 type Config struct {
-	kvStorePrefix                string
-	lruSize                      int
-	levelSubscriptionChannelSize int
+	kvStorePrefix                               string
+	lruSize                                     int
+	levelSubscriptionNotificationsBufferMaxSize int
 }
 
 func NewCacheConfig() *Config {
 	return &Config{
-		kvStorePrefix:                KVStorePrefix,
-		lruSize:                      LRUSize,
-		levelSubscriptionChannelSize: LevelSubscriptionChannelSize,
+		kvStorePrefix: KVStorePrefix,
+		lruSize:       LRUSize,
+		levelSubscriptionNotificationsBufferMaxSize: LevelSubscriptionNotificationsBufferMaxSize,
 	}
 }
 
@@ -32,7 +32,7 @@ func (ro *Config) SetLRUSize(lruSize int) *Config {
 	return ro
 }
 
-func (ro *Config) SetLevelSubscriptionChannelSize(levelSubscriptionChannelSize int) *Config {
-	ro.levelSubscriptionChannelSize = levelSubscriptionChannelSize
+func (ro *Config) SetLevelSubscriptionNotificationsBufferMaxSize(levelSubscriptionNotificationsBufferMaxSize int) *Config {
+	ro.levelSubscriptionNotificationsBufferMaxSize = levelSubscriptionNotificationsBufferMaxSize
 	return ro
 }
