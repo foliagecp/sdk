@@ -45,7 +45,7 @@ func notifySubscriber(c chan KeyValue, key interface{}, value interface{}) {
 	guaranteedDelivery := func(channel chan KeyValue, k interface{}, v interface{}) {
 		channel <- KeyValue{Key: k, Value: v}
 	}
-	if len(c) < cap(c) { // If room is available in th channel
+	if len(c) < cap(c) { // If room is available in the channel
 		guaranteedDelivery(c, key, value)
 	} else {
 		go guaranteedDelivery(c, key, value) // Runs in a separate thread cause notifySubscriber must be non blocking operation
@@ -707,8 +707,6 @@ func (cs *Store) DeleteValue(key string, updateInKV bool, customDeleteTime int64
 }
 
 func (cs *Store) GetKeysByPattern(pattern string) []string {
-	// TODO: Restore cs.consistentWithKV to true: all keys from KV must exist in cache
-
 	keys := map[string]bool{}
 
 	appendKeysFromKV := func() {
@@ -736,12 +734,12 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 			consistencyWithKVLossTime := atomic.LoadInt64(&parentCacheStoreValue.storeConsistencyWithKVLossTime)
 			// ------------------------------------------------------
 
-			//childrenStoresAreConsistentWithKV := true
+			childrenStoresAreConsistentWithKV := true
 			parentCacheStoreValue.Range(func(key, value interface{}) bool {
 				childCSV := value.(*StoreValue)
-				/*if atomic.LoadInt64(&childCSV.storeConsistencyWithKVLossTime) > 0 { // Child store not consistent with KV
+				if atomic.LoadInt64(&childCSV.storeConsistencyWithKVLossTime) > 0 { // Child store not consistent with KV
 					childrenStoresAreConsistentWithKV = false
-				}*/
+				}
 				if childCSV.ValueExists() {
 					keys[keyWithoutLastToken+key.(string)] = true
 				}
@@ -750,16 +748,17 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 
 			// If CSV is inconsistent with KV -----------------------
 			if consistencyWithKVLossTime > 0 {
-				//keysCountBefore := len(keys)
+				keysCountBefore := len(keys)
 				appendKeysFromKV()
-				//keysCountAfter := len(keys)
+				keysCountAfter := len(keys)
 
-				/*if keysCountBefore == keysCountAfter && childrenStoresAreConsistentWithKV {
+				if keysCountBefore == keysCountAfter && childrenStoresAreConsistentWithKV {
 					// Restore consistency if relevant
-					if atomic.CompareAndSwapInt64(&parentCacheStoreValue.storeConsistencyWithKVLossTime, consistencyWithKVLossTime, 0) {
-						fmt.Printf("Consistency restored for key=\"%s\" store\n", parentCacheStoreValue.GetFullKeyString())
-					}
-				}*/
+					//if atomic.CompareAndSwapInt64(&parentCacheStoreValue.storeConsistencyWithKVLossTime, consistencyWithKVLossTime, 0) {
+					//fmt.Printf("Consistency restored for key=\"%s\" store\n", parentCacheStoreValue.GetFullKeyString())
+					//}
+					atomic.CompareAndSwapInt64(&parentCacheStoreValue.storeConsistencyWithKVLossTime, consistencyWithKVLossTime, 0)
+				}
 			}
 			// ------------------------------------------------------
 		} else if keyLastToken == ">" {
@@ -807,18 +806,19 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 
 			// If CSV is inconsistent with KV -----------------------
 			if inconsistencyWithKVExistsOnSubLevel {
-				//keysCountBefore := len(keys)
+				keysCountBefore := len(keys)
 				appendKeysFromKV()
-				//keysCountAfter := len(keys)
+				keysCountAfter := len(keys)
 
-				/*if keysCountBefore == keysCountAfter {
+				if keysCountBefore == keysCountAfter {
 					for subCSV, subCSVConsistencyWithKVLossTime := range allSubCSVsToConsistencyWithKVLossTime {
 						// Restore consistency if relevant
-						if atomic.CompareAndSwapInt64(&subCSV.storeConsistencyWithKVLossTime, subCSVConsistencyWithKVLossTime, 0) {
-							//fmt.Printf("Consistency restored for key=\"%s\" store\n", subCSV.GetFullKeyString())
-						}
+						//if atomic.CompareAndSwapInt64(&subCSV.storeConsistencyWithKVLossTime, subCSVConsistencyWithKVLossTime, 0) {
+						//fmt.Printf("Consistency restored for key=\"%s\" store\n", subCSV.GetFullKeyString())
+						//}
+						atomic.CompareAndSwapInt64(&subCSV.storeConsistencyWithKVLossTime, subCSVConsistencyWithKVLossTime, 0)
 					}
-				}*/
+				}
 			}
 			// ------------------------------------------------------
 		} else {
