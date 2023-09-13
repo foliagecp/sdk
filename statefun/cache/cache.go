@@ -20,18 +20,18 @@ import (
 )
 
 type KeyValue struct {
-	Key   any
-	Value any
+	Key   interface{}
+	Value interface{}
 }
 
 type StoreValue struct {
 	parent      *StoreValue
-	keyInParent any
-	value       any
+	keyInParent interface{}
+	value       interface{}
 	valueExists bool
 	// 0 - do not purge, 1 - wait for KV update confirmation and go to state 2, 2 - purge
 	purgeState int
-	store      map[any]*StoreValue
+	store      map[interface{}]*StoreValue
 	// "0" if store contains all keys and all subkeys (no lru purged ones at any next level)
 	storeConsistencyWithKVLossTime int64
 	valueUpdateTime                int64
@@ -41,8 +41,8 @@ type StoreValue struct {
 	syncedWithKV                   bool
 }
 
-func notifySubscriber(c chan KeyValue, key any, value any) {
-	guaranteedDelivery := func(channel chan KeyValue, k any, v any) {
+func notifySubscriber(c chan KeyValue, key interface{}, value interface{}) {
+	guaranteedDelivery := func(channel chan KeyValue, k interface{}, v interface{}) {
 		channel <- KeyValue{Key: k, Value: v}
 	}
 	if len(c) < cap(c) { // If room is available in th channel
@@ -94,7 +94,7 @@ func (csv *StoreValue) ValueExists() bool {
 	return csv.valueExists
 }
 
-func (csv *StoreValue) LoadChild(key any, safe bool) (*StoreValue, bool) {
+func (csv *StoreValue) LoadChild(key interface{}, safe bool) (*StoreValue, bool) {
 	if safe {
 		csv.Lock("LoadChild")
 		defer csv.Unlock("LoadChild")
@@ -105,7 +105,7 @@ func (csv *StoreValue) LoadChild(key any, safe bool) (*StoreValue, bool) {
 	return nil, false
 }
 
-func (csv *StoreValue) StoreChild(key any, child *StoreValue, safe bool) {
+func (csv *StoreValue) StoreChild(key interface{}, child *StoreValue, safe bool) {
 	child.Lock("StoreChild child")
 	defer child.Unlock("StoreChild child")
 
@@ -119,13 +119,13 @@ func (csv *StoreValue) StoreChild(key any, child *StoreValue, safe bool) {
 	if safe {
 		csv.Unlock("StoreChild")
 	}
-	csv.notifyUpdates.Range(func(_, v any) bool {
+	csv.notifyUpdates.Range(func(_, v interface{}) bool {
 		notifySubscriber(v.(chan KeyValue), key, child.value)
 		return true
 	})
 }
 
-func (csv *StoreValue) Put(value any, updateInKV bool, customPutTime int64) {
+func (csv *StoreValue) Put(value interface{}, updateInKV bool, customPutTime int64) {
 	csv.Lock("Put")
 	key := csv.keyInParent
 
@@ -140,7 +140,7 @@ func (csv *StoreValue) Put(value any, updateInKV bool, customPutTime int64) {
 	csv.syncedWithKV = !updateInKV
 
 	if csv.parent != nil {
-		csv.parent.notifyUpdates.Range(func(k, v any) bool {
+		csv.parent.notifyUpdates.Range(func(k, v interface{}) bool {
 			notifySubscriber(v.(chan KeyValue), key, value)
 			return true
 		})
@@ -160,7 +160,7 @@ func (csv *StoreValue) collectGarbage() {
 	}
 
 	noNotifySubscribers := true
-	csv.notifyUpdates.Range(func(k, v any) bool {
+	csv.notifyUpdates.Range(func(k, v interface{}) bool {
 		noNotifySubscribers = false
 		return false
 	})
@@ -222,14 +222,14 @@ func (csv *StoreValue) Delete(updateInKV bool, customDeleteTime int64) {
 	csv.Unlock("Delete")
 
 	if csv.parent != nil {
-		csv.parent.notifyUpdates.Range(func(k, v any) bool {
+		csv.parent.notifyUpdates.Range(func(k, v interface{}) bool {
 			notifySubscriber(v.(chan KeyValue), key, nil)
 			return true
 		})
 	}
 }
 
-func (csv *StoreValue) Range(f func(key, value any) bool) {
+func (csv *StoreValue) Range(f func(key, value interface{}) bool) {
 	csv.Lock("Range")
 	defer csv.Unlock("Range")
 	for key, value := range csv.store {
@@ -271,10 +271,21 @@ type Store struct {
 
 func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *Store {
 	cs := Store{
-		cacheConfig:                 cacheConfig,
-		kv:                          kv,
-		initChan:                    make(chan bool),
-		rootValue:                   &StoreValue{parent: nil, value: nil, storeMutex: &sync.Mutex{}, store: make(map[any]*StoreValue), storeConsistencyWithKVLossTime: 0, valueExists: false, purgeState: 0, syncNeeded: false, syncedWithKV: true, valueUpdateTime: -1},
+		cacheConfig: cacheConfig,
+		kv:          kv,
+		initChan:    make(chan bool),
+		rootValue: &StoreValue{
+			parent:                         nil,
+			value:                          nil,
+			storeMutex:                     &sync.Mutex{},
+			store:                          make(map[interface{}]*StoreValue),
+			storeConsistencyWithKVLossTime: 0,
+			valueExists:                    false,
+			purgeState:                     0,
+			syncNeeded:                     false,
+			syncedWithKV:                   true,
+			valueUpdateTime:                -1,
+		},
 		lruTresholdTime:             0,
 		valuesInCache:               0,
 		transactionsMutex:           &sync.Mutex{},
@@ -376,7 +387,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *
 					depthsStack = depthsStack[:lastID]
 
 					noChildred := true
-					currentStoreValue.Range(func(key, value any) bool {
+					currentStoreValue.Range(func(key, value interface{}) bool {
 						noChildred = false
 
 						var newSuffix string
@@ -604,7 +615,7 @@ func (cs *Store) TransactionEnd(transactionID string) {
 			}
 			return false
 		} else {
-			csvUpdate = &StoreValue{value: newValue, storeMutex: &sync.Mutex{}, store: make(map[any]*StoreValue), storeConsistencyWithKVLossTime: 0, valueExists: true, purgeState: 0, syncNeeded: updateInKV, syncedWithKV: !updateInKV, valueUpdateTime: customSetTime}
+			csvUpdate = &StoreValue{value: newValue, storeMutex: &sync.Mutex{}, store: make(map[interface{}]*StoreValue), storeConsistencyWithKVLossTime: 0, valueExists: true, purgeState: 0, syncNeeded: updateInKV, syncedWithKV: !updateInKV, valueUpdateTime: customSetTime}
 			parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate)
 			return true
 		}
@@ -627,7 +638,7 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 				return true
 			}
 		} else {
-			csvUpdate = &StoreValue{value: newValue, storeMutex: &sync.Mutex{}, store: make(map[any]*StoreValue), storeConsistencyWithKVLossTime: 0, valueExists: true, purgeState: 0, syncNeeded: updateInKV, syncedWithKV: !updateInKV, valueUpdateTime: customSetTime}
+			csvUpdate = &StoreValue{value: newValue, storeMutex: &sync.Mutex{}, store: make(map[interface{}]*StoreValue), storeConsistencyWithKVLossTime: 0, valueExists: true, purgeState: 0, syncNeeded: updateInKV, syncedWithKV: !updateInKV, valueUpdateTime: customSetTime}
 			parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate, false)
 			return true
 		}
@@ -649,7 +660,7 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 				csv.Put(value, updateInKV, customSetTime)
 			} else {
 				//fmt.Println(">>4 " + key)
-				csvUpdate = &StoreValue{value: value, storeMutex: &sync.Mutex{}, store: make(map[any]*StoreValue), storeConsistencyWithKVLossTime: 0, valueExists: true, purgeState: 0, syncNeeded: updateInKV, syncedWithKV: !updateInKV, valueUpdateTime: customSetTime}
+				csvUpdate = &StoreValue{value: value, storeMutex: &sync.Mutex{}, store: make(map[interface{}]*StoreValue), storeConsistencyWithKVLossTime: 0, valueExists: true, purgeState: 0, syncNeeded: updateInKV, syncedWithKV: !updateInKV, valueUpdateTime: customSetTime}
 				//fmt.Println(">>5 " + key)
 				parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate, true)
 				//fmt.Println(">>6 " + key)
@@ -726,7 +737,7 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 			// ------------------------------------------------------
 
 			//childrenStoresAreConsistentWithKV := true
-			parentCacheStoreValue.Range(func(key, value any) bool {
+			parentCacheStoreValue.Range(func(key, value interface{}) bool {
 				childCSV := value.(*StoreValue)
 				/*if atomic.LoadInt64(&childCSV.storeConsistencyWithKVLossTime) > 0 { // Child store not consistent with KV
 					childrenStoresAreConsistentWithKV = false
@@ -777,7 +788,7 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 				suffixPathsStack = suffixPathsStack[:lastID]
 				depthsStack = depthsStack[:lastID]
 
-				currentStoreValue.Range(func(key, value any) bool {
+				currentStoreValue.Range(func(key, value interface{}) bool {
 					var newSuffix string
 					if currentDepth == 0 {
 						newSuffix = currentSuffix + key.(string)
@@ -856,7 +867,17 @@ func (cs *Store) getLastKeyTokenAndItsParentCacheStoreValue(key string, createIf
 			currentStoreLevel = csv
 		} else {
 			if createIfNotexists {
-				csv := StoreValue{value: nil, storeMutex: &sync.Mutex{}, store: make(map[any]*StoreValue), storeConsistencyWithKVLossTime: 0, valueExists: false, purgeState: 0, syncNeeded: false, syncedWithKV: true, valueUpdateTime: system.GetCurrentTimeNs()}
+				csv := StoreValue{
+					value:                          nil,
+					storeMutex:                     &sync.Mutex{},
+					store:                          make(map[interface{}]*StoreValue),
+					storeConsistencyWithKVLossTime: 0,
+					valueExists:                    false,
+					purgeState:                     0,
+					syncNeeded:                     false,
+					syncedWithKV:                   true,
+					valueUpdateTime:                system.GetCurrentTimeNs(),
+				}
 				currentStoreLevel.StoreChild(tokens[currentTokenID], &csv, true)
 				currentStoreLevel = &csv
 			} else {
