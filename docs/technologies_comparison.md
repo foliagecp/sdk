@@ -33,27 +33,23 @@ Foliage Graph Store is built on NATS key/value, which means that both the storag
 
 ### Lightweight
 
-ArangoDB's minimum hardware requirements are as follows: 
-- RAM: 1 GB
-- CPU: 2.2 GHz
-
-In contrast, NATS can run on very small edge devices, such as Raspberry Pi, baseboard management controller, etc., and it requires no more than 32 MiB of RAM in a native installation.
+In contrast to other solutions, NATS server can run on very small edge devices, such as Raspberry Pi, baseboard management controller, etc., and it requires no more than 32 MiB of RAM in a native installation. More about NATS server installation requirements you can read [here](https://docs.nats.io/running-a-nats-service/introduction/installation).
 
 ## Functional layer provider
 
 The table below outlines the criteria that explain why the platform chose to create its own stateful functions processing system to meet its system requirements.
 
-| Features                             | Apache Flink Statefun  | Foliage Statefun (on NATS JetStream) | AWS Lambda                 |
-|--------------------------------------|:----------------------:|:------------------------------------:|:--------------------------:|
-| Stateful functions with context      | Yes                    | Yes                                  | No (ext. storage required) |
-| Clustering and high-availability     | Yes                    | Yes                                  | Yes                        |
-| Exactly once                         | Yes                    | Yes                                  | Yes                        |
-| Independent statefun runtimes        | No                     | Yes                                  | Yes                        |
-| Adding statefuns on the fly          | No                     | Yes                                  | Yes                        |
-| Access other statefun's context      | No                     | Yes                                  | Yes                        |
-| Lightweight                          | No                     | Yes                                  | Yes                        |
-| No dependencies required             | No                     | Yes                                  | No (works with cloud)      |
-| Easy functions cold start            | Yes                    | Yes                                  | No                         |
+| Features                             | Apache Flink Statefun  | AWS Lambda                 | Foliage Statefun |
+|--------------------------------------|:----------------------:|:--------------------------:|:----------------:|
+| Stateful functions with context      | Yes                    | No (ext. storage required) | Yes              |
+| Clustering and high-availability     | Yes                    | Yes                        | Yes              |
+| Exactly once                         | Yes                    | Yes                        | Yes              |
+| Independent statefun runtimes        | No                     | Yes                        | Yes              |
+| Adding statefuns on the fly          | No                     | Yes                        | Yes              |
+| Access other statefun's context      | No                     | Yes                        | Yes              |
+| Lightweight                          | No                     | Yes                        | Yes              |
+| No dependencies required             | No                     | No (works with cloud)      | Yes              |
+| Easy functions cold start            | Yes                    | No                         | Yes              |
 
 ### Independent Statefun Runtimes
 
