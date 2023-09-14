@@ -1,7 +1,7 @@
 // Copyright 2023 NJWS Inc.
 
-// Foliage graph DBMS jpgql package.
-// Provides stateful functions of json-path graph query language for the graph DBMS
+// Foliage graph store jpgql package.
+// Provides stateful functions of json-path graph query language for the graph store
 package jpgql
 
 import (

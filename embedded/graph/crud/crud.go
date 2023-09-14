@@ -1,7 +1,7 @@
 // Copyright 2023 NJWS Inc.
 
-// Foliage graph DBMS crud package.
-// Provides stateful functions of low-level crud operations for the graph DBMS
+// Foliage graph store crud package.
+// Provides stateful functions of low-level crud operations for the graph store
 package crud
 
 import (
