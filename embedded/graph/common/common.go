@@ -1,7 +1,7 @@
 
 
-// Foliage graph DBMS common package.
-// Provides shared functions for other graph DBMS packages
+// Foliage graph store common package.
+// Provides shared functions for other graph store packages
 package common
 
 import (
