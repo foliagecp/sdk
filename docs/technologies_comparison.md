@@ -2,7 +2,7 @@
 
 ## Graph provider
 
-The table below outlines the criteria that explain why the platform chose to create its own storage and graph processing system to meet its system requirements.
+The table below outlines the features that explain why the platform chose to create its own storage and graph processing system to meet its system requirements.
 
 | Features                       | Neo4j                 | Dgraph                       | Amazon Neptune     | ArangoDB               | Foliage Graph Store    |
 |--------------------------------|:---------------------:|:----------------------------:|:------------------:|:----------------------:|:----------------------:|
@@ -37,7 +37,7 @@ In contrast to other solutions, NATS server can run on very small edge devices, 
 
 ## Functional layer provider
 
-The table below outlines the criteria that explain why the platform chose to create its own stateful functions processing system to meet its system requirements.
+The table below outlines the features that explain why the platform chose to create its own stateful functions processing system to meet its system requirements.
 
 | Features                             | Apache Flink Statefun  | AWS Lambda                 | Foliage Statefun |
 |--------------------------------------|:----------------------:|:--------------------------:|:----------------:|
