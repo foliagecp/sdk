@@ -173,19 +173,17 @@ Same as for `JPGQL_CTRA query examples with call on targets`
 
 ## Comparison with other graph query languages
 
-| Features | AQL | JPGQL |
-|----------|:-------------:|:------:|
-| Tunable indices | Yes | No |
-| Vertex attribute filtering | Yes | No |
-| Link attribute filtering | Yes | Types & Tags only |
-| Whole path filtering | Yes | No |
-| Outbound directional search | Yes | Yes |
-| Inbound directional search | Yes | No |
-| Query plan | Yes | No |
-| JOIN, SORT, GROUP, LIMIT, AGGREGATE, etc. | Yes | No |
-| Traverse pruning | Yes | No |
-| User-defined functions, traverse algorithm | Functions only | Yes |
-| User-defined  | No | Yes |
-| Async execution | No | Yes |
-| Parallel execution | Yes | Yes |
-| Graph traversals in a cluster | Yes | Yes |
+| Features                                   | AQL (ArangoDB)  | DQL (Dgraph)   | Gremlin (Amazon Neptune) | Cypher (Neo4j) | JPGQL (Foliage)   |
+|--------------------------------------------|:---------------:|:--------------:|:------------------------:|:--------------:|:-----------------:|
+| Tunable indices                            | Yes             | No             | Yes                      | Yes            | No                |
+| Vertex attribute filtering                 | Yes             | Yes            | Yes                      | Yes            | No                |
+| Link attribute filtering                   | Yes             | No             | Yes                      | Yes            | Types & Tags only |
+| Whole path filtering                       | Yes             | No             | Yes                      | Yes            | No                |
+| Outbound directional search                | Yes             | Yes            | Yes                      | Yes            | Yes               |
+| Inbound directional search                 | Yes             | No             | Yes                      | Yes            | No                |
+| Query plan                                 | Yes             | Yes            | Yes                      | Yes            | No                |
+| JOIN, SORT, GROUP, LIMIT, AGGREGATE, etc.  | Yes             | Yes            | Yes                      | Yes            | No                |
+| Traverse pruning                           | Yes             | Yes            | Yes                      | Yes            | No                |
+| User-defined functions, traverse algorithm | Functions only  | Functions only | Functions only           | Functions only | Yes               |
+| Async-paraller vertex traverse             | No              | Yes            | Yes                      | No             | Yes               |
+| Graph traversals in a cluster              | Yes             | Yes            | Yes                      | Yes            | Yes               |
