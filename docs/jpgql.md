@@ -173,17 +173,17 @@ Same as for `JPGQL_CTRA query examples with call on targets`
 
 ## Comparison with other graph query languages
 
-| Features                                   | AQL (ArangoDB)  | DQL (Dgraph)   | Gremlin (Amazon Neptune) | Cypher (Neo4j) | JPGQL (Foliage)   |
-|--------------------------------------------|:---------------:|:--------------:|:------------------------:|:--------------:|:-----------------:|
-| Tunable indices                            | Yes             | No             | Yes                      | Yes            | No                |
-| Vertex attribute filtering                 | Yes             | Yes            | Yes                      | Yes            | No                |
-| Link attribute filtering                   | Yes             | No             | Yes                      | Yes            | Types & Tags only |
-| Whole path filtering                       | Yes             | No             | Yes                      | Yes            | No                |
-| Outbound directional search                | Yes             | Yes            | Yes                      | Yes            | Yes               |
-| Inbound directional search                 | Yes             | No             | Yes                      | Yes            | No                |
-| Query plan                                 | Yes             | Yes            | Yes                      | Yes            | No                |
-| JOIN, SORT, GROUP, LIMIT, AGGREGATE, etc.  | Yes             | Yes            | Yes                      | Yes            | No                |
-| Traverse pruning                           | Yes             | Yes            | Yes                      | Yes            | No                |
-| User-defined functions, traverse algorithm | Functions only  | Functions only | Functions only           | Functions only | Yes               |
-| Async-paraller vertex traverse             | No              | Yes            | Yes                      | No             | Yes               |
-| Graph traversals in a cluster              | Yes             | Yes            | Yes                      | Yes            | Yes               |
+| Features                                   | JPGQL (Foliage)       | AQL (ArangoDB)  | DQL (Dgraph)   | Gremlin (Amazon Neptune) | Cypher (Neo4j) |
+|--------------------------------------------|:---------------------:|:---------------:|:--------------:|:------------------------:|:--------------:|
+| Tunable indices                            | **No**                | Yes             | No             | Yes                      | Yes            |
+| Vertex attribute filtering                 | **No**                | Yes             | Yes            | Yes                      | Yes            |
+| Link attribute filtering                   | **Types & Tags only** | Yes             | No             | Yes                      | Yes            |
+| Whole path filtering                       | **No**                | Yes             | No             | Yes                      | Yes            |
+| Outbound directional search                | **Yes**               | Yes             | Yes            | Yes                      | Yes            |
+| Inbound directional search                 | **No**                | Yes             | No             | Yes                      | Yes            |
+| Query plan                                 | **No**                | Yes             | Yes            | Yes                      | Yes            |
+| JOIN, SORT, GROUP, LIMIT, AGGREGATE, etc.  | **No**                | Yes             | Yes            | Yes                      | Yes            |
+| Traverse pruning                           | **No**                | Yes             | Yes            | Yes                      | Yes            |
+| User-defined functions, traverse algorithm | **Yes**               | Functions only  | Functions only | Functions only           | Functions only |
+| Async-paraller vertex traverse             | **Yes**               | No              | Yes            | Yes                      | No             |
+| Graph traversals in a cluster              | **Yes**               | Yes             | Yes            | Yes                      | Yes            |
