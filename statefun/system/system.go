@@ -71,9 +71,11 @@ func CreateDimSizeChannel[T interface{}](maxBufferElements int, onBufferOverflow
 	return
 }
 
-func MsgOnErrorReturn(err error) {
-	if err != nil {
-		fmt.Printf("ERROR: %s\n", err)
+func MsgOnErrorReturn(retVars ...interface{}) {
+	for _, retVar := range retVars {
+		if err, ok := retVar.(error); ok {
+			fmt.Printf("ERROR: %s\n", err)
+		}
 	}
 }
 
