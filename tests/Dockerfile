@@ -15,6 +15,8 @@ RUN cd ./tests && go build -o /usr/bin/tests
 
 FROM ubuntu:22.04
 
+WORKDIR /tests
+
 RUN apt update && \
     apt install ca-certificates curl -y && \
     rm -rf /var/lib/apt/lists/*
