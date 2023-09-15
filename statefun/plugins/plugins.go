@@ -6,8 +6,9 @@ package plugins
 
 import (
 	"fmt"
-	"json_easy"
 	"sync"
+
+	"github.com/foliagecp/easyjson"
 
 	"github.com/foliagecp/sdk/statefun/cache"
 )
@@ -19,18 +20,18 @@ type StatefunAddress struct {
 
 type StatefunContextProcessor struct {
 	GlobalCache        *cache.Store
-	GetFunctionContext func() *json_easy.JSON
-	SetFunctionContext func(*json_easy.JSON)
-	GetObjectContext   func() *json_easy.JSON
-	SetObjectContext   func(*json_easy.JSON)
-	Call               func(string, string, *json_easy.JSON, *json_easy.JSON)
+	GetFunctionContext func() *easyjson.JSON
+	SetFunctionContext func(*easyjson.JSON)
+	GetObjectContext   func() *easyjson.JSON
+	SetObjectContext   func(*easyjson.JSON)
+	Call               func(string, string, *easyjson.JSON, *easyjson.JSON)
 	// TODO: DownstreamCall(<function type>, <links filters>, <payload>, <options>)
-	GolangCallSync func(string, string, *json_easy.JSON, *json_easy.JSON) *json_easy.JSON
-	Egress         func(string, *json_easy.JSON)
+	GolangCallSync func(string, string, *easyjson.JSON, *easyjson.JSON) *easyjson.JSON
+	Egress         func(string, *easyjson.JSON)
 	Self           StatefunAddress
 	Caller         StatefunAddress
-	Payload        *json_easy.JSON
-	Options        *json_easy.JSON
+	Payload        *easyjson.JSON
+	Options        *easyjson.JSON
 }
 
 type StatefunExecutor interface {

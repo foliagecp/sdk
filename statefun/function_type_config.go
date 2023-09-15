@@ -2,7 +2,7 @@
 
 package statefun
 
-import "json_easy"
+import "github.com/foliagecp/easyjson"
 
 const (
 	MsgAckWaitTimeoutMs = 10000
@@ -19,7 +19,7 @@ type FunctionTypeConfig struct {
 	balanceNeeded     bool
 	balanced          bool
 	mutexLifeTimeSec  int
-	options           *json_easy.JSON
+	options           *easyjson.JSON
 }
 
 func NewFunctionTypeConfig() *FunctionTypeConfig {
@@ -29,7 +29,7 @@ func NewFunctionTypeConfig() *FunctionTypeConfig {
 		msgAckChannelSize: MsgAckChannelSize,
 		balanceNeeded:     BalanceNeeded,
 		mutexLifeTimeSec:  MutexLifetimeSec,
-		options:           json_easy.NewJSONObject().GetPtr(),
+		options:           easyjson.NewJSONObject().GetPtr(),
 	}
 }
 
@@ -58,7 +58,7 @@ func (ftc *FunctionTypeConfig) SetMutexLifeTimeSec(mutexLifeTimeSec int) *Functi
 	return ftc
 }
 
-func (ftc *FunctionTypeConfig) SetOptions(options *json_easy.JSON) *FunctionTypeConfig {
+func (ftc *FunctionTypeConfig) SetOptions(options *easyjson.JSON) *FunctionTypeConfig {
 	ftc.options = options
 	return ftc
 }

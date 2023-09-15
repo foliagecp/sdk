@@ -8,12 +8,13 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"json_easy"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/foliagecp/easyjson"
 
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
@@ -553,10 +554,10 @@ func (cs *Store) GetValue(key string) ([]byte, error) {
 	return result, resultError
 }
 
-func (cs *Store) GetValueAsJSON(key string) (*json_easy.JSON, error) {
+func (cs *Store) GetValueAsJSON(key string) (*easyjson.JSON, error) {
 	value, err := cs.GetValue(key)
 	if err == nil {
-		if j, ok := json_easy.JSONFromBytes(value); ok {
+		if j, ok := easyjson.JSONFromBytes(value); ok {
 			return &j, nil
 		}
 		return nil, fmt.Errorf("Value for key=%s is not a JSON", key)

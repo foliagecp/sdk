@@ -4,11 +4,12 @@ package statefun
 
 import (
 	"fmt"
-	"json_easy"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/foliagecp/easyjson"
 
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	sfPluginJS "github.com/foliagecp/sdk/statefun/plugins/js"
@@ -18,10 +19,10 @@ import (
 )
 
 type GoMsg struct {
-	ResultJSONChannel chan *json_easy.JSON
+	ResultJSONChannel chan *easyjson.JSON
 	Caller            *sfPlugins.StatefunAddress
-	Payload           *json_easy.JSON
-	Options           *json_easy.JSON
+	Payload           *easyjson.JSON
+	Options           *easyjson.JSON
 }
 
 type FunctionHandler func(sfPlugins.StatefunExecutor, *sfPlugins.StatefunContextProcessor)
@@ -179,11 +180,11 @@ func (ft *FunctionType) idHandler(id string, msgChannel chan interface{}) {
 
 	functionTypeIDContextProcessor := sfPlugins.StatefunContextProcessor{
 		GlobalCache:        ft.runtime.cacheStore,
-		GetFunctionContext: func() *json_easy.JSON { return ft.getContext(ft.name + "." + id) },
-		SetFunctionContext: func(context *json_easy.JSON) { ft.setContext(ft.name+"."+id, context) },
-		GetObjectContext:   func() *json_easy.JSON { return ft.getContext(id) },
-		SetObjectContext:   func(context *json_easy.JSON) { ft.setContext(id, context) },
-		GolangCallSync: func(targetTypename string, targetID string, payload *json_easy.JSON, options *json_easy.JSON) *json_easy.JSON {
+		GetFunctionContext: func() *easyjson.JSON { return ft.getContext(ft.name + "." + id) },
+		SetFunctionContext: func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
+		GetObjectContext:   func() *easyjson.JSON { return ft.getContext(id) },
+		SetObjectContext:   func(context *easyjson.JSON) { ft.setContext(id, context) },
+		GolangCallSync: func(targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) *easyjson.JSON {
 			return ft.runtime.callFunctionGolangSync(ft.name, id, targetTypename, targetID, payload, options)
 		},
 		Self:   sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
@@ -221,24 +222,24 @@ func (ft *FunctionType) idHandlerNatsMsg(id string, msg *nats.Msg, functionTypeI
 		}
 	}
 
-	var data *json_easy.JSON
-	if j, ok := json_easy.JSONFromBytes(msg.Data); ok {
+	var data *easyjson.JSON
+	if j, ok := easyjson.JSONFromBytes(msg.Data); ok {
 		data = &j
 
-		var payload *json_easy.JSON
+		var payload *easyjson.JSON
 		if data != nil && data.GetByPath("payload").IsObject() {
 			j := data.GetByPath("payload")
 			payload = &j
 		} else {
-			j := json_easy.NewJSONObject()
+			j := easyjson.NewJSONObject()
 			payload = &j
 		}
 
-		var msgOptions *json_easy.JSON
+		var msgOptions *easyjson.JSON
 		if data != nil && data.GetByPath("options").IsObject() {
 			msgOptions = data.GetByPath("options").GetPtr()
 		} else {
-			msgOptions = json_easy.NewJSONObject().GetPtr()
+			msgOptions = easyjson.NewJSONObject().GetPtr()
 		}
 
 		caller := sfPlugins.StatefunAddress{}
@@ -247,7 +248,7 @@ func (ft *FunctionType) idHandlerNatsMsg(id string, msg *nats.Msg, functionTypeI
 			caller.ID, _ = data.GetByPath("caller_id").AsString()
 		}
 
-		functionTypeIDContextProcessor.Call = func(targetTypename string, targetID string, j *json_easy.JSON, o *json_easy.JSON) {
+		functionTypeIDContextProcessor.Call = func(targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) {
 			ft.runtime.callFunction(ft.name, id, targetTypename, targetID, j, o)
 		}
 		functionTypeIDContextProcessor.Payload = payload
@@ -277,7 +278,7 @@ func (ft *FunctionType) idHandlerNatsMsg(id string, msg *nats.Msg, functionTypeI
 }
 
 func (ft *FunctionType) idHandlerGoMsg(id string, msg *GoMsg, functionTypeIDContextProcessor *sfPlugins.StatefunContextProcessor) {
-	functionTypeIDContextProcessor.Call = func(targetTypename string, targetID string, j *json_easy.JSON, o *json_easy.JSON) {
+	functionTypeIDContextProcessor.Call = func(targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) {
 		if msg.Caller.Typename == targetTypename && msg.Caller.ID == targetID {
 			msg.ResultJSONChannel <- j
 		} else {
@@ -333,15 +334,15 @@ func (ft *FunctionType) gc(functionTypeIDLifetimeMs int) (garbageCollected int, 
 	return
 }
 
-func (ft *FunctionType) getContext(keyValueID string) *json_easy.JSON {
+func (ft *FunctionType) getContext(keyValueID string) *easyjson.JSON {
 	if j, err := ft.runtime.cacheStore.GetValueAsJSON(keyValueID); err == nil {
 		return j
 	}
-	j := json_easy.NewJSONObject()
+	j := easyjson.NewJSONObject()
 	return &j
 }
 
-func (ft *FunctionType) setContext(keyValueID string, context *json_easy.JSON) {
+func (ft *FunctionType) setContext(keyValueID string, context *easyjson.JSON) {
 	if context == nil {
 		ft.runtime.cacheStore.SetValue(keyValueID, nil, true, -1, "")
 	} else {
@@ -349,7 +350,7 @@ func (ft *FunctionType) setContext(keyValueID string, context *json_easy.JSON) {
 	}
 }
 
-func (ft *FunctionType) egress(natsTopic string, payload *json_easy.JSON) {
+func (ft *FunctionType) egress(natsTopic string, payload *easyjson.JSON) {
 	go func() {
 		system.MsgOnErrorReturn(ft.runtime.nc.Publish(natsTopic, payload.ToBytes()))
 	}()

@@ -6,9 +6,10 @@ package jpgql
 
 import (
 	"fmt"
-	"json_easy"
 	"strings"
 	"time"
+
+	"github.com/foliagecp/easyjson"
 
 	"github.com/foliagecp/sdk/embedded/graph/common"
 	"github.com/foliagecp/sdk/statefun"
@@ -72,8 +73,8 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 		queryID := common.GetQueryID(contextProcessor)
 
 		processID := sfSystem.GetUniqueStrID()
-		payload.SetByPath("caller_aggregation_id", json_easy.NewJSON(processID))
-		payload.SetByPath("query_id", json_easy.NewJSON(queryID))
+		payload.SetByPath("caller_aggregation_id", easyjson.NewJSON(processID))
+		payload.SetByPath("query_id", easyjson.NewJSON(queryID))
 		contextProcessor.Call(contextProcessor.Self.Typename, contextProcessor.Self.ID+"==="+processID, payload, nil)
 
 		keyBase := fmt.Sprintf("jpgql_ctra.%s.%s", contextProcessor.Self.ID, processID)
@@ -88,7 +89,7 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 					key := kv.Key.(string)
 					value := kv.Value.([]byte)
 					if key == "result" {
-						if result, ok := json_easy.JSONFromBytes(value); ok {
+						if result, ok := easyjson.JSONFromBytes(value); ok {
 							contextProcessor.GlobalCache.UnsubscribeLevelCallback(keyBase+".*", processID)
 							common.ReplyQueryID(queryID, &result, contextProcessor)
 							return
@@ -102,9 +103,9 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 						errorString := "LLAPIQueryJPGQLCallTreeResultAggregation evaluation timeout!"
 						fmt.Println(errorString)
 
-						result := json_easy.NewJSONObject()
-						result.SetByPath("status", json_easy.NewJSON("failed"))
-						result.SetByPath("result", json_easy.NewJSON(errorString))
+						result := easyjson.NewJSONObject()
+						result.SetByPath("status", easyjson.NewJSON("failed"))
+						result.SetByPath("result", easyjson.NewJSON(errorString))
 						common.ReplyQueryID(queryID, &result, contextProcessor)
 						return
 					}
@@ -163,10 +164,10 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 			if aggregationID, ok := payload.GetByPath("caller_aggregation_id").AsString(); ok {
 				callerAggregationID = aggregationID
 			}
-			context.SetByPath(aggregationID+"_result", json_easy.NewJSONObject())
-			context.SetByPath(aggregationID+"_callbacks", json_easy.NewJSON(0)) // Stores counter of callbacks from descendants
-			context.SetByPath(aggregationID+"_reply_object_id", json_easy.NewJSON(contextProcessor.Caller.ID))
-			context.SetByPath(aggregationID+"_caller_aggregation_id", json_easy.NewJSON(callerAggregationID))
+			context.SetByPath(aggregationID+"_result", easyjson.NewJSONObject())
+			context.SetByPath(aggregationID+"_callbacks", easyjson.NewJSON(0)) // Stores counter of callbacks from descendants
+			context.SetByPath(aggregationID+"_reply_object_id", easyjson.NewJSON(contextProcessor.Caller.ID))
+			context.SetByPath(aggregationID+"_caller_aggregation_id", easyjson.NewJSON(callerAggregationID))
 			if call := payload.GetByPath("call"); call.IsObject() {
 				context.SetByPath(aggregationID+"_call", call)
 			}
@@ -181,7 +182,7 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 			context.RemoveByPath(aggregationID + "_call")                  // Release this object from this query from specific parent
 		}
 
-		replyCaller := func(thisFunctionAggregationID string, replyPayload *json_easy.JSON) error {
+		replyCaller := func(thisFunctionAggregationID string, replyPayload *easyjson.JSON) error {
 			//fmt.Println("----------->>> PRERESULT ")
 			replyObjectID, ok := context.GetByPath(thisFunctionAggregationID + "_reply_object_id").AsString()
 			if !ok {
@@ -209,8 +210,8 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 						}
 					}
 				}
-				result := json_easy.NewJSONObject()
-				result.SetByPath("status", json_easy.NewJSON("ok"))
+				result := easyjson.NewJSONObject()
+				result.SetByPath("status", easyjson.NewJSON("ok"))
 				result.SetByPath("result", replyPayload.GetByPath("result"))
 
 				callerAggregationID, _ := replyPayload.GetByPath("aggregation_id").AsString()
@@ -224,10 +225,10 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 		replyCallerPreventSameQueryCall := func() error {
 			if callerAggregationID, ok := payload.GetByPath("caller_aggregation_id").AsString(); ok {
 				if strings.Count(contextProcessor.Caller.ID, "===") == 1 {
-					replyPayload := json_easy.NewJSONObject()
-					replyPayload.SetByPath("query_id", json_easy.NewJSON(queryID))
-					replyPayload.SetByPath("aggregation_id", json_easy.NewJSON(callerAggregationID))
-					replyPayload.SetByPath("result", json_easy.NewJSONObject())
+					replyPayload := easyjson.NewJSONObject()
+					replyPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
+					replyPayload.SetByPath("aggregation_id", easyjson.NewJSON(callerAggregationID))
+					replyPayload.SetByPath("result", easyjson.NewJSONObject())
 					contextProcessor.Call(contextProcessor.Self.Typename, contextProcessor.Caller.ID, &replyPayload, nil)
 				}
 				return nil
@@ -276,10 +277,10 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 
 				//fmt.Println(processID + ":0:: " + "(" + thisObjectID + ") " + "6")
 				if len(resultObjects) == 0 { // If no links found (no matter if queryTail exists) - return result empty objects array immediately without aggregation
-					replyPayload := json_easy.NewJSONObject()
-					replyPayload.SetByPath("query_id", json_easy.NewJSON(queryID))
-					replyPayload.SetByPath("aggregation_id", json_easy.NewJSON(callerAggregationID))
-					replyPayload.SetByPath("result", json_easy.NewJSONObject())
+					replyPayload := easyjson.NewJSONObject()
+					replyPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
+					replyPayload.SetByPath("aggregation_id", easyjson.NewJSON(callerAggregationID))
+					replyPayload.SetByPath("result", easyjson.NewJSONObject())
 					//fmt.Println(processID + ":0:: " + "(" + thisObjectID + ") " + "7")
 					if err := replyCaller(thisFunctionAggregationID, &replyPayload); err != nil {
 						fmt.Println(err.Error())
@@ -298,22 +299,22 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 						if len(nextQuery) == 0 { // jpgql_query ended!!!!
 							objectsToReturnAsAResult[objectID] = true
 						} else {
-							nextPayload := json_easy.NewJSONObject()
-							nextPayload.SetByPath("query_id", json_easy.NewJSON(queryID))
-							nextPayload.SetByPath("caller_aggregation_id", json_easy.NewJSON(thisFunctionAggregationID))
-							nextPayload.SetByPath("jpgql_query", json_easy.NewJSON(nextQuery))
+							nextPayload := easyjson.NewJSONObject()
+							nextPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
+							nextPayload.SetByPath("caller_aggregation_id", easyjson.NewJSON(thisFunctionAggregationID))
+							nextPayload.SetByPath("jpgql_query", easyjson.NewJSON(nextQuery))
 							//fmt.Println(processID+"::: 0:0.1 "+thisObjectID+" | CHILD:", objectID)
 							contextProcessor.Call(contextProcessor.Self.Typename, objectID+"==="+processID, &nextPayload, nil)
 							nextCalls++
 						}
 					}
 					//fmt.Println(processID + ":0:: " + "(" + thisObjectID + ") " + "9")
-					immediateAggregationResult := json_easy.NewJSON(objectsToReturnAsAResult)
+					immediateAggregationResult := easyjson.NewJSON(objectsToReturnAsAResult)
 					context.SetByPath(thisFunctionAggregationID+"_result", immediateAggregationResult)
 					if nextCalls == 0 { // All descendant objects on links are result ones
-						replyPayload := json_easy.NewJSONObject()
-						replyPayload.SetByPath("query_id", json_easy.NewJSON(queryID))
-						replyPayload.SetByPath("aggregation_id", json_easy.NewJSON(callerAggregationID))
+						replyPayload := easyjson.NewJSONObject()
+						replyPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
+						replyPayload.SetByPath("aggregation_id", easyjson.NewJSON(callerAggregationID))
 						replyPayload.SetByPath("result", immediateAggregationResult)
 						if err := replyCaller(thisFunctionAggregationID, &replyPayload); err != nil {
 							fmt.Println(err.Error())
@@ -321,7 +322,7 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 						}
 						//fmt.Println(processID+"::: 0:1 "+thisObjectID+" | Context:", context.ToString())
 					} else { // There are descendants to aggregate result from
-						context.SetByPath(thisFunctionAggregationID+"_callbacks", json_easy.NewJSON(nextCalls)) // Store counter of callbacks from descendants
+						context.SetByPath(thisFunctionAggregationID+"_callbacks", easyjson.NewJSON(nextCalls)) // Store counter of callbacks from descendants
 						//fmt.Println(processID+"::: 0:2 "+thisObjectID+" | Context:", context.ToString())
 					}
 					//fmt.Println(processID + ":0:: " + "(" + thisObjectID + ") " + "10")
@@ -351,8 +352,8 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 			callbacks--
 			totalResult, _ := context.GetByPath(thisFunctionAggregationID + "_result").AsObject()
 			totalResult = sfSystem.MergeMaps(totalResult, result)
-			context.SetByPath(thisFunctionAggregationID+"_result", json_easy.NewJSON(totalResult))
-			context.SetByPath(thisFunctionAggregationID+"_callbacks", json_easy.NewJSON(callbacks))
+			context.SetByPath(thisFunctionAggregationID+"_result", easyjson.NewJSON(totalResult))
+			context.SetByPath(thisFunctionAggregationID+"_callbacks", easyjson.NewJSON(callbacks))
 
 			//fmt.Println(processID + ":1:: " + "(" + thisObjectID + ") " + "13: ")
 
@@ -364,10 +365,10 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 					return
 				}
 
-				replyPayload := json_easy.NewJSONObject()
-				replyPayload.SetByPath("query_id", json_easy.NewJSON(queryID))
-				replyPayload.SetByPath("aggregation_id", json_easy.NewJSON(callerAggregationID))
-				replyPayload.SetByPath("result", json_easy.NewJSON(totalResult))
+				replyPayload := easyjson.NewJSONObject()
+				replyPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
+				replyPayload.SetByPath("aggregation_id", easyjson.NewJSON(callerAggregationID))
+				replyPayload.SetByPath("result", easyjson.NewJSON(totalResult))
 				//fmt.Println(processID + ":1:: " + "(" + thisObjectID + ") " + "13.1")
 				if err := replyCaller(thisFunctionAggregationID, &replyPayload); err != nil {
 					fmt.Println(err.Error())
@@ -424,7 +425,7 @@ func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExec
 	}
 
 	payload := contextProcessor.Payload
-	var call *json_easy.JSON = nil
+	var call *easyjson.JSON = nil
 	if j := payload.GetByPath("call"); j.IsObject() {
 		call = &j
 	}
@@ -478,7 +479,7 @@ func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExec
 						}
 					} else {
 						pendingMap[key] = false
-						if v, ok := json_easy.JSONFromBytes(value); ok && v.IsNonEmptyArray() {
+						if v, ok := easyjson.JSONFromBytes(value); ok && v.IsNonEmptyArray() {
 							if resultArray, ok2 := v.AsArrayString(); ok2 {
 								resultObjects = append(resultObjects, resultArray...)
 							}
@@ -499,12 +500,12 @@ func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExec
 							}
 							contextProcessor.GlobalCache.UnsubscribeLevelCallback(fmt.Sprintf("%s.%s.pending.%s", modifiedTypename, aggregationID, "*"), aggregationID)
 
-							resultMap := json_easy.NewJSONObject()
+							resultMap := easyjson.NewJSONObject()
 							for _, resObj := range resultObjects {
-								resultMap.SetByPath(resObj, json_easy.NewJSON(true))
+								resultMap.SetByPath(resObj, easyjson.NewJSON(true))
 							}
-							result := json_easy.NewJSONObject()
-							result.SetByPath("status", json_easy.NewJSON("ok"))
+							result := easyjson.NewJSONObject()
+							result.SetByPath("status", easyjson.NewJSON("ok"))
 							result.SetByPath("result", resultMap)
 							common.ReplyQueryID(queryID, &result, contextProcessor)
 
@@ -518,9 +519,9 @@ func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExec
 						errorString := "LLAPIQueryJPGQLDirectCacheResultAggregation evaluation timeout!"
 						fmt.Println(errorString)
 
-						result := json_easy.NewJSONObject()
-						result.SetByPath("status", json_easy.NewJSON("failed"))
-						result.SetByPath("result", json_easy.NewJSON(errorString))
+						result := easyjson.NewJSONObject()
+						result.SetByPath("status", easyjson.NewJSON("failed"))
+						result.SetByPath("result", easyjson.NewJSON(errorString))
 						common.ReplyQueryID(queryID, &result, contextProcessor)
 						return
 					}
@@ -529,9 +530,9 @@ func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExec
 		}(chacheUpdatedChannel)
 
 		if initPendingProcess(contextProcessor.Self.ID, currentQuery, aggregationID) {
-			nextPayload := json_easy.NewJSONObject()
-			nextPayload.SetByPath("aggregation_id", json_easy.NewJSON(aggregationID))
-			nextPayload.SetByPath("jpgql_query", json_easy.NewJSON(currentQuery))
+			nextPayload := easyjson.NewJSONObject()
+			nextPayload.SetByPath("aggregation_id", easyjson.NewJSON(aggregationID))
+			nextPayload.SetByPath("jpgql_query", easyjson.NewJSON(currentQuery))
 			if call != nil {
 				nextPayload.SetByPath("call", *call)
 			}
@@ -553,7 +554,7 @@ func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExec
 		thisProcessID := sfSystem.GetHashStr(thisObjectID + "_" + currentQuery)
 
 		thisPendingDone := func(foundObjects *[]string) bool {
-			contextProcessor.GlobalCache.SetValue(fmt.Sprintf("%s.%s.pending.%s", modifiedTypename, aggregationID, thisProcessID), json_easy.JSONFromArray(*foundObjects).ToBytes(), true, -1, "")
+			contextProcessor.GlobalCache.SetValue(fmt.Sprintf("%s.%s.pending.%s", modifiedTypename, aggregationID, thisProcessID), easyjson.JSONFromArray(*foundObjects).ToBytes(), true, -1, "")
 			//fmt.Println("-----------> PENDING DONE " + thisObjectID + ": " + fmt.Sprintf("%s.%s.pending.%s", modifiedTypename, aggregationID, thisProcessID))
 			return true
 		}
@@ -588,9 +589,9 @@ func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExec
 				} else {
 					if initPendingProcess(objectID, nextQuery, aggregationID) {
 						//fmt.Println("Going to call " + objectID)
-						nextPayload := json_easy.NewJSONObject()
-						nextPayload.SetByPath("aggregation_id", json_easy.NewJSON(aggregationID))
-						nextPayload.SetByPath("jpgql_query", json_easy.NewJSON(nextQuery))
+						nextPayload := easyjson.NewJSONObject()
+						nextPayload.SetByPath("aggregation_id", easyjson.NewJSON(aggregationID))
+						nextPayload.SetByPath("jpgql_query", easyjson.NewJSON(nextQuery))
 						if call != nil {
 							nextPayload.SetByPath("call", *call)
 						}
@@ -605,7 +606,7 @@ func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExec
 }
 
 func RegisterAllFunctionTypes(runtime *statefun.Runtime, jpgqlEvaluationTimeoutSec int) {
-	options := json_easy.NewJSONObjectWithKeyValue("eval_timeout_sec", json_easy.NewJSON(jpgqlEvaluationTimeoutSec))
+	options := easyjson.NewJSONObjectWithKeyValue("eval_timeout_sec", easyjson.NewJSON(jpgqlEvaluationTimeoutSec))
 	statefun.NewFunctionType(runtime, "functions.graph.ll.api.query.jpgql.ctra", LLAPIQueryJPGQLCallTreeResultAggregation, *statefun.NewFunctionTypeConfig().SetOptions(&options))
 	statefun.NewFunctionType(runtime, "functions.graph.ll.api.query.jpgql.dcra", LLAPIQueryJPGQLDirectCacheResultAggregation, *statefun.NewFunctionTypeConfig().SetOptions(&options))
 }
