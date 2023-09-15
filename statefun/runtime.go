@@ -152,7 +152,7 @@ func (r *Runtime) IngressNATS(typename string, id string, payload *easyjson.JSON
 	r.callFunction("ingress", "nats", typename, id, payload, options)
 }
 
-func (r *Runtime) IngressGolangSync(typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) *easyjson.JSON {
+func (r *Runtime) IngressGolangSync(typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) (*easyjson.JSON, error) {
 	return r.callFunctionGolangSync("ingress", "go", typename, id, payload, options)
 }
 
@@ -172,20 +172,20 @@ func (r *Runtime) callFunction(callerTypename string, callerID string, targetTyp
 }
 
 // TODO: return error also
-func (r *Runtime) callFunctionGolangSync(callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) *easyjson.JSON {
+func (r *Runtime) callFunctionGolangSync(callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) (*easyjson.JSON, error) {
 	resultJSONChannel := make(chan *easyjson.JSON, 1)
 
 	msg := &GoMsg{ResultJSONChannel: resultJSONChannel, Caller: &sfPlugins.StatefunAddress{Typename: callerTypename, ID: callerID}, Payload: payload}
 	if targetFT, ok := r.registeredFunctionTypes[targetTypename]; ok {
 		targetFT.sendMsgToIDHandler(targetID, msg, nil)
 	} else {
-		return nil
+		return nil, fmt.Errorf("callFunctionGolangSync cannot call function with the typename %s, not registered", callerTypename)
 	}
 
 	select {
 	case resultJSON := <-resultJSONChannel:
-		return resultJSON
+		return resultJSON, nil
 	case <-time.After(time.Duration(r.config.ingressCallGoLangSyncTimeoutSec) * time.Second):
-		return nil
+		return nil, fmt.Errorf("timeout occured while executing callFunctionGolangSync for function with the typename %s", callerTypename)
 	}
 }

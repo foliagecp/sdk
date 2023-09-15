@@ -26,7 +26,7 @@ type StatefunContextProcessor struct {
 	SetObjectContext   func(*easyjson.JSON)
 	Call               func(string, string, *easyjson.JSON, *easyjson.JSON)
 	// TODO: DownstreamCall(<function type>, <links filters>, <payload>, <options>)
-	GolangCallSync func(string, string, *easyjson.JSON, *easyjson.JSON) *easyjson.JSON
+	GolangCallSync func(string, string, *easyjson.JSON, *easyjson.JSON) (*easyjson.JSON, error)
 	Egress         func(string, *easyjson.JSON)
 	Self           StatefunAddress
 	Caller         StatefunAddress

@@ -184,7 +184,7 @@ func (ft *FunctionType) idHandler(id string, msgChannel chan interface{}) {
 		SetFunctionContext: func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
 		GetObjectContext:   func() *easyjson.JSON { return ft.getContext(id) },
 		SetObjectContext:   func(context *easyjson.JSON) { ft.setContext(id, context) },
-		GolangCallSync: func(targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) *easyjson.JSON {
+		GolangCallSync: func(targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) (*easyjson.JSON, error) {
 			return ft.runtime.callFunctionGolangSync(ft.name, id, targetTypename, targetID, payload, options)
 		},
 		Self:   sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
