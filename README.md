@@ -16,11 +16,11 @@
 
 - [Introduction](#introduction) <!-- omit in toc -->
 - [Core Concepts](#core-concepts)
-  - [Abstraction](#abstraction)
+  - [Abstract](#abstract)
   - [Features](#features)
 - [Getting Started](#getting-started)
   - [Installation](#installation)
-  - [Running Tests](#running-tests) 
+  - [Running Tests](#running-tests)
   - [Customization](#customization)
 - [Development](#development)
   - [Working with the SDK](#working-with-the-sdk)
@@ -32,29 +32,29 @@
 
 ## Introduction
 
-Foliage is an open-source collaborative application platform that leverages a distributed graph database. It provides a unified and extensible environment for automation, cross-domain connectivity, and high-performance, edge-friendly runtimes. Whether you're building IoT solutions, automation workflows, or edge computing applications, Foliage offers a powerful foundation.
+Foliage is an open-source collaborative platform that uses a distributed graph database, offering a unified, extensible environment for automation, cross-domain connectivity, and high-performance, edge-friendly runtimes. It provides a robust foundation for IoT solutions, automation workflows, and edge computing applications.
 
 ## Core Concepts
 
-### Abstraction
+### Abstract
 
-Foliage introduces the concept of abstraction, where knowledge about complex systems converges into a unified associative space. This enables transparent understanding of the entire system, blurring the boundary between system models and the system itself.
+Foliage introduces abstraction, where knowledge about complex systems converges into a unified space, promoting transparent understanding and blurring the boundary between system models and the system itself.
 
-![Abstraction](./docs/pics/FoliageUnification.jpg)
+![Abstract](./docs/pics/FoliageUnification.jpg)
 
 ### Features
 
-Foliage offers transparency, consistency, and unambiguity among system components by consolidating knowledge from different domains into a unified space. It uncovers previously unnoticed dependencies, making system evaluation and relationship management more straightforward.
+Foliage promotes transparency, consistency, and clarity among system components by consolidating knowledge from diverse domains into a unified space. It reveals hidden dependencies, simplifying system evaluation and relationship management.
 
 ![Features](./docs/pics/FoliageSingleSpace.jpg)
 
-For a comprehensive list of features, see [here](./docs/features.md).
+Click [here](./docs/features.md) to see all features.
 
 ## Getting Started
 
 ### Installation
 
-To get started with Foliage, clone the repository:
+To begin using Foliage, clone the repository:
 
 ```sh
 git clone https://github.com/foliagecp/sdk.git
@@ -64,9 +64,9 @@ For detailed installation instructions and prerequisites, visit the [official do
 
 ### Running Tests
 
-Foliage provides a set of test samples to help you get familiar with the platform. To run tests, follow these steps:
+Foliage provides a set of test samples to help you get familiar with the platform. Follow these steps to run them:
 
-#### 1. Navigate to the `tests` directory:
+#### 1. Navigate to `tests`:
 
 ```sh
 cd tests
@@ -88,7 +88,7 @@ Customize the test environment by editing the `.env` file. For the basic test, f
 docker-compose up -d
 ```
 
-By default, the basic test sample will start. To choose another test sample, set the `TEST_NAME` environment variable before running `docker-compose up -d`.
+To select a different test sample, set the TEST_NAME environment variable before running docker-compose up -d. The basic test sample starts by default.
 
 #### 5. Stop and clean up:
 
@@ -100,7 +100,7 @@ docker-compose down -v
 
 ### Customization
 
-Explore existing test samples and learn how to customize them to better understand Foliage's development principles. Refer to the [basic test sample documentation](./docs/tests/basic.md).
+Explore available test samples and customize them to gain insights into Foliage's development principles. Refer to [basic test sample documentation](./docs/tests/basic.md).
 
 For statefun logic definition, consider using plugins like [JavaScript](./docs/plugins/js.md).
 
@@ -108,7 +108,7 @@ For statefun logic definition, consider using plugins like [JavaScript](./docs/p
 
 ### Working with the SDK
 
-To develop applications with Foliage, use the SDK:
+Use SDK To develop applications with Foliage:
 
 ```sh
 go get github.com/foliagecp/sdk
@@ -141,7 +141,7 @@ Foliage relies on a versatile technology stack that includes:
 
 ## Roadmap
 
-Explore our exciting roadmap for upcoming features and enhancements by checking out the [Roadmap](./docs/pics/Roadmap.jpg).
+Check out our [Roadmap](./docs/pics/Roadmap.jpg) for more upcoming features and enhancements.
 
 ## References
 
@@ -154,4 +154,4 @@ Unless otherwise noted, the Foliage source files are distributed under the Apach
 
 ## Contribution
 
-Foliage welcomes contributions from the open-source community. Join us in building a collaborative application platform that empowers developers worldwide.
+Foliage welcomes contributions from the open-source community. Join us in building a collaborative application platform that empowers developers worldwide!
