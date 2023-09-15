@@ -1,23 +1,23 @@
-# Closest competitor technologies comparison
+# Closest alternative solutions comparison
 
 ## Graph provider
 
 The table below outlines the features that explain why the platform chose to create its own storage and graph processing system to meet its system requirements.
 
-| Features                       | Neo4j                 | Dgraph                       | Amazon Neptune     | ArangoDB               | Foliage Graph Store    |
-|--------------------------------|:---------------------:|:----------------------------:|:------------------:|:----------------------:|:----------------------:|
-| Graph Storage                  | Yes                   | Yes                          | Yes                | Yes                    | Yes                    |
-| Distributed Graph              | Yes (Enterprise only) | Yes                          | Yes                | Yes (>Community only)  | Yes                    |
-| Persistence                    | Yes                   | Yes                          | Yes                | Yes                    | Yes                    |
-| Backup & Restore               | Yes                   | Yes                          | Yes                | Yes                    | Yes                    |
-| Additional Functionality       | Cypher                | GraphQL                      | SPARQL and Gremlin | JavaScript (V8) - Foxx | Foliage Statefuns      |
-| Event Subscription (Triggers)  | Yes (Enterprise only) | Yes                          | Yes                | No                     | Yes                    |
-| Functional Graph               | No                    | Yes                          | No                 | No                     | Yes                    |
-| Lightweight                    | No (8GB RAM minimum)  | No (8GB RAM minimum)         | No                 | No (1GB RAM minimum)   | Yes (64MB RAM minimum) |
-| ARM Non-64                     | No                    | Yes                          | Yes                | No                     | Yes                    |
-| On-premise deploy              | Yes                   | Yes                          | No                 | Yes                    | Yes                    |
-| Traditional graph modeling     | Yes                   | No                           | Yes                | Yes                    | Yes                    |
-| Schema-related Constraints     | No                    | Properties and Relationships | No                 | No                     | No                     |
+| Features                          | Foliage Graph Store        | Neo4j                 | Dgraph                       | Amazon Neptune     | ArangoDB               |
+|-----------------------------------|:--------------------------:|:---------------------:|:----------------------------:|:------------------:|:----------------------:|
+| Graph Storage                     | **Yes**                    | Yes                   | Yes                          | Yes                | Yes                    |
+| Distributed Graph                 | **Yes**                    | Yes (Enterprise only) | Yes                          | Yes                | Yes (>Community only)  |
+| Persistence                       | **Yes**                    | Yes                   | Yes                          | Yes                | Yes                    |
+| Backup & Restore                  | **Yes**                    | Yes                   | Yes                          | Yes                | Yes                    |
+| Additional Functionality          | **Foliage Statefuns**      | Cypher                | GraphQL                      | SPARQL and Gremlin | JavaScript (V8) - Foxx |
+| Event Subscription (Triggers)     | **Yes**                    | Yes (Enterprise only) | Yes                          | Yes                | No                     |
+| Functional Graph                  | **Yes**                    | No                    | Yes                          | No                 | No                     |
+| Lightweight                       | **Yes (64MB RAM minimum)** | No (8GB RAM minimum)  | No (8GB RAM minimum)         | No                 | No (1GB RAM minimum)   |
+| ARM6, ARM7                        | **Yes**                    | No                    | Yes                          | Yes                | No                     |
+| On-premise deploy                 | **Yes**                    | Yes                   | Yes                          | No                 | Yes                    |
+| Traditional graph (links & edges) | **Yes**                    | Yes                   | No                           | Yes                | Yes                    |
+| Schema-related Constraints        | **No**                     | No                    | Properties and Relationships | No                 | No                     |
 
 Query languages comparison is available [here.](./jpgql.md#comparison-with-other-graph-query-languages)
 
@@ -39,17 +39,17 @@ In contrast to other solutions, NATS server can run on very small edge devices, 
 
 The table below outlines the features that explain why the platform chose to create its own stateful functions processing system to meet its system requirements.
 
-| Features                             | Apache Flink Statefun  | AWS Lambda                 | Foliage Statefun |
-|--------------------------------------|:----------------------:|:--------------------------:|:----------------:|
-| Stateful functions with context      | Yes                    | No (ext. storage required) | Yes              |
-| Clustering and high-availability     | Yes                    | Yes                        | Yes              |
-| Exactly once                         | Yes                    | Yes                        | Yes              |
-| Independent statefun runtimes        | No                     | Yes                        | Yes              |
-| Adding statefuns on the fly          | No                     | Yes                        | Yes              |
-| Access other statefun's context      | No                     | Yes                        | Yes              |
-| Lightweight                          | No                     | Yes                        | Yes              |
-| No dependencies required             | No                     | No (works with cloud)      | Yes              |
-| Easy functions cold start            | Yes                    | No                         | Yes              |
+| Features                             | Foliage Statefun | Apache Flink Statefun  | AWS Lambda                 |
+|--------------------------------------|:----------------:|:----------------------:|:--------------------------:|
+| Stateful functions with context      | **Yes**          | Yes                    | No (ext. storage required) |
+| Clustering and high-availability     | **Yes**          | Yes                    | Yes                        |
+| Exactly once                         | **Yes**          | Yes                    | Yes                        |
+| Independent statefun runtimes        | **Yes**          | No                     | Yes                        |
+| Adding statefuns on the fly          | **Yes**          | No                     | Yes                        |
+| Access other statefun's context      | **Yes**          | No                     | Yes                        |
+| Lightweight                          | **Yes**          | No                     | Yes                        |
+| No dependencies required             | **Yes**          | No                     | No (works with cloud)      |
+| Easy functions cold start            | **Yes**          | Yes                    | No                         |
 
 ### Independent Statefun Runtimes
 
