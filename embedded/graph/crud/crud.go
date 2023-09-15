@@ -6,8 +6,9 @@ package crud
 
 import (
 	"fmt"
-	"json_easy"
 	"strings"
+
+	"github.com/foliagecp/easyjson"
 
 	"github.com/foliagecp/sdk/embedded/graph/common"
 	"github.com/foliagecp/sdk/statefun"
@@ -36,28 +37,28 @@ Reply:
 func LLAPIObjectCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	payload := contextProcessor.Payload
 
-	result := json_easy.NewJSONObject()
+	result := easyjson.NewJSONObject()
 
 	queryID := common.GetQueryID(contextProcessor)
 	contextProcessor.GlobalCache.TransactionBegin(queryID)
 
-	var objectBody json_easy.JSON
+	var objectBody easyjson.JSON
 	if payload.GetByPath("body").IsObject() {
 		objectBody = payload.GetByPath("body")
 	} else {
-		objectBody = json_easy.NewJSONObject()
+		objectBody = easyjson.NewJSONObject()
 	}
 
 	// Delete existing object ---------------------------------------------
-	deleteObjectPayload := json_easy.NewJSONObject()
-	deleteObjectPayload.SetByPath("query_id", json_easy.NewJSON(queryID))
+	deleteObjectPayload := easyjson.NewJSONObject()
+	deleteObjectPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
 	contextProcessor.GolangCallSync("functions.graph.ll.api.object.delete", contextProcessor.Self.ID, &deleteObjectPayload, nil)
 	// --------------------------------------------------------------------
 
 	contextProcessor.GlobalCache.SetValue(contextProcessor.Self.ID, objectBody.ToBytes(), true, -1, queryID)
 
-	result.SetByPath("status", json_easy.NewJSON("ok"))
-	result.SetByPath("result", json_easy.NewJSON(""))
+	result.SetByPath("status", easyjson.NewJSON("ok"))
+	result.SetByPath("result", easyjson.NewJSON(""))
 
 	common.ReplyQueryID(queryID, &result, contextProcessor)
 
@@ -86,11 +87,11 @@ func LLAPIObjectUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sf
 	payload := contextProcessor.Payload
 
 	errorString := ""
-	result := json_easy.NewJSONObject()
+	result := easyjson.NewJSONObject()
 
 	queryID := common.GetQueryID(contextProcessor)
 
-	var objectBody json_easy.JSON
+	var objectBody easyjson.JSON
 	if payload.GetByPath("body").IsObject() {
 		objectBody = payload.GetByPath("body")
 	} else {
@@ -101,11 +102,11 @@ func LLAPIObjectUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sf
 		oldObjectBody := contextProcessor.GetObjectContext()
 		oldObjectBody.DeepMerge(objectBody)
 		contextProcessor.SetObjectContext(oldObjectBody) // Update an object
-		result.SetByPath("status", json_easy.NewJSON("ok"))
+		result.SetByPath("status", easyjson.NewJSON("ok"))
 	} else {
-		result.SetByPath("status", json_easy.NewJSON("failed"))
+		result.SetByPath("status", easyjson.NewJSON("failed"))
 	}
-	result.SetByPath("result", json_easy.NewJSON(errorString))
+	result.SetByPath("result", easyjson.NewJSON(errorString))
 
 	common.ReplyQueryID(queryID, &result, contextProcessor)
 }
@@ -128,7 +129,7 @@ Reply:
 */
 func LLAPIObjectDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	errorString := ""
-	result := json_easy.NewJSONObject()
+	result := easyjson.NewJSONObject()
 
 	queryID := common.GetQueryID(contextProcessor)
 	contextProcessor.GlobalCache.TransactionBegin(queryID)
@@ -140,10 +141,10 @@ func LLAPIObjectDelete(executor sfplugins.StatefunExecutor, contextProcessor *sf
 		toObjectID := inLinkKeyTokens[len(inLinkKeyTokens)-1]
 		linkType := inLinkKeyTokens[len(inLinkKeyTokens)-2]
 
-		deleteLinkPayload := json_easy.NewJSONObject()
-		deleteLinkPayload.SetByPath("query_id", json_easy.NewJSON(queryID))
-		deleteLinkPayload.SetByPath("descendant_uuid", json_easy.NewJSON(toObjectID))
-		deleteLinkPayload.SetByPath("link_type", json_easy.NewJSON(linkType))
+		deleteLinkPayload := easyjson.NewJSONObject()
+		deleteLinkPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
+		deleteLinkPayload.SetByPath("descendant_uuid", easyjson.NewJSON(toObjectID))
+		deleteLinkPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
 		contextProcessor.GolangCallSync("functions.graph.ll.api.link.delete", contextProcessor.Self.ID, &deleteLinkPayload, nil)
 	}
 	// ----------------------------------------------------
@@ -155,17 +156,17 @@ func LLAPIObjectDelete(executor sfplugins.StatefunExecutor, contextProcessor *sf
 		fromObjectID := inLinkKeyTokens[len(inLinkKeyTokens)-2]
 		linkType := inLinkKeyTokens[len(inLinkKeyTokens)-1]
 
-		deleteLinkPayload := json_easy.NewJSONObject()
-		deleteLinkPayload.SetByPath("query_id", json_easy.NewJSON(queryID))
-		deleteLinkPayload.SetByPath("descendant_uuid", json_easy.NewJSON(contextProcessor.Self.ID))
-		deleteLinkPayload.SetByPath("link_type", json_easy.NewJSON(linkType))
+		deleteLinkPayload := easyjson.NewJSONObject()
+		deleteLinkPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
+		deleteLinkPayload.SetByPath("descendant_uuid", easyjson.NewJSON(contextProcessor.Self.ID))
+		deleteLinkPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
 		contextProcessor.GolangCallSync("functions.graph.ll.api.link.delete", fromObjectID, &deleteLinkPayload, nil)
 	}
 	// ----------------------------------------------------
 	contextProcessor.GlobalCache.DeleteValue(contextProcessor.Self.ID, true, -1, queryID) // Delete object's body
 
-	result.SetByPath("status", json_easy.NewJSON("ok"))
-	result.SetByPath("result", json_easy.NewJSON(errorString))
+	result.SetByPath("status", easyjson.NewJSON("ok"))
+	result.SetByPath("result", easyjson.NewJSON(errorString))
 
 	common.ReplyQueryID(queryID, &result, contextProcessor)
 
@@ -205,24 +206,24 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 	contextProcessor.GlobalCache.TransactionBegin(queryID)
 
 	errorString := ""
-	result := json_easy.NewJSONObject()
+	result := easyjson.NewJSONObject()
 
 	if payload.PathExists("in_link_type") {
 		selfID := strings.Split(contextProcessor.Self.ID, "===")[0]
 		if inLinkType, ok := payload.GetByPath("in_link_type").AsString(); ok && len(inLinkType) > 0 {
 			if linkFromObjectUUID := contextProcessor.Caller.ID; len(linkFromObjectUUID) > 0 {
 				contextProcessor.GlobalCache.SetValue(selfID+".in.oid_ltp-nil."+linkFromObjectUUID+"."+inLinkType, nil, true, -1, queryID)
-				result.SetByPath("status", json_easy.NewJSON("ok"))
+				result.SetByPath("status", easyjson.NewJSON("ok"))
 			}
 		} else {
-			result.SetByPath("status", json_easy.NewJSON("failed"))
+			result.SetByPath("status", easyjson.NewJSON("failed"))
 			errorString = fmt.Sprintf("ERROR LLAPILinkCreate %s: in_link_type:string must be a non empty string", selfID)
 			fmt.Println(errorString)
 		}
-		result.SetByPath("result", json_easy.NewJSON(errorString))
+		result.SetByPath("result", easyjson.NewJSON(errorString))
 		contextProcessor.Call(contextProcessor.Caller.Typename, contextProcessor.Caller.ID, &result, nil)
 	} else {
-		var linkBody json_easy.JSON
+		var linkBody easyjson.JSON
 		if payload.GetByPath("link_body").IsObject() {
 			linkBody = payload.GetByPath("link_body")
 		} else {
@@ -243,10 +244,10 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			}
 
 			// Delete link if exists ----------------------------------
-			nextCallPayload := json_easy.NewJSONObject()
-			nextCallPayload.SetByPath("query_id", json_easy.NewJSON(queryID))
-			nextCallPayload.SetByPath("descendant_uuid", json_easy.NewJSON(descendantUUID))
-			nextCallPayload.SetByPath("link_type", json_easy.NewJSON(linkType))
+			nextCallPayload := easyjson.NewJSONObject()
+			nextCallPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
+			nextCallPayload.SetByPath("descendant_uuid", easyjson.NewJSON(descendantUUID))
+			nextCallPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
 			contextProcessor.GolangCallSync("functions.graph.ll.api.link.delete", contextProcessor.Self.ID, &nextCallPayload, nil)
 			// --------------------------------------------------------
 
@@ -262,9 +263,9 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			// --------------------------------------------------------
 
 			// Create in link on descendant object --------------------
-			nextCallPayload = json_easy.NewJSONObject()
-			nextCallPayload.SetByPath("query_id", json_easy.NewJSON(queryID))
-			nextCallPayload.SetByPath("in_link_type", json_easy.NewJSON(linkType))
+			nextCallPayload = easyjson.NewJSONObject()
+			nextCallPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
+			nextCallPayload.SetByPath("in_link_type", easyjson.NewJSON(linkType))
 			if descendantUUID == contextProcessor.Self.ID {
 				contextProcessor.GolangCallSync(contextProcessor.Self.Typename, descendantUUID+"===create_in_link", &nextCallPayload, nil)
 			} else {
@@ -272,11 +273,11 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			}
 			// --------------------------------------------------------
 
-			result.SetByPath("status", json_easy.NewJSON("ok"))
-			result.SetByPath("result", json_easy.NewJSON(errorString))
+			result.SetByPath("status", easyjson.NewJSON("ok"))
+			result.SetByPath("result", easyjson.NewJSON(errorString))
 		} else {
-			result.SetByPath("status", json_easy.NewJSON("failed"))
-			result.SetByPath("result", json_easy.NewJSON(errorString))
+			result.SetByPath("status", easyjson.NewJSON("failed"))
+			result.SetByPath("result", easyjson.NewJSON(errorString))
 		}
 		common.ReplyQueryID(queryID, &result, contextProcessor)
 	}
@@ -312,9 +313,9 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 	contextProcessor.GlobalCache.TransactionBegin(queryID)
 
 	errorString := ""
-	result := json_easy.NewJSONObject()
+	result := easyjson.NewJSONObject()
 
-	var linkBody json_easy.JSON
+	var linkBody easyjson.JSON
 	if payload.GetByPath("link_body").IsObject() {
 		linkBody = payload.GetByPath("link_body")
 	} else {
@@ -359,19 +360,19 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			// ------------------------------------------------------------
 		} else {
 			// Create link if does not exist
-			createLinkPayload := json_easy.NewJSONObject()
-			createLinkPayload.SetByPath("query_id", json_easy.NewJSON(queryID))
-			createLinkPayload.SetByPath("descendant_uuid", json_easy.NewJSON(descendantUUID))
-			createLinkPayload.SetByPath("link_type", json_easy.NewJSON(linkType))
+			createLinkPayload := easyjson.NewJSONObject()
+			createLinkPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
+			createLinkPayload.SetByPath("descendant_uuid", easyjson.NewJSON(descendantUUID))
+			createLinkPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
 			createLinkPayload.SetByPath("link_body", linkBody)
 			contextProcessor.GolangCallSync("functions.graph.ll.api.link.create", contextProcessor.Self.ID, &createLinkPayload, nil)
 		}
 
-		result.SetByPath("status", json_easy.NewJSON("ok"))
-		result.SetByPath("result", json_easy.NewJSON(errorString))
+		result.SetByPath("status", easyjson.NewJSON("ok"))
+		result.SetByPath("result", easyjson.NewJSON(errorString))
 	} else {
-		result.SetByPath("status", json_easy.NewJSON("failed"))
-		result.SetByPath("result", json_easy.NewJSON(errorString))
+		result.SetByPath("status", easyjson.NewJSON("failed"))
+		result.SetByPath("result", easyjson.NewJSON(errorString))
 	}
 	common.ReplyQueryID(queryID, &result, contextProcessor)
 
@@ -407,21 +408,21 @@ func LLAPILinkDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 	contextProcessor.GlobalCache.TransactionBegin(queryID)
 
 	errorString := ""
-	result := json_easy.NewJSONObject()
+	result := easyjson.NewJSONObject()
 
 	if payload.PathExists("in_link_type") {
 		selfID := strings.Split(contextProcessor.Self.ID, "===")[0]
 		if inLinkType, ok := payload.GetByPath("in_link_type").AsString(); ok && len(inLinkType) > 0 {
 			if linkFromObjectUUID := contextProcessor.Caller.ID; len(linkFromObjectUUID) > 0 {
 				contextProcessor.GlobalCache.DeleteValue(selfID+".in.oid_ltp-nil."+linkFromObjectUUID+"."+inLinkType, true, -1, queryID)
-				result.SetByPath("status", json_easy.NewJSON("ok"))
+				result.SetByPath("status", easyjson.NewJSON("ok"))
 			}
 		} else {
-			result.SetByPath("status", json_easy.NewJSON("failed"))
+			result.SetByPath("status", easyjson.NewJSON("failed"))
 			errorString = fmt.Sprintf("ERROR LLAPILinkDelete %s: in_link_type:string must be a non empty string", selfID)
 			fmt.Println(errorString)
 		}
-		result.SetByPath("result", json_easy.NewJSON(errorString))
+		result.SetByPath("result", easyjson.NewJSON(errorString))
 		contextProcessor.Call(contextProcessor.Self.Typename, contextProcessor.Caller.ID, &result, nil)
 	} else {
 		var linkType string
@@ -440,8 +441,8 @@ func LLAPILinkDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 		if len(errorString) == 0 {
 			if _, err := contextProcessor.GlobalCache.GetValue(contextProcessor.Self.ID + ".out.ltp_oid-bdy." + linkType + "." + descendantUUID); err != nil {
 				// Link does not exist - nothing to delete
-				result.SetByPath("status", json_easy.NewJSON("ok"))
-				result.SetByPath("result", json_easy.NewJSON("Link does not exist"))
+				result.SetByPath("status", easyjson.NewJSON("ok"))
+				result.SetByPath("result", easyjson.NewJSON("Link does not exist"))
 			} else {
 				lbk := contextProcessor.Self.ID + ".out.ltp_oid-bdy." + linkType + "." + descendantUUID
 				linkBody, _ := contextProcessor.GlobalCache.GetValueAsJSON(lbk)
@@ -455,20 +456,20 @@ func LLAPILinkDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 					}
 				}
 
-				nextCallPayload := json_easy.NewJSONObject()
-				nextCallPayload.SetByPath("query_id", json_easy.NewJSON(queryID))
-				nextCallPayload.SetByPath("in_link_type", json_easy.NewJSON(linkType))
+				nextCallPayload := easyjson.NewJSONObject()
+				nextCallPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
+				nextCallPayload.SetByPath("in_link_type", easyjson.NewJSON(linkType))
 				if descendantUUID == contextProcessor.Self.ID {
 					contextProcessor.GolangCallSync(contextProcessor.Self.Typename, descendantUUID+"===delete_in_link", &nextCallPayload, nil)
 				} else {
 					contextProcessor.GolangCallSync(contextProcessor.Self.Typename, descendantUUID, &nextCallPayload, nil)
 				}
-				result.SetByPath("status", json_easy.NewJSON("ok"))
-				result.SetByPath("result", json_easy.NewJSON(errorString))
+				result.SetByPath("status", easyjson.NewJSON("ok"))
+				result.SetByPath("result", easyjson.NewJSON(errorString))
 			}
 		} else {
-			result.SetByPath("status", json_easy.NewJSON("failed"))
-			result.SetByPath("result", json_easy.NewJSON(errorString))
+			result.SetByPath("status", easyjson.NewJSON("failed"))
+			result.SetByPath("result", easyjson.NewJSON(errorString))
 		}
 		common.ReplyQueryID(queryID, &result, contextProcessor)
 	}

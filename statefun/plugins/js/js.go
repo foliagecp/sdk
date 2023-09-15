@@ -4,7 +4,8 @@ package js
 
 import (
 	"fmt"
-	"json_easy"
+
+	"github.com/foliagecp/easyjson"
 
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
@@ -94,7 +95,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 		}
 
 		newContextStr := info.Args()[0].String()
-		newContext, ok := json_easy.JSONFromString(newContextStr)
+		newContext, ok := easyjson.JSONFromString(newContextStr)
 		if !ok {
 			v, _ := v8.NewValue(sfejs.vw, int32(3))
 			return v
@@ -128,7 +129,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 		}
 
 		newContextStr := info.Args()[0].String()
-		newContext, ok := json_easy.JSONFromString(newContextStr)
+		newContext, ok := easyjson.JSONFromString(newContextStr)
 		if !ok {
 			v, _ := v8.NewValue(sfejs.vw, int32(3))
 			return v
@@ -168,10 +169,10 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 			return v
 		}
 		if info.Args()[0].IsString() && info.Args()[1].IsString() && info.Args()[2].IsString() && info.Args()[3].IsString() {
-			if j, ok := json_easy.JSONFromString(info.Args()[2].String()); ok {
-				var options *json_easy.JSON = nil
+			if j, ok := easyjson.JSONFromString(info.Args()[2].String()); ok {
+				var options *easyjson.JSON = nil
 				if len(info.Args()[3].String()) > 0 {
-					if o, ok := json_easy.JSONFromString(info.Args()[3].String()); ok {
+					if o, ok := easyjson.JSONFromString(info.Args()[3].String()); ok {
 						options = &o
 					} else {
 						fmt.Printf("statefunCall options is not empty and not a JSON: %s\n", info.Args()[3].String())
@@ -199,7 +200,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 			return v
 		}
 		if info.Args()[0].IsString() && info.Args()[1].IsString() {
-			if j, ok := json_easy.JSONFromString(info.Args()[1].String()); ok {
+			if j, ok := easyjson.JSONFromString(info.Args()[1].String()); ok {
 				sfejs.contextProcessor.Egress(info.Args()[0].String(), &j)
 				v, _ := v8.NewValue(sfejs.vw, int32(0))
 				return v

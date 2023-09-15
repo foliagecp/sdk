@@ -7,9 +7,10 @@ package statefun
 import (
 	"context"
 	"fmt"
-	"json_easy"
 	"sync/atomic"
 	"time"
+
+	"github.com/foliagecp/easyjson"
 
 	"github.com/foliagecp/sdk/statefun/cache"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
@@ -147,18 +148,18 @@ func (r *Runtime) runGarbageCellector() (err error) {
 	}
 }
 
-func (r *Runtime) IngressNATS(typename string, id string, payload *json_easy.JSON, options *json_easy.JSON) {
+func (r *Runtime) IngressNATS(typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) {
 	r.callFunction("ingress", "nats", typename, id, payload, options)
 }
 
-func (r *Runtime) IngressGolangSync(typename string, id string, payload *json_easy.JSON, options *json_easy.JSON) *json_easy.JSON {
+func (r *Runtime) IngressGolangSync(typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) *easyjson.JSON {
 	return r.callFunctionGolangSync("ingress", "go", typename, id, payload, options)
 }
 
-func (r *Runtime) callFunction(callerTypename string, callerID string, targetTypename string, targetID string, payload *json_easy.JSON, options *json_easy.JSON) {
-	data := json_easy.NewJSONObject()
-	data.SetByPath("caller_typename", json_easy.NewJSON(callerTypename))
-	data.SetByPath("caller_id", json_easy.NewJSON(callerID))
+func (r *Runtime) callFunction(callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) {
+	data := easyjson.NewJSONObject()
+	data.SetByPath("caller_typename", easyjson.NewJSON(callerTypename))
+	data.SetByPath("caller_id", easyjson.NewJSON(callerID))
 	if payload != nil {
 		data.SetByPath("payload", *payload)
 	}
@@ -171,8 +172,8 @@ func (r *Runtime) callFunction(callerTypename string, callerID string, targetTyp
 }
 
 // TODO: return error also
-func (r *Runtime) callFunctionGolangSync(callerTypename string, callerID string, targetTypename string, targetID string, payload *json_easy.JSON, options *json_easy.JSON) *json_easy.JSON {
-	resultJSONChannel := make(chan *json_easy.JSON, 1)
+func (r *Runtime) callFunctionGolangSync(callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) *easyjson.JSON {
+	resultJSONChannel := make(chan *easyjson.JSON, 1)
 
 	msg := &GoMsg{ResultJSONChannel: resultJSONChannel, Caller: &sfPlugins.StatefunAddress{Typename: callerTypename, ID: callerID}, Payload: payload}
 	if targetFT, ok := r.registeredFunctionTypes[targetTypename]; ok {

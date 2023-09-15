@@ -6,7 +6,8 @@ package common
 
 import (
 	"fmt"
-	"json_easy"
+
+	"github.com/foliagecp/easyjson"
 
 	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
 	sfSystem "github.com/foliagecp/sdk/statefun/system"
@@ -24,7 +25,7 @@ func GetQueryID(contextProcessor *sfplugins.StatefunContextProcessor) string {
 	return queryID
 }
 
-func ReplyQueryID(queryID string, result *json_easy.JSON, contextProcessor *sfplugins.StatefunContextProcessor) {
+func ReplyQueryID(queryID string, result *easyjson.JSON, contextProcessor *sfplugins.StatefunContextProcessor) {
 	if result != nil && contextProcessor != nil {
 		if len(contextProcessor.Caller.Typename) == 0 || len(contextProcessor.Caller.ID) == 0 {
 			contextProcessor.Egress(QueryResultTopic+"."+queryID, result) // Publish result to NATS topic (no JetStream)

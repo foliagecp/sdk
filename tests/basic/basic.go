@@ -6,8 +6,9 @@ package basic
 
 import (
 	"fmt"
-	"json_easy"
 	"os"
+
+	"github.com/foliagecp/easyjson"
 
 	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
 	graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
@@ -43,7 +44,7 @@ var (
 )
 
 func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-	var functionContext *json_easy.JSON
+	var functionContext *easyjson.JSON
 	if MasterFunctionContextIncrement {
 		functionContext = contextProcessor.GetFunctionContext()
 	}
@@ -57,7 +58,7 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlu
 		fmt.Println("== Context:", functionContext.ToString())
 	}
 
-	var objectContext *json_easy.JSON
+	var objectContext *easyjson.JSON
 	if MasterFunctionObjectContextProcess {
 		objectContext = contextProcessor.GetObjectContext()
 		if MasterFunctionLogs {
@@ -81,10 +82,10 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlu
 
 	if MasterFunctionContextIncrement {
 		if v, ok := functionContext.GetByPath("counter").AsNumeric(); ok {
-			functionContext.SetByPath("counter", json_easy.NewJSON(int(v)+increment))
+			functionContext.SetByPath("counter", easyjson.NewJSON(int(v)+increment))
 			fmt.Printf("++ Function context's counter value incrementated by %d\n", increment)
 		} else {
-			functionContext.SetByPath("counter", json_easy.NewJSON(0))
+			functionContext.SetByPath("counter", easyjson.NewJSON(0))
 			fmt.Printf("++ Function context's counter value initialized with 0\n")
 		}
 	}
@@ -100,7 +101,7 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlu
 
 func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	// Create new typename function "functions.tests.basic.master" each stateful instance of which uses go function "MasterFunction"
-	ftOptions := json_easy.NewJSONObjectWithKeyValue("increment", json_easy.NewJSON(MasterFunctionContextIncrementOption))
+	ftOptions := easyjson.NewJSONObjectWithKeyValue("increment", easyjson.NewJSON(MasterFunctionContextIncrementOption))
 	ft := statefun.NewFunctionType(runtime, "functions.tests.basic.master", MasterFunction, *statefun.NewFunctionTypeConfig().SetOptions(&ftOptions))
 	// Add TypenameExecutorPlugin which will provide StatefunExecutor for each stateful instance for this typename function (skip this if TypenameExecutorPlugin is not needed)
 
