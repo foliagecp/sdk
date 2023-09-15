@@ -26,3 +26,5 @@ services:
     build:
       context: ..
       dockerfile: tests/Dockerfile
+    volumes:
+      - ./:/tests
