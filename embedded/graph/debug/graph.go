@@ -34,6 +34,7 @@ Algorithm: Sync BFS
 		"verbose": true | false // optional, default: false
 	}
 */
+// TODO: add depth limit
 func LLAPIPrintGraph(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	self := contextProcessor.Self
 	payload := contextProcessor.Payload
@@ -61,8 +62,8 @@ func LLAPIPrintGraph(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 	}
 
 	defer func() {
-		gviz.Close()
-		graph.Close()
+		_ = gviz.Close()
+		_ = graph.Close()
 	}()
 
 	graph = graph.SetSize(500, 500)
@@ -86,7 +87,7 @@ func LLAPIPrintGraph(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 
 	queue := list.New()
 
-	for _, v := range getChilds(contextProcessor, self.ID) {
+	for _, v := range getChildren(contextProcessor, self.ID) {
 		queue.PushBack(v)
 	}
 
@@ -115,7 +116,7 @@ func LLAPIPrintGraph(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			addParents(contextProcessor, graph, nodes, elem)
 		}
 
-		for _, n := range getChilds(contextProcessor, node.id) {
+		for _, n := range getChildren(contextProcessor, node.id) {
 			if _, ok := nodes[n.id]; !ok {
 				queue.PushBack(n)
 			}
@@ -151,13 +152,13 @@ func getParents(ctx *sfplugins.StatefunContextProcessor, id string) []node {
 	return nodes
 }
 
-func getChilds(ctx *sfplugins.StatefunContextProcessor, id string) []node {
+func getChildren(ctx *sfplugins.StatefunContextProcessor, id string) []node {
 	pattern := id + ".out.ltp_oid-bdy.>"
-	childs := ctx.GlobalCache.GetKeysByPattern(pattern)
+	children := ctx.GlobalCache.GetKeysByPattern(pattern)
 
-	nodes := make([]node, 0, len(childs))
+	nodes := make([]node, 0, len(children))
 
-	for _, v := range childs {
+	for _, v := range children {
 		split := strings.Split(v, ".")
 		if len(split) == 0 {
 			continue
