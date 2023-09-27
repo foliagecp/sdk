@@ -10,6 +10,7 @@ package debug
 
 import (
 	"container/list"
+	"math"
 	"path/filepath"
 	"strings"
 
@@ -19,9 +20,9 @@ import (
 )
 
 type node struct {
-	parent string
+	parent string // parent id
 	id     string
-	lt     string
+	lt     string // link type
 }
 
 /*
@@ -32,9 +33,9 @@ Algorithm: Sync BFS
 	Payload: {
 		"ext": "dot" | "png" | "svg" // optional, default: "dot"
 		"verbose": true | false // optional, default: false
+		"depth": uint // optional, default: 256
 	}
 */
-// TODO: add depth limit
 func LLAPIPrintGraph(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	self := contextProcessor.Self
 	payload := contextProcessor.Payload
@@ -54,6 +55,7 @@ func LLAPIPrintGraph(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 	}
 
 	verboseGraph := payload.GetByPath("verbose").AsBoolDefault(false)
+	maxDepth := uint(payload.GetByPath("depth").AsNumericDefault(math.MaxUint8))
 
 	gviz := graphviz.New()
 	graph, err := gviz.Graph()
@@ -72,30 +74,33 @@ func LLAPIPrintGraph(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 		graph.SetRankSeparator(5)
 	}
 
-	root, err := createNode(graph, self.ID)
-	if err != nil {
-		return
-	}
+	nodes := make(map[string]*cgraph.Node)
 
-	nodes := map[string]*cgraph.Node{
-		self.ID: root,
-	}
-
-	if verboseGraph {
-		addParents(contextProcessor, graph, nodes, root)
+	root := node{
+		id: self.ID,
 	}
 
 	queue := list.New()
+	queue.PushBack(root)
+	queue.PushBack(nil)
 
-	for _, v := range getChildren(contextProcessor, self.ID) {
-		queue.PushBack(v)
-	}
-
+	currentDepth := uint(0)
 	for queue.Len() > 0 {
 		e := queue.Front()
-		node := e.Value.(node)
+		node, ok := e.Value.(node)
 
 		queue.Remove(e)
+
+		if !ok {
+			currentDepth++
+			queue.PushBack(nil)
+
+			if queue.Front().Value == nil {
+				break
+			}
+
+			continue
+		}
 
 		elem, exists := nodes[node.id]
 		if !exists {
@@ -108,17 +113,21 @@ func LLAPIPrintGraph(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			elem = newElem
 		}
 
-		if _, err := createEdge(graph, node.lt, nodes[node.parent], elem); err != nil {
-			continue
-		}
-
 		if verboseGraph {
 			addParents(contextProcessor, graph, nodes, elem)
 		}
 
-		for _, n := range getChildren(contextProcessor, node.id) {
-			if _, ok := nodes[n.id]; !ok {
-				queue.PushBack(n)
+		if node.parent != "" && node.lt != "" {
+			if _, err := createEdge(graph, node.lt, nodes[node.parent], elem); err != nil {
+				continue
+			}
+		}
+
+		if currentDepth < maxDepth {
+			for _, n := range getChildren(contextProcessor, node.id) {
+				if _, ok := nodes[n.id]; !ok {
+					queue.PushBack(n)
+				}
 			}
 		}
 	}
