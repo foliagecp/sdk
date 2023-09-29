@@ -77,7 +77,7 @@ func NewRuntime(config RuntimeConfig) (r *Runtime, err error) {
 	return
 }
 
-func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Runtime)) (err error) {
+func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Runtime) error) (err error) {
 	// Create stream if does not exist ------------------------------
 	streamExists := false
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -111,7 +111,7 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 	}
 	// --------------------------------------------------------------
 
-	onAfterStart(r)
+	system.MsgOnErrorReturn(onAfterStart(r))
 	system.MsgOnErrorReturn(r.runGarbageCellector())
 
 	return
