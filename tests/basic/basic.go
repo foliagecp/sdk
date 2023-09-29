@@ -121,10 +121,11 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 }
 
 func Start() {
-	afterStart := func(runtime *statefun.Runtime) {
+	afterStart := func(runtime *statefun.Runtime) error {
 		if CreateSimpleGraphTest {
 			CreateTestGraph(runtime)
 		}
+		return nil
 	}
 
 	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "basic")); err == nil {
