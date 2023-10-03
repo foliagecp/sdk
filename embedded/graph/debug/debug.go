@@ -11,6 +11,11 @@ import (
 	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
+func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
+	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.debug.print", LLAPIObjectDebugPrint, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.debug.print.graph", LLAPIPrintGraph, *statefun.NewFunctionTypeConfig())
+}
+
 /*
 Prints to caonsole the content of an object the function being called on along with all its input and output links.
 */
@@ -32,8 +37,4 @@ func LLAPIObjectDebugPrint(executor sfplugins.StatefunExecutor, contextProcessor
 		}
 	}
 	fmt.Println()
-}
-
-func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
-	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.debug.print", LLAPIObjectDebugPrint, *statefun.NewFunctionTypeConfig())
 }
