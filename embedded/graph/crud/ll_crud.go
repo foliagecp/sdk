@@ -17,6 +17,21 @@ import (
 	sfSystem "github.com/foliagecp/sdk/statefun/system"
 )
 
+func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
+	statefun.NewFunctionType(runtime, "functions.graph.api.object.create", CreateObject, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.api.type.create", CreateType, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.api.types.link.create", CreateTypesLink, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.api.objects.link.create", CreateObjectsLink, *statefun.NewFunctionTypeConfig())
+
+	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.create", LLAPIObjectCreate, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.update", LLAPIObjectUpdate, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.delete", LLAPIObjectDelete, *statefun.NewFunctionTypeConfig())
+
+	statefun.NewFunctionType(runtime, "functions.graph.ll.api.link.create", LLAPILinkCreate, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.ll.api.link.update", LLAPILinkUpdate, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.ll.api.link.delete", LLAPILinkDelete, *statefun.NewFunctionTypeConfig())
+}
+
 /*
 Creates an object in the graph with an id the function being called with. Preliminarily deletes an existing one with the same id, if present.
 If caller is not empty returns result to the caller else returns result to the nats topic.
@@ -475,14 +490,4 @@ func LLAPILinkDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 		common.ReplyQueryID(queryID, &result, contextProcessor)
 	}
 	contextProcessor.GlobalCache.TransactionEnd(queryID)
-}
-
-func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
-	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.create", LLAPIObjectCreate, *statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.update", LLAPIObjectUpdate, *statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.delete", LLAPIObjectDelete, *statefun.NewFunctionTypeConfig())
-
-	statefun.NewFunctionType(runtime, "functions.graph.ll.api.link.create", LLAPILinkCreate, *statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.ll.api.link.update", LLAPILinkUpdate, *statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.ll.api.link.delete", LLAPILinkDelete, *statefun.NewFunctionTypeConfig())
 }
