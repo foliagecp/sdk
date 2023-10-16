@@ -19,8 +19,9 @@
   - [Abstract](#abstract)
   - [Features](#features)
 - [Getting Started](#getting-started)
+  - [Minimum Requirements](#minimum-requirements)
   - [Installation](#installation)
-  - [Health status check](#health-status-check)
+  - [Health Status Check](#health-status-check)
   - [Running Tests](#running-tests)
   - [Customization](#customization)
 - [Development](#development)
@@ -53,6 +54,21 @@ Click [here](./docs/features.md) to see all features.
 
 ## Getting Started
 
+### Minimum Requirements
+
+**Native Install**
+
+Foliage platform native install requirements correspond to the NATS Jetstream installations requirements listed here:  
+https://docs.nats.io/running-a-nats-service/introduction/installation#with-jetstream
+
+Same is for supported OS:  
+https://docs.nats.io/running-a-nats-service/introduction/installation#with-jetstream
+
+**Docker Container Install**
+
+Foliage platform install via docker requires as minimal resources as docker engine itself:
+https://docs.docker.com/desktop/install/linux-install/
+
 ### Installation
 
 To begin using Foliage, clone the repository:
@@ -63,7 +79,7 @@ git clone https://github.com/foliagecp/sdk.git
 
 For detailed installation instructions and prerequisites, visit the [official documentation](https://pkg.go.dev/github.com/foliagecp/sdk).
 
-### Health status check
+### Health Status Check
 
 1. Check that NATS server and Foliage runtime are running fine:
 ```sh
