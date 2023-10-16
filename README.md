@@ -20,6 +20,7 @@
   - [Features](#features)
 - [Getting Started](#getting-started)
   - [Installation](#installation)
+  - [Health status check](#health-status-check)
   - [Running Tests](#running-tests)
   - [Customization](#customization)
 - [Development](#development)
@@ -61,6 +62,32 @@ git clone https://github.com/foliagecp/sdk.git
 ```
 
 For detailed installation instructions and prerequisites, visit the [official documentation](https://pkg.go.dev/github.com/foliagecp/sdk).
+
+### Health status check
+
+1. Check that NATS server and Foliage runtime are running fine:
+```sh
+% docker ps
+
+CONTAINER ID   IMAGE                      COMMAND                  CREATED          STATUS          PORTS                                                                    NAMES
+...
+b5a2deb84082   foliage-sdk-tests:latest   "/usr/bin/tests basic"   11 minutes ago   Up 11 minutes                                                                            tests-runtime-1
+fac8d1bfef3a   nats:latest                "/nats-server -js -s…"   11 minutes ago   Up 11 minutes   0.0.0.0:4222->4222/tcp, 0.0.0.0:6222->6222/tcp, 0.0.0.0:8222->8222/tcp   tests-nats-1
+``` 
+
+2. Check that NATS server is running fine:
+```sh
+% docker logs tests-nats-1
+
+...
+[1] 2023/10/16 09:00:43.094325 [INF] Server is ready
+```
+
+3. Check that Foliage runtime runs without errors:
+```sh
+% docker logs tests-runtime-1 | grep "error" -i
+```
+
 
 ### Running Tests
 
