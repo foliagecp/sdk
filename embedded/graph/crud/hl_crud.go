@@ -11,6 +11,7 @@ import (
 
 /*
 	{
+		"prefix": string, optional
 		"body": json
 	}
 
@@ -19,10 +20,12 @@ create types -> type link
 func CreateType(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	selfID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
-	body := payload.GetByPath("body")
+
+	prefix := payload.GetByPath("prefix").AsStringDefault("")
+
 	qid := common.GetQueryID(contextProcessor)
 
-	_, err := contextProcessor.GolangCallSync("functions.graph.ll.api.object.create", selfID, &body, nil)
+	_, err := contextProcessor.GolangCallSync("functions.graph.ll.api.object.create", selfID, payload, nil)
 	if err != nil {
 		reply := easyjson.NewJSONObject()
 		reply.SetByPath("status", easyjson.NewJSON("failed"))
@@ -36,7 +39,7 @@ func CreateType(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	link.SetByPath("link_type", easyjson.NewJSON("__type"))
 	link.SetByPath("link_body", easyjson.NewJSONObject())
 
-	_, err = contextProcessor.GolangCallSync("functions.graph.ll.api.link.create", "types", &link, nil)
+	_, err = contextProcessor.GolangCallSync("functions.graph.ll.api.link.create", prefix+"types", &link, nil)
 	if err != nil {
 		reply := easyjson.NewJSONObject()
 		reply.SetByPath("status", easyjson.NewJSON("failed"))
@@ -52,6 +55,7 @@ func CreateType(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins
 
 /*
 	{
+		"prefix": string, optional,
 		"originType": string,
 		"body": json
 	}
@@ -71,10 +75,11 @@ func CreateObject(executor sfplugins.StatefunExecutor, contextProcessor *sfplugi
 		return
 	}
 
-	body := payload.GetByPath("body")
+	prefix := payload.GetByPath("prefix").AsStringDefault("")
+
 	qid := common.GetQueryID(contextProcessor)
 
-	_, err := contextProcessor.GolangCallSync("functions.graph.ll.api.object.create", selfID, &body, nil)
+	_, err := contextProcessor.GolangCallSync("functions.graph.ll.api.object.create", selfID, payload, nil)
 	if err != nil {
 		reply := easyjson.NewJSONObject()
 		reply.SetByPath("status", easyjson.NewJSON("failed"))
@@ -88,9 +93,9 @@ func CreateObject(executor sfplugins.StatefunExecutor, contextProcessor *sfplugi
 	}
 
 	needLinks := []_link{
-		{from: "objects", to: selfID, lt: "__object"},
-		{from: selfID, to: originType, lt: "__type"},
-		{from: originType, to: selfID, lt: "__object"},
+		{from: prefix + "objects", to: selfID, lt: "__object"},
+		{from: selfID, to: prefix + originType, lt: "__type"},
+		{from: prefix + originType, to: selfID, lt: "__object"},
 	}
 
 	for _, l := range needLinks {
