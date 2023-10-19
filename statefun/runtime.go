@@ -10,10 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/foliagecp/easyjson"
-
 	"github.com/foliagecp/sdk/statefun/cache"
-	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
 )
@@ -107,7 +104,10 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 
 	// Start function subscriptions ---------------------------------
 	for _, ft := range r.registeredFunctionTypes {
-		system.MsgOnErrorReturn(ft.Start(r.config.functionTypesStreamName))
+		system.MsgOnErrorReturn(AddSignalSourceJetstreamQueuePushConsumer(ft, r.config.functionTypesStreamName))
+		if ft.config.serviceActive {
+			system.MsgOnErrorReturn(AddRequestSourceNatsCore(ft))
+		}
 	}
 	// --------------------------------------------------------------
 
@@ -145,47 +145,5 @@ func (r *Runtime) runGarbageCellector() (err error) {
 			// --------------------------------------------------------------
 		}
 		time.Sleep(1 * time.Second)
-	}
-}
-
-func (r *Runtime) IngressNATS(typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) {
-	r.callFunction("ingress", "nats", typename, id, payload, options)
-}
-
-func (r *Runtime) IngressGolangSync(typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) (*easyjson.JSON, error) {
-	return r.callFunctionGolangSync("ingress", "go", typename, id, payload, options)
-}
-
-func (r *Runtime) callFunction(callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) {
-	data := easyjson.NewJSONObject()
-	data.SetByPath("caller_typename", easyjson.NewJSON(callerTypename))
-	data.SetByPath("caller_id", easyjson.NewJSON(callerID))
-	if payload != nil {
-		data.SetByPath("payload", *payload)
-	}
-	if options != nil {
-		data.SetByPath("options", *options)
-	}
-	go func() {
-		system.MsgOnErrorReturn(r.nc.Publish(targetTypename+"."+targetID, data.ToBytes()))
-	}()
-}
-
-// TODO: return error also
-func (r *Runtime) callFunctionGolangSync(callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) (*easyjson.JSON, error) {
-	resultJSONChannel := make(chan *easyjson.JSON, 1)
-
-	msg := &GoMsg{ResultJSONChannel: resultJSONChannel, Caller: &sfPlugins.StatefunAddress{Typename: callerTypename, ID: callerID}, Payload: payload}
-	if targetFT, ok := r.registeredFunctionTypes[targetTypename]; ok {
-		targetFT.sendMsgToIDHandler(targetID, msg, nil)
-	} else {
-		return nil, fmt.Errorf("callFunctionGolangSync cannot call function with the typename %s, not registered", callerTypename)
-	}
-
-	select {
-	case resultJSON := <-resultJSONChannel:
-		return resultJSON, nil
-	case <-time.After(time.Duration(r.config.ingressCallGoLangSyncTimeoutSec) * time.Second):
-		return nil, fmt.Errorf("timeout occured while executing callFunctionGolangSync for function with the typename %s", callerTypename)
 	}
 }
