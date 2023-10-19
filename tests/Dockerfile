@@ -11,7 +11,7 @@ COPY . .
 
 RUN go mod tidy
 
-# --ldflags '-extldflags "-Wl,--allow-multiple-definition"' for resolving the following conflict between go-graphviz and rogchap:
+# --ldflags '-extldflags "-Wl,--allow-multiple-definition"' for resolving the following cgo conflict between go-graphviz and rogchap:
 # running g++ failed: exit status 1; multiple definition of `Version'
 RUN cd ./tests && go build --ldflags '-extldflags "-Wl,--allow-multiple-definition"' -o /usr/bin/tests
 
