@@ -3,19 +3,38 @@
 /*
 Functions available in this script 
 
-statefun_getSelfTypename() // gets typename of function (string)
-statefun_getSelfId() // gets id of function (string)
-statefun_getCallerTypename() // gets caller typename of function (string)
-statefun_getCallerId() // gets caller id of function (string)
-statefun_getFunctionContext() // gets JSON context of function (string)
-statefun_setFunctionContext(<string of JSON>) // set JSON context of function (string)
-statefun_getObjectContext() // gets JSON context of object (string)
-statefun_setObjectContext(<string of JSON>) // set JSON context of object (string)
-statefun_getPayload() // gets JSON payload of function (string)
-statefun_getOptions() // gets JSON options of function (string)
-statefun_call(<string of typename>, <string of id>, <string with JSON payload>, <string with JSON options>) // calls stateful function by typename and id
-statefun_egress(<nats topic>, <string with JSON payload>) // sends payload data to an egress
-print(v1, v2, ...) // prints argument values
+// Get typename of the stateful function
+statefun_getSelfTypename() -> string
+// Get id of the stateful function
+statefun_getSelfId() -> string
+// Get the stateful function's caller typename
+statefun_getCallerTypename() -> string
+// Get the stateful function's caller id
+statefun_getCallerId() -> string
+// Get the stateful function's JSON context
+statefun_getFunctionContext() -> string(json)
+// Get JSON context of the stateful function's object
+statefun_getObjectContext() -> string(json)
+// Get the stateful function's JSON payload
+statefun_getPayload() -> string(json)
+// Get the stateful function's JSON options
+statefun_getOptions() -> string(json)
+// Get the stateful function's request reply data if exists, otherwise empty string is returned
+statefun_getRequestReplyData() -> string(json)
+
+// Set the stateful function's JSON context
+statefun_setFunctionContext(<string of JSON>) -> int(status)
+// Set the stateful function object's JSON context
+statefun_setObjectContext(<string of JSON>) -> int(status)
+// Set the stateful function's JSON request reply data
+statefun_setRequestReplyData(<string of JSON>) -> int(status)
+
+// Signal a stateful function by its typename and id
+statefun_signal(<int of signal provider>, <string of typename>, <string of id>, <string with JSON payload>, <string with JSON options>) -> int(status)
+// Synchronously call a stateful function by its typename and id (string)
+statefun_request(<int of request provider>, <string of typename>, <string of id>, <string with JSON payload>, <string with JSON options>) -> string(json)|int(err status)
+// Print arbitrary values
+print(v1, v2, ...)
 */
 
 var context = JSON.parse(statefun_getFunctionContext())
@@ -25,4 +44,4 @@ print("++ Function context's counter value incrementated by JS by", options.incr
 var contextStr = JSON.stringify(context)
 statefun_setFunctionContext(contextStr)
 
-statefun_egress("test.basic.egress", contextStr) // Send function's context data to the egress/nats-topic "test.basic.egress"
+statefun_signal(0, "test.basic", "egress", contextStr, "") // Send function's context data to the egress/nats-topic "test.basic.egress"

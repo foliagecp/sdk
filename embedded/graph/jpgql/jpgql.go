@@ -14,6 +14,7 @@ import (
 	"github.com/foliagecp/sdk/embedded/graph/common"
 	"github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/cache"
+	"github.com/foliagecp/sdk/statefun/plugins"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	sfSystem "github.com/foliagecp/sdk/statefun/system"
 )
@@ -75,7 +76,7 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 		processID := sfSystem.GetUniqueStrID()
 		payload.SetByPath("caller_aggregation_id", easyjson.NewJSON(processID))
 		payload.SetByPath("query_id", easyjson.NewJSON(queryID))
-		contextProcessor.Call(contextProcessor.Self.Typename, contextProcessor.Self.ID+"==="+processID, payload, nil)
+		sfSystem.MsgOnErrorReturn(contextProcessor.Signal(plugins.JetstreamGlobalSignal, contextProcessor.Self.Typename, contextProcessor.Self.ID+"==="+processID, payload, nil))
 
 		keyBase := fmt.Sprintf("jpgql_ctra.%s.%s", contextProcessor.Self.ID, processID)
 
@@ -189,7 +190,7 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 				return fmt.Errorf("Error LLAPIQueryJPGQLCallTreeResultAggregation: no valid reply_object_id")
 			}
 			if len(replyObjectID) > 0 && strings.Count(replyObjectID, "===") == 1 {
-				contextProcessor.Call(contextProcessor.Self.Typename, replyObjectID, replyPayload, nil)
+				sfSystem.MsgOnErrorReturn(contextProcessor.Signal(plugins.JetstreamGlobalSignal, contextProcessor.Self.Typename, replyObjectID, replyPayload, nil))
 			} else {
 				if context.PathExists(thisFunctionAggregationID + "_call") {
 					if call := context.GetByPath(thisFunctionAggregationID + "_call"); call.IsObject() {
@@ -197,7 +198,7 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 							if callPayload := call.GetByPath("payload"); callPayload.IsObject() {
 								if resultObjectsMap, ok := replyPayload.GetByPath("result").AsObject(); ok {
 									for objectID := range resultObjectsMap {
-										contextProcessor.Call(typename, objectID, &callPayload, nil)
+										sfSystem.MsgOnErrorReturn(contextProcessor.Signal(plugins.JetstreamGlobalSignal, typename, objectID, &callPayload, nil))
 									}
 								} else {
 									fmt.Printf("ERROR LLAPIQueryJPGQLCallTreeResultAggregation cannot make call on target: no result objects\n")
@@ -229,7 +230,7 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 					replyPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
 					replyPayload.SetByPath("aggregation_id", easyjson.NewJSON(callerAggregationID))
 					replyPayload.SetByPath("result", easyjson.NewJSONObject())
-					contextProcessor.Call(contextProcessor.Self.Typename, contextProcessor.Caller.ID, &replyPayload, nil)
+					sfSystem.MsgOnErrorReturn(contextProcessor.Signal(plugins.JetstreamGlobalSignal, contextProcessor.Self.Typename, contextProcessor.Caller.ID, &replyPayload, nil))
 				}
 				return nil
 			}
@@ -304,7 +305,7 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 							nextPayload.SetByPath("caller_aggregation_id", easyjson.NewJSON(thisFunctionAggregationID))
 							nextPayload.SetByPath("jpgql_query", easyjson.NewJSON(nextQuery))
 							//fmt.Println(processID+"::: 0:0.1 "+thisObjectID+" | CHILD:", objectID)
-							contextProcessor.Call(contextProcessor.Self.Typename, objectID+"==="+processID, &nextPayload, nil)
+							sfSystem.MsgOnErrorReturn(contextProcessor.Signal(plugins.JetstreamGlobalSignal, contextProcessor.Self.Typename, objectID+"==="+processID, &nextPayload, nil))
 							nextCalls++
 						}
 					}
@@ -536,7 +537,7 @@ func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExec
 			if call != nil {
 				nextPayload.SetByPath("call", *call)
 			}
-			contextProcessor.Call(contextProcessor.Self.Typename, contextProcessor.Self.ID+"==="+sfSystem.GetUniqueStrID(), &nextPayload, nil)
+			sfSystem.MsgOnErrorReturn(contextProcessor.Signal(plugins.JetstreamGlobalSignal, contextProcessor.Self.Typename, contextProcessor.Self.ID+"==="+sfSystem.GetUniqueStrID(), &nextPayload, nil))
 		}
 	} else {
 		idTokens := strings.Split(contextProcessor.Self.ID, "===")
@@ -576,7 +577,7 @@ func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExec
 					if call != nil {
 						if typename, ok := call.GetByPath("typename").AsString(); ok {
 							if callPayload := call.GetByPath("payload"); callPayload.IsObject() {
-								contextProcessor.Call(typename, objectID, &callPayload, nil)
+								sfSystem.MsgOnErrorReturn(contextProcessor.Signal(plugins.JetstreamGlobalSignal, typename, objectID, &callPayload, nil))
 							} else {
 								fmt.Printf("ERROR LLAPIQueryJPGQLDirectCacheResultAggregation cannot make call on target %s: call payload is not a JSON object\n", objectID)
 							}
@@ -595,7 +596,7 @@ func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExec
 						if call != nil {
 							nextPayload.SetByPath("call", *call)
 						}
-						contextProcessor.Call(contextProcessor.Self.Typename, objectID+"==="+sfSystem.GetUniqueStrID(), &nextPayload, nil)
+						sfSystem.MsgOnErrorReturn(contextProcessor.Signal(plugins.JetstreamGlobalSignal, contextProcessor.Self.Typename, objectID+"==="+sfSystem.GetUniqueStrID(), &nextPayload, nil))
 					}
 				}
 			}

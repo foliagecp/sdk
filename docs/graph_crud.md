@@ -11,7 +11,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.objec
 ```
 4. Inspect nats KV store via `io` container: 
 ```sh
-nats -s nats://nats:foliage@nats:4222 kv ls -v --display-value app1_kv_store
+nats -s nats://nats:foliage@nats:4222 kv ls -v --display-value basic_kv_store
 ```
 
 ## Functions
@@ -46,7 +46,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.objec
 [Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPIObjectDelete)
 
 Example:  
-```json
+```sh
 nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.object.delete.root "{\"payload\":{\"query_id\":\"QUERYID\"}}"
 ```
 
