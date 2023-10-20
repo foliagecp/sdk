@@ -25,7 +25,7 @@ func CreateType(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins
 
 	qid := common.GetQueryID(contextProcessor)
 
-	_, err := contextProcessor.GolangCallSync("functions.graph.ll.api.object.create", selfID, payload, nil)
+	_, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", selfID, payload, nil)
 	if err != nil {
 		reply := easyjson.NewJSONObject()
 		reply.SetByPath("status", easyjson.NewJSON("failed"))
@@ -39,7 +39,7 @@ func CreateType(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	link.SetByPath("link_type", easyjson.NewJSON("__type"))
 	link.SetByPath("link_body", easyjson.NewJSONObject())
 
-	_, err = contextProcessor.GolangCallSync("functions.graph.ll.api.link.create", prefix+"types", &link, nil)
+	_, err = contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.create", prefix+"types", &link, nil)
 	if err != nil {
 		reply := easyjson.NewJSONObject()
 		reply.SetByPath("status", easyjson.NewJSON("failed"))
@@ -79,7 +79,7 @@ func CreateObject(executor sfplugins.StatefunExecutor, contextProcessor *sfplugi
 
 	qid := common.GetQueryID(contextProcessor)
 
-	_, err := contextProcessor.GolangCallSync("functions.graph.ll.api.object.create", selfID, payload, nil)
+	_, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", selfID, payload, nil)
 	if err != nil {
 		reply := easyjson.NewJSONObject()
 		reply.SetByPath("status", easyjson.NewJSON("failed"))
@@ -104,7 +104,7 @@ func CreateObject(executor sfplugins.StatefunExecutor, contextProcessor *sfplugi
 		link.SetByPath("link_type", easyjson.NewJSON(l.lt))
 		link.SetByPath("link_body", easyjson.NewJSONObject())
 
-		_, err = contextProcessor.GolangCallSync("functions.graph.ll.api.link.create", l.from, &link, nil)
+		_, err = contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.create", l.from, &link, nil)
 		if err != nil {
 			reply := easyjson.NewJSONObject()
 			reply.SetByPath("status", easyjson.NewJSON("failed"))
@@ -148,7 +148,7 @@ func CreateTypesLink(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 	link.SetByPath("link_type", easyjson.NewJSON(to))
 	link.SetByPath("link_body.link_type", easyjson.NewJSON(objectLinkType))
 
-	_, err := contextProcessor.GolangCallSync("functions.graph.ll.api.link.create", selfID, &link, nil)
+	_, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.create", selfID, &link, nil)
 	if err != nil {
 		reply := easyjson.NewJSONObject()
 		reply.SetByPath("status", easyjson.NewJSON("failed"))
@@ -198,7 +198,7 @@ func CreateObjectsLink(executor sfplugins.StatefunExecutor, contextProcessor *sf
 	objectLink.SetByPath("link_type", easyjson.NewJSON(linkType))
 	objectLink.SetByPath("link_body", easyjson.NewJSONObject())
 
-	_, err = contextProcessor.GolangCallSync("functions.graph.ll.api.link.create", selfID, &objectLink, nil)
+	_, err = contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.create", selfID, &objectLink, nil)
 	if err != nil {
 		reply := easyjson.NewJSONObject()
 		reply.SetByPath("status", easyjson.NewJSON("failed"))

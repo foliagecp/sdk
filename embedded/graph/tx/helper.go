@@ -7,6 +7,7 @@ import (
 
 func createLowLevelLink(ctx *sfplugins.StatefunContextProcessor, from, to, lt, objectLt string) error {
 	const op = "functions.graph.ll.api.link.create"
+
 	link := easyjson.NewJSONObject()
 	link.SetByPath("descendant_uuid", easyjson.NewJSON(to))
 	link.SetByPath("link_type", easyjson.NewJSON(lt))
@@ -15,7 +16,7 @@ func createLowLevelLink(ctx *sfplugins.StatefunContextProcessor, from, to, lt, o
 		link.SetByPath("link_body.link_type", easyjson.NewJSON(objectLt))
 	}
 
-	if _, err := ctx.GolangCallSync(op, from, &link, nil); err != nil {
+	if _, err := ctx.Request(sfplugins.GolangLocalRequest, op, from, &link, nil); err != nil {
 		return err
 	}
 

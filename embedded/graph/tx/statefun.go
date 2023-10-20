@@ -62,7 +62,7 @@ func begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 	txBody := easyjson.NewJSONObject()
 	txBody.SetByPath("created_at", easyjson.NewJSON(now))
 
-	if _, err := contextProcessor.GolangCallSync("functions.graph.ll.api.object.create", txID, &txBody, nil); err != nil {
+	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", txID, &txBody, nil); err != nil {
 		return
 	}
 
@@ -71,7 +71,7 @@ func begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 	link.SetByPath("link_type", easyjson.NewJSON("tx"))
 	link.SetByPath("link_body", easyjson.NewJSONObject())
 
-	if _, err := contextProcessor.GolangCallSync("functions.graph.ll.api.link.create", selfID, &link, nil); err != nil {
+	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.create", selfID, &link, nil); err != nil {
 		return
 	}
 
@@ -108,7 +108,7 @@ func createType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 	createTypePayload.SetByPath("prefix", easyjson.NewJSON(prefix))
 	createTypePayload.SetByPath("body", payload.GetByPath("body"))
 
-	if _, err := contextProcessor.GolangCallSync("functions.graph.api.type.create", typeID, &createTypePayload, nil); err != nil {
+	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.type.create", typeID, &createTypePayload, nil); err != nil {
 		return
 	}
 
@@ -146,7 +146,7 @@ func createObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 	createObjPayload.SetByPath("originType", payload.GetByPath("originType"))
 	createObjPayload.SetByPath("body", payload.GetByPath("body"))
 
-	if _, err := contextProcessor.GolangCallSync("functions.graph.api.object.create", objID, &createObjPayload, nil); err != nil {
+	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.object.create", objID, &createObjPayload, nil); err != nil {
 		return
 	}
 
@@ -182,7 +182,7 @@ func createTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	createLinkPayload.SetByPath("to", easyjson.NewJSON(to))
 	createLinkPayload.SetByPath("objectLinkType", payload.GetByPath("objectLinkType"))
 
-	if _, err := contextProcessor.GolangCallSync("functions.graph.api.types.link.create", from, &createLinkPayload, nil); err != nil {
+	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.types.link.create", from, &createLinkPayload, nil); err != nil {
 		return
 	}
 
@@ -216,7 +216,7 @@ func createObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	createLinkPayload := easyjson.NewJSONObject()
 	createLinkPayload.SetByPath("to", easyjson.NewJSON(to))
 
-	if _, err := contextProcessor.GolangCallSync("functions.graph.api.objects.link.create", from, &createLinkPayload, nil); err != nil {
+	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.objects.link.create", from, &createLinkPayload, nil); err != nil {
 		return
 	}
 
@@ -229,7 +229,7 @@ func createObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 
 func commit(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	empty := easyjson.NewJSONObject().GetPtr()
-	contextProcessor.GolangCallSync("functions.graph.tx.push", _TX_MASTER, empty, empty)
+	contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.tx.push", _TX_MASTER, empty, empty)
 
 	qid := common.GetQueryID(contextProcessor)
 	reply := easyjson.NewJSONObject()
@@ -252,7 +252,7 @@ func push(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCont
 	}
 
 	// delete success tx
-	if _, err := contextProcessor.GolangCallSync("functions.graph.ll.api.object.delete", txID, easyjson.NewJSONObject().GetPtr(), nil); err != nil {
+	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.delete", txID, easyjson.NewJSONObject().GetPtr(), nil); err != nil {
 		return
 	}
 
@@ -274,7 +274,7 @@ func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) err
 
 	// create root
 	root := prefix + BUILT_IN_ROOT
-	_, err := ctx.GolangCallSync("functions.graph.ll.api.object.create", root, easyjson.NewJSONObject().GetPtr(), nil)
+	_, err := ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", root, easyjson.NewJSONObject().GetPtr(), nil)
 	if err != nil {
 		return err
 	}
@@ -285,13 +285,13 @@ func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) err
 
 	// create objects and types
 	objects := prefix + BUILT_IN_OBJECTS
-	_, err = ctx.GolangCallSync("functions.graph.ll.api.object.create", objects, easyjson.NewJSONObject().GetPtr(), nil)
+	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", objects, easyjson.NewJSONObject().GetPtr(), nil)
 	if err != nil {
 		return err
 	}
 
 	types := prefix + BUILT_IN_TYPES
-	_, err = ctx.GolangCallSync("functions.graph.ll.api.object.create", types, easyjson.NewJSONObject().GetPtr(), nil)
+	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", types, easyjson.NewJSONObject().GetPtr(), nil)
 	if err != nil {
 		return err
 	}
@@ -308,7 +308,7 @@ func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) err
 
 	// create group type ----------------------------------------
 	group := prefix + "group"
-	_, err = ctx.GolangCallSync("functions.graph.ll.api.object.create", group, easyjson.NewJSONObject().GetPtr(), nil)
+	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", group, easyjson.NewJSONObject().GetPtr(), nil)
 	if err != nil {
 		return err
 	}
@@ -325,7 +325,7 @@ func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) err
 
 	// create NAV ------------------------------------------------
 	nav := prefix + "nav"
-	_, err = ctx.GolangCallSync("functions.graph.ll.api.object.create", nav, easyjson.NewJSONObject().GetPtr(), nil)
+	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", nav, easyjson.NewJSONObject().GetPtr(), nil)
 	if err != nil {
 		return err
 	}
@@ -392,7 +392,7 @@ func merge(ctx *sfplugins.StatefunContextProcessor, txGraphID string) error {
 			payload := easyjson.NewJSONObjectWithKeyValue("body", *body)
 
 			// TODO: use high level api?
-			if _, err = ctx.GolangCallSync("functions.graph.ll.api.object.create", normalParentID, &payload, nil); err != nil {
+			if _, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", normalParentID, &payload, nil); err != nil {
 				return err
 			}
 
@@ -410,7 +410,7 @@ func merge(ctx *sfplugins.StatefunContextProcessor, txGraphID string) error {
 			payload := easyjson.NewJSONObjectWithKeyValue("body", *body)
 
 			// TODO: use high level api?
-			if _, err = ctx.GolangCallSync("functions.graph.ll.api.object.create", normalChildID, &payload, nil); err != nil {
+			if _, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", normalChildID, &payload, nil); err != nil {
 				return err
 			}
 
