@@ -68,7 +68,7 @@ func LLAPIObjectCreate(executor sfplugins.StatefunExecutor, contextProcessor *sf
 	// Delete existing object ---------------------------------------------
 	deleteObjectPayload := easyjson.NewJSONObject()
 	deleteObjectPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
-	system.MsgOnErrorReturn(contextProcessor.GolangCallSync("functions.graph.ll.api.object.delete", contextProcessor.Self.ID, &deleteObjectPayload, nil))
+	system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.delete", contextProcessor.Self.ID, &deleteObjectPayload, nil))
 	// --------------------------------------------------------------------
 
 	contextProcessor.GlobalCache.SetValue(contextProcessor.Self.ID, objectBody.ToBytes(), true, -1, queryID)
@@ -161,7 +161,7 @@ func LLAPIObjectDelete(executor sfplugins.StatefunExecutor, contextProcessor *sf
 		deleteLinkPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
 		deleteLinkPayload.SetByPath("descendant_uuid", easyjson.NewJSON(toObjectID))
 		deleteLinkPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
-		system.MsgOnErrorReturn(contextProcessor.GolangCallSync("functions.graph.ll.api.link.delete", contextProcessor.Self.ID, &deleteLinkPayload, nil))
+		system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.delete", contextProcessor.Self.ID, &deleteLinkPayload, nil))
 	}
 	// ----------------------------------------------------
 
@@ -176,7 +176,7 @@ func LLAPIObjectDelete(executor sfplugins.StatefunExecutor, contextProcessor *sf
 		deleteLinkPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
 		deleteLinkPayload.SetByPath("descendant_uuid", easyjson.NewJSON(contextProcessor.Self.ID))
 		deleteLinkPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
-		system.MsgOnErrorReturn(contextProcessor.GolangCallSync("functions.graph.ll.api.link.delete", fromObjectID, &deleteLinkPayload, nil))
+		system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.delete", fromObjectID, &deleteLinkPayload, nil))
 	}
 	// ----------------------------------------------------
 	contextProcessor.GlobalCache.DeleteValue(contextProcessor.Self.ID, true, -1, queryID) // Delete object's body
@@ -237,7 +237,7 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			fmt.Println(errorString)
 		}
 		result.SetByPath("result", easyjson.NewJSON(errorString))
-		contextProcessor.Call(contextProcessor.Caller.Typename, contextProcessor.Caller.ID, &result, nil)
+		contextProcessor.RequestReplyData = &result
 	} else {
 		var linkBody easyjson.JSON
 		if payload.GetByPath("link_body").IsObject() {
@@ -264,7 +264,7 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			nextCallPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
 			nextCallPayload.SetByPath("descendant_uuid", easyjson.NewJSON(descendantUUID))
 			nextCallPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
-			system.MsgOnErrorReturn(contextProcessor.GolangCallSync("functions.graph.ll.api.link.delete", contextProcessor.Self.ID, &nextCallPayload, nil))
+			system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.delete", contextProcessor.Self.ID, &nextCallPayload, nil))
 			// --------------------------------------------------------
 
 			// Create out link on this object -------------------------
@@ -283,9 +283,9 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			nextCallPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
 			nextCallPayload.SetByPath("in_link_type", easyjson.NewJSON(linkType))
 			if descendantUUID == contextProcessor.Self.ID {
-				system.MsgOnErrorReturn(contextProcessor.GolangCallSync(contextProcessor.Self.Typename, descendantUUID+"===create_in_link", &nextCallPayload, nil))
+				system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, contextProcessor.Self.Typename, descendantUUID+"===create_in_link", &nextCallPayload, nil))
 			} else {
-				system.MsgOnErrorReturn(contextProcessor.GolangCallSync(contextProcessor.Self.Typename, descendantUUID, &nextCallPayload, nil))
+				system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, contextProcessor.Self.Typename, descendantUUID, &nextCallPayload, nil))
 			}
 			// --------------------------------------------------------
 
@@ -381,7 +381,7 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			createLinkPayload.SetByPath("descendant_uuid", easyjson.NewJSON(descendantUUID))
 			createLinkPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
 			createLinkPayload.SetByPath("link_body", linkBody)
-			system.MsgOnErrorReturn(contextProcessor.GolangCallSync("functions.graph.ll.api.link.create", contextProcessor.Self.ID, &createLinkPayload, nil))
+			system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.create", contextProcessor.Self.ID, &createLinkPayload, nil))
 		}
 
 		result.SetByPath("status", easyjson.NewJSON("ok"))
@@ -439,7 +439,7 @@ func LLAPILinkDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			fmt.Println(errorString)
 		}
 		result.SetByPath("result", easyjson.NewJSON(errorString))
-		contextProcessor.Call(contextProcessor.Self.Typename, contextProcessor.Caller.ID, &result, nil)
+		contextProcessor.RequestReplyData = &result
 	} else {
 		var linkType string
 		if s, ok := payload.GetByPath("link_type").AsString(); ok {
@@ -476,9 +476,9 @@ func LLAPILinkDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 				nextCallPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
 				nextCallPayload.SetByPath("in_link_type", easyjson.NewJSON(linkType))
 				if descendantUUID == contextProcessor.Self.ID {
-					system.MsgOnErrorReturn(contextProcessor.GolangCallSync(contextProcessor.Self.Typename, descendantUUID+"===delete_in_link", &nextCallPayload, nil))
+					system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, contextProcessor.Self.Typename, descendantUUID+"===delete_in_link", &nextCallPayload, nil))
 				} else {
-					system.MsgOnErrorReturn(contextProcessor.GolangCallSync(contextProcessor.Self.Typename, descendantUUID, &nextCallPayload, nil))
+					system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, contextProcessor.Self.Typename, descendantUUID, &nextCallPayload, nil))
 				}
 				result.SetByPath("status", easyjson.NewJSON("ok"))
 				result.SetByPath("result", easyjson.NewJSON(errorString))

@@ -11,10 +11,12 @@ import (
 	"github.com/foliagecp/easyjson"
 
 	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
+	// Comment out and no not use graphDebug for resolving the cgo conflict between go-graphviz and rogchap (when --ldflags '-extldflags "-Wl,--allow-multiple-definition"' does not help)
 	graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
 	"github.com/foliagecp/sdk/embedded/graph/jpgql"
 	statefun "github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/cache"
+	"github.com/foliagecp/sdk/statefun/plugins"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	sfPluginJS "github.com/foliagecp/sdk/statefun/plugins/js"
 	"github.com/foliagecp/sdk/statefun/system"
@@ -80,14 +82,14 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlu
 		functionContext = contextProcessor.GetFunctionContext()
 	}
 
+	incrementValue := 0
 	if MasterFunctionContextIncrement {
 		if v, ok := functionContext.GetByPath("counter").AsNumeric(); ok {
-			functionContext.SetByPath("counter", easyjson.NewJSON(int(v)+increment))
-			fmt.Printf("++ Function context's counter value incrementated by %d\n", increment)
-		} else {
-			functionContext.SetByPath("counter", easyjson.NewJSON(0))
-			fmt.Printf("++ Function context's counter value initialized with 0\n")
+			incrementValue = int(v)
 		}
+		incrementValue += increment
+		functionContext.SetByPath("counter", easyjson.NewJSON(incrementValue))
+		fmt.Printf("++ Function context's counter value incrementated by %d\n", increment)
 	}
 
 	if MasterFunctionObjectContextProcess {
@@ -97,12 +99,16 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlu
 	if MasterFunctionContextIncrement {
 		contextProcessor.SetFunctionContext(functionContext)
 	}
+
+	if contextProcessor.RequestReplyData != nil { // Request call is being made
+		contextProcessor.RequestReplyData = easyjson.NewJSONObjectWithKeyValue("counter", easyjson.NewJSON(incrementValue)).GetPtr()
+	}
 }
 
 func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	// Create new typename function "functions.tests.basic.master" each stateful instance of which uses go function "MasterFunction"
 	ftOptions := easyjson.NewJSONObjectWithKeyValue("increment", easyjson.NewJSON(MasterFunctionContextIncrementOption))
-	ft := statefun.NewFunctionType(runtime, "functions.tests.basic.master", MasterFunction, *statefun.NewFunctionTypeConfig().SetOptions(&ftOptions))
+	ft := statefun.NewFunctionType(runtime, "functions.tests.basic.master", MasterFunction, *statefun.NewFunctionTypeConfig().SetOptions(&ftOptions).SetServiceState(true))
 	// Add TypenameExecutorPlugin which will provide StatefunExecutor for each stateful instance for this typename function (skip this if TypenameExecutorPlugin is not needed)
 
 	if MasterFunctionJSPlugin {
@@ -120,11 +126,38 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	jpgql.RegisterAllFunctionTypes(runtime, 30)
 }
 
+func RequestReplyTest(runtime *statefun.Runtime) {
+	fmt.Println(">>> Test started: request reply calls")
+
+	funcTypename := "functions.tests.basic.master"
+	replyJson, err := runtime.Request(plugins.GolangLocalRequest, funcTypename, "synctest", easyjson.NewJSONObject().GetPtr(), nil)
+	if err != nil {
+		system.MsgOnErrorReturn(err)
+	} else {
+		if _, ok := replyJson.GetByPath("counter").AsNumeric(); ok {
+			fmt.Printf("GolangLocalRequest test passed! Got reply from %s: %s\n", funcTypename, replyJson.ToString())
+		}
+	}
+
+	replyJson, err = runtime.Request(plugins.NatsCoreGlobalRequest, funcTypename, "synctest", easyjson.NewJSONObject().GetPtr(), nil)
+	if err != nil {
+		system.MsgOnErrorReturn(err)
+	} else {
+		if _, ok := replyJson.GetByPath("counter").AsNumeric(); ok {
+			fmt.Printf("NatsCoreGlobalRequest test passed! Got reply from %s: %s\n", funcTypename, replyJson.ToString())
+		}
+	}
+
+	fmt.Println("<<< Test ended: request reply calls")
+}
+
 func Start() {
-	afterStart := func(runtime *statefun.Runtime) {
+	afterStart := func(runtime *statefun.Runtime) error {
+		RequestReplyTest(runtime)
 		if CreateSimpleGraphTest {
 			CreateTestGraph(runtime)
 		}
+		return nil
 	}
 
 	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "basic")); err == nil {

@@ -18,20 +18,33 @@ type StatefunAddress struct {
 	ID       string
 }
 
+type SignalProvider int
+
+const (
+	JetstreamGlobalSignal SignalProvider = iota
+)
+
+type RequestProvider int
+
+const (
+	NatsCoreGlobalRequest RequestProvider = iota
+	GolangLocalRequest
+)
+
 type StatefunContextProcessor struct {
 	GlobalCache        *cache.Store
 	GetFunctionContext func() *easyjson.JSON
 	SetFunctionContext func(*easyjson.JSON)
 	GetObjectContext   func() *easyjson.JSON
 	SetObjectContext   func(*easyjson.JSON)
-	Call               func(string, string, *easyjson.JSON, *easyjson.JSON)
-	// TODO: DownstreamCall(<function type>, <links filters>, <payload>, <options>)
-	GolangCallSync func(string, string, *easyjson.JSON, *easyjson.JSON) (*easyjson.JSON, error)
-	Egress         func(string, *easyjson.JSON)
-	Self           StatefunAddress
-	Caller         StatefunAddress
-	Payload        *easyjson.JSON
-	Options        *easyjson.JSON
+	// TODO: DownstreamSignal(<function type>, <links filters>, <payload>, <options>)
+	Signal           func(SignalProvider, string, string, *easyjson.JSON, *easyjson.JSON) error
+	Request          func(RequestProvider, string, string, *easyjson.JSON, *easyjson.JSON) (*easyjson.JSON, error)
+	Self             StatefunAddress
+	Caller           StatefunAddress
+	Payload          *easyjson.JSON
+	Options          *easyjson.JSON
+	RequestReplyData *easyjson.JSON // when requested in function: nil - function was signaled, !nil - function was requested
 }
 
 type StatefunExecutor interface {

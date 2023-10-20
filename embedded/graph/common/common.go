@@ -9,6 +9,7 @@ import (
 
 	"github.com/foliagecp/easyjson"
 
+	"github.com/foliagecp/sdk/statefun/plugins"
 	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
 	sfSystem "github.com/foliagecp/sdk/statefun/system"
 )
@@ -27,10 +28,10 @@ func GetQueryID(contextProcessor *sfplugins.StatefunContextProcessor) string {
 
 func ReplyQueryID(queryID string, result *easyjson.JSON, contextProcessor *sfplugins.StatefunContextProcessor) {
 	if result != nil && contextProcessor != nil {
-		if len(contextProcessor.Caller.Typename) == 0 || len(contextProcessor.Caller.ID) == 0 {
-			contextProcessor.Egress(QueryResultTopic+"."+queryID, result) // Publish result to NATS topic (no JetStream)
+		if len(contextProcessor.Caller.Typename) == 0 || len(contextProcessor.Caller.ID) == 0 { // Signal was sent from a NATS cli
+			sfSystem.MsgOnErrorReturn(contextProcessor.Signal(plugins.JetstreamGlobalSignal, QueryResultTopic, queryID, result, nil)) // Publish result to NATS special query reply topic (no JetStream)
 		} else {
-			contextProcessor.Call(contextProcessor.Caller.Typename, contextProcessor.Caller.ID, result, nil)
+			contextProcessor.RequestReplyData = result
 		}
 	} else {
 		fmt.Println("ERROR: replyQueryId")

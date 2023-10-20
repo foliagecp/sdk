@@ -50,7 +50,7 @@ Don't forget to create `custom_function_plugin.js` if you plan to use the Statef
 2. Create a Go function "CustomFunction" to be used by your typename function. It should correspond to the following type:
 
 ```go
-type FunctionHandler func(sfPlugins.StatefunExecutor, *sfPlugins.StatefunContextProcessor)
+type FunctionLogicHandler func(sfPlugins.StatefunExecutor, *sfPlugins.StatefunContextProcessor)
 ```
 
 For example:
