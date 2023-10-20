@@ -18,6 +18,7 @@ type FunctionTypeConfig struct {
 	msgAckChannelSize int
 	balanceNeeded     bool
 	balanced          bool
+	serviceActive     bool
 	mutexLifeTimeSec  int
 	options           *easyjson.JSON
 }
@@ -50,6 +51,11 @@ func (ftc *FunctionTypeConfig) SetMsgAckChannelSize(msgAckChannelSize int) *Func
 
 func (ftc *FunctionTypeConfig) SetBalanceNeeded(balanceNeeded bool) *FunctionTypeConfig {
 	ftc.balanceNeeded = balanceNeeded
+	return ftc
+}
+
+func (ftc *FunctionTypeConfig) SetServiceState(active bool) *FunctionTypeConfig {
+	ftc.serviceActive = active
 	return ftc
 }
 
