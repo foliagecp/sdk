@@ -7,26 +7,28 @@ import (
 	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
+type state struct {
+	objects map[string]struct{}
+	links   map[string]link
+}
+
 type node struct {
-	parent string
 	id     string
 	lt     string
+	linkID string
 }
 
-func (n node) ID() string {
-	return n.parent + n.id + n.lt
+type link struct {
+	from, to, lt, linkID string
 }
 
-func (n node) NormalID(prefix string) string {
-	return strings.TrimPrefix(n.parent, prefix) + strings.TrimPrefix(n.id, prefix) + strings.TrimPrefix(n.lt, prefix)
-}
-
-func treeToMap(ctx *sfplugins.StatefunContextProcessor, startPoint string) map[string]node {
-	visited := make(map[string]node)
-
-	root := node{
-		id: startPoint,
+func graphState(ctx *sfplugins.StatefunContextProcessor, startPoint string) *state {
+	state := &state{
+		objects: make(map[string]struct{}),
+		links:   make(map[string]link),
 	}
+
+	root := startPoint
 
 	queue := list.New()
 	queue.PushBack(root)
@@ -35,25 +37,34 @@ func treeToMap(ctx *sfplugins.StatefunContextProcessor, startPoint string) map[s
 		e := queue.Front()
 		queue.Remove(e)
 
-		node, ok := e.Value.(node)
+		node, ok := e.Value.(string)
 		if !ok {
 			continue
 		}
 
-		if _, exists := visited[node.ID()]; !exists {
-			visited[node.ID()] = node
+		if _, exists := state.objects[node]; !exists {
+			state.objects[node] = struct{}{}
 		}
 
-		for _, n := range getChildren(ctx, node.id) {
-			if _, ok := visited[n.ID()]; !ok {
-				queue.PushBack(n)
+		for _, ch := range getChildren(ctx, node) {
+			linkID := node + ch.id + ch.lt
+
+			if _, ok := state.links[linkID]; !ok {
+				state.links[linkID] = link{
+					from:   node,
+					to:     ch.id,
+					lt:     ch.lt,
+					linkID: ch.linkID,
+				}
+			}
+
+			if _, ok := state.objects[ch.id]; !ok {
+				queue.PushBack(ch.id)
 			}
 		}
 	}
 
-	delete(visited, root.ID())
-
-	return visited
+	return state
 }
 
 func getChildren(ctx *sfplugins.StatefunContextProcessor, id string) []node {
@@ -69,9 +80,9 @@ func getChildren(ctx *sfplugins.StatefunContextProcessor, id string) []node {
 		}
 
 		nodes = append(nodes, node{
-			parent: id,
 			id:     split[len(split)-1],
 			lt:     split[len(split)-2],
+			linkID: v,
 		})
 	}
 

@@ -76,8 +76,33 @@ func createLowLevelLink(ctx *sfplugins.StatefunContextProcessor, from, to, lt, o
 	return nil
 }
 
+func updateLowLevelLink(ctx *sfplugins.StatefunContextProcessor, from, to, lt string, body easyjson.JSON) error {
+	const op = "functions.graph.ll.api.link.update"
+
+	link := easyjson.NewJSONObject()
+	link.SetByPath("descendant_uuid", easyjson.NewJSON(to))
+	link.SetByPath("link_type", easyjson.NewJSON(lt))
+	link.SetByPath("link_body", body)
+
+	if _, err := ctx.Request(sfplugins.GolangLocalRequest, op, from, &link, nil); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func createLowLevelObject(ctx *sfplugins.StatefunContextProcessor, id string, body *easyjson.JSON) error {
 	const op = "functions.graph.ll.api.object.create"
+
+	if _, err := ctx.Request(sfplugins.GolangLocalRequest, op, id, body, nil); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func updateLowLevelObject(ctx *sfplugins.StatefunContextProcessor, id string, body *easyjson.JSON) error {
+	const op = "functions.graph.ll.api.object.update"
 
 	if _, err := ctx.Request(sfplugins.GolangLocalRequest, op, id, body, nil); err != nil {
 		return err

@@ -9,6 +9,7 @@ import (
 )
 
 // merge v0
+// TODO: add rollback
 func merge(ctx *sfplugins.StatefunContextProcessor, txGraphID string) error {
 	slog.Info("Start merging", "tx", txGraphID)
 
@@ -16,80 +17,58 @@ func merge(ctx *sfplugins.StatefunContextProcessor, txGraphID string) error {
 
 	txGraphRoot := prefix + BUILT_IN_ROOT
 
-	main := treeToMap(ctx, BUILT_IN_ROOT)
-	txGraph := treeToMap(ctx, txGraphRoot)
+	main := graphState(ctx, BUILT_IN_ROOT)
+	txGraph := graphState(ctx, txGraphRoot)
 
-	created := make(map[string]struct{})
-	for _, n := range main {
-		created[n.parent] = struct{}{}
-		created[n.id] = struct{}{}
-		created[n.NormalID(prefix)] = struct{}{}
+	for k := range txGraph.objects {
+		normalID := strings.TrimPrefix(k, prefix)
+
+		body, err := ctx.GlobalCache.GetValueAsJSON(k)
+		if err != nil {
+			return err
+		}
+
+		if _, ok := main.objects[normalID]; ok {
+			// check for delete
+			// otherwise, update
+			payload := easyjson.NewJSONObjectWithKeyValue("body", *body)
+			// TODO: use high level api?
+			if err := updateLowLevelObject(ctx, normalID, &payload); err != nil {
+				return err
+			}
+		} else {
+			// create
+			payload := easyjson.NewJSONObjectWithKeyValue("body", *body)
+			// TODO: use high level api?
+			if err := createLowLevelObject(ctx, normalID, &payload); err != nil {
+				return err
+			}
+		}
 	}
 
-	update := make(map[string]node)
-	new := make(map[string]node)
+	for _, l := range txGraph.links {
+		normalParent := strings.TrimPrefix(l.from, prefix)
+		normalChild := strings.TrimPrefix(l.to, prefix)
+		normalLt := strings.TrimPrefix(l.lt, prefix)
 
-	for _, n := range txGraph {
-		normalID := n.NormalID(prefix)
-		if _, ok := main[normalID]; ok {
-			update[normalID] = n
-			continue
+		normalID := normalParent + normalChild + normalLt
+
+		body, err := ctx.GlobalCache.GetValueAsJSON(l.linkID)
+		if err != nil {
+			return err
 		}
 
-		new[normalID] = n
-	}
-
-	// create new elements
-	for _, n := range new {
-		// create parent if need
-		normalParentID := strings.TrimPrefix(n.parent, prefix)
-		if _, ok := created[normalParentID]; !ok {
-			body, err := ctx.GlobalCache.GetValueAsJSON(n.parent)
-			if err != nil {
+		if _, ok := main.links[normalID]; ok {
+			// check for delete
+			// otherwise, update
+			if err := updateLowLevelLink(ctx, normalParent, normalChild, normalLt, *body); err != nil {
 				return err
 			}
-
-			payload := easyjson.NewJSONObjectWithKeyValue("body", *body)
-
-			// TODO: use high level api?
-			if _, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", normalParentID, &payload, nil); err != nil {
-				return err
-			}
-
-			created[normalParentID] = struct{}{}
 		} else {
-			update[normalParentID] = n
-		}
-
-		// create child if need
-		normalChildID := strings.TrimPrefix(n.id, prefix)
-		if _, ok := created[normalChildID]; !ok {
-			body, err := ctx.GlobalCache.GetValueAsJSON(n.id)
-			if err != nil {
+			// create
+			if err := createLowLevelLink(ctx, normalParent, normalChild, normalLt, "", *body); err != nil {
 				return err
 			}
-
-			payload := easyjson.NewJSONObjectWithKeyValue("body", *body)
-
-			// TODO: use high level api?
-			if _, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", normalChildID, &payload, nil); err != nil {
-				return err
-			}
-
-			created[normalChildID] = struct{}{}
-		} else {
-			update[normalChildID] = n
-		}
-
-		// create link if need
-		normalLinkTypeID := n.NormalID(prefix)
-		if _, ok := created[normalLinkTypeID]; !ok {
-			err := createLowLevelLink(ctx, normalParentID, normalChildID, strings.TrimPrefix(n.lt, prefix), "", easyjson.NewJSONObject())
-			if err != nil {
-				return err
-			}
-
-			created[normalLinkTypeID] = struct{}{}
 		}
 	}
 
