@@ -3,6 +3,7 @@ package crud
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/foliagecp/easyjson"
@@ -173,7 +174,7 @@ func CreateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	link := easyjson.NewJSONObject()
 	link.SetByPath("descendant_uuid", easyjson.NewJSON(to))
 	link.SetByPath("link_type", easyjson.NewJSON(to))
-	link.SetByPath("link_body", payload.GetByPath("body"))
+	//link.SetByPath("link_body", payload.GetByPath("body"))
 	link.SetByPath("link_body.link_type", easyjson.NewJSON(objectLinkType))
 
 	_, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.create", selfID, &link, nil)
@@ -302,17 +303,17 @@ func CreateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 
 	linkType, ok := linkBody.GetByPath("link_type").AsString()
 	if !ok {
-		replyError(contextProcessor, err)
 		return
 	}
 
 	objectLink := easyjson.NewJSONObject()
 	objectLink.SetByPath("descendant_uuid", easyjson.NewJSON(to))
 	objectLink.SetByPath("link_type", easyjson.NewJSON(linkType))
-	objectLink.SetByPath("link_body", payload.GetByPath("body"))
+	objectLink.SetByPath("link_body", easyjson.NewJSONObject())
 
 	_, err = contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.create", selfID, &objectLink, nil)
 	if err != nil {
+		slog.Error(err.Error())
 		replyError(contextProcessor, err)
 		return
 	}
@@ -400,7 +401,13 @@ func findTypeObjects(ctx *sfplugins.StatefunContextProcessor, typeID string) []s
 
 func getLinkBody(ctx *sfplugins.StatefunContextProcessor, from, to string) (*easyjson.JSON, error) {
 	id := fmt.Sprintf("%s.out.ltp_oid-bdy.%s.%s", from, to, to)
-	return ctx.GlobalCache.GetValueAsJSON(id)
+
+	body, err := ctx.GlobalCache.GetValueAsJSON(id)
+	if err != nil {
+		return nil, fmt.Errorf("get link body: %w", err)
+	}
+
+	return body, nil
 }
 
 func replyOk(ctx *sfplugins.StatefunContextProcessor, msg ...string) {

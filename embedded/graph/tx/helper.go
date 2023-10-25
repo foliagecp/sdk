@@ -123,7 +123,9 @@ func reply(ctx *sfplugins.StatefunContextProcessor, status string, data any) {
 	qid := common.GetQueryID(ctx)
 	reply := easyjson.NewJSONObject()
 	reply.SetByPath("status", easyjson.NewJSON(status))
-	reply.SetByPath("result", easyjson.NewJSON(data))
+	if data != nil {
+		reply.SetByPath("result", easyjson.NewJSON(data))
+	}
 	common.ReplyQueryID(qid, easyjson.NewJSONObjectWithKeyValue("payload", reply).GetPtr(), ctx)
 }
 
