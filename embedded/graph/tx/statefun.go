@@ -1,9 +1,10 @@
 package tx
 
 import (
-	"container/list"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 )
 
 const _TX_MASTER = "txmaster"
+const _TX_SEPARATOR = "="
 
 const (
 	OBJECTS_TYPELINK         = "__objects"
@@ -29,12 +31,29 @@ const (
 	GROUP_TYPELINK           = "group"
 )
 
+var (
+	errInvalidArgument = errors.New("invalid argument")
+)
+
 func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 	statefun.NewFunctionType(runtime, "functions.graph.tx.begin", begin, *statefun.NewFunctionTypeConfig())
+
 	statefun.NewFunctionType(runtime, "functions.graph.tx.type.create", createType, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.tx.type.update", updateType, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.tx.type.delete", nil, *statefun.NewFunctionTypeConfig())
+
 	statefun.NewFunctionType(runtime, "functions.graph.tx.object.create", createObject, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.tx.object.update", updateObject, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.tx.object.delete", nil, *statefun.NewFunctionTypeConfig())
+
 	statefun.NewFunctionType(runtime, "functions.graph.tx.types.link.create", createTypesLink, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.tx.types.link.update", updateTypesLink, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.tx.types.link.delete", nil, *statefun.NewFunctionTypeConfig())
+
 	statefun.NewFunctionType(runtime, "functions.graph.tx.objects.link.create", createObjectsLink, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.tx.objects.link.update", updateObjectsLink, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.tx.objects.link.delete", nil, *statefun.NewFunctionTypeConfig())
+
 	statefun.NewFunctionType(runtime, "functions.graph.tx.commit", commit, *statefun.NewFunctionTypeConfig())
 	statefun.NewFunctionType(runtime, "functions.graph.tx.push", push, *statefun.NewFunctionTypeConfig())
 }
@@ -45,6 +64,7 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 func begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	selfID := contextProcessor.Self.ID
 	if selfID != _TX_MASTER {
+		replyError(contextProcessor, errors.New("only on txmaster"))
 		return
 	}
 
@@ -57,25 +77,25 @@ func begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 	contextProcessor.SetObjectContext(body)
 
 	now := system.GetCurrentTimeNs()
+
+	// create tx
 	txID := generateTxID(nonce, now)
 
 	txBody := easyjson.NewJSONObject()
 	txBody.SetByPath("created_at", easyjson.NewJSON(now))
 
 	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", txID, &txBody, nil); err != nil {
+		replyError(contextProcessor, err)
 		return
 	}
 
-	link := easyjson.NewJSONObject()
-	link.SetByPath("descendant_uuid", easyjson.NewJSON(txID))
-	link.SetByPath("link_type", easyjson.NewJSON("tx"))
-	link.SetByPath("link_body", easyjson.NewJSONObject())
-
-	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.create", selfID, &link, nil); err != nil {
+	if err := createLowLevelLink(contextProcessor, selfID, txID, "tx", "", easyjson.NewJSONObject()); err != nil {
+		replyError(contextProcessor, err)
 		return
 	}
 
 	if err := cloneGraph(contextProcessor, txID); err != nil {
+		replyError(contextProcessor, err)
 		return
 	}
 
@@ -87,147 +107,10 @@ func begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 	common.ReplyQueryID(qid, easyjson.NewJSONObjectWithKeyValue("payload", reply).GetPtr(), contextProcessor)
 }
 
-/*
-	{
-		"id": string,
-		"body": json
-	}
-
-create types -> type link
-*/
-func createType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
-	txID := contextProcessor.Self.ID
-	payload := contextProcessor.Payload
-
-	prefix := txID + "="
-
-	typeID := payload.GetByPath("id").AsStringDefault("")
-	typeID = prefix + typeID
-
-	createTypePayload := easyjson.NewJSONObject()
-	createTypePayload.SetByPath("prefix", easyjson.NewJSON(prefix))
-	createTypePayload.SetByPath("body", payload.GetByPath("body"))
-
-	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.type.create", typeID, &createTypePayload, nil); err != nil {
-		return
-	}
-
-	qid := common.GetQueryID(contextProcessor)
-
-	reply := easyjson.NewJSONObject()
-	reply.SetByPath("status", easyjson.NewJSON("ok"))
-	common.ReplyQueryID(qid, easyjson.NewJSONObjectWithKeyValue("payload", reply).GetPtr(), contextProcessor)
-}
-
-/*
-	{
-		"id": string,
-		"originType": string,
-		"body": json
-	}
-
-create objects -> object link
-
-create type -> object link
-
-create object -> type link
-*/
-func createObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
-	txID := contextProcessor.Self.ID
-	payload := contextProcessor.Payload
-
-	prefix := txID + "="
-
-	objID := payload.GetByPath("id").AsStringDefault("")
-	objID = prefix + objID
-
-	createObjPayload := easyjson.NewJSONObject()
-	createObjPayload.SetByPath("prefix", easyjson.NewJSON(prefix))
-	createObjPayload.SetByPath("originType", payload.GetByPath("originType"))
-	createObjPayload.SetByPath("body", payload.GetByPath("body"))
-
-	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.object.create", objID, &createObjPayload, nil); err != nil {
-		return
-	}
-
-	qid := common.GetQueryID(contextProcessor)
-
-	reply := easyjson.NewJSONObject()
-	reply.SetByPath("status", easyjson.NewJSON("ok"))
-	common.ReplyQueryID(qid, easyjson.NewJSONObjectWithKeyValue("payload", reply).GetPtr(), contextProcessor)
-}
-
-/*
-	{
-		"from": string,
-		"to": string,
-		"objectLinkType": string
-	}
-
-create type -> type link
-*/
-func createTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
-	txID := contextProcessor.Self.ID
-	payload := contextProcessor.Payload
-
-	prefix := txID + "="
-
-	from := payload.GetByPath("from").AsStringDefault("")
-	from = prefix + from
-
-	to := payload.GetByPath("to").AsStringDefault("")
-	to = prefix + to
-
-	createLinkPayload := easyjson.NewJSONObject()
-	createLinkPayload.SetByPath("to", easyjson.NewJSON(to))
-	createLinkPayload.SetByPath("objectLinkType", payload.GetByPath("objectLinkType"))
-
-	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.types.link.create", from, &createLinkPayload, nil); err != nil {
-		return
-	}
-
-	qid := common.GetQueryID(contextProcessor)
-
-	reply := easyjson.NewJSONObject()
-	reply.SetByPath("status", easyjson.NewJSON("ok"))
-	common.ReplyQueryID(qid, easyjson.NewJSONObjectWithKeyValue("payload", reply).GetPtr(), contextProcessor)
-}
-
-/*
-	{
-		"from": string,
-		"to": string,
-	}
-
-create object -> object link
-*/
-func createObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
-	txID := contextProcessor.Self.ID
-	payload := contextProcessor.Payload
-
-	prefix := txID + "="
-
-	from := payload.GetByPath("from").AsStringDefault("")
-	from = prefix + from
-
-	to := payload.GetByPath("to").AsStringDefault("")
-	to = prefix + to
-
-	createLinkPayload := easyjson.NewJSONObject()
-	createLinkPayload.SetByPath("to", easyjson.NewJSON(to))
-
-	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.objects.link.create", from, &createLinkPayload, nil); err != nil {
-		return
-	}
-
-	qid := common.GetQueryID(contextProcessor)
-
-	reply := easyjson.NewJSONObject()
-	reply.SetByPath("status", easyjson.NewJSON("ok"))
-	common.ReplyQueryID(qid, easyjson.NewJSONObjectWithKeyValue("payload", reply).GetPtr(), contextProcessor)
-}
-
+// exec on transaction
 func commit(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+	// add validating stage
+
 	empty := easyjson.NewJSONObject().GetPtr()
 	contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.tx.push", _TX_MASTER, empty, empty)
 
@@ -265,12 +148,452 @@ func push(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCont
 	common.ReplyQueryID(qid, easyjson.NewJSONObjectWithKeyValue("payload", reply).GetPtr(), contextProcessor)
 }
 
+/*
+	{
+		"id": string,
+		"body": json
+	}
+
+create types -> type link
+*/
+func createType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+	txID := contextProcessor.Self.ID
+	payload := contextProcessor.Payload
+
+	prefix := generatePrefix(txID)
+
+	typeID := payload.GetByPath("id").AsStringDefault("")
+	txTypeID := prefix + typeID
+
+	createTypePayload := easyjson.NewJSONObject()
+	createTypePayload.SetByPath("prefix", easyjson.NewJSON(prefix))
+	createTypePayload.SetByPath("body", payload.GetByPath("body"))
+
+	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.type.create", txTypeID, &createTypePayload, nil); err != nil {
+		replyError(contextProcessor, err)
+		return
+	}
+
+	replyOk(contextProcessor)
+}
+
+/*
+	{
+		"id": string,
+		"body": json
+		"strategy": string, not impl
+	}
+
+clone type from main graph if not exists
+
+update type body
+*/
+func updateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+	txID := contextProcessor.Self.ID
+	payload := contextProcessor.Payload
+
+	typeID, ok := payload.GetByPath("id").AsString()
+	if !ok {
+		replyError(contextProcessor, errInvalidArgument)
+		return
+	}
+
+	slog.Info("update type", "tx_id", txID, "type_id", typeID)
+
+	prefix := generatePrefix(txID)
+
+	txTypes := prefix + BUILT_IN_TYPES
+	txType := prefix + typeID
+
+	pattern := fmt.Sprintf("%s.out.ltp_oid-bdy.%s.%s", txTypes, TYPE_TYPELINK, txType)
+	keys := contextProcessor.GlobalCache.GetKeysByPattern(pattern)
+
+	// tx type doesn't created yet
+	if len(keys) == 0 {
+		slog.Info("tx type doesn't created yet")
+
+		originBody, err := contextProcessor.GlobalCache.GetValueAsJSON(typeID)
+		if err != nil {
+			replyError(contextProcessor, err)
+			return
+		}
+
+		createPayload := easyjson.NewJSONObject()
+		createPayload.SetByPath("id", easyjson.NewJSON(typeID))
+		createPayload.SetByPath("body", *originBody)
+
+		if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.tx.type.create", txID, &createPayload, nil); err != nil {
+			replyError(contextProcessor, err)
+			return
+		}
+	}
+
+	updatePayload := easyjson.NewJSONObject()
+	updatePayload.SetByPath("body", payload.GetByPath("body"))
+
+	_, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.type.update", txType, &updatePayload, nil)
+	if err != nil {
+		replyError(contextProcessor, err)
+		return
+	}
+
+	slog.Info("update type ok!")
+
+	replyOk(contextProcessor)
+}
+
+/*
+	{
+		"id": string,
+		"origin_type": string,
+		"body": json
+	}
+
+create objects -> object link
+
+create type -> object link
+
+create object -> type link
+*/
+func createObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+	txID := contextProcessor.Self.ID
+	payload := contextProcessor.Payload
+
+	prefix := generatePrefix(txID)
+
+	objID := payload.GetByPath("id").AsStringDefault("")
+	txObjID := prefix + objID
+
+	createObjPayload := easyjson.NewJSONObject()
+	createObjPayload.SetByPath("prefix", easyjson.NewJSON(prefix))
+	createObjPayload.SetByPath("origin_type", payload.GetByPath("origin_type"))
+	createObjPayload.SetByPath("body", payload.GetByPath("body"))
+
+	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.object.create", txObjID, &createObjPayload, nil); err != nil {
+		replyError(contextProcessor, err)
+		return
+	}
+
+	replyOk(contextProcessor)
+}
+
+/*
+	{
+		"id": string,
+		"body": json
+		"strategy": string, not impl
+	}
+
+clone object from main graph if not exists
+
+update object body
+*/
+func updateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+	txID := contextProcessor.Self.ID
+	payload := contextProcessor.Payload
+
+	objectID, ok := payload.GetByPath("id").AsString()
+	if !ok {
+		replyError(contextProcessor, errInvalidArgument)
+		return
+	}
+
+	prefix := generatePrefix(txID)
+
+	txObjects := prefix + BUILT_IN_OBJECTS
+	txObject := prefix + objectID
+
+	pattern := fmt.Sprintf("%s.out.ltp_oid-bdy.%s.%s", txObjects, OBJECT_TYPELINK, txObject)
+	keys := contextProcessor.GlobalCache.GetKeysByPattern(pattern)
+
+	// tx object doesn't created yet
+	if len(keys) == 0 {
+		originBody, err := contextProcessor.GlobalCache.GetValueAsJSON(objectID)
+		if err != nil {
+			replyError(contextProcessor, err)
+			return
+		}
+
+		linkPattern := fmt.Sprintf("%s.out.ltp_oid-bdy.%s.>", objectID, TYPE_TYPELINK)
+		typeKeys := contextProcessor.GlobalCache.GetKeysByPattern(linkPattern)
+		if len(typeKeys) == 0 {
+			return
+		}
+
+		createPayload := easyjson.NewJSONObject()
+		createPayload.SetByPath("id", easyjson.NewJSON(objectID))
+		createPayload.SetByPath("origin_type", easyjson.NewJSON(typeKeys[0]))
+		createPayload.SetByPath("body", *originBody)
+
+		if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.tx.object.create", txID, &createPayload, nil); err != nil {
+			replyError(contextProcessor, err)
+			return
+		}
+	}
+
+	updatePayload := easyjson.NewJSONObject()
+	updatePayload.SetByPath("body", payload.GetByPath("body"))
+
+	_, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.object.update", txObject, &updatePayload, nil)
+	if err != nil {
+		replyError(contextProcessor, err)
+		return
+	}
+
+	replyOk(contextProcessor)
+}
+
+/*
+	{
+		"from": string,
+		"to": string,
+		"object_link_type": string
+		"body": json
+	}
+
+create type -> type link
+*/
+func createTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+	txID := contextProcessor.Self.ID
+	payload := contextProcessor.Payload
+
+	prefix := generatePrefix(txID)
+
+	from, ok := payload.GetByPath("from").AsString()
+	if !ok {
+		replyError(contextProcessor, errInvalidArgument)
+		return
+	}
+
+	to, ok := payload.GetByPath("to").AsString()
+	if !ok {
+		replyError(contextProcessor, errInvalidArgument)
+		return
+	}
+
+	txFrom := prefix + from
+	txTo := prefix + to
+
+	createLinkPayload := easyjson.NewJSONObject()
+	createLinkPayload.SetByPath("to", easyjson.NewJSON(txTo))
+	createLinkPayload.SetByPath("object_link_type", payload.GetByPath("object_link_type"))
+
+	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.types.link.create", txFrom, &createLinkPayload, nil); err != nil {
+		replyError(contextProcessor, err)
+		return
+	}
+
+	replyOk(contextProcessor)
+}
+
+/*
+	{
+		"from": string,
+		"to": string,
+		"object_link_type": string, optional
+		"body": json, optional
+	}
+*/
+func updateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+	txID := contextProcessor.Self.ID
+	payload := contextProcessor.Payload
+
+	from, ok := payload.GetByPath("from").AsString()
+	if !ok {
+		replyError(contextProcessor, errInvalidArgument)
+		return
+	}
+
+	to, ok := payload.GetByPath("to").AsString()
+	if !ok {
+		replyError(contextProcessor, errInvalidArgument)
+		return
+	}
+
+	prefix := generatePrefix(txID)
+	txFrom := prefix + from
+	txTo := prefix + to
+
+	updatePayload := easyjson.NewJSONObject()
+	updatePayload.SetByPath("to", easyjson.NewJSON(txTo))
+
+	needObjects := false
+
+	if payload.PathExists("object_link_type") {
+		needObjects = true
+		updatePayload.SetByPath("object_link_type", payload.GetByPath("object_link_type"))
+	}
+
+	if payload.PathExists("body") {
+		updatePayload.SetByPath("body", payload.GetByPath("body"))
+	}
+
+	linkID := fmt.Sprintf("%s.out.ltp_oid-bdy.%s.%s", txFrom, txTo, txTo)
+
+	// if link to update doesn't exists, so we need to clone area from main graph
+	if _, err := contextProcessor.GlobalCache.GetValue(linkID); err != nil {
+
+		// if from doesn't exists, clone from main graph
+		if _, err := contextProcessor.GlobalCache.GetValue(txFrom); err != nil {
+			// clone
+			if err := cloneTypeFromMainGraphToTx(contextProcessor, txID, from, txFrom); err != nil {
+				replyError(contextProcessor, err)
+				return
+			}
+		}
+
+		// if to doesn't exists, clone from main graph
+		if _, err := contextProcessor.GlobalCache.GetValue(txTo); err != nil {
+			// clone
+			if err := cloneTypeFromMainGraphToTx(contextProcessor, txID, to, txTo); err != nil {
+				replyError(contextProcessor, err)
+				return
+			}
+		}
+
+		// clone link
+		if err := cloneLinkFromMainGraphToTx(contextProcessor, from, to, to, txFrom, txTo, txTo); err != nil {
+			replyError(contextProcessor, err)
+			return
+		}
+
+		if needObjects {
+			// clone objects
+		}
+	}
+
+	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.types.link.update", txFrom, &updatePayload, nil); err != nil {
+		replyError(contextProcessor, err)
+		return
+	}
+
+	replyOk(contextProcessor)
+}
+
+/*
+	{
+		"from": string,
+		"to": string,
+		"body": json
+	}
+
+create object -> object link
+*/
+func createObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+	txID := contextProcessor.Self.ID
+	payload := contextProcessor.Payload
+
+	prefix := generatePrefix(txID)
+
+	from, ok := payload.GetByPath("from").AsString()
+	if !ok {
+		replyError(contextProcessor, errInvalidArgument)
+		return
+	}
+
+	to, ok := payload.GetByPath("to").AsString()
+	if !ok {
+		replyError(contextProcessor, errInvalidArgument)
+		return
+	}
+
+	txFrom := prefix + from
+	txTo := prefix + to
+
+	createLinkPayload := easyjson.NewJSONObject()
+	createLinkPayload.SetByPath("to", easyjson.NewJSON(txTo))
+
+	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.objects.link.create", txFrom, &createLinkPayload, nil); err != nil {
+		replyError(contextProcessor, err)
+		return
+	}
+
+	replyOk(contextProcessor)
+}
+
+/*
+	{
+		"from": string,
+		"to": string,
+		"body": json, optional
+	}
+*/
+func updateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+	txID := contextProcessor.Self.ID
+	payload := contextProcessor.Payload
+
+	prefix := generatePrefix(txID)
+
+	from, ok := payload.GetByPath("from").AsString()
+	if !ok {
+		replyError(contextProcessor, errInvalidArgument)
+		return
+	}
+
+	to, ok := payload.GetByPath("to").AsString()
+	if !ok {
+		replyError(contextProcessor, errInvalidArgument)
+		return
+	}
+
+	fromType := findObjectType(contextProcessor, from)
+	toType := findObjectType(contextProcessor, to)
+
+	typesLink := fmt.Sprintf("%s.out.ltp_oid-bdy.%s.%s", fromType, toType, toType)
+	typesLinkBody, err := contextProcessor.GlobalCache.GetValueAsJSON(typesLink)
+	if err != nil {
+		replyError(contextProcessor, err)
+		return
+	}
+
+	txFrom := prefix + from
+	txTo := prefix + to
+
+	objectLinkType := typesLinkBody.GetByPath("link_type").AsStringDefault("")
+	linkID := fmt.Sprintf("%s.out.ltp_oid-bdy.%s.%s", txFrom, objectLinkType, txTo)
+
+	if _, err := contextProcessor.GlobalCache.GetValue(linkID); err != nil {
+		if _, err := contextProcessor.GlobalCache.GetValue(txFrom); err != nil {
+			if err := cloneObjectFromMainGraphToTx(contextProcessor, txID, from, txFrom, fromType); err != nil {
+				replyError(contextProcessor, err)
+				return
+			}
+		}
+
+		if _, err := contextProcessor.GlobalCache.GetValue(txTo); err != nil {
+			if err := cloneObjectFromMainGraphToTx(contextProcessor, txID, to, txTo, toType); err != nil {
+				replyError(contextProcessor, err)
+				return
+			}
+		}
+
+		if err := cloneLinkFromMainGraphToTx(contextProcessor, from, objectLinkType, to, txFrom, objectLinkType, txTo); err != nil {
+			replyError(contextProcessor, err)
+			return
+		}
+	}
+
+	updatePayload := easyjson.NewJSONObject()
+	updatePayload.SetByPath("to", easyjson.NewJSON(txTo))
+
+	if payload.PathExists("body") {
+		updatePayload.SetByPath("body", payload.GetByPath("body"))
+	}
+
+	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.objects.link.update", txFrom, &updatePayload, nil); err != nil {
+		replyError(contextProcessor, err)
+		return
+	}
+
+	replyOk(contextProcessor)
+}
+
 func cloneGraph(ctx *sfplugins.StatefunContextProcessor, txID string) error {
 	return initBuilInObjects(ctx, txID)
 }
 
 func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) error {
-	prefix := txID + "="
+	prefix := generatePrefix(txID)
 
 	// create root
 	root := prefix + BUILT_IN_ROOT
@@ -279,7 +602,7 @@ func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) err
 		return err
 	}
 
-	if err := createLowLevelLink(ctx, txID, root, "graph", ""); err != nil {
+	if err := createLowLevelLink(ctx, txID, root, "graph", "", easyjson.NewJSONObject()); err != nil {
 		return err
 	}
 
@@ -297,12 +620,12 @@ func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) err
 	}
 
 	// create root -> objects link
-	if err := createLowLevelLink(ctx, root, objects, OBJECTS_TYPELINK, ""); err != nil {
+	if err := createLowLevelLink(ctx, root, objects, OBJECTS_TYPELINK, "", easyjson.NewJSONObject()); err != nil {
 		return err
 	}
 
 	// create root -> types link
-	if err := createLowLevelLink(ctx, root, types, TYPES_TYPELINK, ""); err != nil {
+	if err := createLowLevelLink(ctx, root, types, TYPES_TYPELINK, "", easyjson.NewJSONObject()); err != nil {
 		return err
 	}
 
@@ -313,12 +636,12 @@ func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) err
 		return err
 	}
 
-	if err := createLowLevelLink(ctx, types, group, TYPE_TYPELINK, ""); err != nil {
+	if err := createLowLevelLink(ctx, types, group, TYPE_TYPELINK, "", easyjson.NewJSONObject()); err != nil {
 		return err
 	}
 
 	// link from group -> group, need for define "group" link type
-	if err := createLowLevelLink(ctx, group, group, GROUP_TYPELINK, GROUP_TYPELINK); err != nil {
+	if err := createLowLevelLink(ctx, group, group, GROUP_TYPELINK, GROUP_TYPELINK, easyjson.NewJSONObject()); err != nil {
 		return err
 	}
 	//-----------------------------------------------------------
@@ -330,15 +653,15 @@ func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) err
 		return err
 	}
 
-	if err := createLowLevelLink(ctx, objects, nav, OBJECT_TYPELINK, ""); err != nil {
+	if err := createLowLevelLink(ctx, objects, nav, OBJECT_TYPELINK, "", easyjson.NewJSONObject()); err != nil {
 		return err
 	}
 
-	if err := createLowLevelLink(ctx, nav, group, TYPE_TYPELINK, ""); err != nil {
+	if err := createLowLevelLink(ctx, nav, group, TYPE_TYPELINK, "", easyjson.NewJSONObject()); err != nil {
 		return err
 	}
 
-	if err := createLowLevelLink(ctx, group, nav, OBJECT_TYPELINK, ""); err != nil {
+	if err := createLowLevelLink(ctx, group, nav, OBJECT_TYPELINK, "", easyjson.NewJSONObject()); err != nil {
 		return err
 	}
 	// -----------------------------------------------------------
@@ -351,154 +674,9 @@ func generateTxID(nonce int, unix int64) string {
 	return hex.EncodeToString(hash[:8])
 }
 
-// merge v0
-func merge(ctx *sfplugins.StatefunContextProcessor, txGraphID string) error {
-	slog.Info("Start merging", "tx", txGraphID)
-
-	prefix := txGraphID + "="
-	txGraphRoot := prefix + BUILT_IN_ROOT
-
-	main := treeToMap(ctx, BUILT_IN_ROOT)
-	txGraph := treeToMap(ctx, txGraphRoot)
-
-	created := make(map[string]struct{})
-	for _, n := range main {
-		created[n.parent] = struct{}{}
-		created[n.child] = struct{}{}
-		created[n.NormalID(prefix)] = struct{}{}
-	}
-
-	new := make(map[string]node)
-
-	for _, n := range txGraph {
-		normalID := n.NormalID(prefix)
-		if _, ok := main[normalID]; ok {
-			continue
-		}
-
-		new[normalID] = n
-	}
-
-	// create new elements
-	for _, n := range new {
-		// create parent if need
-		normalParentID := strings.TrimPrefix(n.parent, prefix)
-		if _, ok := created[normalParentID]; !ok {
-			body, err := ctx.GlobalCache.GetValueAsJSON(n.parent)
-			if err != nil {
-				return err
-			}
-
-			payload := easyjson.NewJSONObjectWithKeyValue("body", *body)
-
-			// TODO: use high level api?
-			if _, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", normalParentID, &payload, nil); err != nil {
-				return err
-			}
-
-			created[normalParentID] = struct{}{}
-		}
-
-		// create child if need
-		normalChildID := strings.TrimPrefix(n.child, prefix)
-		if _, ok := created[normalChildID]; !ok {
-			body, err := ctx.GlobalCache.GetValueAsJSON(n.child)
-			if err != nil {
-				return err
-			}
-
-			payload := easyjson.NewJSONObjectWithKeyValue("body", *body)
-
-			// TODO: use high level api?
-			if _, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", normalChildID, &payload, nil); err != nil {
-				return err
-			}
-
-			created[normalChildID] = struct{}{}
-		}
-
-		// create link if need
-		normalLinkTypeID := n.NormalID(prefix)
-		if _, ok := created[normalLinkTypeID]; !ok {
-			err := createLowLevelLink(ctx, normalParentID, normalChildID, strings.TrimPrefix(n.lt, prefix), "")
-			if err != nil {
-				return err
-			}
-
-			created[normalLinkTypeID] = struct{}{}
-		}
-	}
-
-	return nil
-}
-
-type node struct {
-	parent string
-	child  string
-	lt     string
-}
-
-func (n node) ID() string {
-	return n.parent + n.child + n.lt
-}
-
-func (n node) NormalID(prefix string) string {
-	return strings.TrimPrefix(n.parent, prefix) + strings.TrimPrefix(n.child, prefix) + strings.TrimPrefix(n.lt, prefix)
-}
-
-func treeToMap(ctx *sfplugins.StatefunContextProcessor, startPoint string) map[string]node {
-	visited := make(map[string]node)
-
-	root := node{
-		child: startPoint,
-	}
-
-	queue := list.New()
-	queue.PushBack(root)
-
-	for queue.Len() > 0 {
-		e := queue.Front()
-		queue.Remove(e)
-
-		node, ok := e.Value.(node)
-		if !ok {
-			continue
-		}
-
-		if _, exists := visited[node.ID()]; !exists {
-			visited[node.ID()] = node
-		}
-
-		for _, n := range getChildren(ctx, node.child) {
-			if _, ok := visited[n.ID()]; !ok {
-				queue.PushBack(n)
-			}
-		}
-	}
-
-	delete(visited, root.ID())
-
-	return visited
-}
-
-func getChildren(ctx *sfplugins.StatefunContextProcessor, id string) []node {
-	pattern := id + ".out.ltp_oid-bdy.>"
-	children := ctx.GlobalCache.GetKeysByPattern(pattern)
-
-	nodes := make([]node, 0, len(children))
-
-	for _, v := range children {
-		split := strings.Split(v, ".")
-		if len(split) == 0 {
-			continue
-		}
-
-		nodes = append(nodes, node{
-			parent: id,
-			child:  split[len(split)-1],
-			lt:     split[len(split)-2],
-		})
-	}
-
-	return nodes
+func generatePrefix(txID string) string {
+	b := strings.Builder{}
+	b.WriteString(txID)
+	b.WriteString(_TX_SEPARATOR)
+	return b.String()
 }

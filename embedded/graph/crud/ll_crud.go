@@ -14,15 +14,28 @@ import (
 	"github.com/foliagecp/sdk/statefun"
 	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
-	sfSystem "github.com/foliagecp/sdk/statefun/system"
 )
 
 func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
+	// High-Level API Registration
 	statefun.NewFunctionType(runtime, "functions.graph.api.object.create", CreateObject, *statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.api.type.create", CreateType, *statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.api.types.link.create", CreateTypesLink, *statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.api.objects.link.create", CreateObjectsLink, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.api.object.update", UpdateObject, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.api.object.delete", DeleteObject, *statefun.NewFunctionTypeConfig())
 
+	statefun.NewFunctionType(runtime, "functions.graph.api.type.create", CreateType, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.api.type.update", UpdateType, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.api.type.delete", DeleteType, *statefun.NewFunctionTypeConfig())
+
+	statefun.NewFunctionType(runtime, "functions.graph.api.types.link.create", CreateTypesLink, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.api.types.link.update", UpdateTypesLink, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.api.types.link.delete", DeleteTypesLink, *statefun.NewFunctionTypeConfig())
+
+	statefun.NewFunctionType(runtime, "functions.graph.api.objects.link.create", CreateObjectsLink, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.api.objects.link.update", UpdateObjectsLink, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.api.objects.link.delete", DeleteObejectsLink, *statefun.NewFunctionTypeConfig())
+	// High-Level API End Registration
+
+	// Low-Level API
 	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.create", LLAPIObjectCreate, *statefun.NewFunctionTypeConfig())
 	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.update", LLAPIObjectUpdate, *statefun.NewFunctionTypeConfig())
 	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.delete", LLAPIObjectDelete, *statefun.NewFunctionTypeConfig())
@@ -250,13 +263,13 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			if s, ok := payload.GetByPath("link_type").AsString(); ok {
 				linkType = s
 			} else {
-				linkType = sfSystem.GetUniqueStrID()
+				linkType = system.GetUniqueStrID()
 			}
 			var descendantUUID string
 			if s, ok := payload.GetByPath("descendant_uuid").AsString(); ok {
 				descendantUUID = s
 			} else {
-				descendantUUID = sfSystem.GetUniqueStrID()
+				descendantUUID = system.GetUniqueStrID()
 			}
 
 			// Delete link if exists ----------------------------------
