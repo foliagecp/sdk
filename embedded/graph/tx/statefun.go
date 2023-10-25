@@ -131,21 +131,19 @@ func push(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCont
 
 	if err := merge(contextProcessor, txID); err != nil {
 		slog.Error(err.Error())
+		replyError(contextProcessor, err)
 		return
 	}
 
 	// delete success tx
 	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.delete", txID, easyjson.NewJSONObject().GetPtr(), nil); err != nil {
+		replyError(contextProcessor, err)
 		return
 	}
 
 	slog.Info("Merge Done!")
 
-	qid := common.GetQueryID(contextProcessor)
-
-	reply := easyjson.NewJSONObject()
-	reply.SetByPath("status", easyjson.NewJSON("ok"))
-	common.ReplyQueryID(qid, easyjson.NewJSONObjectWithKeyValue("payload", reply).GetPtr(), contextProcessor)
+	replyOk(contextProcessor)
 }
 
 /*
@@ -357,8 +355,6 @@ func createTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	txID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
-	prefix := generatePrefix(txID)
-
 	from, ok := payload.GetByPath("from").AsString()
 	if !ok {
 		replyError(contextProcessor, errInvalidArgument)
@@ -371,6 +367,7 @@ func createTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 		return
 	}
 
+	prefix := generatePrefix(txID)
 	txFrom := prefix + from
 	txTo := prefix + to
 

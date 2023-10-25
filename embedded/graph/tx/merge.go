@@ -31,6 +31,7 @@ func merge(ctx *sfplugins.StatefunContextProcessor, txGraphID string) error {
 		if _, ok := main.objects[normalID]; ok {
 			// check for delete
 			// otherwise, update
+			slog.Info("update object", "id", normalID)
 			payload := easyjson.NewJSONObjectWithKeyValue("body", *body)
 			// TODO: use high level api?
 			if err := updateLowLevelObject(ctx, normalID, &payload); err != nil {
@@ -38,6 +39,7 @@ func merge(ctx *sfplugins.StatefunContextProcessor, txGraphID string) error {
 			}
 		} else {
 			// create
+			slog.Info("create object", "id", normalID)
 			payload := easyjson.NewJSONObjectWithKeyValue("body", *body)
 			// TODO: use high level api?
 			if err := createLowLevelObject(ctx, normalID, &payload); err != nil {
@@ -61,11 +63,15 @@ func merge(ctx *sfplugins.StatefunContextProcessor, txGraphID string) error {
 		if _, ok := main.links[normalID]; ok {
 			// check for delete
 			// otherwise, update
+			slog.Info("update link", "id", normalID)
+
 			if err := updateLowLevelLink(ctx, normalParent, normalChild, normalLt, *body); err != nil {
 				return err
 			}
 		} else {
 			// create
+			slog.Info("create link", "id", normalID)
+
 			if err := createLowLevelLink(ctx, normalParent, normalChild, normalLt, "", *body); err != nil {
 				return err
 			}
