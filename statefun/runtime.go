@@ -111,7 +111,9 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 	}
 	// --------------------------------------------------------------
 
-	system.MsgOnErrorReturn(onAfterStart(r))
+	if onAfterStart != nil {
+		system.MsgOnErrorReturn(onAfterStart(r))
+	}
 	system.MsgOnErrorReturn(r.runGarbageCellector())
 
 	return
