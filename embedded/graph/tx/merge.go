@@ -1,6 +1,7 @@
 package tx
 
 import (
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -21,12 +22,12 @@ func merge(ctx *sfplugins.StatefunContextProcessor, txGraphID string) error {
 	txGraph := graphState(ctx, txGraphRoot)
 
 	for k := range txGraph.objects {
-		normalID := strings.TrimPrefix(k, prefix)
-
 		body, err := ctx.GlobalCache.GetValueAsJSON(k)
 		if err != nil {
-			return err
+			return fmt.Errorf("tx graph object %s not found: %w", k, err)
 		}
+
+		normalID := strings.TrimPrefix(k, prefix)
 
 		if _, ok := main.objects[normalID]; ok {
 			// check for delete
@@ -35,7 +36,7 @@ func merge(ctx *sfplugins.StatefunContextProcessor, txGraphID string) error {
 			payload := easyjson.NewJSONObjectWithKeyValue("body", *body)
 			// TODO: use high level api?
 			if err := updateLowLevelObject(ctx, normalID, &payload); err != nil {
-				return err
+				return fmt.Errorf("update main graph object %s: %w", normalID, err)
 			}
 		} else {
 			// create
@@ -43,7 +44,7 @@ func merge(ctx *sfplugins.StatefunContextProcessor, txGraphID string) error {
 			payload := easyjson.NewJSONObjectWithKeyValue("body", *body)
 			// TODO: use high level api?
 			if err := createLowLevelObject(ctx, normalID, &payload); err != nil {
-				return err
+				return fmt.Errorf("create main graph object %s: %w", normalID, err)
 			}
 		}
 	}
@@ -57,7 +58,7 @@ func merge(ctx *sfplugins.StatefunContextProcessor, txGraphID string) error {
 
 		body, err := ctx.GlobalCache.GetValueAsJSON(l.linkID)
 		if err != nil {
-			return err
+			return fmt.Errorf("tx graph link %s: %w", l.linkID, err)
 		}
 
 		if _, ok := main.links[normalID]; ok {
@@ -66,14 +67,14 @@ func merge(ctx *sfplugins.StatefunContextProcessor, txGraphID string) error {
 			slog.Info("update link", "id", normalID)
 
 			if err := updateLowLevelLink(ctx, normalParent, normalChild, normalLt, *body); err != nil {
-				return err
+				return fmt.Errorf("update main link %s: %w", normalID, err)
 			}
 		} else {
 			// create
 			slog.Info("create link", "id", normalID)
 
 			if err := createLowLevelLink(ctx, normalParent, normalChild, normalLt, "", *body); err != nil {
-				return err
+				return fmt.Errorf("create main graph link %s: %w", normalID, err)
 			}
 		}
 	}
