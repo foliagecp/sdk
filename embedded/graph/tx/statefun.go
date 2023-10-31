@@ -36,32 +36,32 @@ var (
 )
 
 func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
-	statefun.NewFunctionType(runtime, "functions.graph.tx.begin", begin, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.tx.begin", Begin, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
-	statefun.NewFunctionType(runtime, "functions.graph.tx.type.create", createType, *statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.tx.type.update", updateType, *statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.tx.type.delete", nil, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.tx.type.create", CreateType, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.graph.tx.type.update", UpdateType, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.graph.tx.type.delete", nil, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
-	statefun.NewFunctionType(runtime, "functions.graph.tx.object.create", createObject, *statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.tx.object.update", updateObject, *statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.tx.object.delete", nil, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.tx.object.create", CreateObject, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.graph.tx.object.update", UpdateObject, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.graph.tx.object.delete", nil, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
-	statefun.NewFunctionType(runtime, "functions.graph.tx.types.link.create", createTypesLink, *statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.tx.types.link.update", updateTypesLink, *statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.tx.types.link.delete", nil, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.tx.types.link.create", CreateTypesLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.graph.tx.types.link.update", UpdateTypesLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.graph.tx.types.link.delete", nil, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
-	statefun.NewFunctionType(runtime, "functions.graph.tx.objects.link.create", createObjectsLink, *statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.tx.objects.link.update", updateObjectsLink, *statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.tx.objects.link.delete", nil, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.tx.objects.link.create", CreateObjectsLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.graph.tx.objects.link.update", UpdateObjectsLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.graph.tx.objects.link.delete", nil, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
-	statefun.NewFunctionType(runtime, "functions.graph.tx.commit", commit, *statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.tx.push", push, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.tx.commit", Commit, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.graph.tx.push", Push, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 }
 
 // exec only on txmaster
 // create tx_id, clone exist graph with tx_id prefix, return tx_id to client
 // tx_id = sha256(txmaster + nonce.toString() + unixnano.toString()).toString()
-func begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	selfID := contextProcessor.Self.ID
 	if selfID != _TX_MASTER {
 		replyError(contextProcessor, errors.New("only on txmaster"))
@@ -108,7 +108,7 @@ func begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 }
 
 // exec on transaction
-func commit(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func Commit(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	// add validating stage
 
 	empty := easyjson.NewJSONObject().GetPtr()
@@ -120,7 +120,7 @@ func commit(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCo
 	common.ReplyQueryID(qid, easyjson.NewJSONObjectWithKeyValue("payload", reply).GetPtr(), contextProcessor)
 }
 
-func push(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func Push(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	selfID := contextProcessor.Self.ID
 	if selfID != _TX_MASTER {
 		return
@@ -154,7 +154,7 @@ func push(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCont
 
 create types -> type link
 */
-func createType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func CreateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	txID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -186,7 +186,7 @@ clone type from main graph if not exists
 
 update type body
 */
-func updateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func UpdateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	txID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -253,7 +253,7 @@ create type -> object link
 
 create object -> type link
 */
-func createObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func CreateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	txID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -286,7 +286,7 @@ clone object from main graph if not exists
 
 update object body
 */
-func updateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	txID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -351,7 +351,7 @@ func updateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 
 create type -> type link
 */
-func createTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func CreateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	txID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -391,7 +391,7 @@ func createTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 		"body": json, optional
 	}
 */
-func updateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	txID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -476,7 +476,7 @@ func updateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 
 create object -> object link
 */
-func createObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func CreateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	txID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -515,7 +515,7 @@ func createObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 		"body": json, optional
 	}
 */
-func updateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	txID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
