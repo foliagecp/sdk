@@ -112,7 +112,7 @@ func Commit(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCo
 	// add validating stage
 
 	empty := easyjson.NewJSONObject().GetPtr()
-	contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.tx.push", _TX_MASTER, empty, empty)
+	system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.tx.push", _TX_MASTER, empty, empty))
 
 	qid := common.GetQueryID(contextProcessor)
 	reply := easyjson.NewJSONObject()
@@ -414,10 +414,10 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	updatePayload := easyjson.NewJSONObject()
 	updatePayload.SetByPath("to", easyjson.NewJSON(txTo))
 
-	needObjects := false
+	//needObjects := false
 
 	if payload.PathExists("object_link_type") {
-		needObjects = true
+		//needObjects = true
 		updatePayload.SetByPath("object_link_type", payload.GetByPath("object_link_type"))
 	}
 
@@ -454,9 +454,9 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 			return
 		}
 
-		if needObjects {
-			// clone objects
-		}
+		//if needObjects {
+		// clone objects
+		//}
 	}
 
 	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.types.link.update", txFrom, &updatePayload, nil); err != nil {
