@@ -54,6 +54,7 @@ func (ftc *FunctionTypeConfig) SetBalanceNeeded(balanceNeeded bool) *FunctionTyp
 	return ftc
 }
 
+// TODO: if serviceActive == false GOLANG local call should also be not possible!
 func (ftc *FunctionTypeConfig) SetServiceState(active bool) *FunctionTypeConfig {
 	ftc.serviceActive = active
 	return ftc
