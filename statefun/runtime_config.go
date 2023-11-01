@@ -41,7 +41,7 @@ func NewRuntimeConfig() *RuntimeConfig {
 
 func NewRuntimeConfigSimple(natsURL string, runtimeName string) *RuntimeConfig {
 	ro := NewRuntimeConfig()
-	return ro.SetNatsURL(natsURL).SeKeyValueStoreBucketName("common").SetFunctionTypesStreamName(fmt.Sprintf("%s_stream", runtimeName))
+	return ro.SetNatsURL(natsURL).SeKeyValueStoreBucketName("common_kv_store").SetFunctionTypesStreamName(fmt.Sprintf("%s_stream", runtimeName))
 }
 
 func (ro *RuntimeConfig) SetNatsURL(natsURL string) *RuntimeConfig {
