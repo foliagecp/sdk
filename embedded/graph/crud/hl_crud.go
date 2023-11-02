@@ -3,7 +3,6 @@ package crud
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 
 	"github.com/foliagecp/easyjson"
@@ -56,8 +55,8 @@ func UpdateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 
 	payload := contextProcessor.Payload
 
-	_, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.update", selfID, payload, nil)
-	if err != nil {
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.update", selfID, payload, nil)
+	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
 	}
@@ -95,8 +94,8 @@ func CreateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 
 	prefix := payload.GetByPath("prefix").AsStringDefault("")
 
-	_, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", selfID, payload, nil)
-	if err != nil {
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", selfID, payload, nil)
+	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
 	}
@@ -117,8 +116,8 @@ func CreateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 		link.SetByPath("link_type", easyjson.NewJSON(l.lt))
 		link.SetByPath("link_body", easyjson.NewJSONObject())
 
-		_, err = contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.create", l.from, &link, nil)
-		if err != nil {
+		result, err = contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.create", l.from, &link, nil)
+		if err := checkRequestError(result, err); err != nil {
 			replyError(contextProcessor, err)
 			return
 		}
@@ -137,8 +136,8 @@ func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 	selfID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
-	_, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.update", selfID, payload, nil)
-	if err != nil {
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.update", selfID, payload, nil)
+	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
 	}
@@ -179,8 +178,8 @@ func CreateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	//link.SetByPath("link_body", payload.GetByPath("body"))
 	link.SetByPath("link_body.link_type", easyjson.NewJSON(objectLinkType))
 
-	_, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.create", selfID, &link, nil)
-	if err != nil {
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.create", selfID, &link, nil)
+	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
 	}
@@ -228,7 +227,7 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	if needUpdateObjectLinkType {
 		updateLinkPayload.SetByPath("link_body.link_type", easyjson.NewJSON(objectLinkType))
 
-		currentBody, err := getLinkBody(contextProcessor, selfID, to)
+		currentBody, err := getTypesLinkBody(contextProcessor, selfID, to)
 		if err != nil {
 			replyError(contextProcessor, err)
 			return
@@ -237,8 +236,8 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 		currentObjectLinkType, _ = currentBody.GetByPath("link_body.link_type").AsString()
 	}
 
-	_, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.update", selfID, &updateLinkPayload, nil)
-	if err != nil {
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.update", selfID, &updateLinkPayload, nil)
+	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
 	}
@@ -260,8 +259,8 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 				updateObjectLinkPayload.SetByPath("link_type", easyjson.NewJSON(objectLinkType))
 				updateObjectLinkPayload.SetByPath("link_body", easyjson.NewJSONObject())
 
-				_, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.update", objectID, &updateObjectLinkPayload, nil)
-				if err != nil {
+				result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.update", objectID, &updateObjectLinkPayload, nil)
+				if err := checkRequestError(result, err); err != nil {
 					replyError(contextProcessor, err)
 					return
 				}
@@ -297,7 +296,7 @@ func CreateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	selfType := findObjectType(contextProcessor, selfID)
 	toType := findObjectType(contextProcessor, to)
 
-	linkBody, err := getLinkBody(contextProcessor, selfType, toType)
+	linkBody, err := getTypesLinkBody(contextProcessor, selfType, toType)
 	if err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -313,9 +312,8 @@ func CreateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	objectLink.SetByPath("link_type", easyjson.NewJSON(linkType))
 	objectLink.SetByPath("link_body", easyjson.NewJSONObject())
 
-	_, err = contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.create", selfID, &objectLink, nil)
-	if err != nil {
-		slog.Error(err.Error())
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.create", selfID, &objectLink, nil)
+	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
 	}
@@ -341,7 +339,7 @@ func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	fromTypeID := findObjectType(contextProcessor, selfID)
 	toTypeID := findObjectType(contextProcessor, objectToID)
 
-	linkBody, err := getLinkBody(contextProcessor, fromTypeID, toTypeID)
+	linkBody, err := getTypesLinkBody(contextProcessor, fromTypeID, toTypeID)
 	if err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -358,8 +356,8 @@ func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	objectLink.SetByPath("link_type", easyjson.NewJSON(linkType))
 	objectLink.SetByPath("link_body", payload.GetByPath("body"))
 
-	_, err = contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.update", selfID, &objectLink, nil)
-	if err != nil {
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.update", selfID, &objectLink, nil)
+	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
 	}
@@ -401,12 +399,12 @@ func findTypeObjects(ctx *sfplugins.StatefunContextProcessor, typeID string) []s
 	return out
 }
 
-func getLinkBody(ctx *sfplugins.StatefunContextProcessor, from, to string) (*easyjson.JSON, error) {
-	id := fmt.Sprintf("%s.out.ltp_oid-bdy.%s.%s", from, to, to)
+func getTypesLinkBody(ctx *sfplugins.StatefunContextProcessor, from, to string) (*easyjson.JSON, error) {
+	id := fmt.Sprintf("%s.out.ltp_oid-bdy.__type.%s", from, to)
 
 	body, err := ctx.GlobalCache.GetValueAsJSON(id)
 	if err != nil {
-		return nil, fmt.Errorf("get link body: %w", err)
+		return nil, fmt.Errorf("link %s, %s not found: %w", from, to, err)
 	}
 
 	return body, nil
@@ -426,4 +424,16 @@ func reply(ctx *sfplugins.StatefunContextProcessor, status string, data any) {
 	reply.SetByPath("status", easyjson.NewJSON(status))
 	reply.SetByPath("result", easyjson.NewJSON(data))
 	common.ReplyQueryID(qid, easyjson.NewJSONObjectWithKeyValue("payload", reply).GetPtr(), ctx)
+}
+
+func checkRequestError(result *easyjson.JSON, err error) error {
+	if err != nil {
+		return err
+	}
+
+	if result.GetByPath("status").AsStringDefault("failed") == "failed" {
+		return errors.New(result.GetByPath("result").AsStringDefault("unknown error"))
+	}
+
+	return nil
 }
