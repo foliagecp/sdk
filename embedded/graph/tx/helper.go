@@ -1,6 +1,7 @@
 package tx
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -140,4 +141,16 @@ func findObjectType(ctx *sfplugins.StatefunContextProcessor, objectID string) st
 	split := strings.Split(keys[0], ".")
 
 	return split[len(split)-1]
+}
+
+func checkRequestError(result *easyjson.JSON, err error) error {
+	if err != nil {
+		return err
+	}
+
+	if result.GetByPath("payload.status").AsStringDefault("failed") == "failed" {
+		return errors.New(result.GetByPath("payload.result").AsStringDefault("unknown error"))
+	}
+
+	return nil
 }
