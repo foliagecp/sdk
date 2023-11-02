@@ -638,7 +638,7 @@ func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) err
 	}
 
 	// link from group -> group, need for define "group" link type
-	if err := createLowLevelLink(ctx, group, group, GROUP_TYPELINK, GROUP_TYPELINK, easyjson.NewJSONObject()); err != nil {
+	if err := createLowLevelLink(ctx, group, group, TYPE_TYPELINK, GROUP_TYPELINK, easyjson.NewJSONObject()); err != nil {
 		return err
 	}
 	//-----------------------------------------------------------
