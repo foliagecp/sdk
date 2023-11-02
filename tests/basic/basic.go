@@ -14,6 +14,7 @@ import (
 	// Comment out and no not use graphDebug for resolving the cgo conflict between go-graphviz and rogchap (when --ldflags '-extldflags "-Wl,--allow-multiple-definition"' does not help)
 	graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
 	"github.com/foliagecp/sdk/embedded/graph/jpgql"
+	graphTX "github.com/foliagecp/sdk/embedded/graph/tx"
 	statefun "github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/cache"
 	"github.com/foliagecp/sdk/statefun/plugins"
@@ -122,6 +123,7 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	}
 
 	graphCRUD.RegisterAllFunctionTypes(runtime)
+	graphTX.RegisterAllFunctionTypes(runtime)
 	graphDebug.RegisterAllFunctionTypes(runtime)
 	jpgql.RegisterAllFunctionTypes(runtime, 30)
 }
