@@ -81,6 +81,8 @@ create objects -> object link
 create type -> object link
 
 create object -> type link
+
+TODO: Add origin type check
 */
 func CreateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	selfID := contextProcessor.Self.ID
@@ -173,7 +175,7 @@ func CreateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 
 	link := easyjson.NewJSONObject()
 	link.SetByPath("descendant_uuid", easyjson.NewJSON(to))
-	link.SetByPath("link_type", easyjson.NewJSON(to))
+	link.SetByPath("link_type", easyjson.NewJSON("__type"))
 	//link.SetByPath("link_body", payload.GetByPath("body"))
 	link.SetByPath("link_body.link_type", easyjson.NewJSON(objectLinkType))
 
@@ -217,7 +219,7 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 
 	updateLinkPayload := easyjson.NewJSONObject()
 	updateLinkPayload.SetByPath("descendant_uuid", easyjson.NewJSON(to))
-	updateLinkPayload.SetByPath("link_type", easyjson.NewJSON(to))
+	updateLinkPayload.SetByPath("link_type", easyjson.NewJSON("__type"))
 	updateLinkPayload.SetByPath("link_body", body)
 
 	needUpdateObjectLinkType := objectLinkType != ""
