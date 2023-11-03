@@ -59,13 +59,24 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 
 // exec only on txmaster
 // create tx_id, clone exist graph with tx_id prefix, return tx_id to client
-// tx_id = sha256(txmaster + nonce.toString() + unixnano.toString()).toString()
+// tx_id = sha256(txmaster + nonce.String() + unixnano.String()).String()
+
+/*
+	payload:{
+		"clone": "min" | "full" | "with", optional, default: full
+		"with": [...], only with "clone":"with"
+	}
+*/
 func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	selfID := contextProcessor.Self.ID
 	if selfID != _TX_MASTER {
 		replyError(contextProcessor, errors.New("only on txmaster"))
 		return
 	}
+
+	payload := contextProcessor.Payload
+	cloneMod := payload.GetByPath("clone").AsStringDefault("full")
+	cloneWith, _ := payload.GetByPath("with").AsArrayString()
 
 	body := contextProcessor.GetObjectContext()
 
@@ -93,7 +104,7 @@ func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 		return
 	}
 
-	if err := cloneGraph(contextProcessor, txID); err != nil {
+	if err := cloneGraph(contextProcessor, txID, cloneMod, cloneWith...); err != nil {
 		replyError(contextProcessor, err)
 		return
 	}
@@ -585,8 +596,23 @@ func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	replyOk(contextProcessor)
 }
 
-func cloneGraph(ctx *sfplugins.StatefunContextProcessor, txID string) error {
-	return initBuilInObjects(ctx, txID)
+func cloneGraph(ctx *sfplugins.StatefunContextProcessor, txID, cloneMod string, objects ...string) error {
+	switch cloneMod {
+	case "min":
+		if err := cloneGraphWithObjects(ctx, txID); err != nil {
+			return err
+		}
+	case "full":
+		if err := fullClone(ctx, txID); err != nil {
+			return err
+		}
+	case "with":
+		if err := cloneGraphWithObjects(ctx, txID, objects...); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) error {
@@ -662,6 +688,64 @@ func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) err
 		return err
 	}
 	// -----------------------------------------------------------
+
+	return nil
+}
+
+func fullClone(ctx *sfplugins.StatefunContextProcessor, txID string) error {
+	prefix := generatePrefix(txID)
+	state := graphState(ctx, BUILT_IN_ROOT)
+
+	for id := range state.objects {
+		body, err := ctx.GlobalCache.GetValueAsJSON(id)
+		if err != nil {
+			system.MsgOnErrorReturn(err)
+			continue
+		}
+
+		if err := createLowLevelObject(ctx, prefix+id, body); err != nil {
+			system.MsgOnErrorReturn(err)
+			continue
+		}
+	}
+
+	for _, l := range state.links {
+		body, err := ctx.GlobalCache.GetValueAsJSON(l.linkID)
+		if err != nil {
+			system.MsgOnErrorReturn(err)
+			continue
+		}
+
+		from := prefix + l.from
+		to := prefix + l.to
+
+		if err := createLowLevelLink(ctx, from, to, l.lt, "", *body); err != nil {
+			system.MsgOnErrorReturn(err)
+			continue
+		}
+	}
+
+	return nil
+}
+
+func cloneGraphWithObjects(ctx *sfplugins.StatefunContextProcessor, txID string, objects ...string) error {
+	if err := initBuilInObjects(ctx, txID); err != nil {
+		return err
+	}
+
+	for _, v := range objects {
+		// if object is type
+		// 		clone type, types, other_type
+		//      clone links types -> type
+		//  				type -> other_type
+		//		clone objects (which implement type)
+		//					type -> objects (which implement type)
+		// 					objects (which implement type) -> type
+		// if object is object
+		// 		clone object, objects
+		//		clone links
+		_ = v
+	}
 
 	return nil
 }
