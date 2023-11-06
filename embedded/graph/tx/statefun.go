@@ -729,6 +729,10 @@ func fullClone(ctx *sfplugins.StatefunContextProcessor, txID string) error {
 		}
 	}
 
+	if err := createLowLevelLink(ctx, txID, prefix+BUILT_IN_ROOT, "graph", "", easyjson.NewJSONObject()); err != nil {
+		return err
+	}
+
 	return nil
 }
 
