@@ -696,6 +696,10 @@ func fullClone(ctx *sfplugins.StatefunContextProcessor, txID string) error {
 	prefix := generatePrefix(txID)
 	state := graphState(ctx, BUILT_IN_ROOT)
 
+	if state.empty() {
+		return initBuilInObjects(ctx, txID)
+	}
+
 	for id := range state.objects {
 		body, err := ctx.GlobalCache.GetValueAsJSON(id)
 		if err != nil {
