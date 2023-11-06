@@ -54,7 +54,7 @@ func LLAPIPrintGraph(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 		}
 	}
 
-	verboseGraph := payload.GetByPath("verbose").AsBoolDefault(false)
+	verboseGraph := payload.GetByPath("verbose").AsBoolDefault(true)
 	maxDepth := uint(payload.GetByPath("depth").AsNumericDefault(math.MaxUint8))
 
 	gviz := graphviz.New()
