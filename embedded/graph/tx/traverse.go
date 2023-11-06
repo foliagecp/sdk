@@ -12,6 +12,10 @@ type state struct {
 	links   map[string]link
 }
 
+func (s state) empty() bool {
+	return len(s.objects) == 0 && len(s.links) == 0
+}
+
 type node struct {
 	id     string
 	lt     string
