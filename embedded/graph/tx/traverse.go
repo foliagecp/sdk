@@ -32,6 +32,10 @@ func graphState(ctx *sfplugins.StatefunContextProcessor, startPoint string) *sta
 		links:   make(map[string]link),
 	}
 
+	if _, err := ctx.GlobalCache.GetValue(startPoint); err != nil {
+		return state
+	}
+
 	root := startPoint
 
 	queue := list.New()
