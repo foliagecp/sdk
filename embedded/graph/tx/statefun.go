@@ -716,12 +716,10 @@ func fullClone(ctx *sfplugins.StatefunContextProcessor, txID string) error {
 	for id := range state.objects {
 		body, err := ctx.GlobalCache.GetValueAsJSON(id)
 		if err != nil {
-			system.MsgOnErrorReturn(err)
 			body = easyjson.NewJSONObject().GetPtr()
 		}
 
 		if err := createLowLevelObject(ctx, prefix+id, body); err != nil {
-			system.MsgOnErrorReturn(err)
 			continue
 		}
 	}
@@ -729,7 +727,6 @@ func fullClone(ctx *sfplugins.StatefunContextProcessor, txID string) error {
 	for _, l := range state.links {
 		body, err := ctx.GlobalCache.GetValueAsJSON(l.cacheID)
 		if err != nil {
-			system.MsgOnErrorReturn(err)
 			body = easyjson.NewJSONObject().GetPtr()
 		}
 
@@ -737,7 +734,6 @@ func fullClone(ctx *sfplugins.StatefunContextProcessor, txID string) error {
 		to := prefix + l.to
 
 		if err := createLowLevelLink(ctx, from, to, l.lt, l.objectLt, *body); err != nil {
-			system.MsgOnErrorReturn(err)
 			continue
 		}
 	}
@@ -849,7 +845,6 @@ func cloneGraphWithTypes(ctx *sfplugins.StatefunContextProcessor, txID string, t
 
 		typesLink, err := ctx.GlobalCache.GetValueAsJSON(fmt.Sprintf("%s.out.ltp_oid-bdy.__type.%s", l.from, l.to))
 		if err != nil {
-			system.MsgOnErrorReturn(err)
 			continue
 		}
 
@@ -873,12 +868,10 @@ func cloneGraphWithTypes(ctx *sfplugins.StatefunContextProcessor, txID string, t
 	for id := range objects {
 		body, err := ctx.GlobalCache.GetValueAsJSON(id)
 		if err != nil {
-			system.MsgOnErrorReturn(err)
 			body = easyjson.NewJSONObject().GetPtr()
 		}
 
 		if err := createLowLevelObject(ctx, prefix+id, body); err != nil {
-			system.MsgOnErrorReturn(err)
 			continue
 		}
 	}
@@ -886,7 +879,6 @@ func cloneGraphWithTypes(ctx *sfplugins.StatefunContextProcessor, txID string, t
 	for _, l := range links {
 		body, err := ctx.GlobalCache.GetValueAsJSON(fmt.Sprintf("%s.out.ltp_oid-bdy.%s.%s", l.from, l.lt, l.to))
 		if err != nil {
-			system.MsgOnErrorReturn(err)
 			body = easyjson.NewJSONObject().GetPtr()
 		}
 
@@ -894,7 +886,6 @@ func cloneGraphWithTypes(ctx *sfplugins.StatefunContextProcessor, txID string, t
 		to := prefix + l.to
 
 		if err := createLowLevelLink(ctx, from, to, l.lt, l.objectLt, *body); err != nil {
-			system.MsgOnErrorReturn(err)
 			continue
 		}
 	}

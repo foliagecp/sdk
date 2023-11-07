@@ -98,7 +98,7 @@ func createLowLevelObject(ctx *sfplugins.StatefunContextProcessor, id string, bo
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("body", *body)
 
-	if _, err := ctx.Request(sfplugins.GolangLocalRequest, op, id, body, nil); err != nil {
+	if _, err := ctx.Request(sfplugins.GolangLocalRequest, op, id, &payload, nil); err != nil {
 		return err
 	}
 
@@ -112,7 +112,7 @@ func updateLowLevelObject(ctx *sfplugins.StatefunContextProcessor, mode, id stri
 	payload.SetByPath("body", *body)
 	payload.SetByPath("mode", easyjson.NewJSON(mode))
 
-	if _, err := ctx.Request(sfplugins.GolangLocalRequest, op, id, body, nil); err != nil {
+	if _, err := ctx.Request(sfplugins.GolangLocalRequest, op, id, &payload, nil); err != nil {
 		return err
 	}
 
