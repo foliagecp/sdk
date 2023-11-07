@@ -75,6 +75,7 @@ Request:
 		query_id: string - optional // ID for this query. Transaction id for operations with the cache. Do not use the same for concurrent graph modify operations.
 		body: json - required // Body for object to be created with.
 			<key>: <type> - optional // Any additional key and value to be stored in objects's body.
+		mode: string - optional // "merge" (default) - deep merge old and new bodies, "replace" - replace old body with the new one, <other> is interpreted as "merge" without any notification
 
 Reply:
 
@@ -98,10 +99,18 @@ func LLAPIObjectUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sf
 	}
 
 	if len(errorString) == 0 {
-		oldObjectBody := contextProcessor.GetObjectContext()
-		oldObjectBody.DeepMerge(objectBody)
-		contextProcessor.SetObjectContext(oldObjectBody) // Update an object
-		result.SetByPath("status", easyjson.NewJSON("ok"))
+		mode := payload.GetByPath("mode").AsStringDefault("merge")
+		switch mode {
+		case "replace":
+			contextProcessor.SetObjectContext(&objectBody) // Update an object
+		case "merge":
+			fallthrough
+		default:
+			oldObjectBody := contextProcessor.GetObjectContext()
+			oldObjectBody.DeepMerge(objectBody)
+			contextProcessor.SetObjectContext(oldObjectBody) // Update an object
+			result.SetByPath("status", easyjson.NewJSON("ok"))
+		}
 	} else {
 		result.SetByPath("status", easyjson.NewJSON("failed"))
 	}
@@ -298,6 +307,7 @@ Request:
 		link_body: json - required // Body for link leading to descendant.
 			tags: []string - optional // Defines link tags.
 			<key>: <type> - optional // Any additional key and value to be stored in link's body.
+		mode: string - optional // "merge" (default) - deep merge old and new bodies, "replace" - replace old body with the new one, <other> is interpreted as "merge" without any notification
 
 Reply:
 
@@ -345,7 +355,15 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			}
 			// ------------------------------------------------------------
 			// Update link body -------------------------------------------
-			oldLinkBody.DeepMerge(linkBody)
+			mode := payload.GetByPath("mode").AsStringDefault("merge")
+			switch mode {
+			case "replace":
+				oldLinkBody = &linkBody
+			case "merge":
+				fallthrough
+			default:
+				oldLinkBody.DeepMerge(linkBody)
+			}
 			contextProcessor.GlobalCache.SetValue(contextProcessor.Self.ID+".out.ltp_oid-bdy."+linkType+"."+descendantUUID, oldLinkBody.ToBytes(), true, -1, queryID) // Store link body in KV
 			// ------------------------------------------------------------
 			// Create new indices -----------------------------------------
