@@ -11,7 +11,6 @@ import (
 	"github.com/foliagecp/easyjson"
 
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
-	sfPluginJS "github.com/foliagecp/sdk/statefun/plugins/js"
 	"github.com/foliagecp/sdk/statefun/system"
 )
 
@@ -44,7 +43,7 @@ func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHa
 // --------------------------------------------------------------------------------------------------------------------
 
 func (ft *FunctionType) SetExecutor(alias string, content string, constructor func(alias string, source string) sfPlugins.StatefunExecutor) error {
-	ft.executor = sfPlugins.NewTypenameExecutor(alias, content, sfPluginJS.StatefunExecutorPluginJSContructor)
+	ft.executor = sfPlugins.NewTypenameExecutor(alias, content, constructor)
 	return nil
 }
 
