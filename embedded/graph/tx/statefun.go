@@ -119,12 +119,18 @@ func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 	common.ReplyQueryID(qid, easyjson.NewJSONObjectWithKeyValue("payload", reply).GetPtr(), contextProcessor)
 }
 
+/*
+	payload:{
+		"mode": "merge" | "replace", optional, default: "merge"
+	}
+*/
 // exec on transaction
 func Commit(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	// add validating stage
+	mode := contextProcessor.Payload.GetByPath("mode").AsStringDefault("merge")
+	payload := easyjson.NewJSONObjectWithKeyValue("mode", easyjson.NewJSON(mode))
 
-	empty := easyjson.NewJSONObject().GetPtr()
-	system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.tx.push", _TX_MASTER, empty, empty))
+	system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.tx.push", _TX_MASTER, payload.GetPtr(), nil))
 
 	qid := common.GetQueryID(contextProcessor)
 	reply := easyjson.NewJSONObject()
@@ -132,16 +138,23 @@ func Commit(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCo
 	common.ReplyQueryID(qid, easyjson.NewJSONObjectWithKeyValue("payload", reply).GetPtr(), contextProcessor)
 }
 
+/*
+	payload:{
+		"mode": "merge" | "replace", optional, default: "merge"
+	}
+*/
 func Push(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	selfID := contextProcessor.Self.ID
 	if selfID != _TX_MASTER {
 		return
 	}
 
+	mode := contextProcessor.Payload.GetByPath("mode").AsStringDefault("merge")
+
 	// TODO: check tx id
 	txID := contextProcessor.Caller.ID
 
-	if err := merge(contextProcessor, txID); err != nil {
+	if err := merge(contextProcessor, txID, mode); err != nil {
 		replyError(contextProcessor, err)
 		return
 	}

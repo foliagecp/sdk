@@ -4,14 +4,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/foliagecp/easyjson"
 	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
 // merge v0
 // TODO: add rollback
-func merge(ctx *sfplugins.StatefunContextProcessor, txGraphID string) error {
-	fmt.Println("[INFO] Start merging", "tx", txGraphID)
+func merge(ctx *sfplugins.StatefunContextProcessor, txGraphID, mode string) error {
+	fmt.Println("[INFO] Start merging", "tx", txGraphID, "with mode", mode)
 
 	prefix := generatePrefix(txGraphID)
 
@@ -31,16 +30,14 @@ func merge(ctx *sfplugins.StatefunContextProcessor, txGraphID string) error {
 		if _, ok := main.objects[normalID]; ok {
 			// check for delete
 			// otherwise, update
-			payload := easyjson.NewJSONObjectWithKeyValue("body", *body)
 			// TODO: use high level api?
-			if err := updateLowLevelObject(ctx, normalID, &payload); err != nil {
+			if err := updateLowLevelObject(ctx, mode, normalID, body); err != nil {
 				return fmt.Errorf("update main graph object %s: %w", normalID, err)
 			}
 		} else {
 			// create
-			payload := easyjson.NewJSONObjectWithKeyValue("body", *body)
 			// TODO: use high level api?
-			if err := createLowLevelObject(ctx, normalID, &payload); err != nil {
+			if err := createLowLevelObject(ctx, normalID, body); err != nil {
 				return fmt.Errorf("create main graph object %s: %w", normalID, err)
 			}
 		}
