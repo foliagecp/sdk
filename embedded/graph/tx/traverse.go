@@ -8,12 +8,72 @@ import (
 )
 
 type state struct {
-	objects map[string]struct{}
-	links   map[string]link
+	objects map[string]struct{} // low level objects
+	links   map[string]link     // low level links
 }
 
-func (s state) empty() bool {
+func (s state) isEmpty() bool {
 	return len(s.objects) == 0 && len(s.links) == 0
+}
+
+func (s state) initBuiltIn() {
+	s.objects[BUILT_IN_ROOT] = struct{}{}
+	s.objects[BUILT_IN_OBJECTS] = struct{}{}
+	s.objects[BUILT_IN_TYPES] = struct{}{}
+
+	// create root -> objects link
+	s.links[BUILT_IN_ROOT+BUILT_IN_OBJECTS+OBJECTS_TYPELINK] = link{
+		from: BUILT_IN_ROOT,
+		to:   BUILT_IN_OBJECTS,
+		lt:   OBJECTS_TYPELINK,
+	}
+
+	// create root -> types link
+	s.links[BUILT_IN_ROOT+BUILT_IN_TYPES+TYPES_TYPELINK] = link{
+		from: BUILT_IN_ROOT,
+		to:   BUILT_IN_TYPES,
+		lt:   TYPES_TYPELINK,
+	}
+
+	s.objects[BUILT_IN_GROUP] = struct{}{}
+
+	// create types -> group link
+	s.links[BUILT_IN_TYPES+BUILT_IN_GROUP+TYPE_TYPELINK] = link{
+		from: BUILT_IN_TYPES,
+		to:   BUILT_IN_GROUP,
+		lt:   TYPE_TYPELINK,
+	}
+
+	// link from group -> group, need for define "group" link type
+	s.links[BUILT_IN_GROUP+BUILT_IN_GROUP+TYPE_TYPELINK] = link{
+		from:     BUILT_IN_GROUP,
+		to:       BUILT_IN_GROUP,
+		lt:       TYPE_TYPELINK,
+		objectLt: GROUP_TYPELINK,
+	}
+
+	s.objects[BUILT_IN_NAV] = struct{}{}
+
+	// create objects -> nav link
+	s.links[BUILT_IN_OBJECTS+BUILT_IN_NAV+OBJECT_TYPELINK] = link{
+		from: BUILT_IN_OBJECTS,
+		to:   BUILT_IN_NAV,
+		lt:   OBJECT_TYPELINK,
+	}
+
+	// create nav -> group link
+	s.links[BUILT_IN_NAV+BUILT_IN_GROUP+TYPE_TYPELINK] = link{
+		from: BUILT_IN_NAV,
+		to:   BUILT_IN_GROUP,
+		lt:   TYPE_TYPELINK,
+	}
+
+	// create group -> nav link
+	s.links[BUILT_IN_GROUP+BUILT_IN_NAV+OBJECT_TYPELINK] = link{
+		from: BUILT_IN_GROUP,
+		to:   BUILT_IN_NAV,
+		lt:   OBJECT_TYPELINK,
+	}
 }
 
 type node struct {
@@ -23,7 +83,7 @@ type node struct {
 }
 
 type link struct {
-	from, to, lt, linkID string
+	from, to, lt, objectLt, cacheID string
 }
 
 func graphState(ctx *sfplugins.StatefunContextProcessor, startPoint string) *state {
@@ -59,10 +119,10 @@ func graphState(ctx *sfplugins.StatefunContextProcessor, startPoint string) *sta
 
 			if _, ok := state.links[linkID]; !ok {
 				state.links[linkID] = link{
-					from:   node,
-					to:     ch.id,
-					lt:     ch.lt,
-					linkID: ch.linkID,
+					from:    node,
+					to:      ch.id,
+					lt:      ch.lt,
+					cacheID: ch.linkID,
 				}
 			}
 
