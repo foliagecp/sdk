@@ -83,7 +83,7 @@ func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool, msgAckCha
 
 	data, ok := easyjson.JSONFromBytes(msg.Data)
 	if !ok {
-		msg.Ack()
+		system.MsgOnErrorReturn(msg.Ack())
 		return fmt.Errorf("nats.Msg for function %s with id=%s is not a JSON\n", ft.name, id)
 	}
 
