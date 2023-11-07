@@ -27,6 +27,8 @@ const (
 	BUILT_IN_TYPES           = "types"
 	BUILT_IN_OBJECTS         = "objects"
 	BUILT_IN_ROOT            = "root"
+	BUILT_IN_GROUP           = "group"
+	BUILT_IN_NAV             = "nav"
 	GROUP_TYPELINK           = "group"
 )
 
@@ -63,8 +65,8 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 
 /*
 	payload:{
-		"clone": "min" | "full" | "with", optional, default: full
-		"with": [...], only with "clone":"with"
+		"clone": "min" | "full" | "with_types", optional, default: full
+		"types": []string, only with "clone":"with_types"
 	}
 */
 func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
@@ -76,7 +78,7 @@ func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 
 	payload := contextProcessor.Payload
 	cloneMod := payload.GetByPath("clone").AsStringDefault("full")
-	cloneWith, _ := payload.GetByPath("with").AsArrayString()
+	cloneWithTypes, _ := payload.GetByPath("types").AsArrayString()
 
 	body := contextProcessor.GetObjectContext()
 
@@ -104,7 +106,7 @@ func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 		return
 	}
 
-	if err := cloneGraph(contextProcessor, txID, cloneMod, cloneWith...); err != nil {
+	if err := cloneGraph(contextProcessor, txID, cloneMod, cloneWithTypes...); err != nil {
 		replyError(contextProcessor, err)
 		return
 	}
@@ -596,18 +598,18 @@ func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	replyOk(contextProcessor)
 }
 
-func cloneGraph(ctx *sfplugins.StatefunContextProcessor, txID, cloneMod string, objects ...string) error {
+func cloneGraph(ctx *sfplugins.StatefunContextProcessor, txID, cloneMod string, types ...string) error {
 	switch cloneMod {
 	case "min":
-		if err := cloneGraphWithObjects(ctx, txID); err != nil {
+		if err := cloneGraphWithTypes(ctx, txID); err != nil {
 			return err
 		}
 	case "full":
 		if err := fullClone(ctx, txID); err != nil {
 			return err
 		}
-	case "with":
-		if err := cloneGraphWithObjects(ctx, txID, objects...); err != nil {
+	case "with_types":
+		if err := cloneGraphWithTypes(ctx, txID, types...); err != nil {
 			return err
 		}
 	}
@@ -696,15 +698,13 @@ func fullClone(ctx *sfplugins.StatefunContextProcessor, txID string) error {
 	prefix := generatePrefix(txID)
 	state := graphState(ctx, BUILT_IN_ROOT)
 
-	if state.empty() {
-		return initBuilInObjects(ctx, txID)
-	}
+	state.initBuiltIn()
 
 	for id := range state.objects {
 		body, err := ctx.GlobalCache.GetValueAsJSON(id)
 		if err != nil {
 			system.MsgOnErrorReturn(err)
-			continue
+			body = easyjson.NewJSONObject().GetPtr()
 		}
 
 		if err := createLowLevelObject(ctx, prefix+id, body); err != nil {
@@ -714,16 +714,16 @@ func fullClone(ctx *sfplugins.StatefunContextProcessor, txID string) error {
 	}
 
 	for _, l := range state.links {
-		body, err := ctx.GlobalCache.GetValueAsJSON(l.linkID)
+		body, err := ctx.GlobalCache.GetValueAsJSON(l.cacheID)
 		if err != nil {
 			system.MsgOnErrorReturn(err)
-			continue
+			body = easyjson.NewJSONObject().GetPtr()
 		}
 
 		from := prefix + l.from
 		to := prefix + l.to
 
-		if err := createLowLevelLink(ctx, from, to, l.lt, "", *body); err != nil {
+		if err := createLowLevelLink(ctx, from, to, l.lt, l.objectLt, *body); err != nil {
 			system.MsgOnErrorReturn(err)
 			continue
 		}
@@ -736,23 +736,158 @@ func fullClone(ctx *sfplugins.StatefunContextProcessor, txID string) error {
 	return nil
 }
 
-func cloneGraphWithObjects(ctx *sfplugins.StatefunContextProcessor, txID string, objects ...string) error {
+func cloneGraphWithTypes(ctx *sfplugins.StatefunContextProcessor, txID string, types ...string) error {
 	if err := initBuilInObjects(ctx, txID); err != nil {
 		return err
 	}
 
-	for _, v := range objects {
-		// if object is type
-		// 		clone type, types, other_type
-		//      clone links types -> type
-		//  				type -> other_type
-		//		clone objects (which implement type)
-		//					type -> objects (which implement type)
-		// 					objects (which implement type) -> type
-		// if object is object
-		// 		clone object, objects
-		//		clone links
-		_ = v
+	prefix := generatePrefix(txID)
+
+	uniqTypeObjects := make(map[string]map[string]struct{})
+	for _, v := range types {
+		uniqTypeObjects[v] = make(map[string]struct{})
+	}
+
+	links := make(map[string]link)
+	objects := make(map[string]struct{})
+
+	for v := range uniqTypeObjects {
+		// if type doesn't exists, continue
+		if _, err := ctx.GlobalCache.GetValue(v); err != nil {
+			continue
+		}
+
+		// create type
+		objects[v] = struct{}{}
+
+		// create types -> type link
+		links[BUILT_IN_TYPES+v+TYPE_TYPELINK] = link{
+			from: BUILT_IN_TYPES,
+			to:   v,
+			lt:   TYPE_TYPELINK,
+		}
+
+		pattern := v + ".out.ltp_oid-bdy.>"
+		outLinks := ctx.GlobalCache.GetKeysByPattern(pattern)
+
+		for _, outLink := range outLinks {
+			split := strings.Split(outLink, ".")
+			if len(split) == 0 {
+				continue
+			}
+
+			outLinkID := split[len(split)-1]
+			outLinkLt := split[len(split)-2]
+
+			switch outLinkLt {
+			case OBJECT_TYPELINK:
+				uniqTypeObjects[v][outLinkID] = struct{}{}
+
+				objects[outLinkID] = struct{}{}
+
+				// create type -> object link
+				links[v+outLinkID+OBJECT_TYPELINK] = link{
+					from: v,
+					to:   outLinkID,
+					lt:   OBJECT_TYPELINK,
+				}
+
+				// create object -> type link
+				links[outLinkID+v+TYPE_TYPELINK] = link{
+					from: outLinkID,
+					to:   v,
+					lt:   TYPE_TYPELINK,
+				}
+
+				// create objects -> object link
+				links[BUILT_IN_OBJECTS+outLinkID+OBJECT_TYPELINK] = link{
+					from: BUILT_IN_OBJECTS,
+					to:   outLinkID,
+					lt:   OBJECT_TYPELINK,
+				}
+			case TYPE_TYPELINK:
+				if _, ok := uniqTypeObjects[outLinkID]; !ok {
+					continue
+				}
+
+				objects[outLinkID] = struct{}{}
+
+				// create type -> type link
+				links[v+outLinkID+TYPE_TYPELINK] = link{
+					from: v,
+					to:   outLinkID,
+					lt:   TYPE_TYPELINK,
+				}
+			}
+		}
+	}
+
+	for _, l := range links {
+		if l.lt != TYPE_TYPELINK {
+			continue
+		}
+
+		objectsFrom := uniqTypeObjects[l.from]
+		objectsTo := uniqTypeObjects[l.to]
+
+		if len(objectsFrom) == 0 || len(objectsTo) == 0 {
+			continue
+		}
+
+		typesLink, err := ctx.GlobalCache.GetValueAsJSON(fmt.Sprintf("%s.out.ltp_oid-bdy.__type.%s", l.from, l.to))
+		if err != nil {
+			system.MsgOnErrorReturn(err)
+			continue
+		}
+
+		linkType, ok := typesLink.GetByPath("link_type").AsString()
+		if !ok {
+			continue
+		}
+
+		for objectFrom := range objectsFrom {
+			out := ctx.GlobalCache.GetKeysByPattern(fmt.Sprintf("%s.out.ltp_oid-bdy.%s.>", objectFrom, linkType))
+			for _, objectTo := range out {
+				links[objectFrom+objectTo+linkType] = link{
+					from: objectFrom,
+					to:   objectTo,
+					lt:   linkType,
+				}
+			}
+		}
+	}
+
+	for id := range objects {
+		body, err := ctx.GlobalCache.GetValueAsJSON(id)
+		if err != nil {
+			system.MsgOnErrorReturn(err)
+			body = easyjson.NewJSONObject().GetPtr()
+		}
+
+		if err := createLowLevelObject(ctx, prefix+id, body); err != nil {
+			system.MsgOnErrorReturn(err)
+			continue
+		}
+	}
+
+	for _, l := range links {
+		body, err := ctx.GlobalCache.GetValueAsJSON(fmt.Sprintf("%s.out.ltp_oid-bdy.%s.%s", l.from, l.lt, l.to))
+		if err != nil {
+			system.MsgOnErrorReturn(err)
+			body = easyjson.NewJSONObject().GetPtr()
+		}
+
+		from := prefix + l.from
+		to := prefix + l.to
+
+		if err := createLowLevelLink(ctx, from, to, l.lt, l.objectLt, *body); err != nil {
+			system.MsgOnErrorReturn(err)
+			continue
+		}
+	}
+
+	if err := createLowLevelLink(ctx, txID, prefix+BUILT_IN_ROOT, "graph", "", easyjson.NewJSONObject()); err != nil {
+		return err
 	}
 
 	return nil

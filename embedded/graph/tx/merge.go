@@ -53,9 +53,9 @@ func merge(ctx *sfplugins.StatefunContextProcessor, txGraphID string) error {
 
 		normalID := normalParent + normalChild + normalLt
 
-		body, err := ctx.GlobalCache.GetValueAsJSON(l.linkID)
+		body, err := ctx.GlobalCache.GetValueAsJSON(l.cacheID)
 		if err != nil {
-			return fmt.Errorf("tx graph link %s: %w", l.linkID, err)
+			return fmt.Errorf("tx graph link %s: %w", l.cacheID, err)
 		}
 
 		if _, ok := main.links[normalID]; ok {
