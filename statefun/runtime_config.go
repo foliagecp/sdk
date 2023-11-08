@@ -7,35 +7,35 @@ import (
 )
 
 const (
-	NatsURL                      = "nats://nats:foliage@nats:4222"
-	RuntimeName                  = "foliage_runtime"
-	KeyValueStoreBucketName      = RuntimeName + "_kv_store"
-	FunctionTypesStreamName      = RuntimeName + "_stream"
-	KVMutexLifetimeSec           = 120
-	KVMutexIsOldPollingInterval  = 10
-	FunctionTypeIDLifetimeMs     = 5000
-	IngressCallGolangSyncTimeout = 60
+	NatsURL                     = "nats://nats:foliage@nats:4222"
+	RuntimeName                 = "foliage_runtime"
+	KeyValueStoreBucketName     = RuntimeName + "_kv_store"
+	FunctionTypesStreamName     = RuntimeName + "_stream"
+	KVMutexLifetimeSec          = 120
+	KVMutexIsOldPollingInterval = 10
+	FunctionTypeIDLifetimeMs    = 5000
+	RequestTimeoutSec           = 60
 )
 
 type RuntimeConfig struct {
-	natsURL                         string
-	keyValueStoreBucketName         string
-	functionTypesStreamName         string
-	kvMutexLifeTimeSec              int
-	kvMutexIsOldPollingIntervalSec  int
-	functionTypeIDLifetimeMs        int
-	ingressCallGoLangSyncTimeoutSec int
+	natsURL                        string
+	keyValueStoreBucketName        string
+	functionTypesStreamName        string
+	kvMutexLifeTimeSec             int
+	kvMutexIsOldPollingIntervalSec int
+	functionTypeIDLifetimeMs       int
+	requestTimeoutSec              int
 }
 
 func NewRuntimeConfig() *RuntimeConfig {
 	return &RuntimeConfig{
-		natsURL:                         NatsURL,
-		keyValueStoreBucketName:         KeyValueStoreBucketName,
-		functionTypesStreamName:         FunctionTypesStreamName,
-		kvMutexLifeTimeSec:              KVMutexLifetimeSec,
-		kvMutexIsOldPollingIntervalSec:  KVMutexIsOldPollingInterval,
-		functionTypeIDLifetimeMs:        FunctionTypeIDLifetimeMs,
-		ingressCallGoLangSyncTimeoutSec: IngressCallGolangSyncTimeout,
+		natsURL:                        NatsURL,
+		keyValueStoreBucketName:        KeyValueStoreBucketName,
+		functionTypesStreamName:        FunctionTypesStreamName,
+		kvMutexLifeTimeSec:             KVMutexLifetimeSec,
+		kvMutexIsOldPollingIntervalSec: KVMutexIsOldPollingInterval,
+		functionTypeIDLifetimeMs:       FunctionTypeIDLifetimeMs,
+		requestTimeoutSec:              RequestTimeoutSec,
 	}
 }
 
@@ -74,7 +74,7 @@ func (ro *RuntimeConfig) SetFunctionTypeIDLifetimeMs(functionTypeIDLifetimeMs in
 	return ro
 }
 
-func (ro *RuntimeConfig) SetIngressCallGoLangSyncTimeoutSec(ingressCallGoLangSyncTimeoutSec int) *RuntimeConfig {
-	ro.ingressCallGoLangSyncTimeoutSec = ingressCallGoLangSyncTimeoutSec
+func (ro *RuntimeConfig) SetRequestTimeoutSec(requestTimeoutSec int) *RuntimeConfig {
+	ro.requestTimeoutSec = requestTimeoutSec
 	return ro
 }
