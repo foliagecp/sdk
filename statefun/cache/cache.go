@@ -500,7 +500,7 @@ func (cs *Store) GetValueUpdateTime(key string) int64 {
 	var result int64 = -1
 
 	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, false); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
-		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken, true); ok {
+		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken, true); ok && csv.valueExists {
 			csv.Lock("GetValueUpdateTime")
 			result = csv.valueUpdateTime
 			csv.Unlock("GetValueUpdateTime")
