@@ -48,7 +48,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 		resp, err := r.nc.Request(
 			fmt.Sprintf("service.%s.%s", targetTypename, targetID),
 			buildNatsData(callerTypename, callerID, payload, options),
-			time.Duration(r.config.ingressCallGoLangSyncTimeoutSec)*time.Second,
+			time.Duration(r.config.requestTimeoutSec)*time.Second,
 		)
 		if err == nil {
 			if j, ok := easyjson.JSONFromBytes(resp.Data); ok {
@@ -84,7 +84,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 					return resultJSON, nil
 				}
 				return nil, fmt.Errorf("target function typename \"%s\" with id \"%s\" resufes to handle request", targetTypename, targetID)
-			case <-time.After(time.Duration(r.config.ingressCallGoLangSyncTimeoutSec) * time.Second):
+			case <-time.After(time.Duration(r.config.requestTimeoutSec) * time.Second):
 				return nil, fmt.Errorf("timeout occured while requesting function typename \"%s\" with id \"%s\"", targetTypename, targetID)
 			}
 		} else {
