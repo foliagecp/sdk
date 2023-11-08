@@ -41,19 +41,19 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 
 	statefun.NewFunctionType(runtime, "functions.graph.tx.type.create", CreateType, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 	statefun.NewFunctionType(runtime, "functions.graph.tx.type.update", UpdateType, *statefun.NewFunctionTypeConfig().SetServiceState(true))
-	statefun.NewFunctionType(runtime, "functions.graph.tx.type.delete", nil, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.graph.tx.type.delete", DeleteType, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
 	statefun.NewFunctionType(runtime, "functions.graph.tx.object.create", CreateObject, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 	statefun.NewFunctionType(runtime, "functions.graph.tx.object.update", UpdateObject, *statefun.NewFunctionTypeConfig().SetServiceState(true))
-	statefun.NewFunctionType(runtime, "functions.graph.tx.object.delete", nil, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.graph.tx.object.delete", DeleteObject, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
 	statefun.NewFunctionType(runtime, "functions.graph.tx.types.link.create", CreateTypesLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 	statefun.NewFunctionType(runtime, "functions.graph.tx.types.link.update", UpdateTypesLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
-	statefun.NewFunctionType(runtime, "functions.graph.tx.types.link.delete", nil, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.graph.tx.types.link.delete", DeleteTypesLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
 	statefun.NewFunctionType(runtime, "functions.graph.tx.objects.link.create", CreateObjectsLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 	statefun.NewFunctionType(runtime, "functions.graph.tx.objects.link.update", UpdateObjectsLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
-	statefun.NewFunctionType(runtime, "functions.graph.tx.objects.link.delete", nil, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.graph.tx.objects.link.delete", DeleteObjectsLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
 	statefun.NewFunctionType(runtime, "functions.graph.tx.commit", Commit, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 	statefun.NewFunctionType(runtime, "functions.graph.tx.push", Push, *statefun.NewFunctionTypeConfig().SetServiceState(true))
@@ -204,7 +204,6 @@ func CreateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 	{
 		"id": string,
 		"body": json
-		"strategy": string, not impl
 	}
 
 clone type from main graph if not exists
@@ -262,6 +261,50 @@ func UpdateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 
 /*
 	{
+		"id": string
+	}
+*/
+func DeleteType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+	txID := contextProcessor.Self.ID
+	payload := contextProcessor.Payload
+
+	typeID, ok := payload.GetByPath("id").AsString()
+	if !ok {
+		replyError(contextProcessor, errInvalidArgument)
+		return
+	}
+
+	prefix := generatePrefix(txID)
+	txType := prefix + typeID
+	meta := generateDeletedMeta()
+
+	// delete objects which implement this type
+	for _, v := range findTypeObjects(contextProcessor, txType) {
+		updatePayload := easyjson.NewJSONObject()
+		updatePayload.SetByPath("body", meta)
+
+		result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.object.update", v, &updatePayload, nil)
+		if err := checkRequestError(result, err); err != nil {
+			replyError(contextProcessor, err)
+			return
+		}
+
+	}
+
+	updatePayload := easyjson.NewJSONObject()
+	updatePayload.SetByPath("body", meta)
+
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.type.update", txType, &updatePayload, nil)
+	if err := checkRequestError(result, err); err != nil {
+		replyError(contextProcessor, err)
+		return
+	}
+
+	replyOk(contextProcessor)
+}
+
+/*
+	{
 		"id": string,
 		"origin_type": string,
 		"body": json
@@ -300,7 +343,6 @@ func CreateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 	{
 		"id": string,
 		"body": json
-		"strategy": string, not impl
 	}
 
 clone object from main graph if not exists
@@ -353,6 +395,37 @@ func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 
 	updatePayload := easyjson.NewJSONObject()
 	updatePayload.SetByPath("body", payload.GetByPath("body"))
+
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.object.update", txObject, &updatePayload, nil)
+	if err := checkRequestError(result, err); err != nil {
+		replyError(contextProcessor, err)
+		return
+	}
+
+	replyOk(contextProcessor)
+}
+
+/*
+	{
+		"id":string
+	}
+*/
+func DeleteObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+	txID := contextProcessor.Self.ID
+	payload := contextProcessor.Payload
+
+	objectID, ok := payload.GetByPath("id").AsString()
+	if !ok {
+		replyError(contextProcessor, errInvalidArgument)
+		return
+	}
+
+	prefix := generatePrefix(txID)
+	txObject := prefix + objectID
+	meta := generateDeletedMeta()
+
+	updatePayload := easyjson.NewJSONObject()
+	updatePayload.SetByPath("body", meta)
 
 	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.object.update", txObject, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
@@ -448,7 +521,7 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 		updatePayload.SetByPath("body", payload.GetByPath("body"))
 	}
 
-	linkID := fmt.Sprintf("%s.out.ltp_oid-bdy.%s.%s", txFrom, txTo, txTo)
+	linkID := fmt.Sprintf("%s.out.ltp_oid-bdy.__type.%s", txFrom, txTo)
 
 	// if link to update doesn't exists, so we need to clone area from main graph
 	if _, err := contextProcessor.GlobalCache.GetValue(linkID); err != nil {
@@ -481,6 +554,69 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 		// clone objects
 		//}
 	}
+
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.types.link.update", txFrom, &updatePayload, nil)
+	if err := checkRequestError(result, err); err != nil {
+		replyError(contextProcessor, err)
+		return
+	}
+
+	replyOk(contextProcessor)
+}
+
+/*
+	{
+		"from": string,
+		"to": string,
+	}
+*/
+func DeleteTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+	txID := contextProcessor.Self.ID
+	payload := contextProcessor.Payload
+
+	from, ok := payload.GetByPath("from").AsString()
+	if !ok {
+		replyError(contextProcessor, errInvalidArgument)
+		return
+	}
+
+	to, ok := payload.GetByPath("to").AsString()
+	if !ok {
+		replyError(contextProcessor, errInvalidArgument)
+		return
+	}
+
+	prefix := generatePrefix(txID)
+	txFrom := prefix + from
+	txTo := prefix + to
+	meta := generateDeletedMeta()
+
+	// delete objects links
+	for _, objectID := range findTypeObjects(contextProcessor, txFrom) {
+		links := contextProcessor.GlobalCache.GetKeysByPattern(fmt.Sprintf("%s.out.ltp_oid-bdy.%s.>", objectID, txTo))
+		for _, v := range links {
+			split := strings.Split(v, ".")
+			if len(split) == 0 {
+				continue
+			}
+
+			id := split[len(split)-1]
+
+			updatePayload := easyjson.NewJSONObject()
+			updatePayload.SetByPath("to", easyjson.NewJSON(id))
+			updatePayload.SetByPath("body", meta)
+
+			result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.objects.link.update", objectID, &updatePayload, nil)
+			if err := checkRequestError(result, err); err != nil {
+				replyError(contextProcessor, err)
+				return
+			}
+		}
+	}
+
+	updatePayload := easyjson.NewJSONObject()
+	updatePayload.SetByPath("to", easyjson.NewJSON(txTo))
+	updatePayload.SetByPath("body", meta)
 
 	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.types.link.update", txFrom, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
@@ -601,6 +737,46 @@ func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	if payload.PathExists("body") {
 		updatePayload.SetByPath("body", payload.GetByPath("body"))
 	}
+
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.objects.link.update", txFrom, &updatePayload, nil)
+	if err := checkRequestError(result, err); err != nil {
+		replyError(contextProcessor, err)
+		return
+	}
+
+	replyOk(contextProcessor)
+}
+
+/*
+	{
+		"from": string,
+		"to": string,
+	}
+*/
+func DeleteObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+	txID := contextProcessor.Self.ID
+	payload := contextProcessor.Payload
+
+	from, ok := payload.GetByPath("from").AsString()
+	if !ok {
+		replyError(contextProcessor, errInvalidArgument)
+		return
+	}
+
+	to, ok := payload.GetByPath("to").AsString()
+	if !ok {
+		replyError(contextProcessor, errInvalidArgument)
+		return
+	}
+
+	prefix := generatePrefix(txID)
+	txFrom := prefix + from
+	txTo := prefix + to
+	meta := generateDeletedMeta()
+
+	updatePayload := easyjson.NewJSONObject()
+	updatePayload.SetByPath("to", easyjson.NewJSON(txTo))
+	updatePayload.SetByPath("body", meta)
 
 	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.objects.link.update", txFrom, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
