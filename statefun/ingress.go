@@ -61,9 +61,10 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 
 	goLangLocalRequest := func() (*easyjson.JSON, error) {
 		if targetFT, ok := r.registeredFunctionTypes[targetTypename]; ok {
-			if !targetFT.config.serviceActive {
+			// TODO: localGolangServiceActive ???
+			/*if !targetFT.config.serviceActive {
 				return nil, fmt.Errorf("callFunctionGolangSync cannot request function with the typename %s, not running as a service", callerTypename)
-			}
+			}*/
 
 			resultJSONChannel := make(chan *easyjson.JSON)
 
