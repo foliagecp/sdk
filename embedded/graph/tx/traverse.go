@@ -12,9 +12,9 @@ type state struct {
 	links   map[string]link     // low level links
 }
 
-func (s state) isEmpty() bool {
+/*func (s state) isEmpty() bool {
 	return len(s.objects) == 0 && len(s.links) == 0
-}
+}*/
 
 func (s state) initBuiltIn() {
 	s.objects[BUILT_IN_ROOT] = struct{}{}
