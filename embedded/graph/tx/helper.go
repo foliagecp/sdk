@@ -8,6 +8,7 @@ import (
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/embedded/graph/common"
 	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
+	"github.com/foliagecp/sdk/statefun/system"
 )
 
 func cloneTypeFromMainGraphToTx(ctx *sfplugins.StatefunContextProcessor, txID, src, dst string) error {
@@ -160,4 +161,31 @@ func checkRequestError(result *easyjson.JSON, err error) error {
 	}
 
 	return nil
+}
+
+func findTypeObjects(ctx *sfplugins.StatefunContextProcessor, typeID string) []string {
+	pattern := typeID + ".out.ltp_oid-bdy.__object.>"
+
+	keys := ctx.GlobalCache.GetKeysByPattern(pattern)
+	if len(keys) == 0 {
+		return []string{}
+	}
+
+	out := make([]string, 0, len(keys))
+	for _, v := range keys {
+		split := strings.Split(v, ".")
+		out = append(out, split[len(split)-1])
+	}
+
+	return out
+}
+
+func generateDeletedMeta() easyjson.JSON {
+	now := system.GetCurrentTimeNs()
+
+	metaBody := easyjson.NewJSONObject()
+	metaBody.SetByPath("status", easyjson.NewJSON("deleted"))
+	metaBody.SetByPath("time", easyjson.NewJSON(now))
+
+	return easyjson.NewJSONObjectWithKeyValue("__meta", metaBody)
 }
