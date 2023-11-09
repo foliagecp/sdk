@@ -30,13 +30,17 @@ func merge(ctx *sfplugins.StatefunContextProcessor, txGraphID, mode string) erro
 		if _, ok := main.objects[normalID]; ok {
 			// check for delete
 			// otherwise, update
-			// TODO: use high level api?
-			if err := updateLowLevelObject(ctx, mode, normalID, body); err != nil {
-				return fmt.Errorf("update main graph object %s: %w", normalID, err)
+			if body.GetByPath("__meta.status").AsStringDefault("") == "deleted" {
+				if err := deleteLowLevelObject(ctx, normalID); err != nil {
+					return fmt.Errorf("delete main graph object %s: %w", normalID, err)
+				}
+			} else {
+				if err := updateLowLevelObject(ctx, mode, normalID, body); err != nil {
+					return fmt.Errorf("update main graph object %s: %w", normalID, err)
+				}
 			}
 		} else {
 			// create
-			// TODO: use high level api?
 			if err := createLowLevelObject(ctx, normalID, body); err != nil {
 				return fmt.Errorf("create main graph object %s: %w", normalID, err)
 			}
@@ -58,13 +62,17 @@ func merge(ctx *sfplugins.StatefunContextProcessor, txGraphID, mode string) erro
 		if _, ok := main.links[normalID]; ok {
 			// check for delete
 			// otherwise, update
-
-			if err := updateLowLevelLink(ctx, normalParent, normalChild, normalLt, *body); err != nil {
-				return fmt.Errorf("update main link %s: %w", normalID, err)
+			if body.GetByPath("__meta.status").AsStringDefault("") == "deleted" {
+				if err := deleteLowLevelLink(ctx, normalParent, normalChild, normalLt); err != nil {
+					return fmt.Errorf("delete main graph link %s: %w", normalID, err)
+				}
+			} else {
+				if err := updateLowLevelLink(ctx, normalParent, normalChild, normalLt, *body); err != nil {
+					return fmt.Errorf("update main link %s: %w", normalID, err)
+				}
 			}
 		} else {
 			// create
-
 			if err := createLowLevelLink(ctx, normalParent, normalChild, normalLt, "", *body); err != nil {
 				return fmt.Errorf("create main graph link %s: %w", normalID, err)
 			}

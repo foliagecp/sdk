@@ -93,6 +93,20 @@ func updateLowLevelLink(ctx *sfplugins.StatefunContextProcessor, from, to, lt st
 	return nil
 }
 
+func deleteLowLevelLink(ctx *sfplugins.StatefunContextProcessor, from, to, linkType string) error {
+	const op = "functions.graph.ll.api.link.delete"
+
+	payload := easyjson.NewJSONObject()
+	payload.SetByPath("descendant_uuid", easyjson.NewJSON(to))
+	payload.SetByPath("link_type", easyjson.NewJSON(linkType))
+
+	if _, err := ctx.Request(sfplugins.GolangLocalRequest, op, from, &payload, nil); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func createLowLevelObject(ctx *sfplugins.StatefunContextProcessor, id string, body *easyjson.JSON) error {
 	const op = "functions.graph.ll.api.object.create"
 
@@ -112,6 +126,18 @@ func updateLowLevelObject(ctx *sfplugins.StatefunContextProcessor, mode, id stri
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("body", *body)
 	payload.SetByPath("mode", easyjson.NewJSON(mode))
+
+	if _, err := ctx.Request(sfplugins.GolangLocalRequest, op, id, &payload, nil); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func deleteLowLevelObject(ctx *sfplugins.StatefunContextProcessor, id string) error {
+	const op = "functions.graph.ll.api.object.delete"
+
+	payload := easyjson.NewJSONObject()
 
 	if _, err := ctx.Request(sfplugins.GolangLocalRequest, op, id, &payload, nil); err != nil {
 		return err
