@@ -409,6 +409,8 @@ func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 	{
 		"id":string
 	}
+
+TODO: mark for delete all link from/in object
 */
 func DeleteObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	txID := contextProcessor.Self.ID
