@@ -18,6 +18,7 @@ func merge(ctx *sfplugins.StatefunContextProcessor, txGraphID, mode string) erro
 
 	main := graphState(ctx, BUILT_IN_ROOT)
 	txGraph := graphState(ctx, txGraphRoot)
+	deleted := make(map[string]struct{})
 
 	for k := range txGraph.objects {
 		body, err := ctx.GlobalCache.GetValueAsJSON(k)
@@ -31,6 +32,8 @@ func merge(ctx *sfplugins.StatefunContextProcessor, txGraphID, mode string) erro
 			// check for delete
 			// otherwise, update
 			if body.GetByPath("__meta.status").AsStringDefault("") == "deleted" {
+				deleted[normalID] = struct{}{}
+
 				if err := deleteLowLevelObject(ctx, normalID); err != nil {
 					return fmt.Errorf("delete main graph object %s: %w", normalID, err)
 				}
@@ -50,8 +53,16 @@ func merge(ctx *sfplugins.StatefunContextProcessor, txGraphID, mode string) erro
 	for _, l := range txGraph.links {
 		normalParent := strings.TrimPrefix(l.from, prefix)
 		normalChild := strings.TrimPrefix(l.to, prefix)
-		normalLt := strings.TrimPrefix(l.lt, prefix)
 
+		if _, ok := deleted[normalParent]; ok {
+			continue
+		}
+
+		if _, ok := deleted[normalChild]; ok {
+			continue
+		}
+
+		normalLt := strings.TrimPrefix(l.lt, prefix)
 		normalID := normalParent + normalChild + normalLt
 
 		body, err := ctx.GlobalCache.GetValueAsJSON(l.cacheID)
