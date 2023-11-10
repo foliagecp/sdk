@@ -54,13 +54,13 @@ func (ft *FunctionType) sendMsg(id string, msg FunctionTypeMsg) {
 			var err error
 			ft.typenameLockRevisionID, err = FunctionTypeMutexLock(ft, true)
 			if err != nil {
-				if msg.RefusalCallback != nil {
-					msg.RefusalCallback()
-				}
 				fmt.Printf("WARNING: function with type %s has received a message, but this typename was already locked! Skipping message...\n", ft.name)
 				// Preventing from rapidly calling this function over and over again if no function
 				// in other runtime that can handle this message and kv mutex is already dead
-				time.Sleep(time.Duration(ft.config.msgAckWaitMs) * time.Millisecond)
+				time.Sleep(time.Duration(ft.config.msgAckWaitMs/2) * time.Millisecond) // Sleep duration must be guarantee less than msgAckWaitMs, otherwise may miss doing Nak (via RefusalCallback) in time
+				if msg.RefusalCallback != nil {
+					msg.RefusalCallback()
+				}
 				return
 			}
 			ft.config.balanced = true
