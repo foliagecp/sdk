@@ -48,7 +48,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 		resp, err := r.nc.Request(
 			fmt.Sprintf("service.%s.%s", targetTypename, targetID),
 			buildNatsData(callerTypename, callerID, payload, options),
-			time.Duration(r.config.ingressCallGoLangSyncTimeoutSec)*time.Second,
+			time.Duration(r.config.requestTimeoutSec)*time.Second,
 		)
 		if err == nil {
 			if j, ok := easyjson.JSONFromBytes(resp.Data); ok {
@@ -61,6 +61,11 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 
 	goLangLocalRequest := func() (*easyjson.JSON, error) {
 		if targetFT, ok := r.registeredFunctionTypes[targetTypename]; ok {
+			// TODO: localGolangServiceActive ???
+			/*if !targetFT.config.serviceActive {
+				return nil, fmt.Errorf("callFunctionGolangSync cannot request function with the typename %s, not running as a service", callerTypename)
+			}*/
+
 			resultJSONChannel := make(chan *easyjson.JSON)
 
 			functionMsg := FunctionTypeMsg{
@@ -84,11 +89,11 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 					return resultJSON, nil
 				}
 				return nil, fmt.Errorf("target function typename \"%s\" with id \"%s\" resufes to handle request", targetTypename, targetID)
-			case <-time.After(time.Duration(r.config.ingressCallGoLangSyncTimeoutSec) * time.Second):
+			case <-time.After(time.Duration(r.config.requestTimeoutSec) * time.Second):
 				return nil, fmt.Errorf("timeout occured while requesting function typename \"%s\" with id \"%s\"", targetTypename, targetID)
 			}
 		} else {
-			return nil, fmt.Errorf("callFunctionGolangSync cannot call function with the typename %s, not registered", callerTypename)
+			return nil, fmt.Errorf("callFunctionGolangSync cannot request function with the typename %s, not registered", callerTypename)
 		}
 	}
 
