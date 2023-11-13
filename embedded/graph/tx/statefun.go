@@ -121,16 +121,25 @@ func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 
 /*
 	payload:{
+		"debug": bool, optional, default: "false"
 		"mode": "merge" | "replace", optional, default: "merge"
 	}
 */
 // exec on transaction
 func Commit(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	// add validating stage
-	mode := contextProcessor.Payload.GetByPath("mode").AsStringDefault("merge")
-	payload := easyjson.NewJSONObjectWithKeyValue("mode", easyjson.NewJSON(mode))
+	payload := contextProcessor.Payload
+	push := easyjson.NewJSONObject()
 
-	system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.tx.push", _TX_MASTER, payload.GetPtr(), nil))
+	if mode, ok := payload.GetByPath("mode").AsString(); ok {
+		push.SetByPath("mode", easyjson.NewJSON(mode))
+	}
+
+	if debug, ok := payload.GetByPath("debug").AsBool(); ok {
+		push.SetByPath("debug", easyjson.NewJSON(debug))
+	}
+
+	system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.tx.push", _TX_MASTER, &push, nil))
 
 	qid := common.GetQueryID(contextProcessor)
 	reply := easyjson.NewJSONObject()
@@ -140,6 +149,7 @@ func Commit(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCo
 
 /*
 	payload:{
+		"debug": bool, optional, default: "false"
 		"mode": "merge" | "replace", optional, default: "merge"
 	}
 */
@@ -149,23 +159,33 @@ func Push(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCont
 		return
 	}
 
-	mode := contextProcessor.Payload.GetByPath("mode").AsStringDefault("merge")
+	opts := make([]mergerOpt, 0)
+
+	if mode, ok := contextProcessor.Payload.GetByPath("mode").AsString(); ok {
+		opts = append(opts, withMode(mode))
+	}
+
+	if debug, ok := contextProcessor.Payload.GetByPath("debug").AsBool(); ok && debug {
+		opts = append(opts, withDebug())
+	}
 
 	// TODO: check tx id
 	txID := contextProcessor.Caller.ID
+	merger := newMerger(txID, opts...)
 
-	if err := merge(contextProcessor, txID, mode); err != nil {
+	if err := merger.Merge(contextProcessor); err != nil {
 		replyError(contextProcessor, err)
 		return
 	}
 
 	// delete success tx
-	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.delete", txID, easyjson.NewJSONObject().GetPtr(), nil); err != nil {
+	delete := easyjson.NewJSONObject()
+	delete.SetByPath("mode", easyjson.NewJSON("cascade"))
+
+	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.object.delete", txID, &delete, nil); err != nil {
 		replyError(contextProcessor, err)
 		return
 	}
-
-	fmt.Println("[INFO] Merge Done!")
 
 	replyOk(contextProcessor)
 }

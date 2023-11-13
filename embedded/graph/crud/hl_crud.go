@@ -128,7 +128,7 @@ func CreateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 
 /*
 	{
-		"strategy": string, optional, default: DeepMerge
+		"mode": string, optional, default: merge
 		"body": json
 	}
 */
@@ -145,7 +145,59 @@ func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 	replyOk(contextProcessor)
 }
 
+/*
+	{
+		"mode": "vertex" | "cascade", optional, default: vertex
+	}
+*/
 func DeleteObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+	selfID := contextProcessor.Self.ID
+	payload := contextProcessor.Payload
+
+	mode := payload.GetByPath("mode").AsStringDefault("vertex")
+	switch mode {
+	case "cascade":
+		visited := map[string]struct{}{
+			selfID: {},
+		}
+		queue := []string{selfID}
+
+		for len(queue) > 0 {
+			elem := queue[0]
+			pattern := elem + ".out.ltp_oid-bdy.>"
+			children := contextProcessor.GlobalCache.GetKeysByPattern(pattern)
+
+			for _, v := range children {
+				split := strings.Split(v, ".")
+				if len(split) == 0 {
+					continue
+				}
+
+				id := split[len(split)-1]
+
+				if _, ok := visited[id]; ok {
+					continue
+				}
+
+				visited[id] = struct{}{}
+				queue = append(queue, id)
+			}
+
+			queue = queue[1:]
+			if len(queue) == 0 {
+				break
+			}
+
+			empty := easyjson.NewJSONObject()
+			result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.delete", elem, &empty, nil)
+			if err := checkRequestError(result, err); err != nil {
+				replyError(contextProcessor, err)
+				return
+			}
+		}
+	case "vertex":
+	}
+
 	replyOk(contextProcessor)
 }
 
