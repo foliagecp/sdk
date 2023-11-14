@@ -363,6 +363,7 @@ func CreateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 	{
 		"id": string,
 		"body": json
+		"mode": "merge" | "replace", optional, default: "merge"
 	}
 
 clone object from main graph if not exists
@@ -415,6 +416,10 @@ func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 
 	updatePayload := easyjson.NewJSONObject()
 	updatePayload.SetByPath("body", payload.GetByPath("body"))
+
+	if mode, ok := payload.GetByPath("mode").AsString(); ok {
+		updatePayload.SetByPath("mode", easyjson.NewJSON(mode))
+	}
 
 	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.object.update", txObject, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
