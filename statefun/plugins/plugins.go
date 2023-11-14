@@ -31,6 +31,11 @@ const (
 	GolangLocalRequest
 )
 
+type SyncReply struct {
+	With          func(*easyjson.JSON)
+	CancelDefault func()
+}
+
 type StatefunContextProcessor struct {
 	GlobalCache        *cache.Store
 	GetFunctionContext func() *easyjson.JSON
@@ -38,13 +43,13 @@ type StatefunContextProcessor struct {
 	GetObjectContext   func() *easyjson.JSON
 	SetObjectContext   func(*easyjson.JSON)
 	// TODO: DownstreamSignal(<function type>, <links filters>, <payload>, <options>)
-	Signal           func(SignalProvider, string, string, *easyjson.JSON, *easyjson.JSON) error
-	Request          func(RequestProvider, string, string, *easyjson.JSON, *easyjson.JSON) (*easyjson.JSON, error)
-	Self             StatefunAddress
-	Caller           StatefunAddress
-	Payload          *easyjson.JSON
-	Options          *easyjson.JSON
-	RequestReplyData *easyjson.JSON // when requested in function: nil - function was signaled, !nil - function was requested
+	Signal  func(SignalProvider, string, string, *easyjson.JSON, *easyjson.JSON) error
+	Request func(RequestProvider, string, string, *easyjson.JSON, *easyjson.JSON) (*easyjson.JSON, error)
+	Self    StatefunAddress
+	Caller  StatefunAddress
+	Payload *easyjson.JSON
+	Options *easyjson.JSON
+	Reply   *SyncReply // when requested in function: nil - function was signaled, !nil - function was requested
 }
 
 type StatefunExecutor interface {

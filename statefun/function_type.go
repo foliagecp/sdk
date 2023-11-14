@@ -142,9 +142,24 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 		}
 	}
 
-	typenameIDContextProcessor.RequestReplyData = nil
+	replyDataChannel := make(chan *easyjson.JSON, 1)
 	if msg.RequestCallback != nil {
-		typenameIDContextProcessor.RequestReplyData = easyjson.NewJSONObject().GetPtr()
+		typenameIDContextProcessor.Reply = &sfPlugins.SyncReply{}
+
+		replyDataChannel <- easyjson.NewJSONObject().GetPtr()
+		cancelReplyIfExists := func() {
+			select { // Remove old value if exists
+			case <-replyDataChannel:
+			default:
+			}
+		}
+		typenameIDContextProcessor.Reply.CancelDefault = func() {
+			cancelReplyIfExists()
+		}
+		typenameIDContextProcessor.Reply.With = func(data *easyjson.JSON) {
+			cancelReplyIfExists()
+			replyDataChannel <- data // Put new value
+		}
 	}
 
 	typenameIDContextProcessor.Payload = msg.Payload
@@ -166,7 +181,13 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 		msg.AckCallback(true)
 	}
 	if msg.RequestCallback != nil {
-		msg.RequestCallback(typenameIDContextProcessor.RequestReplyData)
+		var replyData *easyjson.JSON = nil
+		select {
+		case replyData = <-replyDataChannel:
+		case <-time.After(time.Duration(ft.runtime.config.requestTimeoutSec) * time.Second):
+			replyData.SetByPath("status", easyjson.NewJSON("timeout"))
+		}
+		msg.RequestCallback(replyData)
 	}
 
 	if !ft.config.balanceNeeded { // Use context mutex lock if function type is not typename balanced

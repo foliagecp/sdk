@@ -101,8 +101,8 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlu
 		contextProcessor.SetFunctionContext(functionContext)
 	}
 
-	if contextProcessor.RequestReplyData != nil { // Request call is being made
-		contextProcessor.RequestReplyData = easyjson.NewJSONObjectWithKeyValue("counter", easyjson.NewJSON(incrementValue)).GetPtr()
+	if contextProcessor.Reply != nil { // Request call is being made
+		contextProcessor.Reply.With(easyjson.NewJSONObjectWithKeyValue("counter", easyjson.NewJSON(incrementValue)).GetPtr())
 	}
 }
 
