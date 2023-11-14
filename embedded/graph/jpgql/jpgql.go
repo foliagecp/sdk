@@ -51,6 +51,10 @@ Reply:
 		result: []string // Found objects
 */
 func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
+	if contextProcessor.Reply != nil {
+		contextProcessor.Reply.CancelDefault()
+	}
+
 	jpgqlEvaluationTimeoutSec := 30
 	if v, ok := contextProcessor.Options.GetByPath("eval_timeout_sec").AsNumeric(); ok {
 		jpgqlEvaluationTimeoutSec = int(v)
@@ -418,6 +422,10 @@ Reply:
 		result: []string // Found objects
 */
 func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
+	if contextProcessor.Reply != nil {
+		contextProcessor.Reply.CancelDefault()
+	}
+
 	modifiedTypename := "jpgql_dcra"
 
 	jpgqlEvaluationTimeoutSec := 30
@@ -608,6 +616,6 @@ func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExec
 
 func RegisterAllFunctionTypes(runtime *statefun.Runtime, jpgqlEvaluationTimeoutSec int) {
 	options := easyjson.NewJSONObjectWithKeyValue("eval_timeout_sec", easyjson.NewJSON(jpgqlEvaluationTimeoutSec))
-	statefun.NewFunctionType(runtime, "functions.graph.ll.api.query.jpgql.ctra", LLAPIQueryJPGQLCallTreeResultAggregation, *statefun.NewFunctionTypeConfig().SetOptions(&options))
-	statefun.NewFunctionType(runtime, "functions.graph.ll.api.query.jpgql.dcra", LLAPIQueryJPGQLDirectCacheResultAggregation, *statefun.NewFunctionTypeConfig().SetOptions(&options))
+	statefun.NewFunctionType(runtime, "functions.graph.ll.api.query.jpgql.ctra", LLAPIQueryJPGQLCallTreeResultAggregation, *statefun.NewFunctionTypeConfig().SetOptions(&options).SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.graph.ll.api.query.jpgql.dcra", LLAPIQueryJPGQLDirectCacheResultAggregation, *statefun.NewFunctionTypeConfig().SetOptions(&options).SetServiceState(true))
 }

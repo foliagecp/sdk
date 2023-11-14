@@ -229,7 +229,7 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			fmt.Println(errorString)
 		}
 		result.SetByPath("result", easyjson.NewJSON(errorString))
-		contextProcessor.RequestReplyData = &result
+		common.ReplyQueryID(queryID, &result, contextProcessor)
 	} else {
 		var linkBody easyjson.JSON
 		if payload.GetByPath("link_body").IsObject() {
@@ -440,7 +440,7 @@ func LLAPILinkDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			fmt.Println(errorString)
 		}
 		result.SetByPath("result", easyjson.NewJSON(errorString))
-		contextProcessor.RequestReplyData = &result
+		common.ReplyQueryID(queryID, &result, contextProcessor)
 	} else {
 		var linkType string
 		if s, ok := payload.GetByPath("link_type").AsString(); ok {
