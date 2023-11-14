@@ -116,14 +116,17 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 			v, _ := v8.NewValue(sfejs.vw, int32(2))
 			return v
 		}
-
-		requestReplyDataStr := info.Args()[0].String()
-		requestReplyData, ok := easyjson.JSONFromString(requestReplyDataStr)
-		if !ok {
+		if sfejs.contextProcessor.Reply == nil {
 			v, _ := v8.NewValue(sfejs.vw, int32(3))
 			return v
 		}
-		sfejs.contextProcessor.RequestReplyData = &requestReplyData
+		requestReplyDataStr := info.Args()[0].String()
+		requestReplyData, ok := easyjson.JSONFromString(requestReplyDataStr)
+		if !ok {
+			v, _ := v8.NewValue(sfejs.vw, int32(4))
+			return v
+		}
+		sfejs.contextProcessor.Reply.With(&requestReplyData)
 		v, _ := v8.NewValue(sfejs.vw, int32(0))
 		return v
 	})
@@ -181,20 +184,6 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 			return v
 		}
 		v, _ := v8.NewValue(sfejs.vw, sfejs.contextProcessor.Options.ToString())
-		return v
-	})
-	// () -> string
-	statefunGetRequestReplyData := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//fmt.Printf("statefun_getRequestReplyData: %v", info.Args())
-		if len(info.Args()) != 0 {
-			fmt.Printf("statefun_getRequestReplyData error: requires no arguments but got %d\n", len(info.Args()))
-			v, _ := v8.NewValue(sfejs.vw, nil)
-			return v
-		}
-		v, _ := v8.NewValue(sfejs.vw, "")
-		if sfejs.contextProcessor.RequestReplyData != nil {
-			v, _ = v8.NewValue(sfejs.vw, sfejs.contextProcessor.RequestReplyData.ToString())
-		}
 		return v
 	})
 	// (int, string, string, string, string) -> int
@@ -290,7 +279,6 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 	system.MsgOnErrorReturn(global.Set("statefun_getObjectContext", statefunGetObjectContext))
 	system.MsgOnErrorReturn(global.Set("statefun_getPayload", statefunGetPayload))
 	system.MsgOnErrorReturn(global.Set("statefun_getOptions", statefunGetOptions))
-	system.MsgOnErrorReturn(global.Set("statefun_getRequestReplyData", statefunGetRequestReplyData))
 
 	system.MsgOnErrorReturn(global.Set("statefun_setObjectContext", statefunSetObjectContext))
 	system.MsgOnErrorReturn(global.Set("statefun_setFunctionContext", statefunSetFunctionContext))

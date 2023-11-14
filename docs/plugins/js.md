@@ -21,8 +21,6 @@ statefun_getObjectContext() -> string(json)
 statefun_getPayload() -> string(json)
 // Get the stateful function's JSON options
 statefun_getOptions() -> string(json)
-// Get the stateful function's request reply data if exists, otherwise empty string is returned
-statefun_getRequestReplyData() -> string(json)
 
 // Set the stateful function's JSON context
 statefun_setFunctionContext(<string of JSON>) -> int(status)
