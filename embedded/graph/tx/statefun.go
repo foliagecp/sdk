@@ -614,13 +614,27 @@ func DeleteTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	}
 
 	prefix := generatePrefix(txID)
+	meta := generateDeletedMeta()
+
 	txFrom := prefix + from
 	txTo := prefix + to
-	meta := generateDeletedMeta()
+	linkID := fmt.Sprintf("%s.out.ltp_oid-bdy.__type.%s", txFrom, txTo)
+
+	linkBody, err := contextProcessor.GlobalCache.GetValueAsJSON(linkID)
+	if err != nil {
+		replyError(contextProcessor, err)
+		return
+	}
+
+	linkType, ok := linkBody.GetByPath("link_type").AsString()
+	if !ok {
+		replyError(contextProcessor, errInvalidArgument)
+		return
+	}
 
 	// delete objects links
 	for _, objectID := range findTypeObjects(contextProcessor, txFrom) {
-		links := contextProcessor.GlobalCache.GetKeysByPattern(fmt.Sprintf("%s.out.ltp_oid-bdy.%s.>", objectID, txTo))
+		links := contextProcessor.GlobalCache.GetKeysByPattern(fmt.Sprintf("%s.out.ltp_oid-bdy.%s.>", objectID, linkType))
 		for _, v := range links {
 			split := strings.Split(v, ".")
 			if len(split) == 0 {
