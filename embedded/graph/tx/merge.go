@@ -46,7 +46,7 @@ func withMode(mode string) mergerOpt {
 func newMerger(txID string, opts ...mergerOpt) *merger {
 	m := &merger{
 		debug:                 false,
-		uninitedObjectsPolicy: strict,
+		uninitedObjectsPolicy: allowCreation,
 		txID:                  txID,
 		mode:                  "merge",
 	}
