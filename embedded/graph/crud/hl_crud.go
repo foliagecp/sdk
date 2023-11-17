@@ -33,7 +33,7 @@ func CreateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 	link := easyjson.NewJSONObject()
 	link.SetByPath("descendant_uuid", easyjson.NewJSON(selfID))
 	link.SetByPath("link_type", easyjson.NewJSON("__type"))
-	link.SetByPath("link_body", easyjson.NewJSONObject())
+	link.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{"TYPE_" + selfID}))
 
 	_, err = contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.create", prefix+"types", &link, nil)
 	if err != nil {
@@ -115,6 +115,11 @@ func CreateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 		link.SetByPath("descendant_uuid", easyjson.NewJSON(l.to))
 		link.SetByPath("link_type", easyjson.NewJSON(l.lt))
 		link.SetByPath("link_body", easyjson.NewJSONObject())
+
+		switch l.lt {
+		case "__type":
+			link.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{"TYPE_" + l.to}))
+		}
 
 		result, err = contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.create", l.from, &link, nil)
 		if err := checkRequestError(result, err); err != nil {
@@ -228,7 +233,7 @@ func CreateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	link.SetByPath("descendant_uuid", easyjson.NewJSON(to))
 	link.SetByPath("link_type", easyjson.NewJSON("__type"))
 	link.SetByPath("link_body.link_type", easyjson.NewJSON(objectLinkType))
-	link.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{fmt.Sprintf("TYPE_%s", to)}))
+	link.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{"TYPE_" + to}))
 
 	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.create", selfID, &link, nil)
 	if err := checkRequestError(result, err); err != nil {
@@ -272,7 +277,7 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	updateLinkPayload.SetByPath("descendant_uuid", easyjson.NewJSON(to))
 	updateLinkPayload.SetByPath("link_type", easyjson.NewJSON("__type"))
 	updateLinkPayload.SetByPath("link_body", body)
-	updateLinkPayload.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{fmt.Sprintf("TYPE_%s", to)}))
+	updateLinkPayload.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{"TYPE_" + to}))
 
 	needUpdateObjectLinkType := objectLinkType != ""
 	currentObjectLinkType := ""
