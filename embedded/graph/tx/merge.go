@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/foliagecp/easyjson"
 	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
@@ -142,6 +143,8 @@ func (m *merger) Merge(ctx *sfplugins.StatefunContextProcessor) error {
 			return fmt.Errorf("tx graph link %s: %w", l.cacheID, err)
 		}
 
+		removeTxPrefix(prefix, body)
+
 		if _, ok := main.links[normalID]; ok {
 			// check for delete
 			// otherwise, update
@@ -177,4 +180,18 @@ func (m *merger) Merge(ctx *sfplugins.StatefunContextProcessor) error {
 	fmt.Println("[INFO] Merge Done!", "dt", time.Since(start))
 
 	return nil
+}
+
+func removeTxPrefix(prefix string, linkBody *easyjson.JSON) {
+	if tags, ok := linkBody.GetByPath("tags").AsArrayString(); ok {
+		normalTags := make([]string, 0, len(tags))
+		for _, v := range tags {
+			normalTags = append(normalTags, strings.ReplaceAll(v, prefix, ""))
+		}
+		linkBody.SetByPath("tags", easyjson.JSONFromArray(normalTags))
+	}
+
+	if lt, ok := linkBody.GetByPath("link_type").AsString(); ok && strings.HasPrefix(lt, prefix) {
+		linkBody.SetByPath("link_type", easyjson.NewJSON(strings.TrimPrefix(prefix, lt)))
+	}
 }
