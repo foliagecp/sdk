@@ -42,7 +42,7 @@ func KeyMutexLock(runtime *Runtime, key string, errorOnLocked bool, debugCaller 
 	}
 	getKeyWatch := func(keyMutex string) (nats.KeyWatcher, error) {
 		kwWatchMutex.Lock()
-		return kv.Watch(keyMutex)
+		return kv.Watch(keyMutex, nats.IgnoreDeletes())
 	}
 	releaseKeyWatch := func(w nats.KeyWatcher) {
 		system.MsgOnErrorReturn(w.Stop())

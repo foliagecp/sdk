@@ -289,7 +289,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *
 	cs.ctx, cs.cancel = context.WithCancel(ctx)
 
 	storeUpdatesHandler := func(cs *Store) {
-		if w, err := kv.Watch(cacheConfig.kvStorePrefix + ".>"); err == nil {
+		if w, err := kv.Watch(cacheConfig.kvStorePrefix+".>", nats.IgnoreDeletes()); err == nil {
 			activeKVSync := true
 			for activeKVSync {
 				select {
@@ -711,7 +711,7 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 	appendKeysFromKV := func() {
 		cs.getKeysByPatternFromKVMutex.Lock()
 		//fmt.Println("!!! GetKeysByPattern started appendKeysFromKV")
-		if w, err := cs.kv.Watch(cs.toStoreKey(pattern)); err == nil {
+		if w, err := cs.kv.Watch(cs.toStoreKey(pattern), nats.IgnoreDeletes()); err == nil {
 			for entry := range w.Updates() {
 				if entry != nil && len(entry.Value()) >= 9 {
 					keys[cs.fromStoreKey(entry.Key())] = true
