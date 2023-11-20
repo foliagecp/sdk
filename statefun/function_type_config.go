@@ -55,6 +55,7 @@ func (ftc *FunctionTypeConfig) SetBalanceNeeded(balanceNeeded bool) *FunctionTyp
 }
 
 // TODO: if serviceActive == false GOLANG local call should also be not possible!
+// TODO: SetAccessebility([]string = "golang local request" | "golang local signal" | "jetstream signal" | "nats core request")
 func (ftc *FunctionTypeConfig) SetServiceState(active bool) *FunctionTypeConfig {
 	ftc.serviceActive = active
 	return ftc
