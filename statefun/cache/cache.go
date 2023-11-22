@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -18,6 +19,10 @@ import (
 
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
+)
+
+var (
+	keyValidationRegexp *regexp.Regexp = regexp.MustCompile(`^[a-zA-Z0-9=_-][a-zA-Z0-9=._-]+[a-zA-Z0-9=_-]$`)
 )
 
 type KeyValue struct {
@@ -623,6 +628,10 @@ func (cs *Store) TransactionEnd(transactionID string) {
 }*/
 
 func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV bool, customSetTime int64) bool {
+	if !keyValidationRegexp.MatchString(key) {
+		return false
+	}
+
 	if customSetTime < 0 {
 		customSetTime = system.GetCurrentTimeNs()
 	}
@@ -645,7 +654,11 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 	return false
 }
 
-func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTime int64, transactionID string) {
+func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTime int64, transactionID string) bool {
+	if !keyValidationRegexp.MatchString(key) {
+		return false
+	}
+
 	if customSetTime < 0 {
 		customSetTime = system.GetCurrentTimeNs()
 	}
@@ -675,6 +688,7 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 			fmt.Printf("ERROR SetValue: transaction with id=%s doesn't exist\n", transactionID)
 		}
 	}
+	return true
 }
 
 func (cs *Store) Destroy() {
