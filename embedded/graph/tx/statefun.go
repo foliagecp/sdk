@@ -38,6 +38,7 @@ var (
 
 func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 	statefun.NewFunctionType(runtime, "functions.graph.tx.begin", Begin, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.graph.tx.clone", Clone, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
 	statefun.NewFunctionType(runtime, "functions.graph.tx.type.create", CreateType, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 	statefun.NewFunctionType(runtime, "functions.graph.tx.type.update", UpdateType, *statefun.NewFunctionTypeConfig().SetServiceState(true))
@@ -62,23 +63,12 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 // exec only on txmaster
 // create tx_id, clone exist graph with tx_id prefix, return tx_id to client
 // tx_id = sha256(txmaster + nonce.String() + unixnano.String()).String()
-
-/*
-	payload:{
-		"clone": "min" | "full" | "with_types", optional, default: full
-		"types": []string, only with "clone":"with_types"
-	}
-*/
 func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	selfID := contextProcessor.Self.ID
 	if selfID != _TX_MASTER {
 		replyError(contextProcessor, errors.New("only on txmaster"))
 		return
 	}
-
-	payload := contextProcessor.Payload
-	cloneMod := payload.GetByPath("clone").AsStringDefault("full")
-	cloneWithTypes, _ := payload.GetByPath("types").AsArrayString()
 
 	body := contextProcessor.GetObjectContext()
 
@@ -96,17 +86,12 @@ func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 	txBody := easyjson.NewJSONObject()
 	txBody.SetByPath("created_at", easyjson.NewJSON(now))
 
-	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", txID, &txBody, nil); err != nil {
+	if err := createLowLevelObject(contextProcessor, txID, &txBody); err != nil {
 		replyError(contextProcessor, err)
 		return
 	}
 
 	if err := createLowLevelLink(contextProcessor, selfID, txID, "tx", "", easyjson.NewJSONObject()); err != nil {
-		replyError(contextProcessor, err)
-		return
-	}
-
-	if err := cloneGraph(contextProcessor, txID, cloneMod, cloneWithTypes...); err != nil {
 		replyError(contextProcessor, err)
 		return
 	}
@@ -117,6 +102,29 @@ func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 	reply.SetByPath("status", easyjson.NewJSON("ok"))
 	reply.SetByPath("id", easyjson.NewJSON(txID))
 	common.ReplyQueryID(qid, easyjson.NewJSONObjectWithKeyValue("payload", reply).GetPtr(), contextProcessor)
+}
+
+/*
+	payload:{
+		"mode": "min" | "full" | "with_types", optional, default: full
+		"types": []string, only with "clone":"with_types"
+	}
+*/
+func Clone(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+	txID := contextProcessor.Self.ID
+
+	payload := contextProcessor.Payload
+	cloneMod := payload.GetByPath("clone").AsStringDefault("full")
+	cloneWithTypes, _ := payload.GetByPath("types").AsArrayString()
+
+	fmt.Printf("[INFO] clone graph txID: %v payload: %s\n", txID, payload.ToString())
+
+	if err := cloneGraph(contextProcessor, txID, cloneMod, cloneWithTypes...); err != nil {
+		replyError(contextProcessor, err)
+		return
+	}
+
+	replyOk(contextProcessor)
 }
 
 /*
