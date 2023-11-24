@@ -42,6 +42,8 @@ type StatefunContextProcessor struct {
 	SetFunctionContext func(*easyjson.JSON)
 	GetObjectContext   func() *easyjson.JSON
 	SetObjectContext   func(*easyjson.JSON)
+	ObjectMutexLock    func(errorOnLocked bool) error
+	ObjectMutexUnlock  func() error
 	// TODO: DownstreamSignal(<function type>, <links filters>, <payload>, <options>)
 	Signal  func(SignalProvider, string, string, *easyjson.JSON, *easyjson.JSON) error
 	Request func(RequestProvider, string, string, *easyjson.JSON, *easyjson.JSON) (*easyjson.JSON, error)

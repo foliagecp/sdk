@@ -169,6 +169,37 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 	}
 	typenameIDContextProcessor.Caller = *msg.Caller
 
+	typenameIDContextProcessor.ObjectMutexLock = func(errorOnLocked bool) error {
+		revId, err := KeyMutexLock(ft.runtime, id, errorOnLocked, fmt.Sprintf("ft-%s:%s", ft.name, id))
+		if err == nil {
+			objCtx := ft.getContext(id)
+			objCtx.SetByPath("__lock_rev_id", easyjson.NewJSON(revId))
+			ft.setContext(id, objCtx)
+			return nil
+		}
+		return err
+	}
+	typenameIDContextProcessor.ObjectMutexUnlock = func() error {
+		objCtx := ft.getContext(id)
+		v, ok := objCtx.GetByPath("__lock_rev_id").AsNumeric()
+		if !ok {
+			return fmt.Errorf("object was not locked")
+		}
+		revId := uint64(v)
+
+		err := KeyMutexUnlock(ft.runtime, id, revId, fmt.Sprintf("ft-%s:%s", ft.name, id))
+		if err == nil {
+			objCtx := ft.getContext(id)
+			ok1 := objCtx.RemoveByPath("__lock_rev_id")
+			if !ok1 {
+				return fmt.Errorf("cannot remove __lock_rev_id")
+			}
+			ft.setContext(id, objCtx)
+			return nil
+		}
+		return err
+	}
+
 	// Calling typename handler function --------------------
 	if ft.executor != nil {
 		ft.logicHandler(ft.executor.GetForID(id), typenameIDContextProcessor)
