@@ -56,7 +56,8 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 	statefun.NewFunctionType(runtime, "functions.graph.tx.push", Push, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 }
 
-// exec only on arbitrary id=txid
+// exec on arbitrary id=txid,
+// id must not belong to an existing object in graph! otherwise object will be rewritten
 // create tx_id, clone exist graph with tx_id prefix, return tx_id to client
 
 /*
