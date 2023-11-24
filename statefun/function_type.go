@@ -170,34 +170,32 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 	typenameIDContextProcessor.Caller = *msg.Caller
 
 	typenameIDContextProcessor.ObjectMutexLock = func(errorOnLocked bool) error {
-		revId, err := KeyMutexLock(ft.runtime, id, errorOnLocked, fmt.Sprintf("ft-%s:%s", ft.name, id))
+		lockId := fmt.Sprintf("%s-lock", id)
+		revId, err := KeyMutexLock(ft.runtime, lockId, errorOnLocked, lockId)
 		if err == nil {
-			objCtx := ft.getContext(id)
+			objCtx := ft.getContext(lockId)
 			objCtx.SetByPath("__lock_rev_id", easyjson.NewJSON(revId))
-			ft.setContext(id, objCtx)
+			ft.setContext(lockId, objCtx)
 			return nil
 		}
 		return err
 	}
 	typenameIDContextProcessor.ObjectMutexUnlock = func() error {
-		objCtx := ft.getContext(id)
+		lockId := fmt.Sprintf("%s-lock", id)
+
+		objCtx := ft.getContext(lockId)
 		v, ok := objCtx.GetByPath("__lock_rev_id").AsNumeric()
 		if !ok {
-			return fmt.Errorf("object was not locked")
+			return fmt.Errorf("object:%s was not locked", lockId)
 		}
 		revId := uint64(v)
 
-		err := KeyMutexUnlock(ft.runtime, id, revId, fmt.Sprintf("ft-%s:%s", ft.name, id))
-		if err == nil {
-			objCtx := ft.getContext(id)
-			ok1 := objCtx.RemoveByPath("__lock_rev_id")
-			if !ok1 {
-				return fmt.Errorf("cannot remove __lock_rev_id")
-			}
-			ft.setContext(id, objCtx)
-			return nil
+		err := KeyMutexUnlock(ft.runtime, lockId, revId, lockId)
+		if err != nil {
+			return err
 		}
-		return err
+		ft.runtime.cacheStore.DeleteValue(lockId, true, -1, "")
+		return nil
 	}
 
 	// Calling typename handler function --------------------
