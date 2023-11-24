@@ -90,11 +90,6 @@ func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 	txBody := easyjson.NewJSONObject()
 	txBody.SetByPath("created_at", easyjson.NewJSON(now))
 
-	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", txID, &txBody, nil); err != nil {
-		replyError(contextProcessor, err)
-		return
-	}
-
 	if err := createLowLevelLink(contextProcessor, _TX_MASTER, txID, "tx", "", easyjson.NewJSONObject()); err != nil {
 		replyError(contextProcessor, err)
 		return
