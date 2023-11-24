@@ -17,6 +17,7 @@ var (
 	kwWatchMutex                sync.Mutex
 )
 
+// errorOnLocked - if mutex is elready locked, exit with error (do not wait for unlocking)
 func KeyMutexLock(runtime *Runtime, key string, errorOnLocked bool, debugCaller ...string) (uint64, error) {
 	caller := strings.Join(debugCaller, "-")
 	kv := runtime.kv
