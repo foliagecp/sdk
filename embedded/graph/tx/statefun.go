@@ -104,7 +104,6 @@ func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 
 	reply := easyjson.NewJSONObject()
 	reply.SetByPath("status", easyjson.NewJSON("ok"))
-	reply.SetByPath("id", easyjson.NewJSON(txID))
 	common.ReplyQueryID(qid, easyjson.NewJSONObjectWithKeyValue("payload", reply).GetPtr(), contextProcessor)
 }
 
