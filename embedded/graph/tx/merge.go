@@ -32,11 +32,11 @@ func withDebug() mergerOpt {
 	}
 }
 
-func withObjectsPolicy(policy objectsPolicy) mergerOpt {
+/*func withObjectsPolicy(policy objectsPolicy) mergerOpt {
 	return func(m *merger) {
 		m.uninitedObjectsPolicy = policy
 	}
-}
+}*/
 
 func withMode(mode string) mergerOpt {
 	return func(m *merger) {
