@@ -34,26 +34,26 @@ var (
 )
 
 func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
-	statefun.NewFunctionType(runtime, "functions.graph.tx.begin", Begin, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.begin", Begin, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
-	statefun.NewFunctionType(runtime, "functions.graph.tx.type.create", CreateType, *statefun.NewFunctionTypeConfig().SetServiceState(true))
-	statefun.NewFunctionType(runtime, "functions.graph.tx.type.update", UpdateType, *statefun.NewFunctionTypeConfig().SetServiceState(true))
-	statefun.NewFunctionType(runtime, "functions.graph.tx.type.delete", DeleteType, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.type.create", CreateType, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.type.update", UpdateType, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.type.delete", DeleteType, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
-	statefun.NewFunctionType(runtime, "functions.graph.tx.object.create", CreateObject, *statefun.NewFunctionTypeConfig().SetServiceState(true))
-	statefun.NewFunctionType(runtime, "functions.graph.tx.object.update", UpdateObject, *statefun.NewFunctionTypeConfig().SetServiceState(true))
-	statefun.NewFunctionType(runtime, "functions.graph.tx.object.delete", DeleteObject, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.object.create", CreateObject, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.object.update", UpdateObject, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.object.delete", DeleteObject, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
-	statefun.NewFunctionType(runtime, "functions.graph.tx.types.link.create", CreateTypesLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
-	statefun.NewFunctionType(runtime, "functions.graph.tx.types.link.update", UpdateTypesLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
-	statefun.NewFunctionType(runtime, "functions.graph.tx.types.link.delete", DeleteTypesLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.types.link.create", CreateTypesLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.types.link.update", UpdateTypesLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.types.link.delete", DeleteTypesLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
-	statefun.NewFunctionType(runtime, "functions.graph.tx.objects.link.create", CreateObjectsLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
-	statefun.NewFunctionType(runtime, "functions.graph.tx.objects.link.update", UpdateObjectsLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
-	statefun.NewFunctionType(runtime, "functions.graph.tx.objects.link.delete", DeleteObjectsLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.objects.link.create", CreateObjectsLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.objects.link.update", UpdateObjectsLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.objects.link.delete", DeleteObjectsLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
-	statefun.NewFunctionType(runtime, "functions.graph.tx.commit", Commit, *statefun.NewFunctionTypeConfig().SetServiceState(true))
-	statefun.NewFunctionType(runtime, "functions.graph.tx.push", Push, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.commit", Commit, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.push", Push, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 }
 
 // exec on arbitrary id=txid,
@@ -128,7 +128,7 @@ func Commit(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCo
 		push.SetByPath("debug", easyjson.NewJSON(debug))
 	}
 
-	system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.tx.push", _TX_MASTER, &push, nil))
+	system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.tx.push", _TX_MASTER, &push, nil))
 
 	qid := common.GetQueryID(contextProcessor)
 	reply := easyjson.NewJSONObject()
@@ -173,7 +173,7 @@ func Push(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCont
 	delete := easyjson.NewJSONObject()
 	delete.SetByPath("mode", easyjson.NewJSON("cascade"))
 
-	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.object.delete", txID, &delete, nil); err != nil {
+	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.object.delete", txID, &delete, nil); err != nil {
 		replyError(contextProcessor, err)
 		return
 	}
@@ -202,7 +202,7 @@ func CreateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 	createTypePayload.SetByPath("prefix", easyjson.NewJSON(prefix))
 	createTypePayload.SetByPath("body", payload.GetByPath("body"))
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.type.create", txTypeID, &createTypePayload, nil)
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.type.create", txTypeID, &createTypePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -251,7 +251,7 @@ func UpdateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 		createPayload.SetByPath("id", easyjson.NewJSON(typeID))
 		createPayload.SetByPath("body", *originBody)
 
-		result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.tx.type.create", txID, &createPayload, nil)
+		result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.tx.type.create", txID, &createPayload, nil)
 		if err := checkRequestError(result, err); err != nil {
 			replyError(contextProcessor, err)
 			return
@@ -261,7 +261,7 @@ func UpdateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 	updatePayload := easyjson.NewJSONObject()
 	updatePayload.SetByPath("body", payload.GetByPath("body"))
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.type.update", txType, &updatePayload, nil)
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.type.update", txType, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -294,7 +294,7 @@ func DeleteType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 		updatePayload := easyjson.NewJSONObject()
 		updatePayload.SetByPath("body", meta)
 
-		result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.object.update", v, &updatePayload, nil)
+		result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.object.update", v, &updatePayload, nil)
 		if err := checkRequestError(result, err); err != nil {
 			replyError(contextProcessor, err)
 			return
@@ -305,7 +305,7 @@ func DeleteType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 	updatePayload := easyjson.NewJSONObject()
 	updatePayload.SetByPath("body", meta)
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.type.update", txType, &updatePayload, nil)
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.type.update", txType, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -341,7 +341,7 @@ func CreateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 	createObjPayload.SetByPath("origin_type", payload.GetByPath("origin_type"))
 	createObjPayload.SetByPath("body", payload.GetByPath("body"))
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.object.create", txObjID, &createObjPayload, nil)
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.object.create", txObjID, &createObjPayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -398,7 +398,7 @@ func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 		createPayload.SetByPath("origin_type", easyjson.NewJSON(typeKeys[0]))
 		createPayload.SetByPath("body", *originBody)
 
-		result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.tx.object.create", txID, &createPayload, nil)
+		result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.tx.object.create", txID, &createPayload, nil)
 		if err := checkRequestError(result, err); err != nil {
 			replyError(contextProcessor, err)
 			return
@@ -412,7 +412,7 @@ func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 		updatePayload.SetByPath("mode", easyjson.NewJSON(mode))
 	}
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.object.update", txObject, &updatePayload, nil)
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.object.update", txObject, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -445,7 +445,7 @@ func DeleteObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 	updatePayload := easyjson.NewJSONObject()
 	updatePayload.SetByPath("body", meta)
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.object.update", txObject, &updatePayload, nil)
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.object.update", txObject, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -488,7 +488,7 @@ func CreateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	createLinkPayload.SetByPath("to", easyjson.NewJSON(txTo))
 	createLinkPayload.SetByPath("object_link_type", payload.GetByPath("object_link_type"))
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.types.link.create", txFrom, &createLinkPayload, nil)
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.types.link.create", txFrom, &createLinkPayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -573,7 +573,7 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 		//}
 	}
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.types.link.update", txFrom, &updatePayload, nil)
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.types.link.update", txFrom, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -638,7 +638,7 @@ func DeleteTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 			updatePayload.SetByPath("to", easyjson.NewJSON(id))
 			updatePayload.SetByPath("body", meta)
 
-			result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.objects.link.update", objectID, &updatePayload, nil)
+			result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.objects.link.update", objectID, &updatePayload, nil)
 			if err := checkRequestError(result, err); err != nil {
 				replyError(contextProcessor, err)
 				return
@@ -650,7 +650,7 @@ func DeleteTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	updatePayload.SetByPath("to", easyjson.NewJSON(txTo))
 	updatePayload.SetByPath("body", meta)
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.types.link.update", txFrom, &updatePayload, nil)
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.types.link.update", txFrom, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -692,7 +692,7 @@ func CreateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	createLinkPayload := easyjson.NewJSONObject()
 	createLinkPayload.SetByPath("to", easyjson.NewJSON(txTo))
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.objects.link.create", txFrom, &createLinkPayload, nil)
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.objects.link.create", txFrom, &createLinkPayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -770,7 +770,7 @@ func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 		updatePayload.SetByPath("body", payload.GetByPath("body"))
 	}
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.objects.link.update", txFrom, &updatePayload, nil)
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.objects.link.update", txFrom, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -810,7 +810,7 @@ func DeleteObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	updatePayload.SetByPath("to", easyjson.NewJSON(txTo))
 	updatePayload.SetByPath("body", meta)
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.objects.link.update", txFrom, &updatePayload, nil)
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.objects.link.update", txFrom, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -843,7 +843,7 @@ func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) err
 
 	// create root
 	root := prefix + BUILT_IN_ROOT
-	_, err := ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.vertex.create", root, easyjson.NewJSONObject().GetPtr(), nil)
+	_, err := ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.create", root, easyjson.NewJSONObject().GetPtr(), nil)
 	if err != nil {
 		return err
 	}
@@ -854,13 +854,13 @@ func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) err
 
 	// create objects and types
 	objects := prefix + BUILT_IN_OBJECTS
-	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.vertex.create", objects, easyjson.NewJSONObject().GetPtr(), nil)
+	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.create", objects, easyjson.NewJSONObject().GetPtr(), nil)
 	if err != nil {
 		return err
 	}
 
 	types := prefix + BUILT_IN_TYPES
-	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.vertex.create", types, easyjson.NewJSONObject().GetPtr(), nil)
+	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.create", types, easyjson.NewJSONObject().GetPtr(), nil)
 	if err != nil {
 		return err
 	}
@@ -877,7 +877,7 @@ func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) err
 
 	// create group type ----------------------------------------
 	group := prefix + "group"
-	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.vertex.create", group, easyjson.NewJSONObject().GetPtr(), nil)
+	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.create", group, easyjson.NewJSONObject().GetPtr(), nil)
 	if err != nil {
 		return err
 	}
@@ -894,7 +894,7 @@ func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) err
 
 	// create NAV ------------------------------------------------
 	nav := prefix + "nav"
-	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.vertex.create", nav, easyjson.NewJSONObject().GetPtr(), nil)
+	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.create", nav, easyjson.NewJSONObject().GetPtr(), nil)
 	if err != nil {
 		return err
 	}

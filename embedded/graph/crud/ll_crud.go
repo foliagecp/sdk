@@ -52,7 +52,7 @@ func LLAPIObjectCreate(executor sfplugins.StatefunExecutor, contextProcessor *sf
 	// Delete existing object ---------------------------------------------
 	deleteObjectPayload := easyjson.NewJSONObject()
 	deleteObjectPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
-	system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.vertex.delete", contextProcessor.Self.ID, &deleteObjectPayload, nil))
+	system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.delete", contextProcessor.Self.ID, &deleteObjectPayload, nil))
 	// --------------------------------------------------------------------
 
 	contextProcessor.GlobalCache.SetValue(contextProcessor.Self.ID, objectBody.ToBytes(), true, -1, queryID)
@@ -154,7 +154,7 @@ func LLAPIObjectDelete(executor sfplugins.StatefunExecutor, contextProcessor *sf
 		deleteLinkPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
 		deleteLinkPayload.SetByPath("descendant_uuid", easyjson.NewJSON(toObjectID))
 		deleteLinkPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
-		system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.delete", contextProcessor.Self.ID, &deleteLinkPayload, nil))
+		system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.delete", contextProcessor.Self.ID, &deleteLinkPayload, nil))
 	}
 	// ----------------------------------------------------
 
@@ -169,7 +169,7 @@ func LLAPIObjectDelete(executor sfplugins.StatefunExecutor, contextProcessor *sf
 		deleteLinkPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
 		deleteLinkPayload.SetByPath("descendant_uuid", easyjson.NewJSON(contextProcessor.Self.ID))
 		deleteLinkPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
-		system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.delete", fromObjectID, &deleteLinkPayload, nil))
+		system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.delete", fromObjectID, &deleteLinkPayload, nil))
 	}
 	// ----------------------------------------------------
 	contextProcessor.GlobalCache.DeleteValue(contextProcessor.Self.ID, true, -1, queryID) // Delete object's body
@@ -257,7 +257,7 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			nextCallPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
 			nextCallPayload.SetByPath("descendant_uuid", easyjson.NewJSON(descendantUUID))
 			nextCallPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
-			system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.delete", contextProcessor.Self.ID, &nextCallPayload, nil))
+			system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.delete", contextProcessor.Self.ID, &nextCallPayload, nil))
 			// --------------------------------------------------------
 
 			// Create out link on this object -------------------------
@@ -383,7 +383,7 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			createLinkPayload.SetByPath("descendant_uuid", easyjson.NewJSON(descendantUUID))
 			createLinkPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
 			createLinkPayload.SetByPath("link_body", linkBody)
-			system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.link.create", contextProcessor.Self.ID, &createLinkPayload, nil))
+			system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.create", contextProcessor.Self.ID, &createLinkPayload, nil))
 		}
 
 		result.SetByPath("status", easyjson.NewJSON("ok"))
