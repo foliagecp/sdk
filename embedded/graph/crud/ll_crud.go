@@ -11,6 +11,7 @@ import (
 	"github.com/foliagecp/easyjson"
 
 	"github.com/foliagecp/sdk/embedded/graph/common"
+	lg "github.com/foliagecp/sdk/statefun/logger"
 	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 )
@@ -225,8 +226,8 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			}
 		} else {
 			result.SetByPath("status", easyjson.NewJSON("failed"))
-			errorString = fmt.Sprintf("ERROR LLAPILinkCreate %s: in_link_type:string must be a non empty string", selfID)
-			fmt.Println(errorString)
+			errorString = fmt.Sprintf("LLAPILinkCreate %s: in_link_type:string must be a non empty string", selfID)
+			lg.Logln(lg.ErrorLevel, errorString)
 		}
 		result.SetByPath("result", easyjson.NewJSON(errorString))
 		common.ReplyQueryID(queryID, &result, contextProcessor)
@@ -436,8 +437,8 @@ func LLAPILinkDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			}
 		} else {
 			result.SetByPath("status", easyjson.NewJSON("failed"))
-			errorString = fmt.Sprintf("ERROR LLAPILinkDelete %s: in_link_type:string must be a non empty string", selfID)
-			fmt.Println(errorString)
+			errorString = fmt.Sprintf("LLAPILinkDelete %s: in_link_type:string must be a non empty string", selfID)
+			lg.Logln(lg.ErrorLevel, errorString)
 		}
 		result.SetByPath("result", easyjson.NewJSON(errorString))
 		common.ReplyQueryID(queryID, &result, contextProcessor)

@@ -13,6 +13,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	lg "github.com/foliagecp/sdk/statefun/logger"
 )
 
 func CreateDimSizeChannel[T interface{}](maxBufferElements int, onBufferOverflow func()) (in chan T, out chan T) {
@@ -42,7 +44,7 @@ func CreateDimSizeChannel[T interface{}](maxBufferElements int, onBufferOverflow
 				continue
 			}
 
-			/*fmt.Printf("%d, %d\n", len(notifier), cap(notifier))
+			/*lg.Logf("%d, %d\n", len(notifier), cap(notifier))
 			if len(notifier) < cap(notifier) { // If room is available in the notifier channel
 				notifier <- true
 			}*/
@@ -74,7 +76,7 @@ func CreateDimSizeChannel[T interface{}](maxBufferElements int, onBufferOverflow
 func MsgOnErrorReturn(retVars ...interface{}) {
 	for _, retVar := range retVars {
 		if err, ok := retVar.(error); ok {
-			fmt.Printf("ERROR: %s\n", err)
+			lg.Logf(lg.ErrorLevel, "%s\n", err)
 		}
 	}
 }

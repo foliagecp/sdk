@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	lg "github.com/foliagecp/sdk/statefun/logger"
+
 	"github.com/foliagecp/sdk/statefun/cache"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
@@ -98,9 +100,9 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 	}
 	// --------------------------------------------------------------
 
-	fmt.Println("Initializing the cache store...")
+	lg.Logln(lg.TraceLevel, "Initializing the cache store...")
 	r.cacheStore = cache.NewCacheStore(context.Background(), cacheConfig, r.kv)
-	fmt.Println("Cache store inited!")
+	lg.Logln(lg.TraceLevel, "Cache store inited!")
 
 	// Start function subscriptions ---------------------------------
 	for _, ft := range r.registeredFunctionTypes {
@@ -139,7 +141,7 @@ func (r *Runtime) runGarbageCellector() (err error) {
 				dt := glce - gt0
 
 				if gc > 0 && dt > 0 {
-					fmt.Printf("!!!!!!!!!!!!!!!!! %d runs, total time (ns/ms): %d/%d, function dt (ns/ms): %d/%d -> %dHz\n", gc, dt, dt/1000000, dt/gc, dt/gc/1000000, gc*1000000000/dt)
+					lg.Logf(lg.TraceLevel, "!!!!!!!!!!!!!!!!! %d runs, total time (ns/ms): %d/%d, function dt (ns/ms): %d/%d -> %dHz\n", gc, dt, dt/1000000, dt/gc, dt/gc/1000000, gc*1000000000/dt)
 					atomic.StoreInt64(&r.gc, 0)
 				}
 				// ------------------------------------------------------------------------------------
