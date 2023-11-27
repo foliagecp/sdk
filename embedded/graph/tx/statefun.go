@@ -843,7 +843,7 @@ func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) err
 
 	// create root
 	root := prefix + BUILT_IN_ROOT
-	_, err := ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", root, easyjson.NewJSONObject().GetPtr(), nil)
+	_, err := ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.vertex.create", root, easyjson.NewJSONObject().GetPtr(), nil)
 	if err != nil {
 		return err
 	}
@@ -854,13 +854,13 @@ func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) err
 
 	// create objects and types
 	objects := prefix + BUILT_IN_OBJECTS
-	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", objects, easyjson.NewJSONObject().GetPtr(), nil)
+	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.vertex.create", objects, easyjson.NewJSONObject().GetPtr(), nil)
 	if err != nil {
 		return err
 	}
 
 	types := prefix + BUILT_IN_TYPES
-	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", types, easyjson.NewJSONObject().GetPtr(), nil)
+	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.vertex.create", types, easyjson.NewJSONObject().GetPtr(), nil)
 	if err != nil {
 		return err
 	}
@@ -877,7 +877,7 @@ func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) err
 
 	// create group type ----------------------------------------
 	group := prefix + "group"
-	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", group, easyjson.NewJSONObject().GetPtr(), nil)
+	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.vertex.create", group, easyjson.NewJSONObject().GetPtr(), nil)
 	if err != nil {
 		return err
 	}
@@ -894,7 +894,7 @@ func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) err
 
 	// create NAV ------------------------------------------------
 	nav := prefix + "nav"
-	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", nav, easyjson.NewJSONObject().GetPtr(), nil)
+	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.vertex.create", nav, easyjson.NewJSONObject().GetPtr(), nil)
 	if err != nil {
 		return err
 	}

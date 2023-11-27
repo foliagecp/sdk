@@ -24,7 +24,7 @@ func CreateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 
 	prefix := payload.GetByPath("prefix").AsStringDefault("")
 
-	_, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", selfID, payload, nil)
+	_, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.vertex.create", selfID, payload, nil)
 	if err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -55,7 +55,7 @@ func UpdateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 
 	payload := contextProcessor.Payload
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.update", selfID, payload, nil)
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.vertex.update", selfID, payload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -94,7 +94,7 @@ func CreateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 
 	prefix := payload.GetByPath("prefix").AsStringDefault("")
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.create", selfID, payload, nil)
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.vertex.create", selfID, payload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -141,7 +141,7 @@ func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 	selfID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.update", selfID, payload, nil)
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.vertex.update", selfID, payload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -194,7 +194,7 @@ func DeleteObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 			}
 
 			empty := easyjson.NewJSONObject()
-			result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.delete", elem, &empty, nil)
+			result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.vertex.delete", elem, &empty, nil)
 			if err := checkRequestError(result, err); err != nil {
 				replyError(contextProcessor, err)
 				return

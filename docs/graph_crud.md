@@ -16,38 +16,38 @@ nats -s nats://nats:foliage@nats:4222 kv ls -v --display-value basic_kv_store
 
 ## Functions
 
-- [functions.graph.ll.api.object.create](#functionsgraphllapiobjectcreateobject_id) <!-- omit in toc -->
-- [functions.graph.ll.api.object.update](#functionsgraphllapiobjectupdateobject_id)
-- [functions.graph.ll.api.object.delete](#functionsgraphllapiobjectdeleteobject_id)
+- [functions.graph.ll.api.vertex.create](#functionsgraphllapiobjectcreateobject_id) <!-- omit in toc -->
+- [functions.graph.ll.api.vertex.update](#functionsgraphllapiobjectupdateobject_id)
+- [functions.graph.ll.api.vertex.delete](#functionsgraphllapiobjectdeleteobject_id)
 - [functions.graph.ll.api.link.create](#functionsgraphllapilinkcreateobject_id)
 - [functions.graph.ll.api.link.update](#functionsgraphllapilinkupdateobject_id)
 - [functions.graph.ll.api.link.delete](#functionsgraphllapilinkdeleteobject_id)
 
-### functions.graph.ll.api.object.create.<object_id>
+### functions.graph.ll.api.vertex.create.<object_id>
 
 [Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPIObjectCreate)
 
 Example:  
 ```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.object.create.root "{\"payload\":{\"query_id\":\"QUERYID\", \"body\":{\"name\":\"root\"}}}"
+nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.vertex.create.root "{\"payload\":{\"query_id\":\"QUERYID\", \"body\":{\"name\":\"root\"}}}"
 ```
 
-### functions.graph.ll.api.object.update.<object_id>
+### functions.graph.ll.api.vertex.update.<object_id>
 
 [Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPIObjectUpdate)
 
 Example:  
 ```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.object.update.root "{\"payload\":{\"query_id\":\"QUERYID\", \"body\":{\"label\":\"some\"}}}"
+nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.vertex.update.root "{\"payload\":{\"query_id\":\"QUERYID\", \"body\":{\"label\":\"some\"}}}"
 ```
 
-### functions.graph.ll.api.object.delete.<object_id>
+### functions.graph.ll.api.vertex.delete.<object_id>
 
 [Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPIObjectDelete)
 
 Example:  
 ```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.object.delete.root "{\"payload\":{\"query_id\":\"QUERYID\"}}"
+nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.vertex.delete.root "{\"payload\":{\"query_id\":\"QUERYID\"}}"
 ```
 
 ### functions.graph.ll.api.link.create.<object_id>

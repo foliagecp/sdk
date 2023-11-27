@@ -108,7 +108,7 @@ func deleteLowLevelLink(ctx *sfplugins.StatefunContextProcessor, from, to, linkT
 }
 
 func createLowLevelObject(ctx *sfplugins.StatefunContextProcessor, id string, body *easyjson.JSON) error {
-	const op = "functions.graph.ll.api.object.create"
+	const op = "functions.graph.ll.api.vertex.create"
 
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("body", *body)
@@ -121,7 +121,7 @@ func createLowLevelObject(ctx *sfplugins.StatefunContextProcessor, id string, bo
 }
 
 func updateLowLevelObject(ctx *sfplugins.StatefunContextProcessor, mode, id string, body *easyjson.JSON) error {
-	const op = "functions.graph.ll.api.object.update"
+	const op = "functions.graph.ll.api.vertex.update"
 
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("body", *body)
@@ -135,7 +135,7 @@ func updateLowLevelObject(ctx *sfplugins.StatefunContextProcessor, mode, id stri
 }
 
 func deleteLowLevelObject(ctx *sfplugins.StatefunContextProcessor, id string) error {
-	const op = "functions.graph.ll.api.object.delete"
+	const op = "functions.graph.ll.api.vertex.delete"
 
 	payload := easyjson.NewJSONObject()
 
