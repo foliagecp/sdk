@@ -35,7 +35,7 @@ Query frequency: 4000Hz
 ### Create object
 
 ```sh
-nats pub --count=100000 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.object.create.root "{\"payload\":{\"query_id\":\"QUERYID\", \"body\":{\"name\":\"root\"}}}"
+nats pub --count=100000 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.vertex.create.root "{\"payload\":{\"query_id\":\"QUERYID\", \"body\":{\"name\":\"root\"}}}"
 ```
 ```
 Total duration: 4258ms

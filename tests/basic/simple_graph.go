@@ -14,15 +14,15 @@ import (
 func CreateTestGraph(runtime *statefun.Runtime) {
 	lg.Logln(lg.DebugLevel, ">>> Test started: simple graph creation")
 
-	system.MsgOnErrorReturn(runtime.Request(plugins.GolangLocalRequest, "functions.graph.ll.api.object.create", "root", easyjson.NewJSONObject().GetPtr(), nil))
-	system.MsgOnErrorReturn(runtime.Request(plugins.GolangLocalRequest, "functions.graph.ll.api.object.create", "a", easyjson.NewJSONObject().GetPtr(), nil))
-	system.MsgOnErrorReturn(runtime.Request(plugins.GolangLocalRequest, "functions.graph.ll.api.object.create", "b", easyjson.NewJSONObject().GetPtr(), nil))
-	system.MsgOnErrorReturn(runtime.Request(plugins.GolangLocalRequest, "functions.graph.ll.api.object.create", "c", easyjson.NewJSONObject().GetPtr(), nil))
-	system.MsgOnErrorReturn(runtime.Request(plugins.GolangLocalRequest, "functions.graph.ll.api.object.create", "d", easyjson.NewJSONObject().GetPtr(), nil))
-	system.MsgOnErrorReturn(runtime.Request(plugins.GolangLocalRequest, "functions.graph.ll.api.object.create", "e", easyjson.NewJSONObject().GetPtr(), nil))
-	system.MsgOnErrorReturn(runtime.Request(plugins.GolangLocalRequest, "functions.graph.ll.api.object.create", "f", easyjson.NewJSONObject().GetPtr(), nil))
-	system.MsgOnErrorReturn(runtime.Request(plugins.GolangLocalRequest, "functions.graph.ll.api.object.create", "g", easyjson.NewJSONObject().GetPtr(), nil))
-	system.MsgOnErrorReturn(runtime.Request(plugins.GolangLocalRequest, "functions.graph.ll.api.object.create", "h", easyjson.NewJSONObject().GetPtr(), nil))
+	system.MsgOnErrorReturn(runtime.Request(plugins.GolangLocalRequest, "functions.graph.ll.api.vertex.create", "root", easyjson.NewJSONObject().GetPtr(), nil))
+	system.MsgOnErrorReturn(runtime.Request(plugins.GolangLocalRequest, "functions.graph.ll.api.vertex.create", "a", easyjson.NewJSONObject().GetPtr(), nil))
+	system.MsgOnErrorReturn(runtime.Request(plugins.GolangLocalRequest, "functions.graph.ll.api.vertex.create", "b", easyjson.NewJSONObject().GetPtr(), nil))
+	system.MsgOnErrorReturn(runtime.Request(plugins.GolangLocalRequest, "functions.graph.ll.api.vertex.create", "c", easyjson.NewJSONObject().GetPtr(), nil))
+	system.MsgOnErrorReturn(runtime.Request(plugins.GolangLocalRequest, "functions.graph.ll.api.vertex.create", "d", easyjson.NewJSONObject().GetPtr(), nil))
+	system.MsgOnErrorReturn(runtime.Request(plugins.GolangLocalRequest, "functions.graph.ll.api.vertex.create", "e", easyjson.NewJSONObject().GetPtr(), nil))
+	system.MsgOnErrorReturn(runtime.Request(plugins.GolangLocalRequest, "functions.graph.ll.api.vertex.create", "f", easyjson.NewJSONObject().GetPtr(), nil))
+	system.MsgOnErrorReturn(runtime.Request(plugins.GolangLocalRequest, "functions.graph.ll.api.vertex.create", "g", easyjson.NewJSONObject().GetPtr(), nil))
+	system.MsgOnErrorReturn(runtime.Request(plugins.GolangLocalRequest, "functions.graph.ll.api.vertex.create", "h", easyjson.NewJSONObject().GetPtr(), nil))
 
 	var v easyjson.JSON
 

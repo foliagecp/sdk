@@ -24,9 +24,9 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 	// High-Level API End Registration
 
 	// Low-Level API
-	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.create", LLAPIObjectCreate, *statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.update", LLAPIObjectUpdate, *statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.delete", LLAPIObjectDelete, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.ll.api.vertex.create", LLAPIObjectCreate, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.ll.api.vertex.update", LLAPIObjectUpdate, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph.ll.api.vertex.delete", LLAPIObjectDelete, *statefun.NewFunctionTypeConfig())
 
 	statefun.NewFunctionType(runtime, "functions.graph.ll.api.link.create", LLAPILinkCreate, *statefun.NewFunctionTypeConfig())
 	statefun.NewFunctionType(runtime, "functions.graph.ll.api.link.update", LLAPILinkUpdate, *statefun.NewFunctionTypeConfig())

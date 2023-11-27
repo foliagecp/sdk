@@ -52,7 +52,7 @@ func LLAPIObjectCreate(executor sfplugins.StatefunExecutor, contextProcessor *sf
 	// Delete existing object ---------------------------------------------
 	deleteObjectPayload := easyjson.NewJSONObject()
 	deleteObjectPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
-	system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.object.delete", contextProcessor.Self.ID, &deleteObjectPayload, nil))
+	system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.ll.api.vertex.delete", contextProcessor.Self.ID, &deleteObjectPayload, nil))
 	// --------------------------------------------------------------------
 
 	contextProcessor.GlobalCache.SetValue(contextProcessor.Self.ID, objectBody.ToBytes(), true, -1, queryID)
