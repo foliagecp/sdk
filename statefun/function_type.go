@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	lg "github.com/foliagecp/sdk/statefun/logger"
+
 	"github.com/foliagecp/easyjson"
 
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
@@ -54,7 +56,7 @@ func (ft *FunctionType) sendMsg(id string, msg FunctionTypeMsg) {
 			var err error
 			ft.typenameLockRevisionID, err = FunctionTypeMutexLock(ft, true)
 			if err != nil {
-				fmt.Printf("WARNING: function with type %s has received a message, but this typename was already locked! Skipping message...\n", ft.name)
+				lg.Logf(lg.WarnLevel, "function with type %s has received a message, but this typename was already locked! Skipping message...\n", ft.name)
 				// Preventing from rapidly calling this function over and over again if no function
 				// in other runtime that can handle this message and kv mutex is already dead
 				time.Sleep(time.Duration(ft.config.msgAckWaitMs/2) * time.Millisecond) // Sleep duration must be guarantee less than msgAckWaitMs, otherwise may miss doing Nak (via RefusalCallback) in time
@@ -243,14 +245,14 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 			// TODO: When to delete  function context??? function's context may be needed later!!!!
 			// cacheStore.DeleteValue(ft.name+"."+id, true, -1, "") // Deleting function context
 			garbageCollected++
-			//fmt.Printf(">>>>>>>>>>>>>> Garbage collected handler for %s:%s\n", ft.name, id)
+			//lg.Logf(">>>>>>>>>>>>>> Garbage collected handler for %s:%s\n", ft.name, id)
 		} else {
 			handlersRunning++
 		}
 		return true
 	})
 	if garbageCollected > 0 && handlersRunning == 0 {
-		fmt.Printf(">>>>>>>>>>>>>> Garbage collected for typename %s - no id handlers left\n", ft.name)
+		lg.Logf(lg.TraceLevel, ">>>>>>>>>>>>>> Garbage collected for typename %s - no id handlers left\n", ft.name)
 		if ft.config.balanced {
 			ft.config.balanced = false
 			system.MsgOnErrorReturn(FunctionTypeMutexUnlock(ft, ft.typenameLockRevisionID))

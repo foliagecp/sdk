@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	lg "github.com/foliagecp/sdk/statefun/logger"
+
 	"github.com/foliagecp/easyjson"
 	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
 )
@@ -62,7 +64,7 @@ func newMerger(txID string, opts ...mergerOpt) *merger {
 // merge v0
 // TODO: add rollback
 func (m *merger) Merge(ctx *sfplugins.StatefunContextProcessor) error {
-	fmt.Println("[INFO] Start merging", "tx", m.txID, "with mode", m.mode)
+	lg.Logln(lg.InfoLevel, "Start merging", "tx", m.txID, "with mode", m.mode)
 	start := time.Now()
 
 	prefix := generatePrefix(m.txID)
@@ -86,7 +88,7 @@ func (m *merger) Merge(ctx *sfplugins.StatefunContextProcessor) error {
 			// otherwise, update
 			if body.GetByPath("__meta.status").AsStringDefault("") == "deleted" {
 				if m.debug {
-					fmt.Println("[DEBUG] Delete object", "id", normalID)
+					lg.Logln(lg.DebugLevel, "Delete object", "id", normalID)
 				}
 
 				deleted[normalID] = struct{}{}
@@ -96,7 +98,7 @@ func (m *merger) Merge(ctx *sfplugins.StatefunContextProcessor) error {
 				}
 			} else {
 				if m.debug {
-					fmt.Println("[DEBUG] Update object", "id", normalID)
+					lg.Logln(lg.DebugLevel, "Update object", "id", normalID)
 				}
 
 				if err := updateLowLevelObject(ctx, m.mode, normalID, body); err != nil {
@@ -106,13 +108,13 @@ func (m *merger) Merge(ctx *sfplugins.StatefunContextProcessor) error {
 		} else {
 			// create
 			if m.debug {
-				fmt.Println("[DEBUG] Create object", "id", normalID)
+				lg.Logln(lg.DebugLevel, "Create object", "id", normalID)
 			}
 
 			// uninited objects policy
 			if _, err := ctx.GlobalCache.GetValue(normalID); err == nil {
 				if m.uninitedObjectsPolicy == strict {
-					fmt.Println("[WARNING] Uninited object", "id", normalID)
+					lg.Logln(lg.WarnLevel, "Uninited object", "id", normalID)
 					return fmt.Errorf("uninited object: %s", normalID)
 				}
 			}
@@ -150,7 +152,7 @@ func (m *merger) Merge(ctx *sfplugins.StatefunContextProcessor) error {
 			// otherwise, update
 			if body.GetByPath("__meta.status").AsStringDefault("") == "deleted" {
 				if m.debug {
-					fmt.Println("[DEBUG] Delete link", "from", normalParent, "to", normalChild, "link_type", normalLt)
+					lg.Logln(lg.DebugLevel, "Delete link", "from", normalParent, "to", normalChild, "link_type", normalLt)
 				}
 
 				if err := deleteLowLevelLink(ctx, normalParent, normalChild, normalLt); err != nil {
@@ -158,7 +160,7 @@ func (m *merger) Merge(ctx *sfplugins.StatefunContextProcessor) error {
 				}
 			} else {
 				if m.debug {
-					fmt.Println("[DEBUG] Update link", "from", normalParent, "to", normalChild, "link_type", normalLt)
+					lg.Logln(lg.DebugLevel, "Update link", "from", normalParent, "to", normalChild, "link_type", normalLt)
 				}
 
 				if err := updateLowLevelLink(ctx, normalParent, normalChild, normalLt, *body); err != nil {
@@ -168,7 +170,7 @@ func (m *merger) Merge(ctx *sfplugins.StatefunContextProcessor) error {
 		} else {
 			// create
 			if m.debug {
-				fmt.Println("[DEBUG] Create link", "from", normalParent, "to", normalChild, "link_type", normalLt)
+				lg.Logln(lg.DebugLevel, "Create link", "from", normalParent, "to", normalChild, "link_type", normalLt)
 			}
 
 			if err := createLowLevelLink(ctx, normalParent, normalChild, normalLt, "", *body); err != nil {
@@ -177,7 +179,7 @@ func (m *merger) Merge(ctx *sfplugins.StatefunContextProcessor) error {
 		}
 	}
 
-	fmt.Println("[INFO] Merge Done!", "dt", time.Since(start))
+	lg.Logln(lg.InfoLevel, "Merge Done!", "dt", time.Since(start))
 
 	return nil
 }

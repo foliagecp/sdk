@@ -3,9 +3,8 @@
 package basic
 
 import (
-	"fmt"
-
 	"github.com/foliagecp/easyjson"
+	lg "github.com/foliagecp/sdk/statefun/logger"
 
 	"github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/plugins"
@@ -13,7 +12,7 @@ import (
 )
 
 func CreateTestGraph(runtime *statefun.Runtime) {
-	fmt.Println(">>> Test started: simple graph creation")
+	lg.Logln(lg.DebugLevel, ">>> Test started: simple graph creation")
 
 	system.MsgOnErrorReturn(runtime.Request(plugins.GolangLocalRequest, "functions.graph.ll.api.object.create", "root", easyjson.NewJSONObject().GetPtr(), nil))
 	system.MsgOnErrorReturn(runtime.Request(plugins.GolangLocalRequest, "functions.graph.ll.api.object.create", "a", easyjson.NewJSONObject().GetPtr(), nil))
@@ -105,5 +104,5 @@ func CreateTestGraph(runtime *statefun.Runtime) {
 	v.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{}))
 	system.MsgOnErrorReturn(runtime.Request(plugins.GolangLocalRequest, "functions.graph.ll.api.link.create", "g", &v, nil))
 
-	fmt.Println("<<< Test ended: simple graph creation")
+	lg.Logln(lg.DebugLevel, "<<< Test ended: simple graph creation")
 }

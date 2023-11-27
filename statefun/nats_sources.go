@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	lg "github.com/foliagecp/sdk/statefun/logger"
+
 	"github.com/foliagecp/easyjson"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
@@ -18,7 +20,7 @@ func AddRequestSourceNatsCore(ft *FunctionType) error {
 	})
 
 	if err != nil {
-		fmt.Printf("Invalid request reply subscription for function type %s: %s\n", ft.name, err)
+		lg.Logf(lg.ErrorLevel, "Invalid request reply subscription for function type %s: %s\n", ft.name, err)
 		return err
 	}
 
@@ -28,7 +30,7 @@ func AddRequestSourceNatsCore(ft *FunctionType) error {
 func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType, streamName string) error {
 	consumerName := strings.ReplaceAll(ft.name, ".", "")
 	consumerGroup := consumerName + "-group"
-	fmt.Printf("Handling function type %s\n", ft.name)
+	lg.Logf(lg.TraceLevel, "Handling function type %s\n", ft.name)
 
 	// Create stream consumer if does not exist ---------------------
 	consumerExists := false
@@ -71,7 +73,7 @@ func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType, streamName stri
 		nats.ManualAck(),
 	)
 	if err != nil {
-		fmt.Printf("Invalid signal subscription for function type %s: %s\n", ft.name, err)
+		lg.Logf(lg.ErrorLevel, "Invalid signal subscription for function type %s: %s\n", ft.name, err)
 		return err
 	}
 	return nil

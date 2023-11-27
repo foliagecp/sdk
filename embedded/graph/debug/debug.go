@@ -5,9 +5,8 @@
 package debug
 
 import (
-	"fmt"
-
 	"github.com/foliagecp/sdk/statefun"
+	lg "github.com/foliagecp/sdk/statefun/logger"
 	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
@@ -23,18 +22,18 @@ func LLAPIObjectDebugPrint(executor sfplugins.StatefunExecutor, contextProcessor
 	self := contextProcessor.Self
 
 	objectContext := contextProcessor.GetObjectContext()
-	fmt.Printf("************************* Object's body (id=%s):\n", self.ID)
-	fmt.Println(objectContext.ToString())
-	fmt.Printf("************************* In links:\n")
+	lg.Logf(lg.DebugLevel, "************************* Object's body (id=%s):\n", self.ID)
+	lg.Logln(lg.DebugLevel, objectContext.ToString())
+	lg.Logf(lg.DebugLevel, "************************* In links:\n")
 	for _, key := range contextProcessor.GlobalCache.GetKeysByPattern(self.ID + ".in.oid_ltp-nil.>") {
-		fmt.Println(key)
+		lg.Logln(lg.DebugLevel, key)
 	}
-	fmt.Printf("************************* Out links:\n")
+	lg.Logf(lg.DebugLevel, "************************* Out links:\n")
 	for _, key := range contextProcessor.GlobalCache.GetKeysByPattern(self.ID + ".out.ltp_oid-bdy.>") {
-		fmt.Println(key)
+		lg.Logln(lg.DebugLevel, key)
 		if j, err := contextProcessor.GlobalCache.GetValueAsJSON(key); err == nil {
-			fmt.Println(j.ToString())
+			lg.Logln(lg.DebugLevel, j.ToString())
 		}
 	}
-	fmt.Println()
+	lg.Logln(lg.DebugLevel)
 }

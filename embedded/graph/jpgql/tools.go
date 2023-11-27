@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 
+	lg "github.com/foliagecp/sdk/statefun/logger"
+
 	"github.com/PaesslerAG/gval"
 	"github.com/foliagecp/sdk/statefun/cache"
 )
@@ -145,7 +147,7 @@ func GetObjectIDsFromLinkTypeAndTag(cacheStore *cache.Store, objectID string, li
 			objectID := string(tokens[len(tokens)-1])
 			resultObjects[objectID] = 0
 		} else {
-			fmt.Printf("ERROR getObjectIDsFromLinkTypeAndTag: linksQuery GetKeysByPattern key %s must consist from 6 tokens, but consists from %d\n", key, len(tokens))
+			lg.Logf(lg.ErrorLevel, "getObjectIDsFromLinkTypeAndTag: linksQuery GetKeysByPattern key %s must consist from 6 tokens, but consists from %d\n", key, len(tokens))
 		}
 	}
 	// --------------------------------------------------------------------

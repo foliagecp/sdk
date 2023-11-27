@@ -5,10 +5,9 @@
 package common
 
 import (
-	"fmt"
-
 	"github.com/foliagecp/easyjson"
 
+	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/foliagecp/sdk/statefun/plugins"
 	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
 	sfSystem "github.com/foliagecp/sdk/statefun/system"
@@ -36,6 +35,6 @@ func ReplyQueryID(queryID string, result *easyjson.JSON, contextProcessor *sfplu
 			} // else do not reply to a signal from another statefun
 		}
 	} else {
-		fmt.Println("ERROR: replyQueryId")
+		lg.Logln(lg.WarnLevel, "replyQueryId has no target to reply")
 	}
 }
