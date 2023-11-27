@@ -21,7 +21,7 @@ func cloneTypeFromMainGraphToTx(ctx *sfplugins.StatefunContextProcessor, txID, s
 	createPayload.SetByPath("id", easyjson.NewJSON(dst))
 	createPayload.SetByPath("body", *originBody)
 
-	if _, err := ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.tx.type.create", txID, &createPayload, nil); err != nil {
+	if _, err := ctx.Request(sfplugins.GolangLocalRequest, "functions.cmdb.tx.type.create", txID, &createPayload, nil); err != nil {
 		return err
 	}
 
@@ -39,7 +39,7 @@ func cloneObjectFromMainGraphToTx(ctx *sfplugins.StatefunContextProcessor, txID,
 	createPayload.SetByPath("body", *originBody)
 	createPayload.SetByPath("origin_type", easyjson.NewJSON(originType))
 
-	if _, err := ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.tx.object.create", txID, &createPayload, nil); err != nil {
+	if _, err := ctx.Request(sfplugins.GolangLocalRequest, "functions.cmdb.tx.object.create", txID, &createPayload, nil); err != nil {
 		return err
 	}
 
@@ -61,7 +61,7 @@ func cloneLinkFromMainGraphToTx(ctx *sfplugins.StatefunContextProcessor, originF
 }
 
 func createLowLevelLink(ctx *sfplugins.StatefunContextProcessor, from, to, lt, objectLt string, body easyjson.JSON) error {
-	const op = "functions.graph.ll.api.link.create"
+	const op = "functions.graph.api.link.create"
 
 	link := easyjson.NewJSONObject()
 	link.SetByPath("descendant_uuid", easyjson.NewJSON(to))
@@ -79,7 +79,7 @@ func createLowLevelLink(ctx *sfplugins.StatefunContextProcessor, from, to, lt, o
 }
 
 func updateLowLevelLink(ctx *sfplugins.StatefunContextProcessor, from, to, lt string, body easyjson.JSON) error {
-	const op = "functions.graph.ll.api.link.update"
+	const op = "functions.graph.api.link.update"
 
 	link := easyjson.NewJSONObject()
 	link.SetByPath("descendant_uuid", easyjson.NewJSON(to))
@@ -94,7 +94,7 @@ func updateLowLevelLink(ctx *sfplugins.StatefunContextProcessor, from, to, lt st
 }
 
 func deleteLowLevelLink(ctx *sfplugins.StatefunContextProcessor, from, to, linkType string) error {
-	const op = "functions.graph.ll.api.link.delete"
+	const op = "functions.graph.api.link.delete"
 
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("descendant_uuid", easyjson.NewJSON(to))
@@ -108,7 +108,7 @@ func deleteLowLevelLink(ctx *sfplugins.StatefunContextProcessor, from, to, linkT
 }
 
 func createLowLevelObject(ctx *sfplugins.StatefunContextProcessor, id string, body *easyjson.JSON) error {
-	const op = "functions.graph.ll.api.vertex.create"
+	const op = "functions.graph.api.vertex.create"
 
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("body", *body)
@@ -121,7 +121,7 @@ func createLowLevelObject(ctx *sfplugins.StatefunContextProcessor, id string, bo
 }
 
 func updateLowLevelObject(ctx *sfplugins.StatefunContextProcessor, mode, id string, body *easyjson.JSON) error {
-	const op = "functions.graph.ll.api.vertex.update"
+	const op = "functions.graph.api.vertex.update"
 
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("body", *body)
@@ -135,7 +135,7 @@ func updateLowLevelObject(ctx *sfplugins.StatefunContextProcessor, mode, id stri
 }
 
 func deleteLowLevelObject(ctx *sfplugins.StatefunContextProcessor, id string) error {
-	const op = "functions.graph.ll.api.vertex.delete"
+	const op = "functions.graph.api.vertex.delete"
 
 	payload := easyjson.NewJSONObject()
 
