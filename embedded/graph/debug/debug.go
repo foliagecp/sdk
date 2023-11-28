@@ -11,8 +11,8 @@ import (
 )
 
 func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
-	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.debug.print", LLAPIObjectDebugPrint, *statefun.NewFunctionTypeConfig())
-	statefun.NewFunctionType(runtime, "functions.graph.ll.api.object.debug.print.graph", LLAPIPrintGraph, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph..api.object.debug.print", LLAPIObjectDebugPrint, *statefun.NewFunctionTypeConfig())
+	statefun.NewFunctionType(runtime, "functions.graph..api.object.debug.print.graph", LLAPIPrintGraph, *statefun.NewFunctionTypeConfig())
 }
 
 /*
