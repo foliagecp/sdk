@@ -618,6 +618,16 @@ func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExec
 
 func RegisterAllFunctionTypes(runtime *statefun.Runtime, jpgqlEvaluationTimeoutSec int) {
 	options := easyjson.NewJSONObjectWithKeyValue("eval_timeout_sec", easyjson.NewJSON(jpgqlEvaluationTimeoutSec))
-	statefun.NewFunctionType(runtime, "functions.graph.api.query.jpgql.ctra", LLAPIQueryJPGQLCallTreeResultAggregation, *statefun.NewFunctionTypeConfig().SetOptions(&options).SetServiceState(true))
-	statefun.NewFunctionType(runtime, "functions.graph.api.query.jpgql.dcra", LLAPIQueryJPGQLDirectCacheResultAggregation, *statefun.NewFunctionTypeConfig().SetOptions(&options).SetServiceState(true))
+	statefun.NewFunctionType(
+		runtime,
+		"functions.graph.api.query.jpgql.ctra",
+		LLAPIQueryJPGQLCallTreeResultAggregation,
+		*statefun.NewFunctionTypeConfig().SetOptions(&options).SetServiceState(true).SetBalanceNeeded(true),
+	)
+	statefun.NewFunctionType(
+		runtime,
+		"functions.graph.api.query.jpgql.dcra",
+		LLAPIQueryJPGQLDirectCacheResultAggregation,
+		*statefun.NewFunctionTypeConfig().SetOptions(&options).SetServiceState(true).SetBalanceNeeded(true),
+	)
 }
