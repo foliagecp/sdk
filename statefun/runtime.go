@@ -89,7 +89,7 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 		existingStreams = append(existingStreams, info.Config.Name)
 	}
 	for _, functionType := range r.registeredFunctionTypes {
-		if !slices.Contains(existingStreams, "foo") {
+		if !slices.Contains(existingStreams, functionType.getStreamName()) {
 			_, err := r.js.AddStream(&nats.StreamConfig{
 				Name:     functionType.getStreamName(),
 				Subjects: []string{functionType.subject},
@@ -103,14 +103,46 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 	r.cacheStore = cache.NewCacheStore(context.Background(), cacheConfig, r.kv)
 	lg.Logln(lg.TraceLevel, "Cache store inited!")
 
+	singleInstanceFunctionsRevisions := map[string]uint64{}
+	singleInstanceFunctionsLockUpdater := func(singleInstanceFunctionsRevisions map[string]uint64) {
+		if len(singleInstanceFunctionsRevisions) > 0 {
+			for {
+				time.Sleep(time.Duration(r.config.kvMutexLifeTimeSec) / 2 * time.Second)
+				for k, revId := range singleInstanceFunctionsRevisions {
+					newRevId, err := KeyMutexLockUpdate(r, k, revId)
+					if err != nil {
+						lg.Logf(lg.ErrorLevel, "KeyMutexLockUpdate for single instance function with stream=%s failed", k)
+					} else {
+						singleInstanceFunctionsRevisions[k] = newRevId
+					}
+				}
+			}
+		}
+	}
+
 	// Start function subscriptions ---------------------------------
 	for _, ft := range r.registeredFunctionTypes {
+		if !ft.config.multipleInstancesAllowed {
+			revId, err := KeyMutexLock(r, ft.getStreamName(), true)
+			if err != nil {
+				if err == mutexLockedError {
+					lg.Logf(lg.WarnLevel, "Function type %s is already running somewhere and multipleInstancesAllowed==false, skipping", ft.name)
+					continue
+				} else {
+					return err
+				}
+			}
+			singleInstanceFunctionsRevisions[ft.getStreamName()] = revId
+		}
+
 		system.MsgOnErrorReturn(AddSignalSourceJetstreamQueuePushConsumer(ft))
 		if ft.config.serviceActive {
 			system.MsgOnErrorReturn(AddRequestSourceNatsCore(ft))
 		}
 	}
 	// --------------------------------------------------------------
+
+	go singleInstanceFunctionsLockUpdater(singleInstanceFunctionsRevisions)
 
 	if onAfterStart != nil {
 		system.MsgOnErrorReturn(onAfterStart(r))
