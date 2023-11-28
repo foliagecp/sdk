@@ -15,8 +15,8 @@ import (
 )
 
 var (
-	keyValueMutexOperationMutex sync.Mutex
-	kwWatchMutex                sync.Mutex
+	//keyValueMutexOperationMutex sync.Mutex
+	kwWatchMutex sync.Mutex
 )
 
 // errorOnLocked - if mutex is elready locked, exit with error (do not wait for unlocking)
@@ -36,7 +36,8 @@ func KeyMutexLock(runtime *Runtime, key string, errorOnLocked bool, debugCaller 
 		lockRevisionID, err := kv.Update(entry.Key(), system.Int64ToBytes(now), entry.Revision())
 		if err != nil { // If no error appeared
 			if strings.Contains(err.Error(), "nats: wrong last sequence") { // If error "wrong revision" appeared
-				lg.Logf(lg.ErrorLevel, "%s: ERROR mutexMereLock: tried to lock with wrong revisionId\n", caller)
+				//lg.Logf(lg.ErrorLevel, "%s: ERROR mutexMereLock: tried to lock with wrong revisionId\n", caller)
+				return 0, nil
 			}
 			return 0, err // Terminate with error
 		}
@@ -83,34 +84,38 @@ func KeyMutexLock(runtime *Runtime, key string, errorOnLocked bool, debugCaller 
 	for {
 		now := system.GetCurrentTimeNs()
 
-		keyValueMutexOperationMutex.Lock()
+		//keyValueMutexOperationMutex.Lock()
 
 		entry, err := kv.Get(keyMutex) // Getting last mutex state for key
 		if err != nil {
 			if err == nats.ErrKeyNotFound {
 				mutexResetLockNeeded = true
 			} else {
-				keyValueMutexOperationMutex.Unlock()
+				//keyValueMutexOperationMutex.Unlock()
 				return 0, err
 			}
 		}
 		if mutexResetLockNeeded {
-			defer keyValueMutexOperationMutex.Unlock()
+			//defer keyValueMutexOperationMutex.Unlock()
 			return mutexResetLock(keyMutex, now)
 		}
 
 		lockTime := system.BytesToInt64(entry.Value())
 		if lockTime == 0 { // Mutex is ready to be locked
-			defer keyValueMutexOperationMutex.Unlock()
-			return mutexMereLock(entry, now)
+			//defer keyValueMutexOperationMutex.Unlock()
+			revId, err := mutexMereLock(entry, now)
+			if revId == 0 && err == nil { // Did not succeed in locking, other lock was faster
+				continue
+			}
+			return revId, err
 		} else if lockTime+int64(runtime.config.kvMutexLifeTimeSec)*int64(time.Second) < now { // Mutex was locked by someone else and its lock is too old
 			lg.Logf(lg.WarnLevel, "Context mutex for key=%s is too old, will be unlocked!\n", key)
 			mutexResetLockNeeded = true
-			keyValueMutexOperationMutex.Unlock()
+			//keyValueMutexOperationMutex.Unlock()
 			continue
 		}
 
-		keyValueMutexOperationMutex.Unlock()
+		//keyValueMutexOperationMutex.Unlock()
 
 		if errorOnLocked {
 			return 0, fmt.Errorf("error: errorOnLocked")
@@ -123,8 +128,8 @@ func KeyMutexUnlock(runtime *Runtime, key string, lockRevisionID uint64, debugCa
 	caller := strings.Join(debugCaller, "-")
 	kv := runtime.kv
 
-	keyValueMutexOperationMutex.Lock()
-	defer keyValueMutexOperationMutex.Unlock()
+	//keyValueMutexOperationMutex.Lock()
+	//defer keyValueMutexOperationMutex.Unlock()
 
 	keyMutex := key + ".mutex"
 	entry, err := kv.Get(keyMutex)
