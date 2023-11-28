@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"runtime"
 	"strconv"
 	"time"
 
@@ -74,9 +75,10 @@ func CreateDimSizeChannel[T interface{}](maxBufferElements int, onBufferOverflow
 }
 
 func MsgOnErrorReturn(retVars ...interface{}) {
+	le := lg.GetCustomLogEntry(runtime.Caller(1))
 	for _, retVar := range retVars {
 		if err, ok := retVar.(error); ok {
-			lg.Logf(lg.ErrorLevel, "%s\n", err)
+			lg.LogfEntry(lg.ErrorLevel, le, "%s\n", err)
 		}
 	}
 }
