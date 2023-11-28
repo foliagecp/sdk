@@ -5,32 +5,35 @@ package statefun
 import "github.com/foliagecp/easyjson"
 
 const (
-	MsgAckWaitTimeoutMs = 10000
-	MsgChannelSize      = 64
-	MsgAckChannelSize   = 64
-	BalanceNeeded       = true
-	MutexLifetimeSec    = 120
+	MsgAckWaitTimeoutMs      = 10000
+	MsgChannelSize           = 64
+	MsgAckChannelSize        = 64
+	BalanceNeeded            = true
+	MutexLifetimeSec         = 120
+	MultipleInstancesAllowed = true
 )
 
 type FunctionTypeConfig struct {
-	msgAckWaitMs      int
-	msgChannelSize    int
-	msgAckChannelSize int
-	balanceNeeded     bool
-	balanced          bool
-	serviceActive     bool
-	mutexLifeTimeSec  int
-	options           *easyjson.JSON
+	msgAckWaitMs             int
+	msgChannelSize           int
+	msgAckChannelSize        int
+	balanceNeeded            bool
+	balanced                 bool
+	serviceActive            bool
+	mutexLifeTimeSec         int
+	options                  *easyjson.JSON
+	multipleInstancesAllowed bool
 }
 
 func NewFunctionTypeConfig() *FunctionTypeConfig {
 	return &FunctionTypeConfig{
-		msgAckWaitMs:      MsgAckWaitTimeoutMs,
-		msgChannelSize:    MsgChannelSize,
-		msgAckChannelSize: MsgAckChannelSize,
-		balanceNeeded:     BalanceNeeded,
-		mutexLifeTimeSec:  MutexLifetimeSec,
-		options:           easyjson.NewJSONObject().GetPtr(),
+		msgAckWaitMs:             MsgAckWaitTimeoutMs,
+		msgChannelSize:           MsgChannelSize,
+		msgAckChannelSize:        MsgAckChannelSize,
+		balanceNeeded:            BalanceNeeded,
+		mutexLifeTimeSec:         MutexLifetimeSec,
+		options:                  easyjson.NewJSONObject().GetPtr(),
+		multipleInstancesAllowed: MultipleInstancesAllowed,
 	}
 }
 
@@ -58,6 +61,11 @@ func (ftc *FunctionTypeConfig) SetBalanceNeeded(balanceNeeded bool) *FunctionTyp
 // TODO: SetAccessebility([]string = "golang local request" | "golang local signal" | "jetstream signal" | "nats core request")
 func (ftc *FunctionTypeConfig) SetServiceState(active bool) *FunctionTypeConfig {
 	ftc.serviceActive = active
+	return ftc
+}
+
+func (ftc *FunctionTypeConfig) SetMultipleInstancesAllowance(allowed bool) *FunctionTypeConfig {
+	ftc.multipleInstancesAllowed = allowed
 	return ftc
 }
 
