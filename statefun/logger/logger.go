@@ -9,6 +9,7 @@ import (
 )
 
 type LogLevel = logrus.Level
+type LogEntry = logrus.Entry
 
 const (
 	PanicLevel LogLevel = iota
@@ -46,7 +47,7 @@ func SetReportCaller(include bool) {
 	reportCaller = include
 }
 
-func getDefaultLogrusEntry(pc uintptr, file string, line int, ok bool) *logrus.Entry {
+func GetCustomLogEntry(pc uintptr, file string, line int, ok bool) *LogEntry {
 	var le *logrus.Entry
 	if reportCaller {
 		le = logrus.WithField("caller", fmt.Sprintf("%s:%d", file, line))
@@ -56,8 +57,7 @@ func getDefaultLogrusEntry(pc uintptr, file string, line int, ok bool) *logrus.E
 	return le
 }
 
-func Logln(ll LogLevel, args ...interface{}) {
-	le := getDefaultLogrusEntry(runtime.Caller(1))
+func LoglnEntry(ll LogLevel, le *LogEntry, args ...interface{}) {
 	switch ll {
 	case PanicLevel:
 		le.Panicln(args...)
@@ -76,8 +76,12 @@ func Logln(ll LogLevel, args ...interface{}) {
 	}
 }
 
-func Logf(ll LogLevel, format string, args ...interface{}) {
-	le := getDefaultLogrusEntry(runtime.Caller(1))
+func Logln(ll LogLevel, args ...interface{}) {
+	le := GetCustomLogEntry(runtime.Caller(1))
+	LoglnEntry(ll, le, args...)
+}
+
+func LogfEntry(ll LogLevel, le *LogEntry, format string, args ...interface{}) {
 	switch ll {
 	case PanicLevel:
 		le.Panicf(format, args...)
@@ -94,4 +98,9 @@ func Logf(ll LogLevel, format string, args ...interface{}) {
 	case TraceLevel:
 		le.Tracef(format, args...)
 	}
+}
+
+func Logf(ll LogLevel, format string, args ...interface{}) {
+	le := GetCustomLogEntry(runtime.Caller(1))
+	LogfEntry(ll, le, format, args...)
 }
