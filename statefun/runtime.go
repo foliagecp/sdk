@@ -7,6 +7,7 @@ package statefun
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -77,26 +78,24 @@ func NewRuntime(config RuntimeConfig) (r *Runtime, err error) {
 }
 
 func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Runtime) error) (err error) {
-	// Create stream if does not exist ------------------------------
-	streamExists := false
+	// Create streams if does not exist ------------------------------
+	/* Each stream contains a single subject (topic).
+	 * Differently named stream with overlapping subjects cannot exist!
+	 */
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	var existingStreams []string
 	for info := range r.js.StreamsInfo(nats.Context(ctx)) {
-		if info.Config.Name == r.config.functionTypesStreamName {
-			streamExists = true
-			break
-		}
+		existingStreams = append(existingStreams, info.Config.Name)
 	}
-	if !streamExists {
-		var subjects []string
-		for _, functionType := range r.registeredFunctionTypes {
-			subjects = append(subjects, functionType.subject)
+	for _, functionType := range r.registeredFunctionTypes {
+		if !slices.Contains(existingStreams, "foo") {
+			_, err := r.js.AddStream(&nats.StreamConfig{
+				Name:     functionType.getStreamName(),
+				Subjects: []string{functionType.subject},
+			})
+			system.MsgOnErrorReturn(err)
 		}
-		_, err := r.js.AddStream(&nats.StreamConfig{
-			Name:     r.config.functionTypesStreamName,
-			Subjects: subjects,
-		})
-		system.MsgOnErrorReturn(err)
 	}
 	// --------------------------------------------------------------
 
@@ -106,7 +105,7 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 
 	// Start function subscriptions ---------------------------------
 	for _, ft := range r.registeredFunctionTypes {
-		system.MsgOnErrorReturn(AddSignalSourceJetstreamQueuePushConsumer(ft, r.config.functionTypesStreamName))
+		system.MsgOnErrorReturn(AddSignalSourceJetstreamQueuePushConsumer(ft))
 		if ft.config.serviceActive {
 			system.MsgOnErrorReturn(AddRequestSourceNatsCore(ft))
 		}
