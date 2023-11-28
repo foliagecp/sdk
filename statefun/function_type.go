@@ -277,3 +277,7 @@ func (ft *FunctionType) setContext(keyValueID string, context *easyjson.JSON) {
 		ft.runtime.cacheStore.SetValue(keyValueID, context.ToBytes(), true, -1, "")
 	}
 }
+
+func (ft *FunctionType) getStreamName() string {
+	return fmt.Sprintf("%s_stream", system.GetHashStr(ft.subject))
+}

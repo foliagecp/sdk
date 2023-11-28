@@ -27,20 +27,20 @@ func AddRequestSourceNatsCore(ft *FunctionType) error {
 	return nil
 }
 
-func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType, streamName string) error {
+func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType) error {
 	consumerName := strings.ReplaceAll(ft.name, ".", "")
 	consumerGroup := consumerName + "-group"
 	lg.Logf(lg.TraceLevel, "Handling function type %s\n", ft.name)
 
 	// Create stream consumer if does not exist ---------------------
 	consumerExists := false
-	for info := range ft.runtime.js.Consumers(streamName, nats.MaxWait(10*time.Second)) {
+	for info := range ft.runtime.js.Consumers(ft.getStreamName(), nats.MaxWait(10*time.Second)) {
 		if info.Name == consumerName {
 			consumerExists = true
 		}
 	}
 	if !consumerExists {
-		_, err := ft.runtime.js.AddConsumer(streamName, &nats.ConsumerConfig{
+		_, err := ft.runtime.js.AddConsumer(ft.getStreamName(), &nats.ConsumerConfig{
 			Name:           consumerName,
 			Durable:        consumerName,
 			DeliverSubject: consumerName,
@@ -69,7 +69,7 @@ func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType, streamName stri
 		func(msg *nats.Msg) {
 			system.MsgOnErrorReturn(handleNatsMsg(ft, msg, false, msgAckChannel))
 		},
-		nats.Bind(streamName, consumerName),
+		nats.Bind(ft.getStreamName(), consumerName),
 		nats.ManualAck(),
 	)
 	if err != nil {
