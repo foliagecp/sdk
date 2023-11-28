@@ -37,7 +37,7 @@ payload: {
 **Change the identifier of the object from which you want to print the graph**
 
 ```sh
-nats pub -s nats://nats:foliage@nats:4222 functions.graph..api.object.debug.print.graph.root {\"payload\":{\"depth\":2}}
+nats pub -s nats://nats:foliage@nats:4222 functions.graph.api.object.debug.print.graph.root {\"payload\":{\"depth\":2}}
 ```
 **The result of this function will be the file "graph.dot", which is shown on the first picture**
 
@@ -47,5 +47,5 @@ nats pub -s nats://nats:foliage@nats:4222 functions.graph..api.object.debug.prin
 
 5. To print entire graph use:
 ```sh
-nats pub -s nats://nats:foliage@nats:4222 functions.graph..api.object.debug.print.graph.root {}
+nats pub -s nats://nats:foliage@nats:4222 functions.graph.api.object.debug.print.graph.root {}
 ```
