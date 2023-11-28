@@ -1063,7 +1063,14 @@ func cloneGraphWithTypes(ctx *sfplugins.StatefunContextProcessor, txID string, t
 
 		for objectFrom := range objectsFrom {
 			out := ctx.GlobalCache.GetKeysByPattern(fmt.Sprintf("%s.out.ltp_oid-bdy.%s.>", objectFrom, linkType))
-			for _, objectTo := range out {
+			for _, v := range out {
+				split := strings.Split(v, ".")
+				if len(split) == 0 {
+					continue
+				}
+
+				objectTo := split[len(split)-1]
+
 				links[objectFrom+objectTo+linkType] = link{
 					from: objectFrom,
 					to:   objectTo,
