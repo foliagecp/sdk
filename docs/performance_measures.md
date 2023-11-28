@@ -24,7 +24,7 @@ Function call frequency: 57673Hz
 ### Search at depth=3 by tags
 
 ```sh
-nats pub --count=100000 -s nats://nats:foliage@nats:4222 functions.graph..api.query.jpgql.dcra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\".root_a.*.*[tags('t1') || tags('t4’)]\"}}"
+nats pub --count=100000 -s nats://nats:foliage@nats:4222 functions.graph.api.query.jpgql.dcra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\".root_a.*.*[tags('t1') || tags('t4’)]\"}}"
 ```
 ```
 Total duration: 25002ms

@@ -5,9 +5,9 @@
 nats sub -s nats://nats:foliage@nats:4222 functions.graph.query.QUERYID
 ```
 2. Call one of the [functions](#functions)
-3. To log object with all its links use: `functions.graph..api.object.debug.print.<object_id>`, example:
+3. To log object with all its links use: `functions.graph.api.object.debug.print.<object_id>`, example:
 ```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph..api.object.debug.print.root "{}"
+nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.object.debug.print.root "{}"
 ```
 4. Inspect nats KV store via `io` container: 
 ```sh
