@@ -173,7 +173,7 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 
 	typenameIDContextProcessor.ObjectMutexLock = func(errorOnLocked bool) error {
 		lockId := fmt.Sprintf("%s-lock", id)
-		revId, err := KeyMutexLock(ft.runtime, lockId, errorOnLocked, lockId)
+		revId, err := KeyMutexLock(ft.runtime, lockId, errorOnLocked)
 		if err == nil {
 			objCtx := ft.getContext(lockId)
 			objCtx.SetByPath("__lock_rev_id", easyjson.NewJSON(revId))
@@ -192,7 +192,7 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 		}
 		revId := uint64(v)
 
-		err := KeyMutexUnlock(ft.runtime, lockId, revId, lockId)
+		err := KeyMutexUnlock(ft.runtime, lockId, revId)
 		if err != nil {
 			return err
 		}
