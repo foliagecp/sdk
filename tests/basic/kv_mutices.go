@@ -3,7 +3,6 @@
 package basic
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
@@ -20,14 +19,13 @@ func KVMuticesSimpleTest(runtime *statefun.Runtime, testDurationSec int, workers
 	testFunc := func(i int) {
 		defer wg.Done()
 
-		s := fmt.Sprintf("W%d", i)
 		for {
-			v, err := statefun.KeyMutexLock(runtime, "test.object", false, s)
+			v, err := statefun.KeyMutexLock(runtime, "test.object", false)
 			if err != nil {
 				lg.Logf(lg.ErrorLevel, "KeyMutexLock test: %v\n", err)
 			}
 			time.Sleep(time.Duration(workTimeMs) * time.Millisecond)
-			err = statefun.KeyMutexUnlock(runtime, "test.object", v, s)
+			err = statefun.KeyMutexUnlock(runtime, "test.object", v)
 			if err != nil {
 				lg.Logf(lg.ErrorLevel, "KeyMutexUnlock test: %v\n", err)
 			}
