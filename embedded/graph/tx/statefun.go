@@ -8,6 +8,7 @@ import (
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/embedded/graph/common"
 	"github.com/foliagecp/sdk/statefun"
+	"github.com/foliagecp/sdk/statefun/logger"
 	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 )
@@ -165,6 +166,7 @@ func Push(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCont
 	merger := newMerger(txID, opts...)
 
 	if err := merger.Merge(contextProcessor); err != nil {
+		logger.Logln(logger.ErrorLevel, err)
 		replyError(contextProcessor, err)
 		return
 	}

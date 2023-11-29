@@ -64,7 +64,7 @@ func newMerger(txID string, opts ...mergerOpt) *merger {
 // merge v0
 // TODO: add rollback
 func (m *merger) Merge(ctx *sfplugins.StatefunContextProcessor) error {
-	lg.Logln(lg.InfoLevel, "Start merging", "tx", m.txID, "with mode", m.mode)
+	lg.Logln(lg.DebugLevel, "Start merging", "tx", m.txID, "with mode", m.mode)
 	start := time.Now()
 
 	prefix := generatePrefix(m.txID)
@@ -87,9 +87,7 @@ func (m *merger) Merge(ctx *sfplugins.StatefunContextProcessor) error {
 			// check for delete
 			// otherwise, update
 			if body.GetByPath("__meta.status").AsStringDefault("") == "deleted" {
-				if m.debug {
-					lg.Logln(lg.DebugLevel, "Delete object", "id", normalID)
-				}
+				lg.Logln(lg.DebugLevel, "Delete object", "id", normalID)
 
 				deleted[normalID] = struct{}{}
 
@@ -97,9 +95,7 @@ func (m *merger) Merge(ctx *sfplugins.StatefunContextProcessor) error {
 					return fmt.Errorf("delete main graph object %s: %w", normalID, err)
 				}
 			} else {
-				if m.debug {
-					lg.Logln(lg.DebugLevel, "Update object", "id", normalID)
-				}
+				lg.Logln(lg.DebugLevel, "Update object", "id", normalID)
 
 				if err := updateLowLevelObject(ctx, m.mode, normalID, body); err != nil {
 					return fmt.Errorf("update main graph object %s: %w", normalID, err)
@@ -107,9 +103,7 @@ func (m *merger) Merge(ctx *sfplugins.StatefunContextProcessor) error {
 			}
 		} else {
 			// create
-			if m.debug {
-				lg.Logln(lg.DebugLevel, "Create object", "id", normalID)
-			}
+			lg.Logln(lg.DebugLevel, "Create object", "id", normalID)
 
 			// uninited objects policy
 			if _, err := ctx.GlobalCache.GetValue(normalID); err == nil {
@@ -151,17 +145,13 @@ func (m *merger) Merge(ctx *sfplugins.StatefunContextProcessor) error {
 			// check for delete
 			// otherwise, update
 			if body.GetByPath("__meta.status").AsStringDefault("") == "deleted" {
-				if m.debug {
-					lg.Logln(lg.DebugLevel, "Delete link", "from", normalParent, "to", normalChild, "link_type", normalLt)
-				}
+				lg.Logln(lg.DebugLevel, "Delete link", "from", normalParent, "to", normalChild, "link_type", normalLt)
 
 				if err := deleteLowLevelLink(ctx, normalParent, normalChild, normalLt); err != nil {
 					return fmt.Errorf("delete main graph link %s: %w", normalID, err)
 				}
 			} else {
-				if m.debug {
-					lg.Logln(lg.DebugLevel, "Update link", "from", normalParent, "to", normalChild, "link_type", normalLt)
-				}
+				lg.Logln(lg.DebugLevel, "Update link", "from", normalParent, "to", normalChild, "link_type", normalLt)
 
 				if err := updateLowLevelLink(ctx, normalParent, normalChild, normalLt, *body); err != nil {
 					return fmt.Errorf("update main link %s: %w", normalID, err)
@@ -169,9 +159,7 @@ func (m *merger) Merge(ctx *sfplugins.StatefunContextProcessor) error {
 			}
 		} else {
 			// create
-			if m.debug {
-				lg.Logln(lg.DebugLevel, "Create link", "from", normalParent, "to", normalChild, "link_type", normalLt)
-			}
+			lg.Logln(lg.DebugLevel, "Create link", "from", normalParent, "to", normalChild, "link_type", normalLt)
 
 			if err := createLowLevelLink(ctx, normalParent, normalChild, normalLt, "", *body); err != nil {
 				return fmt.Errorf("create main graph link %s: %w", normalID, err)
@@ -179,7 +167,7 @@ func (m *merger) Merge(ctx *sfplugins.StatefunContextProcessor) error {
 		}
 	}
 
-	lg.Logln(lg.InfoLevel, "Merge Done!", "dt", time.Since(start))
+	lg.Logln(lg.DebugLevel, "Merge Done!", "dt", time.Since(start))
 
 	return nil
 }

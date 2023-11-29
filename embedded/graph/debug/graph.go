@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/foliagecp/sdk/statefun/logger"
 	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/goccy/go-graphviz"
 	"github.com/goccy/go-graphviz/cgraph"
@@ -60,6 +61,7 @@ func LLAPIPrintGraph(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 	gviz := graphviz.New()
 	graph, err := gviz.Graph()
 	if err != nil {
+		logger.Logln(logger.WarnLevel, err)
 		return
 	}
 
@@ -135,6 +137,7 @@ func LLAPIPrintGraph(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 	outputPath := filepath.Join("graph." + string(graphvizExtension))
 
 	if err := gviz.RenderFilename(graph, graphvizExtension, outputPath); err != nil {
+		logger.Logln(logger.WarnLevel, err)
 		return
 	}
 }
