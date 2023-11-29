@@ -9,7 +9,6 @@ import (
 )
 
 type LogLevel = logrus.Level
-type LogEntry = logrus.Entry
 
 const (
 	PanicLevel LogLevel = iota
@@ -47,60 +46,64 @@ func SetReportCaller(include bool) {
 	reportCaller = include
 }
 
-func GetCustomLogEntry(pc uintptr, file string, line int, ok bool) *LogEntry {
+func GetCustomLogEntry(pc uintptr, file string, line int, ok bool) LogEntry {
 	var le *logrus.Entry
 	if reportCaller {
 		le = logrus.WithField("caller", fmt.Sprintf("%s:%d", file, line))
 	} else {
 		le = logrus.NewEntry(logrus.StandardLogger())
 	}
-	return le
+	return LogEntry{le}
 }
 
-func LoglnEntry(ll LogLevel, le *LogEntry, args ...interface{}) {
+type LogEntry struct {
+	logrusLogEntry *logrus.Entry
+}
+
+func (le *LogEntry) Logln(ll LogLevel, args ...interface{}) {
 	switch ll {
 	case PanicLevel:
-		le.Panicln(args...)
+		le.logrusLogEntry.Panicln(args...)
 	case FatalLevel:
-		le.Fatalln(args...)
+		le.logrusLogEntry.Fatalln(args...)
 	case ErrorLevel:
-		le.Errorln(args...)
+		le.logrusLogEntry.Errorln(args...)
 	case WarnLevel:
-		le.Warnln(args...)
+		le.logrusLogEntry.Warnln(args...)
 	case InfoLevel:
-		le.Infoln(args...)
+		le.logrusLogEntry.Infoln(args...)
 	case DebugLevel:
-		le.Debugln(args...)
+		le.logrusLogEntry.Debugln(args...)
 	case TraceLevel:
-		le.Traceln(args...)
+		le.logrusLogEntry.Traceln(args...)
 	}
 }
 
 func Logln(ll LogLevel, args ...interface{}) {
 	le := GetCustomLogEntry(runtime.Caller(1))
-	LoglnEntry(ll, le, args...)
+	le.Logln(ll, args...)
 }
 
-func LogfEntry(ll LogLevel, le *LogEntry, format string, args ...interface{}) {
+func (le *LogEntry) Logf(ll LogLevel, format string, args ...interface{}) {
 	switch ll {
 	case PanicLevel:
-		le.Panicf(format, args...)
+		le.logrusLogEntry.Panicf(format, args...)
 	case FatalLevel:
-		le.Fatalf(format, args...)
+		le.logrusLogEntry.Fatalf(format, args...)
 	case ErrorLevel:
-		le.Errorf(format, args...)
+		le.logrusLogEntry.Errorf(format, args...)
 	case WarnLevel:
-		le.Warnf(format, args...)
+		le.logrusLogEntry.Warnf(format, args...)
 	case InfoLevel:
-		le.Infof(format, args...)
+		le.logrusLogEntry.Infof(format, args...)
 	case DebugLevel:
-		le.Debugf(format, args...)
+		le.logrusLogEntry.Debugf(format, args...)
 	case TraceLevel:
-		le.Tracef(format, args...)
+		le.logrusLogEntry.Tracef(format, args...)
 	}
 }
 
 func Logf(ll LogLevel, format string, args ...interface{}) {
 	le := GetCustomLogEntry(runtime.Caller(1))
-	LogfEntry(ll, le, format, args...)
+	le.Logf(ll, format, args...)
 }
