@@ -103,27 +103,29 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 	r.cacheStore = cache.NewCacheStore(context.Background(), cacheConfig, r.kv)
 	lg.Logln(lg.TraceLevel, "Cache store inited!")
 
-	singleInstanceFunctionsRevisions := map[string]uint64{}
-	singleInstanceFunctionsLockUpdater := func(singleInstanceFunctionsRevisions map[string]uint64) {
-		if len(singleInstanceFunctionsRevisions) > 0 {
+	// Functions running in a single instance controller --------------------------------
+	singleInstanceFunctionRevisions := map[string]uint64{}
+	singleInstanceFunctionLocksUpdater := func(sifr map[string]uint64) {
+		if len(sifr) > 0 {
 			for {
 				time.Sleep(time.Duration(r.config.kvMutexLifeTimeSec) / 2 * time.Second)
-				for k, revId := range singleInstanceFunctionsRevisions {
-					newRevId, err := KeyMutexLockUpdate(r, k, revId)
+				for ftName, revId := range sifr {
+					newRevId, err := KeyMutexLockUpdate(r, system.GetHashStr(ftName), revId)
 					if err != nil {
-						lg.Logf(lg.ErrorLevel, "KeyMutexLockUpdate for single instance function with stream=%s failed", k)
+						lg.Logf(lg.ErrorLevel, "KeyMutexLockUpdate for single instance function type %s failed", ftName)
 					} else {
-						singleInstanceFunctionsRevisions[k] = newRevId
+						sifr[ftName] = newRevId
 					}
 				}
 			}
 		}
 	}
+	// ----------------------------------------------------------------------------------
 
 	// Start function subscriptions ---------------------------------
-	for _, ft := range r.registeredFunctionTypes {
+	for ftName, ft := range r.registeredFunctionTypes {
 		if !ft.config.multipleInstancesAllowed {
-			revId, err := KeyMutexLock(r, ft.getStreamName(), true)
+			revId, err := KeyMutexLock(r, system.GetHashStr(ftName), true)
 			if err != nil {
 				if err == mutexLockedError {
 					lg.Logf(lg.WarnLevel, "Function type %s is already running somewhere and multipleInstancesAllowed==false, skipping", ft.name)
@@ -132,7 +134,7 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 					return err
 				}
 			}
-			singleInstanceFunctionsRevisions[ft.getStreamName()] = revId
+			singleInstanceFunctionRevisions[ftName] = revId
 		}
 
 		system.MsgOnErrorReturn(AddSignalSourceJetstreamQueuePushConsumer(ft))
@@ -142,7 +144,7 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 	}
 	// --------------------------------------------------------------
 
-	go singleInstanceFunctionsLockUpdater(singleInstanceFunctionsRevisions)
+	go singleInstanceFunctionLocksUpdater(singleInstanceFunctionRevisions)
 
 	if onAfterStart != nil {
 		system.MsgOnErrorReturn(onAfterStart(r))
