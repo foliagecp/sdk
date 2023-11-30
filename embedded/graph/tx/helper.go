@@ -11,6 +11,11 @@ import (
 	"github.com/foliagecp/sdk/statefun/system"
 )
 
+type beginTxType struct {
+	Mode    string              `json:"mode"`
+	Objects map[string]struct{} `json:"objects,omitempty"`
+}
+
 func cloneTypeFromMainGraphToTx(ctx *sfplugins.StatefunContextProcessor, txID, src, dst string) error {
 	originBody, err := ctx.GlobalCache.GetValueAsJSON(src)
 	if err != nil {
