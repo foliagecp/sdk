@@ -95,6 +95,7 @@ func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 
 	if err := createLowLevelLink(contextProcessor, _TX_MASTER, txID, "tx", "", easyjson.NewJSONObject()); err != nil {
 		replyError(contextProcessor, err)
+		system.MsgOnErrorReturn(contextProcessor.ObjectMutexUnlock())
 		return
 	}
 
@@ -104,12 +105,14 @@ func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 	if len(bytes) > 0 {
 		if err := json.Unmarshal(bytes, &types); err != nil {
 			replyError(contextProcessor, err)
+			system.MsgOnErrorReturn(contextProcessor.ObjectMutexUnlock())
 			return
 		}
 	}
 
 	if err := cloneGraph(contextProcessor, txID, cloneMod, types); err != nil {
 		replyError(contextProcessor, err)
+		system.MsgOnErrorReturn(contextProcessor.ObjectMutexUnlock())
 		return
 	}
 
