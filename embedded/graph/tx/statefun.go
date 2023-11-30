@@ -1,6 +1,7 @@
 package tx
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -64,7 +65,7 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 /*
 	payload:{
 		"clone": "min" | "full" | "with_types", optional, default: full
-		"types": []string, only with "clone":"with_types"
+		"types": map[string]beginTxType, only with "clone":"with_types"
 	}
 */
 func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
@@ -77,7 +78,7 @@ func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 
 	payload := contextProcessor.Payload
 	cloneMod := payload.GetByPath("clone").AsStringDefault("full")
-	cloneWithTypes, _ := payload.GetByPath("types").AsArrayString()
+	cloneWithTypes := payload.GetByPath("types")
 
 	body := contextProcessor.GetObjectContext()
 
@@ -97,7 +98,17 @@ func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 		return
 	}
 
-	if err := cloneGraph(contextProcessor, txID, cloneMod, cloneWithTypes...); err != nil {
+	types := make(map[string]beginTxType)
+	bytes := cloneWithTypes.ToBytes()
+
+	if len(bytes) > 0 {
+		if err := json.Unmarshal(bytes, &types); err != nil {
+			replyError(contextProcessor, err)
+			return
+		}
+	}
+
+	if err := cloneGraph(contextProcessor, txID, cloneMod, types); err != nil {
 		replyError(contextProcessor, err)
 		return
 	}
@@ -821,10 +832,10 @@ func DeleteObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	replyOk(contextProcessor)
 }
 
-func cloneGraph(ctx *sfplugins.StatefunContextProcessor, txID, cloneMod string, types ...string) error {
+func cloneGraph(ctx *sfplugins.StatefunContextProcessor, txID, cloneMod string, types map[string]beginTxType) error {
 	switch cloneMod {
 	case "min":
-		if err := cloneGraphWithTypes(ctx, txID); err != nil {
+		if err := cloneGraphWithTypes(ctx, txID, types); err != nil {
 			return err
 		}
 	case "full":
@@ -832,7 +843,7 @@ func cloneGraph(ctx *sfplugins.StatefunContextProcessor, txID, cloneMod string, 
 			return err
 		}
 	case "with_types":
-		if err := cloneGraphWithTypes(ctx, txID, types...); err != nil {
+		if err := cloneGraphWithTypes(ctx, txID, types); err != nil {
 			return err
 		}
 	}
@@ -955,7 +966,7 @@ func fullClone(ctx *sfplugins.StatefunContextProcessor, txID string) error {
 	return nil
 }
 
-func cloneGraphWithTypes(ctx *sfplugins.StatefunContextProcessor, txID string, types ...string) error {
+func cloneGraphWithTypes(ctx *sfplugins.StatefunContextProcessor, txID string, types map[string]beginTxType) error {
 	if err := initBuilInObjects(ctx, txID); err != nil {
 		return err
 	}
@@ -963,18 +974,17 @@ func cloneGraphWithTypes(ctx *sfplugins.StatefunContextProcessor, txID string, t
 	prefix := generatePrefix(txID)
 
 	uniqTypeObjects := make(map[string]map[string]struct{})
-	for _, v := range types {
-		uniqTypeObjects[v] = make(map[string]struct{})
-	}
 
 	links := make(map[string]link)
 	objects := make(map[string]struct{})
 
-	for v := range uniqTypeObjects {
+	for v, policy := range types {
 		// if type doesn't exists, continue
 		if _, err := ctx.GlobalCache.GetValue(v); err != nil {
 			continue
 		}
+
+		uniqTypeObjects[v] = make(map[string]struct{})
 
 		// create type
 		objects[v] = struct{}{}
@@ -1000,8 +1010,17 @@ func cloneGraphWithTypes(ctx *sfplugins.StatefunContextProcessor, txID string, t
 
 			switch outLinkLt {
 			case OBJECT_TYPELINK:
-				uniqTypeObjects[v][outLinkID] = struct{}{}
 
+				switch policy.Mode {
+				case "none":
+					continue
+				case "only":
+					if _, ok := policy.Objects[outLinkID]; !ok {
+						continue
+					}
+				}
+
+				uniqTypeObjects[v][outLinkID] = struct{}{}
 				objects[outLinkID] = struct{}{}
 
 				// create type -> object link
@@ -1025,7 +1044,7 @@ func cloneGraphWithTypes(ctx *sfplugins.StatefunContextProcessor, txID string, t
 					lt:   OBJECT_TYPELINK,
 				}
 			case TYPE_TYPELINK:
-				if _, ok := uniqTypeObjects[outLinkID]; !ok {
+				if _, ok := types[outLinkID]; !ok {
 					continue
 				}
 
@@ -1072,6 +1091,10 @@ func cloneGraphWithTypes(ctx *sfplugins.StatefunContextProcessor, txID string, t
 				}
 
 				objectTo := split[len(split)-1]
+
+				if _, ok := objectsTo[objectTo]; !ok {
+					continue
+				}
 
 				links[objectFrom+objectTo+linkType] = link{
 					from: objectFrom,
