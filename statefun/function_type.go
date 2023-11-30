@@ -165,6 +165,9 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 	}
 
 	typenameIDContextProcessor.Payload = msg.Payload
+	if typenameIDContextProcessor.Payload == nil {
+		typenameIDContextProcessor.Payload = easyjson.NewJSONObject().GetPtr()
+	}
 	typenameIDContextProcessor.Options = ft.config.options
 	if msg.Options != nil {
 		typenameIDContextProcessor.Options.DeepMerge(*msg.Options)
