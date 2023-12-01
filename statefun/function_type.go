@@ -50,7 +50,7 @@ func (ft *FunctionType) SetExecutor(alias string, content string, constructor fu
 }
 
 func (ft *FunctionType) sendMsg(id string, msg FunctionTypeMsg) {
-	// After message was received do typename balance if the one is needed and hasn't been done yet -------
+	/*// After message was received do typename balance if the one is needed and hasn't been done yet -------
 	if ft.config.balanceNeeded {
 		if !ft.config.balanced {
 			var err error
@@ -68,7 +68,7 @@ func (ft *FunctionType) sendMsg(id string, msg FunctionTypeMsg) {
 			ft.config.balanced = true
 		}
 	}
-	// ----------------------------------------------------------------------------------------------------
+	// ----------------------------------------------------------------------------------------------------*/
 
 	// Send msg to type id handler ------------------------------------------------------
 	var msgChannel chan FunctionTypeMsg
@@ -131,7 +131,7 @@ func (ft *FunctionType) idHandlerRoutine(id string, msgChannel chan FunctionType
 }
 
 func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameIDContextProcessor *sfPlugins.StatefunContextProcessor) {
-	var lockRevisionID uint64 = 0
+	/*var lockRevisionID uint64 = 0
 
 	if !ft.config.balanceNeeded { // Use context mutex lock if function type is not typename balanced
 		var err error
@@ -142,7 +142,7 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 			}
 			return
 		}
-	}
+	}*/
 
 	replyDataChannel := make(chan *easyjson.JSON, 1)
 	if msg.RequestCallback != nil {
@@ -224,9 +224,9 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 		msg.RequestCallback(replyData)
 	}
 
-	if !ft.config.balanceNeeded { // Use context mutex lock if function type is not typename balanced
-		system.MsgOnErrorReturn(ContextMutexUnlock(ft, id, lockRevisionID))
-	}
+	//if !ft.config.balanceNeeded { // Use context mutex lock if function type is not typename balanced
+	//	system.MsgOnErrorReturn(ContextMutexUnlock(ft, id, lockRevisionID))
+	//}
 	atomic.StoreInt64(&ft.runtime.glce, time.Now().UnixNano())
 }
 
@@ -256,10 +256,10 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 	})
 	if garbageCollected > 0 && handlersRunning == 0 {
 		lg.Logf(lg.TraceLevel, ">>>>>>>>>>>>>> Garbage collected for typename %s - no id handlers left\n", ft.name)
-		if ft.config.balanced {
+		/*if ft.config.balanced {
 			ft.config.balanced = false
 			system.MsgOnErrorReturn(FunctionTypeMutexUnlock(ft, ft.typenameLockRevisionID))
-		}
+		}*/
 	}
 
 	return
