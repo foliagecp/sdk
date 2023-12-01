@@ -62,6 +62,11 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 // id must not belong to an existing object in graph! otherwise object will be rewritten
 // create tx_id, clone exist graph with tx_id prefix, return tx_id to client
 
+func replyTxError(ctx *sfplugins.StatefunContextProcessor, err error) {
+	reply(ctx, "failed", err.Error())
+	system.MsgOnErrorReturn(ctx.ObjectMutexUnlock())
+}
+
 /*
 	payload:{
 		"clone": "min" | "full" | "with_types", optional, default: full
@@ -94,8 +99,7 @@ func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 	txBody.SetByPath("created_at", easyjson.NewJSON(now))
 
 	if err := createLowLevelLink(contextProcessor, _TX_MASTER, txID, "tx", "", easyjson.NewJSONObject()); err != nil {
-		replyError(contextProcessor, err)
-		system.MsgOnErrorReturn(contextProcessor.ObjectMutexUnlock())
+		replyTxError(contextProcessor, err)
 		return
 	}
 
@@ -104,15 +108,13 @@ func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 
 	if len(bytes) > 0 {
 		if err := json.Unmarshal(bytes, &types); err != nil {
-			replyError(contextProcessor, err)
-			system.MsgOnErrorReturn(contextProcessor.ObjectMutexUnlock())
+			replyTxError(contextProcessor, err)
 			return
 		}
 	}
 
 	if err := cloneGraph(contextProcessor, txID, cloneMod, types); err != nil {
-		replyError(contextProcessor, err)
-		system.MsgOnErrorReturn(contextProcessor.ObjectMutexUnlock())
+		replyTxError(contextProcessor, err)
 		return
 	}
 
@@ -181,7 +183,7 @@ func Push(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCont
 
 	if err := merger.Merge(contextProcessor); err != nil {
 		logger.Logln(logger.ErrorLevel, err)
-		replyError(contextProcessor, err)
+		replyTxError(contextProcessor, err)
 		return
 	}
 
@@ -190,7 +192,7 @@ func Push(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCont
 	delete.SetByPath("mode", easyjson.NewJSON("cascade"))
 
 	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.object.delete", txID, &delete, nil); err != nil {
-		replyError(contextProcessor, err)
+		replyTxError(contextProcessor, err)
 		return
 	}
 
@@ -220,7 +222,7 @@ func CreateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 
 	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.type.create", txTypeID, &createTypePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
+		replyTxError(contextProcessor, err)
 		return
 	}
 
@@ -243,7 +245,7 @@ func UpdateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 
 	typeID, ok := payload.GetByPath("id").AsString()
 	if !ok {
-		replyError(contextProcessor, errInvalidArgument)
+		replyTxError(contextProcessor, errInvalidArgument)
 		return
 	}
 
@@ -259,7 +261,7 @@ func UpdateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 	if len(keys) == 0 {
 		originBody, err := contextProcessor.GlobalCache.GetValueAsJSON(typeID)
 		if err != nil {
-			replyError(contextProcessor, err)
+			replyTxError(contextProcessor, err)
 			return
 		}
 
@@ -269,7 +271,7 @@ func UpdateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 
 		result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.tx.type.create", txID, &createPayload, nil)
 		if err := checkRequestError(result, err); err != nil {
-			replyError(contextProcessor, err)
+			replyTxError(contextProcessor, err)
 			return
 		}
 	}
@@ -279,7 +281,7 @@ func UpdateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 
 	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.type.update", txType, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
+		replyTxError(contextProcessor, err)
 		return
 	}
 
@@ -297,7 +299,7 @@ func DeleteType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 
 	typeID, ok := payload.GetByPath("id").AsString()
 	if !ok {
-		replyError(contextProcessor, errInvalidArgument)
+		replyTxError(contextProcessor, errInvalidArgument)
 		return
 	}
 
@@ -312,7 +314,7 @@ func DeleteType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 
 		result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.object.update", v, &updatePayload, nil)
 		if err := checkRequestError(result, err); err != nil {
-			replyError(contextProcessor, err)
+			replyTxError(contextProcessor, err)
 			return
 		}
 
@@ -323,7 +325,7 @@ func DeleteType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 
 	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.type.update", txType, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
+		replyTxError(contextProcessor, err)
 		return
 	}
 
@@ -359,7 +361,7 @@ func CreateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 
 	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.object.create", txObjID, &createObjPayload, nil)
 	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
+		replyTxError(contextProcessor, err)
 		return
 	}
 
@@ -383,7 +385,7 @@ func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 
 	objectID, ok := payload.GetByPath("id").AsString()
 	if !ok {
-		replyError(contextProcessor, errInvalidArgument)
+		replyTxError(contextProcessor, errInvalidArgument)
 		return
 	}
 
@@ -399,13 +401,14 @@ func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 	if len(keys) == 0 {
 		originBody, err := contextProcessor.GlobalCache.GetValueAsJSON(objectID)
 		if err != nil {
-			replyError(contextProcessor, err)
+			replyTxError(contextProcessor, err)
 			return
 		}
 
 		linkPattern := fmt.Sprintf("%s.out.ltp_oid-bdy.%s.>", objectID, TYPE_TYPELINK)
 		typeKeys := contextProcessor.GlobalCache.GetKeysByPattern(linkPattern)
 		if len(typeKeys) == 0 {
+			replyTxError(contextProcessor, fmt.Errorf("missing links: %s", linkPattern))
 			return
 		}
 
@@ -416,7 +419,7 @@ func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 
 		result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.tx.object.create", txID, &createPayload, nil)
 		if err := checkRequestError(result, err); err != nil {
-			replyError(contextProcessor, err)
+			replyTxError(contextProcessor, err)
 			return
 		}
 	}
@@ -430,7 +433,7 @@ func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 
 	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.object.update", txObject, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
+		replyTxError(contextProcessor, err)
 		return
 	}
 
@@ -450,7 +453,7 @@ func DeleteObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 
 	objectID, ok := payload.GetByPath("id").AsString()
 	if !ok {
-		replyError(contextProcessor, errInvalidArgument)
+		replyTxError(contextProcessor, errInvalidArgument)
 		return
 	}
 
@@ -463,7 +466,7 @@ func DeleteObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 
 	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.object.update", txObject, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
+		replyTxError(contextProcessor, err)
 		return
 	}
 
@@ -486,13 +489,13 @@ func CreateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 
 	from, ok := payload.GetByPath("from").AsString()
 	if !ok {
-		replyError(contextProcessor, errInvalidArgument)
+		replyTxError(contextProcessor, errInvalidArgument)
 		return
 	}
 
 	to, ok := payload.GetByPath("to").AsString()
 	if !ok {
-		replyError(contextProcessor, errInvalidArgument)
+		replyTxError(contextProcessor, errInvalidArgument)
 		return
 	}
 
@@ -506,7 +509,7 @@ func CreateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 
 	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.types.link.create", txFrom, &createLinkPayload, nil)
 	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
+		replyTxError(contextProcessor, err)
 		return
 	}
 
@@ -527,13 +530,13 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 
 	from, ok := payload.GetByPath("from").AsString()
 	if !ok {
-		replyError(contextProcessor, errInvalidArgument)
+		replyTxError(contextProcessor, errInvalidArgument)
 		return
 	}
 
 	to, ok := payload.GetByPath("to").AsString()
 	if !ok {
-		replyError(contextProcessor, errInvalidArgument)
+		replyTxError(contextProcessor, errInvalidArgument)
 		return
 	}
 
@@ -564,7 +567,7 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 		if _, err := contextProcessor.GlobalCache.GetValue(txFrom); err != nil {
 			// clone
 			if err := cloneTypeFromMainGraphToTx(contextProcessor, txID, from, txFrom); err != nil {
-				replyError(contextProcessor, err)
+				replyTxError(contextProcessor, err)
 				return
 			}
 		}
@@ -573,14 +576,14 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 		if _, err := contextProcessor.GlobalCache.GetValue(txTo); err != nil {
 			// clone
 			if err := cloneTypeFromMainGraphToTx(contextProcessor, txID, to, txTo); err != nil {
-				replyError(contextProcessor, err)
+				replyTxError(contextProcessor, err)
 				return
 			}
 		}
 
 		// clone link
 		if err := cloneLinkFromMainGraphToTx(contextProcessor, from, to, to, txFrom, txTo, txTo); err != nil {
-			replyError(contextProcessor, err)
+			replyTxError(contextProcessor, err)
 			return
 		}
 
@@ -591,7 +594,7 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 
 	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.types.link.update", txFrom, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
+		replyTxError(contextProcessor, err)
 		return
 	}
 
@@ -610,13 +613,13 @@ func DeleteTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 
 	from, ok := payload.GetByPath("from").AsString()
 	if !ok {
-		replyError(contextProcessor, errInvalidArgument)
+		replyTxError(contextProcessor, errInvalidArgument)
 		return
 	}
 
 	to, ok := payload.GetByPath("to").AsString()
 	if !ok {
-		replyError(contextProcessor, errInvalidArgument)
+		replyTxError(contextProcessor, errInvalidArgument)
 		return
 	}
 
@@ -629,13 +632,13 @@ func DeleteTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 
 	linkBody, err := contextProcessor.GlobalCache.GetValueAsJSON(linkID)
 	if err != nil {
-		replyError(contextProcessor, err)
+		replyTxError(contextProcessor, err)
 		return
 	}
 
 	linkType, ok := linkBody.GetByPath("link_type").AsString()
 	if !ok {
-		replyError(contextProcessor, errInvalidArgument)
+		replyTxError(contextProcessor, errInvalidArgument)
 		return
 	}
 
@@ -656,7 +659,7 @@ func DeleteTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 
 			result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.objects.link.update", objectID, &updatePayload, nil)
 			if err := checkRequestError(result, err); err != nil {
-				replyError(contextProcessor, err)
+				replyTxError(contextProcessor, err)
 				return
 			}
 		}
@@ -668,7 +671,7 @@ func DeleteTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 
 	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.types.link.update", txFrom, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
+		replyTxError(contextProcessor, err)
 		return
 	}
 
@@ -692,13 +695,13 @@ func CreateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 
 	from, ok := payload.GetByPath("from").AsString()
 	if !ok {
-		replyError(contextProcessor, errInvalidArgument)
+		replyTxError(contextProcessor, errInvalidArgument)
 		return
 	}
 
 	to, ok := payload.GetByPath("to").AsString()
 	if !ok {
-		replyError(contextProcessor, errInvalidArgument)
+		replyTxError(contextProcessor, errInvalidArgument)
 		return
 	}
 
@@ -710,7 +713,7 @@ func CreateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 
 	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.objects.link.create", txFrom, &createLinkPayload, nil)
 	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
+		replyTxError(contextProcessor, err)
 		return
 	}
 
@@ -732,13 +735,13 @@ func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 
 	from, ok := payload.GetByPath("from").AsString()
 	if !ok {
-		replyError(contextProcessor, errInvalidArgument)
+		replyTxError(contextProcessor, errInvalidArgument)
 		return
 	}
 
 	to, ok := payload.GetByPath("to").AsString()
 	if !ok {
-		replyError(contextProcessor, errInvalidArgument)
+		replyTxError(contextProcessor, errInvalidArgument)
 		return
 	}
 
@@ -748,7 +751,7 @@ func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	typesLink := fmt.Sprintf("%s.out.ltp_oid-bdy.__type.%s", fromType, toType)
 	typesLinkBody, err := contextProcessor.GlobalCache.GetValueAsJSON(typesLink)
 	if err != nil {
-		replyError(contextProcessor, err)
+		replyTxError(contextProcessor, err)
 		return
 	}
 
@@ -761,20 +764,20 @@ func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	if _, err := contextProcessor.GlobalCache.GetValue(linkID); err != nil {
 		if _, err := contextProcessor.GlobalCache.GetValue(txFrom); err != nil {
 			if err := cloneObjectFromMainGraphToTx(contextProcessor, txID, from, txFrom, fromType); err != nil {
-				replyError(contextProcessor, err)
+				replyTxError(contextProcessor, err)
 				return
 			}
 		}
 
 		if _, err := contextProcessor.GlobalCache.GetValue(txTo); err != nil {
 			if err := cloneObjectFromMainGraphToTx(contextProcessor, txID, to, txTo, toType); err != nil {
-				replyError(contextProcessor, err)
+				replyTxError(contextProcessor, err)
 				return
 			}
 		}
 
 		if err := cloneLinkFromMainGraphToTx(contextProcessor, from, objectLinkType, to, txFrom, objectLinkType, txTo); err != nil {
-			replyError(contextProcessor, err)
+			replyTxError(contextProcessor, err)
 			return
 		}
 	}
@@ -788,7 +791,7 @@ func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 
 	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.objects.link.update", txFrom, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
+		replyTxError(contextProcessor, err)
 		return
 	}
 
@@ -807,13 +810,13 @@ func DeleteObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 
 	from, ok := payload.GetByPath("from").AsString()
 	if !ok {
-		replyError(contextProcessor, errInvalidArgument)
+		replyTxError(contextProcessor, errInvalidArgument)
 		return
 	}
 
 	to, ok := payload.GetByPath("to").AsString()
 	if !ok {
-		replyError(contextProcessor, errInvalidArgument)
+		replyTxError(contextProcessor, errInvalidArgument)
 		return
 	}
 
@@ -828,7 +831,7 @@ func DeleteObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 
 	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.objects.link.update", txFrom, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
+		replyTxError(contextProcessor, err)
 		return
 	}
 
