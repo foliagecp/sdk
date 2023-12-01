@@ -63,8 +63,8 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 // create tx_id, clone exist graph with tx_id prefix, return tx_id to client
 
 func replyTxError(ctx *sfplugins.StatefunContextProcessor, err error) {
-	reply(ctx, "failed", err.Error())
 	system.MsgOnErrorReturn(ctx.ObjectMutexUnlock())
+	reply(ctx, "failed", err.Error())
 }
 
 /*
