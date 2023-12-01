@@ -10,7 +10,7 @@ const (
 	MsgAckChannelSize        = 64
 	BalanceNeeded            = true
 	MutexLifetimeSec         = 120
-	MultipleInstancesAllowed = true
+	MultipleInstancesAllowed = false
 )
 
 type FunctionTypeConfig struct {
