@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	lg "github.com/foliagecp/sdk/statefun/logger"
+	"github.com/foliagecp/sdk/statefun/prometrics"
 
 	"github.com/foliagecp/easyjson"
 
@@ -45,6 +46,7 @@ type StatefunContextProcessor struct {
 	SetObjectContext   func(*easyjson.JSON)
 	ObjectMutexLock    func(errorOnLocked bool) error
 	ObjectMutexUnlock  func() error
+	GetPrometrics      func() *prometrics.Prometrics
 	// TODO: DownstreamSignal(<function type>, <links filters>, <payload>, <options>)
 	Signal  func(SignalProvider, string, string, *easyjson.JSON, *easyjson.JSON) error
 	Request func(RequestProvider, string, string, *easyjson.JSON, *easyjson.JSON) (*easyjson.JSON, error)

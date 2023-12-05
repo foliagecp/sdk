@@ -9,6 +9,7 @@ import (
 	"time"
 
 	lg "github.com/foliagecp/sdk/statefun/logger"
+	"github.com/foliagecp/sdk/statefun/prometrics"
 
 	"github.com/foliagecp/easyjson"
 
@@ -111,6 +112,7 @@ func (ft *FunctionType) idHandlerRoutine(id string, msgChannel chan FunctionType
 		SetFunctionContext: func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
 		GetObjectContext:   func() *easyjson.JSON { return ft.getContext(id) },
 		SetObjectContext:   func(context *easyjson.JSON) { ft.setContext(id, context) },
+		GetPrometrics:      func() *prometrics.Prometrics { return ft.runtime.prometrics },
 		Self:               sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
 		Signal: func(signalProvider sfPlugins.SignalProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) error {
 			return ft.runtime.signal(signalProvider, ft.name, id, targetTypename, targetID, j, o)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	lg "github.com/foliagecp/sdk/statefun/logger"
+	"github.com/foliagecp/sdk/statefun/prometrics"
 
 	"github.com/foliagecp/sdk/statefun/cache"
 	"github.com/foliagecp/sdk/statefun/system"
@@ -24,6 +25,7 @@ type Runtime struct {
 	js         nats.JetStreamContext
 	kv         nats.KeyValue
 	cacheStore *cache.Store
+	prometrics *prometrics.Prometrics
 
 	registeredFunctionTypes map[string]*FunctionType
 
@@ -78,6 +80,8 @@ func NewRuntime(config RuntimeConfig) (r *Runtime, err error) {
 }
 
 func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Runtime) error) (err error) {
+	r.prometrics = prometrics.NewPrometrics(r.config.prometricsPattern, r.config.prometricsAddr)
+
 	// Create streams if does not exist ------------------------------
 	/* Each stream contains a single subject (topic).
 	 * Differently named stream with overlapping subjects cannot exist!
