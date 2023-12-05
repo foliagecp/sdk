@@ -6,8 +6,10 @@ package basic
 
 import (
 	"os"
+	"time"
 
 	"github.com/foliagecp/easyjson"
+	"github.com/prometheus/client_golang/prometheus"
 
 	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
 	lg "github.com/foliagecp/sdk/statefun/logger"
@@ -48,6 +50,18 @@ var (
 )
 
 func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
+	start := time.Now()
+
+	prometrics := contextProcessor.GetPrometrics()
+	if !prometrics.Exists("master_function") {
+		execTime := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "master_functions_execution_time",
+			Help:    "Total time of MasterFunction's executions in ms",
+			Buckets: []float64{100, 500, 1000, 5000, 10000},
+		}, []string{"id"})
+		prometrics.RegisterHistogramVec("master_function", execTime)
+	}
+
 	var functionContext *easyjson.JSON
 	if MasterFunctionContextIncrement {
 		functionContext = contextProcessor.GetFunctionContext()
@@ -105,6 +119,10 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlu
 	if contextProcessor.Reply != nil { // Request call is being made
 		contextProcessor.Reply.With(easyjson.NewJSONObjectWithKeyValue("counter", easyjson.NewJSON(incrementValue)).GetPtr())
 	}
+
+	if vec, ok := prometrics.GetHistogramVec("master_function"); ok {
+		vec.With(prometheus.Labels{"id": contextProcessor.Self.ID}).Observe(float64(time.Since(start).Milliseconds()))
+	}
 }
 
 func RegisterFunctionTypes(runtime *statefun.Runtime) {
@@ -160,6 +178,7 @@ func Start() {
 		if CreateSimpleGraphTest {
 			CreateTestGraph(runtime)
 		}
+		//TransactionTest(runtime)
 		return nil
 	}
 
