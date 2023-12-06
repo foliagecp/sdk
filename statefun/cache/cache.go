@@ -16,6 +16,8 @@ import (
 	"time"
 
 	lg "github.com/foliagecp/sdk/statefun/logger"
+	"github.com/foliagecp/sdk/statefun/prometrics"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/foliagecp/easyjson"
 
@@ -268,9 +270,11 @@ type Store struct {
 	transactions                sync.Map
 	transactionsMutex           *sync.Mutex
 	getKeysByPatternFromKVMutex *sync.Mutex
+
+	prometrics *prometrics.Prometrics
 }
 
-func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *Store {
+func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue, prometrics *prometrics.Prometrics) *Store {
 	cs := Store{
 		cacheConfig: cacheConfig,
 		kv:          kv,
@@ -291,6 +295,9 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *
 		valuesInCache:               0,
 		transactionsMutex:           &sync.Mutex{},
 		getKeysByPatternFromKVMutex: &sync.Mutex{},
+	}
+	if cacheConfig.prometricsEnabled && prometrics != nil {
+		cs.prometrics = prometrics
 	}
 
 	cs.ctx, cs.cancel = context.WithCancel(ctx)
@@ -470,6 +477,20 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *
 				// ----------------------------------------------------------------*/
 
 				cs.valuesInCache = len(lruTimes)
+
+				if cs.cacheConfig.prometricsEnabled {
+					measureName := "cache_values"
+					if !cs.prometrics.Exists(measureName) {
+						valuesInCache := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+							Name: measureName,
+							Help: "Gauging values count in a cache",
+						}, []string{"id"})
+						cs.prometrics.RegisterGaugeVec(measureName, valuesInCache)
+					}
+					if gaugeVec, ok := cs.prometrics.GetGaugeVec(measureName); ok {
+						gaugeVec.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(cs.valuesInCache))
+					}
+				}
 
 				time.Sleep(100 * time.Millisecond) // Prevents too many locks and prevents too much processor time consumption
 			}

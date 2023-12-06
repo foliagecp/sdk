@@ -13,6 +13,7 @@ import (
 
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/foliagecp/sdk/statefun/prometrics"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/foliagecp/sdk/statefun/cache"
 	"github.com/foliagecp/sdk/statefun/system"
@@ -80,7 +81,7 @@ func NewRuntime(config RuntimeConfig) (r *Runtime, err error) {
 }
 
 func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Runtime) error) (err error) {
-	r.prometrics = prometrics.NewPrometrics(r.config.prometricsPattern, r.config.prometricsAddr)
+	r.prometrics = prometrics.NewPrometricsWithServer(r.config.prometricsPattern, r.config.prometricsAddr)
 
 	// Create streams if does not exist ------------------------------
 	/* Each stream contains a single subject (topic).
@@ -104,7 +105,7 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 	// --------------------------------------------------------------
 
 	lg.Logln(lg.TraceLevel, "Initializing the cache store...")
-	r.cacheStore = cache.NewCacheStore(context.Background(), cacheConfig, r.kv)
+	r.cacheStore = cache.NewCacheStore(context.Background(), cacheConfig, r.kv, r.prometrics)
 	lg.Logln(lg.TraceLevel, "Cache store inited!")
 
 	// Functions running in a single instance controller --------------------------------
@@ -151,7 +152,9 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 	go singleInstanceFunctionLocksUpdater(singleInstanceFunctionRevisions)
 
 	if onAfterStart != nil {
-		system.MsgOnErrorReturn(onAfterStart(r))
+		go func() {
+			system.MsgOnErrorReturn(onAfterStart(r))
+		}()
 	}
 	system.MsgOnErrorReturn(r.runGarbageCellector())
 
@@ -163,11 +166,28 @@ func (r *Runtime) runGarbageCellector() (err error) {
 		// Start function subscriptions ---------------------------------
 		var totalIdsGrbageCollected int
 		var totalIDHandlersRunning int
+
+		// Measure statefun instanced duration ------------
+		measureName := "stetefun_instances"
+		if !r.prometrics.Exists(measureName) {
+			valuesInCache := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+				Name: measureName,
+				Help: "Stateful function instances",
+			}, []string{"typename"})
+			r.prometrics.RegisterGaugeVec(measureName, valuesInCache)
+		}
+		gaugeVec, gaugeVecOk := r.prometrics.GetGaugeVec(measureName)
+		// ------------------------------------------------
+
 		for _, ft := range r.registeredFunctionTypes {
 			n1, n2 := ft.gc(r.config.functionTypeIDLifetimeMs)
 			totalIdsGrbageCollected += n1
 			totalIDHandlersRunning += n2
+			if gaugeVecOk {
+				gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(float64(n2))
+			}
 		}
+
 		if totalIdsGrbageCollected > 0 && totalIDHandlersRunning == 0 {
 			// Result time output -----------------------------------------------------------------
 			if totalIDHandlersRunning == 0 {
@@ -181,10 +201,11 @@ func (r *Runtime) runGarbageCellector() (err error) {
 					lg.Logf(lg.TraceLevel, "!!!!!!!!!!!!!!!!! %d runs, total time (ns/ms): %d/%d, function dt (ns/ms): %d/%d -> %dHz\n", gc, dt, dt/1000000, dt/gc, dt/gc/1000000, gc*1000000000/dt)
 					atomic.StoreInt64(&r.gc, 0)
 				}
-				// ------------------------------------------------------------------------------------
 			}
-			// --------------------------------------------------------------
+			// ------------------------------------------------------------------------------------
 		}
+		// --------------------------------------------------------------
+
 		time.Sleep(1 * time.Second)
 	}
 }

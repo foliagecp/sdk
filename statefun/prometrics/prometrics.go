@@ -13,14 +13,53 @@ type Prometrics struct {
 	metrics map[string]any
 }
 
-func NewPrometrics(pattern string, addr string) *Prometrics {
+func NewPrometrics() *Prometrics {
+	return &Prometrics{map[string]any{}}
+}
+
+func NewPrometricsWithServer(pattern string, addr string) *Prometrics {
 	go func() {
 		http.Handle(pattern, promhttp.Handler())
 		lg.Logln(lg.FatalLevel, http.ListenAndServe(addr, nil))
 	}()
-	return &Prometrics{map[string]any{}}
+	return NewPrometrics()
 }
 
+func (pm *Prometrics) Exists(id string) bool {
+	_, ok := pm.metrics[id]
+	return ok
+}
+
+// GaugeVec ---------------------------------------------------------------------------------------
+func (pm *Prometrics) RegisterGaugeVec(id string, metric *prometheus.GaugeVec) error {
+	if _, ok := pm.metrics[id]; ok {
+		return nil
+	}
+	pm.metrics[id] = metric
+	return prometheus.Register(*metric)
+}
+
+func (pm *Prometrics) UnregisterGaugeVec(id string) bool {
+	if metricAny, ok := pm.metrics[id]; ok {
+		if metric, ok := metricAny.(*prometheus.GaugeVec); ok {
+			return prometheus.Unregister(*metric)
+		}
+	}
+	return false
+}
+
+func (pm *Prometrics) GetGaugeVec(id string) (*prometheus.GaugeVec, bool) {
+	if metricAny, ok := pm.metrics[id]; ok {
+		if metric, ok := metricAny.(*prometheus.GaugeVec); ok {
+			return metric, true
+		}
+	}
+	return nil, false
+}
+
+// ------------------------------------------------------------------------------------------------
+
+// HistogramVec -----------------------------------------------------------------------------------
 func (pm *Prometrics) RegisterHistogramVec(id string, metric *prometheus.HistogramVec) error {
 	if _, ok := pm.metrics[id]; ok {
 		return nil
@@ -47,7 +86,4 @@ func (pm *Prometrics) GetHistogramVec(id string) (*prometheus.HistogramVec, bool
 	return nil, false
 }
 
-func (pm *Prometrics) Exists(id string) bool {
-	_, ok := pm.metrics[id]
-	return ok
-}
+// ------------------------------------------------------------------------------------------------

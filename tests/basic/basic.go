@@ -54,13 +54,22 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlu
 
 	prometrics := contextProcessor.GetPrometrics()
 	if !prometrics.Exists("master_function") {
+		execTime := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "master_functions_execution_time",
+			Help: "Total time of MasterFunction's executions in ms",
+		}, []string{"id"})
+		prometrics.RegisterGaugeVec("master_function", execTime)
+	}
+
+	/*prometrics := contextProcessor.GetPrometrics()
+	if !prometrics.Exists("master_function") {
 		execTime := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "master_functions_execution_time",
 			Help:    "Total time of MasterFunction's executions in ms",
 			Buckets: []float64{100, 500, 1000, 5000, 10000},
 		}, []string{"id"})
 		prometrics.RegisterHistogramVec("master_function", execTime)
-	}
+	}*/
 
 	var functionContext *easyjson.JSON
 	if MasterFunctionContextIncrement {
@@ -120,9 +129,13 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlu
 		contextProcessor.Reply.With(easyjson.NewJSONObjectWithKeyValue("counter", easyjson.NewJSON(incrementValue)).GetPtr())
 	}
 
-	if vec, ok := prometrics.GetHistogramVec("master_function"); ok {
-		vec.With(prometheus.Labels{"id": contextProcessor.Self.ID}).Observe(float64(time.Since(start).Milliseconds()))
+	if gaugeVec, ok := prometrics.GetGaugeVec("master_function"); ok {
+		gaugeVec.With(prometheus.Labels{"id": contextProcessor.Self.ID}).Set(float64(time.Since(start).Microseconds()))
 	}
+
+	/*if vec, ok := prometrics.GetHistogramVec("master_function"); ok {
+		vec.With(prometheus.Labels{"id": contextProcessor.Self.ID}).Observe(float64(time.Since(start).Milliseconds()))
+	}*/
 }
 
 func RegisterFunctionTypes(runtime *statefun.Runtime) {
@@ -188,7 +201,7 @@ func Start() {
 		}
 
 		RegisterFunctionTypes(runtime)
-		if err := runtime.Start(cache.NewCacheConfig(), afterStart); err != nil {
+		if err := runtime.Start(cache.NewCacheConfig("main_cache").SetPrometricsEnabled(true), afterStart); err != nil {
 			lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s\n", err)
 		}
 	} else {

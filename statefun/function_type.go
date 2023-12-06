@@ -4,12 +4,14 @@ package statefun
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/foliagecp/sdk/statefun/prometrics"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/foliagecp/easyjson"
 
@@ -205,13 +207,37 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 		return nil
 	}
 
+	start := time.Now()
+	measureName := fmt.Sprintf("%s_execution_time", strings.ReplaceAll(ft.name, ".", ""))
+	if ft.config.prometricsEnabled {
+		// Measure function execution duration ----------------
+		prometrics := typenameIDContextProcessor.GetPrometrics()
+		if !prometrics.Exists(measureName) {
+			execTime := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+				Name: measureName,
+				Help: fmt.Sprintf("Gauging execution time(us) of the %s", ft.name),
+			}, []string{"id"})
+			prometrics.RegisterGaugeVec(measureName, execTime)
+		}
+		// ----------------------------------------------------
+	}
+
 	// Calling typename handler function --------------------
 	if ft.executor != nil {
 		ft.logicHandler(ft.executor.GetForID(id), typenameIDContextProcessor)
 	} else {
 		ft.logicHandler(nil, typenameIDContextProcessor)
 	}
-	// ------------------------------------------------------
+	// -------------------------------------------------------
+
+	if ft.config.prometricsEnabled {
+		// Measure function execution duration ----------------
+		prometrics := typenameIDContextProcessor.GetPrometrics()
+		if gaugeVec, ok := prometrics.GetGaugeVec(measureName); ok {
+			gaugeVec.With(prometheus.Labels{"id": id}).Set(float64(time.Since(start).Microseconds()))
+		}
+		// ----------------------------------------------------
+	}
 
 	if msg.AckCallback != nil {
 		msg.AckCallback(true)
