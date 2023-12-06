@@ -25,14 +25,13 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
-  "id": 1,
   "links": [],
   "liveNow": false,
   "panels": [
     {
       "datasource": {
-        "type": "datasource",
-        "uid": "grafana"
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
       },
       "fieldConfig": {
         "defaults": {
@@ -86,23 +85,13 @@
       "targets": [
         {
           "datasource": {
-            "type": "datasource",
-            "uid": "grafana"
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
           },
           "expr": "sum(gnatsd_varz_jetstream_stats_storage{server_id=~\"$server\"})/sum(gnatsd_varz_jetstream_config_max_storage{server_id=~\"$server\"})",
           "interval": "",
           "legendFormat": "",
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "datasource",
-            "uid": "grafana"
-          },
-          "expr": "",
-          "interval": "",
-          "legendFormat": "",
-          "refId": "B"
         }
       ],
       "title": "Storage Used",
@@ -110,8 +99,8 @@
     },
     {
       "datasource": {
-        "type": "datasource",
-        "uid": "grafana"
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
       },
       "fieldConfig": {
         "defaults": {
@@ -156,8 +145,8 @@
       "targets": [
         {
           "datasource": {
-            "type": "datasource",
-            "uid": "grafana"
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
           },
           "expr": "sum(gnatsd_varz_jetstream_stats_storage{server_id=~\"$server\"})",
           "interval": "",
@@ -170,8 +159,8 @@
     },
     {
       "datasource": {
-        "type": "datasource",
-        "uid": "grafana"
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
       },
       "fieldConfig": {
         "defaults": {
@@ -225,23 +214,13 @@
       "targets": [
         {
           "datasource": {
-            "type": "datasource",
-            "uid": "grafana"
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
           },
           "expr": "sum(gnatsd_varz_jetstream_stats_memory{server_id=~\"$server\"})/sum(gnatsd_varz_jetstream_config_max_memory{server_id=~\"$server\"})",
           "interval": "",
           "legendFormat": "",
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "datasource",
-            "uid": "grafana"
-          },
-          "expr": "",
-          "interval": "",
-          "legendFormat": "",
-          "refId": "B"
         }
       ],
       "title": "Memory Used",
@@ -249,8 +228,8 @@
     },
     {
       "datasource": {
-        "type": "datasource",
-        "uid": "grafana"
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
       },
       "fieldConfig": {
         "defaults": {
@@ -295,8 +274,8 @@
       "targets": [
         {
           "datasource": {
-            "type": "datasource",
-            "uid": "grafana"
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
           },
           "expr": "sum(gnatsd_varz_jetstream_stats_memory{server_id=~\"$server\"})",
           "interval": "",
@@ -309,8 +288,8 @@
     },
     {
       "datasource": {
-        "type": "datasource",
-        "uid": "grafana"
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
       },
       "fieldConfig": {
         "defaults": {
@@ -359,8 +338,8 @@
       "targets": [
         {
           "datasource": {
-            "type": "datasource",
-            "uid": "grafana"
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
           },
           "expr": "sum(gnatsd_varz_connections{server_id=~\"$server\"})",
           "interval": "",
@@ -373,8 +352,8 @@
     },
     {
       "datasource": {
-        "type": "datasource",
-        "uid": "grafana"
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
       },
       "fieldConfig": {
         "defaults": {
@@ -419,8 +398,8 @@
       "targets": [
         {
           "datasource": {
-            "type": "datasource",
-            "uid": "grafana"
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
           },
           "expr": "sum(gnatsd_varz_jetstream_config_max_storage{server_id=~\"$server\"})",
           "interval": "",
@@ -433,8 +412,8 @@
     },
     {
       "datasource": {
-        "type": "datasource",
-        "uid": "grafana"
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
       },
       "fieldConfig": {
         "defaults": {
@@ -479,8 +458,8 @@
       "targets": [
         {
           "datasource": {
-            "type": "datasource",
-            "uid": "grafana"
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
           },
           "expr": "sum(gnatsd_varz_jetstream_config_max_memory{server_id=~\"$server\"})",
           "interval": "",
@@ -493,8 +472,8 @@
     },
     {
       "datasource": {
-        "type": "datasource",
-        "uid": "grafana"
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
       },
       "fieldConfig": {
         "defaults": {
@@ -542,8 +521,8 @@
       "targets": [
         {
           "datasource": {
-            "type": "datasource",
-            "uid": "grafana"
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
           },
           "expr": "sum(jetstream_server_total_consumers{server_id=~\"$server\"})",
           "interval": "",
@@ -582,8 +561,8 @@
     },
     {
       "datasource": {
-        "type": "datasource",
-        "uid": "grafana"
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
       },
       "fieldConfig": {
         "defaults": {
@@ -663,13 +642,19 @@
       "targets": [
         {
           "datasource": {
-            "type": "datasource",
-            "uid": "grafana"
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
           },
+          "disableTextWrap": false,
+          "editorMode": "code",
           "expr": "sum(jetstream_stream_total_bytes) by (stream_name)",
-          "interval": "",
-          "legendFormat": "{{stream_name}}",
-          "refId": "A"
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "__auto",
+          "range": true,
+          "refId": "A",
+          "useBackend": false
         }
       ],
       "title": "Stream data size",
@@ -677,8 +662,8 @@
     },
     {
       "datasource": {
-        "type": "datasource",
-        "uid": "grafana"
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
       },
       "fieldConfig": {
         "defaults": {
@@ -758,12 +743,14 @@
       "targets": [
         {
           "datasource": {
-            "type": "datasource",
-            "uid": "grafana"
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
           },
+          "editorMode": "code",
           "expr": "sum(jetstream_stream_total_messages) by (stream_name)",
           "interval": "",
           "legendFormat": "{{stream_name}}",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -772,8 +759,8 @@
     },
     {
       "datasource": {
-        "type": "datasource",
-        "uid": "grafana"
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
       },
       "fieldConfig": {
         "defaults": {
@@ -853,8 +840,8 @@
       "targets": [
         {
           "datasource": {
-            "type": "datasource",
-            "uid": "grafana"
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
           },
           "expr": "sum(rate(jetstream_stream_total_messages{server_id=~\"$server\",stream_name=~\"$stream\"}[$__rate_interval])) by (stream_name)",
           "hide": false,
@@ -894,8 +881,8 @@
     },
     {
       "datasource": {
-        "type": "datasource",
-        "uid": "grafana"
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Messages added & processed per minute per consumer",
       "fieldConfig": {
@@ -976,27 +963,30 @@
       "targets": [
         {
           "datasource": {
-            "type": "datasource",
-            "uid": "grafana"
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
           },
+          "editorMode": "code",
           "expr": "sum(rate(jetstream_consumer_num_pending{server_id=~\"$server\",stream_name=~\"$stream\",consumer_name=~\"$consumer\"}[$__rate_interval])+rate(jetstream_consumer_delivered_consumer_seq{server_id=~\"$server\",stream_name=~\"$stream\",consumer_name=~\"$consumer\"}[$__rate_interval])) by (consumer_name)",
           "hide": false,
           "instant": false,
           "interval": "",
           "intervalFactor": 1,
           "legendFormat": "{{consumer_name}} +",
-          "refId": "B"
+          "refId": "A"
         },
         {
           "datasource": {
-            "type": "datasource",
-            "uid": "grafana"
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
           },
+          "editorMode": "code",
           "expr": "- sum(rate(jetstream_consumer_delivered_consumer_seq{server_id=~\"$server\",stream_name=~\"$stream\",consumer_name=~\"$consumer\",consumer_name=~\"$consumer\"}[$__rate_interval])) by (consumer_name)",
           "hide": false,
           "interval": "",
           "legendFormat": "{{consumer_name}} -",
-          "refId": "A"
+          "range": true,
+          "refId": "B"
         }
       ],
       "title": "Messages per second (++/--)",
@@ -1004,8 +994,8 @@
     },
     {
       "datasource": {
-        "type": "datasource",
-        "uid": "grafana"
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
       },
       "fieldConfig": {
         "defaults": {
@@ -1085,8 +1075,8 @@
       "targets": [
         {
           "datasource": {
-            "type": "datasource",
-            "uid": "grafana"
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
           },
           "expr": "sum(jetstream_consumer_delivered_consumer_seq{server_id=~\"$server\",stream_name=~\"$stream\",consumer_name=~\"$consumer\"}) by (consumer_name)",
           "hide": false,
@@ -1100,8 +1090,8 @@
     },
     {
       "datasource": {
-        "type": "datasource",
-        "uid": "grafana"
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
       },
       "fieldConfig": {
         "defaults": {
@@ -1182,8 +1172,8 @@
       "targets": [
         {
           "datasource": {
-            "type": "datasource",
-            "uid": "grafana"
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
           },
           "expr": "sum(jetstream_consumer_num_pending{server_id=~\"$server\",stream_name=~\"$stream\",consumer_name=~\"$consumer\"}) by (consumer_name)",
           "hide": false,
@@ -1197,8 +1187,8 @@
     },
     {
       "datasource": {
-        "type": "datasource",
-        "uid": "grafana"
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
       },
       "fieldConfig": {
         "defaults": {
@@ -1279,8 +1269,8 @@
       "targets": [
         {
           "datasource": {
-            "type": "datasource",
-            "uid": "grafana"
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
           },
           "expr": "sum(jetstream_consumer_num_ack_pending{server_id=~\"$server\",stream_name=~\"$stream\",consumer_name=~\"$consumer\"}) by (consumer_name)",
           "hide": false,
@@ -1300,9 +1290,13 @@
     "list": [
       {
         "current": {
-          "selected": false,
-          "text": "All",
-          "value": "$__all"
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
         },
         "datasource": {
           "type": "prometheus",
@@ -1364,9 +1358,13 @@
       },
       {
         "current": {
-          "selected": false,
-          "text": "All",
-          "value": "$__all"
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
         },
         "datasource": {
           "type": "prometheus",
@@ -1395,7 +1393,7 @@
     ]
   },
   "time": {
-    "from": "now-1h",
+    "from": "now-5m",
     "to": "now"
   },
   "timepicker": {
@@ -1426,6 +1424,6 @@
   "timezone": "browser",
   "title": "NATS JetStream",
   "uid": "yQUo5l17k",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

@@ -35,6 +35,8 @@ services:
 
   nats-exporter:
     image: natsio/prometheus-nats-exporter:latest
+    depends_on:
+     - nats
     ports:
      - '7777:7777'
     command: -varz -jsz=all http://nats:8222
