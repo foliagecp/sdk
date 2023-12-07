@@ -81,7 +81,9 @@ func NewRuntime(config RuntimeConfig) (r *Runtime, err error) {
 }
 
 func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Runtime) error) (err error) {
-	r.prometrics = prometrics.NewPrometricsWithServer(r.config.prometricsPattern, r.config.prometricsAddr)
+	if len(r.config.prometricsAddr) > 0 {
+		r.prometrics = prometrics.NewPrometricsWithServer("/", r.config.prometricsAddr)
+	}
 
 	// Create streams if does not exist ------------------------------
 	/* Each stream contains a single subject (topic).
@@ -167,23 +169,18 @@ func (r *Runtime) runGarbageCellector() (err error) {
 		var totalIdsGrbageCollected int
 		var totalIDHandlersRunning int
 
-		// Measure statefun instanced duration ------------
 		measureName := "stetefun_instances"
-		if !r.prometrics.Exists(measureName) {
-			valuesInCache := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-				Name: measureName,
-				Help: "Stateful function instances",
-			}, []string{"typename"})
-			r.prometrics.RegisterGaugeVec(measureName, valuesInCache)
+		var gaugeVec *prometheus.GaugeVec
+		var gaugeVecErr error
+		if r.prometrics != nil {
+			gaugeVec, gaugeVecErr = r.prometrics.EnsureGaugeVecSimple(measureName, "Stateful function instances", []string{"typename"})
 		}
-		gaugeVec, gaugeVecOk := r.prometrics.GetGaugeVec(measureName)
-		// ------------------------------------------------
 
 		for _, ft := range r.registeredFunctionTypes {
 			n1, n2 := ft.gc(r.config.functionTypeIDLifetimeMs)
 			totalIdsGrbageCollected += n1
 			totalIDHandlersRunning += n2
-			if gaugeVecOk {
+			if gaugeVec != nil && gaugeVecErr == nil {
 				gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(float64(n2))
 			}
 		}

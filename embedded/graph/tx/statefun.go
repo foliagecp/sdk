@@ -122,20 +122,14 @@ func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 		return
 	}
 
-	// Measure cloning duration ---------------------------
-	measureName := fmt.Sprintf("%sclone_execution_time", strings.ReplaceAll(contextProcessor.Self.Typename, ".", ""))
-	prometrics := contextProcessor.GetPrometrics()
-	if !prometrics.Exists(measureName) {
-		valuesInCache := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: measureName,
-			Help: "Gauging execution time(us) of clone during the commit",
-		}, []string{"type"})
-		prometrics.RegisterGaugeVec(measureName, valuesInCache)
+	if pm := contextProcessor.GetPrometrics(); pm != nil {
+		// Measure cloning duration ---------------------------
+		measureName := fmt.Sprintf("%sclone_execution_time", strings.ReplaceAll(contextProcessor.Self.Typename, ".", ""))
+		if gaugeVec, err := pm.EnsureGaugeVecSimple(measureName, "", []string{"id"}); err == nil {
+			gaugeVec.With(prometheus.Labels{"type": cloneMod}).Set(float64(time.Since(cloneStart).Microseconds()))
+		}
+		// ----------------------------------------------------
 	}
-	if gaugeVec, ok := prometrics.GetGaugeVec(measureName); ok {
-		gaugeVec.With(prometheus.Labels{"type": cloneMod}).Set(float64(time.Since(cloneStart).Microseconds()))
-	}
-	// ----------------------------------------------------
 
 	qid := common.GetQueryID(contextProcessor)
 

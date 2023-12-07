@@ -82,7 +82,7 @@ func (ftc *FunctionTypeConfig) SetOptions(options *easyjson.JSON) *FunctionTypeC
 	return ftc
 }
 
-func (ftc *FunctionTypeConfig) SetPrometricsEnabled(allowed bool) *FunctionTypeConfig {
-	ftc.prometricsEnabled = allowed
+func (ftc *FunctionTypeConfig) SetPrometricsEnabled(enabled bool) *FunctionTypeConfig {
+	ftc.prometricsEnabled = enabled
 	return ftc
 }
