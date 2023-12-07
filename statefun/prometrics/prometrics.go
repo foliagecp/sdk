@@ -1,7 +1,10 @@
 package prometrics
 
 import (
+	"errors"
 	"net/http"
+	"strings"
+	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -9,12 +12,17 @@ import (
 	lg "github.com/foliagecp/sdk/statefun/logger"
 )
 
+var (
+	PrometricDifferentTypeExistsForIdError error = errors.New("metrics with a different type exists for an id")
+)
+
 type Prometrics struct {
-	metrics map[string]any
+	metricsMutex *sync.Mutex
+	metrics      map[string]any
 }
 
 func NewPrometrics() *Prometrics {
-	return &Prometrics{map[string]any{}}
+	return &Prometrics{&sync.Mutex{}, map[string]any{}}
 }
 
 func NewPrometricsWithServer(pattern string, addr string) *Prometrics {
@@ -26,64 +34,62 @@ func NewPrometricsWithServer(pattern string, addr string) *Prometrics {
 }
 
 func (pm *Prometrics) Exists(id string) bool {
+	pm.metricsMutex.Lock()
+	defer pm.metricsMutex.Unlock()
 	_, ok := pm.metrics[id]
 	return ok
 }
 
 // GaugeVec ---------------------------------------------------------------------------------------
-func (pm *Prometrics) RegisterGaugeVec(id string, metric *prometheus.GaugeVec) error {
-	if _, ok := pm.metrics[id]; ok {
-		return nil
+func (pm *Prometrics) EnsureGaugeVecSimple(id string, help string, labelNames []string) (*prometheus.GaugeVec, error) {
+	name := strings.ReplaceAll(id, ".", "")
+	metric := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: name,
+		Help: help,
+	}, labelNames)
+	return pm.EnsureGaugeVec(id, metric)
+}
+
+func (pm *Prometrics) EnsureGaugeVec(id string, metric *prometheus.GaugeVec) (*prometheus.GaugeVec, error) {
+	pm.metricsMutex.Lock()
+	defer pm.metricsMutex.Unlock()
+	if metricAny, ok := pm.metrics[id]; ok {
+		if metric, ok := metricAny.(*prometheus.GaugeVec); ok {
+			return metric, nil
+		} else {
+			return nil, PrometricDifferentTypeExistsForIdError
+		}
 	}
 	pm.metrics[id] = metric
-	return prometheus.Register(*metric)
-}
-
-func (pm *Prometrics) UnregisterGaugeVec(id string) bool {
-	if metricAny, ok := pm.metrics[id]; ok {
-		if metric, ok := metricAny.(*prometheus.GaugeVec); ok {
-			return prometheus.Unregister(*metric)
-		}
-	}
-	return false
-}
-
-func (pm *Prometrics) GetGaugeVec(id string) (*prometheus.GaugeVec, bool) {
-	if metricAny, ok := pm.metrics[id]; ok {
-		if metric, ok := metricAny.(*prometheus.GaugeVec); ok {
-			return metric, true
-		}
-	}
-	return nil, false
+	return metric, prometheus.Register(*metric)
 }
 
 // ------------------------------------------------------------------------------------------------
 
 // HistogramVec -----------------------------------------------------------------------------------
-func (pm *Prometrics) RegisterHistogramVec(id string, metric *prometheus.HistogramVec) error {
-	if _, ok := pm.metrics[id]; ok {
-		return nil
+func (pm *Prometrics) EnsureHistogramVecSimple(id string, help string, buckets []float64, labelNames []string) (*prometheus.HistogramVec, error) {
+	name := strings.ReplaceAll(id, ".", "")
+	metric := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    name,
+		Help:    help,
+		Buckets: buckets,
+	}, labelNames)
+
+	return pm.EnsureHistogramVec(id, metric)
+}
+
+func (pm *Prometrics) EnsureHistogramVec(id string, metric *prometheus.HistogramVec) (*prometheus.HistogramVec, error) {
+	pm.metricsMutex.Lock()
+	defer pm.metricsMutex.Unlock()
+	if metricAny, ok := pm.metrics[id]; ok {
+		if metric, ok := metricAny.(*prometheus.HistogramVec); ok {
+			return metric, nil
+		} else {
+			return nil, PrometricDifferentTypeExistsForIdError
+		}
 	}
 	pm.metrics[id] = metric
-	return prometheus.Register(*metric)
-}
-
-func (pm *Prometrics) UnregisterHistogramVec(id string) bool {
-	if metricAny, ok := pm.metrics[id]; ok {
-		if metric, ok := metricAny.(*prometheus.HistogramVec); ok {
-			return prometheus.Unregister(*metric)
-		}
-	}
-	return false
-}
-
-func (pm *Prometrics) GetHistogramVec(id string) (*prometheus.HistogramVec, bool) {
-	if metricAny, ok := pm.metrics[id]; ok {
-		if metric, ok := metricAny.(*prometheus.HistogramVec); ok {
-			return metric, true
-		}
-	}
-	return nil, false
+	return metric, prometheus.Register(*metric)
 }
 
 // ------------------------------------------------------------------------------------------------

@@ -42,7 +42,7 @@ func (ro *Config) SetLevelSubscriptionNotificationsBufferMaxSize(levelSubscripti
 	return ro
 }
 
-func (ro *Config) SetPrometricsEnabled(allowed bool) *Config {
-	ro.prometricsEnabled = allowed
+func (ro *Config) SetPrometricsEnabled(enabled bool) *Config {
+	ro.prometricsEnabled = enabled
 	return ro
 }

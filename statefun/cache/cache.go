@@ -274,7 +274,7 @@ type Store struct {
 	prometrics *prometrics.Prometrics
 }
 
-func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue, prometrics *prometrics.Prometrics) *Store {
+func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue, pm *prometrics.Prometrics) *Store {
 	cs := Store{
 		cacheConfig: cacheConfig,
 		kv:          kv,
@@ -296,8 +296,8 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue, p
 		transactionsMutex:           &sync.Mutex{},
 		getKeysByPatternFromKVMutex: &sync.Mutex{},
 	}
-	if cacheConfig.prometricsEnabled && prometrics != nil {
-		cs.prometrics = prometrics
+	if cacheConfig.prometricsEnabled && pm != nil {
+		cs.prometrics = pm
 	}
 
 	cs.ctx, cs.cancel = context.WithCancel(ctx)
@@ -478,16 +478,9 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue, p
 
 				cs.valuesInCache = len(lruTimes)
 
-				if cs.cacheConfig.prometricsEnabled {
+				if cs.prometrics != nil {
 					measureName := "cache_values"
-					if !cs.prometrics.Exists(measureName) {
-						valuesInCache := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-							Name: measureName,
-							Help: "Gauging values count in a cache",
-						}, []string{"id"})
-						cs.prometrics.RegisterGaugeVec(measureName, valuesInCache)
-					}
-					if gaugeVec, ok := cs.prometrics.GetGaugeVec(measureName); ok {
+					if gaugeVec, err := cs.prometrics.EnsureGaugeVecSimple(measureName, "", []string{"id"}); err == nil {
 						gaugeVec.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(cs.valuesInCache))
 					}
 				}

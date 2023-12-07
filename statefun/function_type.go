@@ -114,8 +114,13 @@ func (ft *FunctionType) idHandlerRoutine(id string, msgChannel chan FunctionType
 		SetFunctionContext: func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
 		GetObjectContext:   func() *easyjson.JSON { return ft.getContext(id) },
 		SetObjectContext:   func(context *easyjson.JSON) { ft.setContext(id, context) },
-		GetPrometrics:      func() *prometrics.Prometrics { return ft.runtime.prometrics },
-		Self:               sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
+		GetPrometrics: func() *prometrics.Prometrics {
+			if ft.config.prometricsEnabled {
+				return ft.runtime.prometrics
+			}
+			return nil
+		},
+		Self: sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
 		Signal: func(signalProvider sfPlugins.SignalProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) error {
 			return ft.runtime.signal(signalProvider, ft.name, id, targetTypename, targetID, j, o)
 		},
@@ -208,19 +213,6 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 	}
 
 	start := time.Now()
-	measureName := fmt.Sprintf("%s_execution_time", strings.ReplaceAll(ft.name, ".", ""))
-	if ft.config.prometricsEnabled {
-		// Measure function execution duration ----------------
-		prometrics := typenameIDContextProcessor.GetPrometrics()
-		if !prometrics.Exists(measureName) {
-			execTime := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-				Name: measureName,
-				Help: fmt.Sprintf("Gauging execution time(us) of the %s", ft.name),
-			}, []string{"id"})
-			prometrics.RegisterGaugeVec(measureName, execTime)
-		}
-		// ----------------------------------------------------
-	}
 
 	// Calling typename handler function --------------------
 	if ft.executor != nil {
@@ -230,13 +222,11 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 	}
 	// -------------------------------------------------------
 
-	if ft.config.prometricsEnabled {
-		// Measure function execution duration ----------------
-		prometrics := typenameIDContextProcessor.GetPrometrics()
-		if gaugeVec, ok := prometrics.GetGaugeVec(measureName); ok {
+	if pm := typenameIDContextProcessor.GetPrometrics(); pm != nil {
+		measureName := fmt.Sprintf("%s_execution_time", strings.ReplaceAll(ft.name, ".", ""))
+		if gaugeVec, err := pm.EnsureGaugeVecSimple(measureName, "", []string{"id"}); err == nil {
 			gaugeVec.With(prometheus.Labels{"id": id}).Set(float64(time.Since(start).Microseconds()))
 		}
-		// ----------------------------------------------------
 	}
 
 	if msg.AckCallback != nil {
@@ -252,9 +242,9 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 		msg.RequestCallback(replyData)
 	}
 
-	//if !ft.config.balanceNeeded { // Use context mutex lock if function type is not typename balanced
-	//	system.MsgOnErrorReturn(ContextMutexUnlock(ft, id, lockRevisionID))
-	//}
+	/*if !ft.config.balanceNeeded { // Use context mutex lock if function type is not typename balanced
+		system.MsgOnErrorReturn(ContextMutexUnlock(ft, id, lockRevisionID))
+	}*/
 	atomic.StoreInt64(&ft.runtime.glce, time.Now().UnixNano())
 }
 

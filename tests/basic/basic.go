@@ -52,25 +52,6 @@ var (
 func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	start := time.Now()
 
-	prometrics := contextProcessor.GetPrometrics()
-	if !prometrics.Exists("master_function") {
-		execTime := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "master_functions_execution_time",
-			Help: "Total time of MasterFunction's executions in ms",
-		}, []string{"id"})
-		prometrics.RegisterGaugeVec("master_function", execTime)
-	}
-
-	/*prometrics := contextProcessor.GetPrometrics()
-	if !prometrics.Exists("master_function") {
-		execTime := prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name:    "master_functions_execution_time",
-			Help:    "Total time of MasterFunction's executions in ms",
-			Buckets: []float64{100, 500, 1000, 5000, 10000},
-		}, []string{"id"})
-		prometrics.RegisterHistogramVec("master_function", execTime)
-	}*/
-
 	var functionContext *easyjson.JSON
 	if MasterFunctionContextIncrement {
 		functionContext = contextProcessor.GetFunctionContext()
@@ -129,13 +110,11 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlu
 		contextProcessor.Reply.With(easyjson.NewJSONObjectWithKeyValue("counter", easyjson.NewJSON(incrementValue)).GetPtr())
 	}
 
-	if gaugeVec, ok := prometrics.GetGaugeVec("master_function"); ok {
-		gaugeVec.With(prometheus.Labels{"id": contextProcessor.Self.ID}).Set(float64(time.Since(start).Microseconds()))
+	if pm := contextProcessor.GetPrometrics(); pm != nil {
+		if gaugeVec, err := pm.EnsureGaugeVecSimple("master_function", "", []string{"id"}); err == nil {
+			gaugeVec.With(prometheus.Labels{"id": contextProcessor.Self.ID}).Set(float64(time.Since(start).Microseconds()))
+		}
 	}
-
-	/*if vec, ok := prometrics.GetHistogramVec("master_function"); ok {
-		vec.With(prometheus.Labels{"id": contextProcessor.Self.ID}).Observe(float64(time.Since(start).Milliseconds()))
-	}*/
 }
 
 func RegisterFunctionTypes(runtime *statefun.Runtime) {
@@ -195,7 +174,7 @@ func Start() {
 		return nil
 	}
 
-	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "basic")); err == nil {
+	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "basic").SetPrometricsEnabled(":9901")); err == nil {
 		if KVMuticesTest {
 			KVMuticesSimpleTest(runtime, KVMuticesTestDurationSec, KVMuticesTestWorkers, 2, 1)
 		}
