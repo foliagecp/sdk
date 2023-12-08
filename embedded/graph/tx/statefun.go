@@ -125,7 +125,7 @@ func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 	if pm := contextProcessor.GetPrometrics(); pm != nil {
 		// Measure cloning duration ---------------------------
 		measureName := fmt.Sprintf("%sclone_execution_time", strings.ReplaceAll(contextProcessor.Self.Typename, ".", ""))
-		if gaugeVec, err := pm.EnsureGaugeVecSimple(measureName, "", []string{"id"}); err == nil {
+		if gaugeVec, err := pm.EnsureGaugeVecSimple(measureName, "", []string{"type"}); err == nil {
 			gaugeVec.With(prometheus.Labels{"type": cloneMod}).Set(float64(time.Since(cloneStart).Microseconds()))
 		}
 		// ----------------------------------------------------
