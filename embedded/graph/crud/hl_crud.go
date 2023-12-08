@@ -423,7 +423,45 @@ func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	replyOk(contextProcessor)
 }
 
+/*
+	{
+		"to": string,
+	}
+*/
 func DeleteObejectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+	selfID := contextProcessor.Self.ID
+	payload := contextProcessor.Payload
+
+	objectToID, ok := payload.GetByPath("to").AsString()
+	if !ok {
+		return
+	}
+
+	fromTypeID := findObjectType(contextProcessor, selfID)
+	toTypeID := findObjectType(contextProcessor, objectToID)
+
+	linkBody, err := getTypesLinkBody(contextProcessor, fromTypeID, toTypeID)
+	if err != nil {
+		replyError(contextProcessor, err)
+		return
+	}
+
+	linkType, ok := linkBody.GetByPath("link_type").AsString()
+	if !ok {
+		replyError(contextProcessor, err)
+		return
+	}
+
+	objectLink := easyjson.NewJSONObject()
+	objectLink.SetByPath("descendant_uuid", easyjson.NewJSON(objectToID))
+	objectLink.SetByPath("link_type", easyjson.NewJSON(linkType))
+
+	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.delete", selfID, &objectLink, nil)
+	if err := checkRequestError(result, err); err != nil {
+		replyError(contextProcessor, err)
+		return
+	}
+
 	replyOk(contextProcessor)
 }
 
