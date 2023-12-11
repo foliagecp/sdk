@@ -93,8 +93,12 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 				select {
 				case kv := <-chacheUpdatedChannel:
 					//lg.Logln("____________ UPDATE FROM CACHE!!!!")
-					key := kv.Key.(string)
-					value := kv.Value.([]byte)
+					key, keyObtained := kv.Key.(string)
+					value, valueObtained := kv.Value.([]byte)
+					if !keyObtained || !valueObtained {
+						continue
+					}
+
 					if key == "result" {
 						if result, ok := easyjson.JSONFromBytes(value); ok {
 							contextProcessor.GlobalCache.UnsubscribeLevelCallback(keyBase+".*", processID)
@@ -481,8 +485,12 @@ func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExec
 			for {
 				select {
 				case kv := <-chacheUpdatedChannel:
-					key := kv.Key.(string)
-					value := kv.Value.([]byte)
+					key, keyObtained := kv.Key.(string)
+					value, valueObtained := kv.Value.([]byte)
+					if !keyObtained || !valueObtained {
+						continue
+					}
+
 					//lg.Logln("DCRA: " + key + " " + fmt.Sprintln(value))
 					if len(value) <= 1 { // Result can be: 0x0 - one byte when pending is in progress, [] - empty array (2 bytes), ["a", "b", ...] - non empty array (more than 2 bytes)
 						if _, ok := pendingMap[key]; !ok {
