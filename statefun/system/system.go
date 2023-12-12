@@ -13,10 +13,43 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"sync"
 	"time"
 
 	lg "github.com/foliagecp/sdk/statefun/logger"
 )
+
+type KeyMutex struct {
+	m *sync.Map
+}
+
+func NewKeyMutex() KeyMutex {
+	m := sync.Map{}
+	return KeyMutex{&m}
+}
+
+func (s KeyMutex) Unlock(key interface{}) {
+	l, exist := s.m.Load(key)
+	if !exist {
+		panic("kmutex: unlock of unlocked mutex")
+	}
+	l_ := l.(*sync.Mutex)
+	s.m.Delete(key)
+	l_.Unlock()
+}
+
+func (s KeyMutex) Lock(key interface{}) {
+	m := sync.Mutex{}
+	m_, _ := s.m.LoadOrStore(key, &m)
+	mm := m_.(*sync.Mutex)
+	mm.Lock()
+	if mm != &m {
+		mm.Unlock()
+		s.Lock(key)
+		return
+	}
+	return
+}
 
 func CreateDimSizeChannel[T interface{}](maxBufferElements int, onBufferOverflow func()) (in chan T, out chan T) {
 	in = make(chan T)

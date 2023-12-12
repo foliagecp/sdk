@@ -27,6 +27,7 @@ type FunctionType struct {
 	subject                string
 	config                 FunctionTypeConfig
 	logicHandler           FunctionLogicHandler
+	idKeyMutex             system.KeyMutex
 	idHandlersChannel      sync.Map
 	idHandlersLastMsgTime  sync.Map
 	typenameLockRevisionID uint64
@@ -39,6 +40,7 @@ func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHa
 		name:         name,
 		subject:      name + ".*",
 		logicHandler: logicHandler,
+		idKeyMutex:   system.NewKeyMutex(),
 		config:       config,
 	}
 	runtime.registeredFunctionTypes[ft.name] = ft
@@ -73,8 +75,10 @@ func (ft *FunctionType) sendMsg(id string, msg FunctionTypeMsg) {
 	}
 	// ----------------------------------------------------------------------------------------------------*/
 
+	ft.idKeyMutex.Lock(id)
 	// Send msg to type id handler ------------------------------------------------------
 	var msgChannel chan FunctionTypeMsg
+
 	if value, ok := ft.idHandlersChannel.Load(id); ok {
 		msgChannel = value.(chan FunctionTypeMsg)
 	} else {
@@ -105,6 +109,7 @@ func (ft *FunctionType) sendMsg(id string, msg FunctionTypeMsg) {
 		}
 	}
 	// ----------------------------------------------------------------------------------
+	ft.idKeyMutex.Unlock(id)
 }
 
 func (ft *FunctionType) idHandlerRoutine(id string, msgChannel chan FunctionTypeMsg) {
@@ -255,6 +260,8 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 		id := key.(string)
 		lastMsgTime := value.(int64)
 		if lastMsgTime+int64(typenameIDLifetimeMs)*int64(time.Millisecond) < now {
+			ft.idKeyMutex.Lock(id)
+
 			v, _ := ft.idHandlersChannel.Load(id)
 			msgChannel := v.(chan FunctionTypeMsg)
 			close(msgChannel)
@@ -267,6 +274,8 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 			// cacheStore.DeleteValue(ft.name+"."+id, true, -1, "") // Deleting function context
 			garbageCollected++
 			//lg.Logf(">>>>>>>>>>>>>> Garbage collected handler for %s:%s\n", ft.name, id)
+
+			ft.idKeyMutex.Unlock(id)
 		} else {
 			handlersRunning++
 		}
