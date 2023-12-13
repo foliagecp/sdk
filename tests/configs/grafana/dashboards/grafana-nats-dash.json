@@ -146,12 +146,18 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "gnatsd_varz_cpu",
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "gnatsd_varz_cpu{server_id=\"$server\"}",
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
           "intervalFactor": 2,
           "legendFormat": "{{server_id}}",
           "metric": "gnatsd_varz_cpu",
+          "range": true,
           "refId": "A",
-          "step": 4
+          "step": 4,
+          "useBackend": false
         }
       ],
       "title": "Server CPU",
@@ -248,12 +254,18 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "gnatsd_varz_mem",
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "gnatsd_varz_mem{server_id=\"$server\"}",
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
           "intervalFactor": 2,
           "legendFormat": "{{server_id}}",
           "metric": "gnatsd_varz_mem",
+          "range": true,
           "refId": "A",
-          "step": 4
+          "step": 4,
+          "useBackend": false
         }
       ],
       "title": "Server Memory",
@@ -374,12 +386,18 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "gnatsd_varz_in_bytes",
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "gnatsd_varz_in_bytes{server_id=\"$server\"}",
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
           "intervalFactor": 2,
           "legendFormat": "{{server_id}}",
           "metric": "gnatsd_varz_in_bytes",
+          "range": true,
           "refId": "A",
-          "step": 10
+          "step": 10,
+          "useBackend": false
         }
       ],
       "title": "Bytes In",
@@ -474,12 +492,18 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "gnatsd_varz_in_msgs",
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "gnatsd_varz_in_msgs{server_id=\"$server\"}",
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
           "intervalFactor": 2,
           "legendFormat": "{{server_id}}",
           "metric": "gnatsd_varz_in_msgs",
+          "range": true,
           "refId": "A",
-          "step": 10
+          "step": 10,
+          "useBackend": false
         }
       ],
       "title": "NATS Msgs In",
@@ -574,12 +598,18 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "gnatsd_varz_out_bytes",
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "gnatsd_varz_out_bytes{server_id=\"$server\"}",
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
           "intervalFactor": 2,
           "legendFormat": "{{server_id}}",
           "metric": "gnatsd_varz_out_bytes",
+          "range": true,
           "refId": "A",
-          "step": 10
+          "step": 10,
+          "useBackend": false
         }
       ],
       "title": "Bytes Out",
@@ -674,12 +704,18 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "gnatsd_varz_out_msgs",
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "gnatsd_varz_out_msgs{server_id=\"$server\"}",
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
           "intervalFactor": 2,
           "legendFormat": "{{server_id}}",
           "metric": "gnatsd_varz_out_msgs",
+          "range": true,
           "refId": "A",
-          "step": 10
+          "step": 10,
+          "useBackend": false
         }
       ],
       "title": "NATS Msgs Out",
@@ -803,12 +839,18 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "gnatsd_varz_connections",
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "gnatsd_varz_connections{server_id=\"$server\"}",
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
           "intervalFactor": 1,
           "legendFormat": "{{server_id}}",
           "metric": "gnatsd_varz_connections",
+          "range": true,
           "refId": "A",
-          "step": 2
+          "step": 2,
+          "useBackend": false
         }
       ],
       "title": "Connections",
@@ -906,13 +948,19 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "gnatsd_varz_subscriptions",
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "gnatsd_varz_subscriptions{server_id=\"$server\"}",
+          "fullMetaSearch": false,
           "hide": false,
+          "includeNullMetadata": true,
           "intervalFactor": 2,
           "legendFormat": "{{server_id}}",
           "metric": "gnatsd_varz_subscriptions",
+          "range": true,
           "refId": "A",
-          "step": 4
+          "step": 4,
+          "useBackend": false
         }
       ],
       "title": "Subscriptions",
@@ -1010,12 +1058,18 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "gnatsd_varz_slow_consumers",
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "gnatsd_varz_slow_consumers{server_id=\"$server\"}",
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
           "intervalFactor": 1,
           "legendFormat": "{{server_id}}",
           "metric": "gnatsd_varz_slow_consumers",
+          "range": true,
           "refId": "A",
-          "step": 2
+          "step": 2,
+          "useBackend": false
         }
       ],
       "title": "Slow Consumers",
@@ -1026,7 +1080,40 @@
   "schemaVersion": 38,
   "tags": [],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "current": {
+          "selected": true,
+          "text": [
+            "http://nats:8222"
+          ],
+          "value": [
+            "http://nats:8222"
+          ]
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "PBFA97CFB590B2093"
+        },
+        "definition": "label_values(server_id)",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Server",
+        "multi": true,
+        "name": "server",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(server_id)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      }
+    ]
   },
   "time": {
     "from": "now-5m",
@@ -1060,6 +1147,6 @@
   "timezone": "browser",
   "title": "NATS Servers",
   "uid": "Usc6F_1nk",
-  "version": 1,
+  "version": 4,
   "weekStart": ""
 }
