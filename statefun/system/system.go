@@ -92,12 +92,13 @@ func CreateDimSizeChannel[T interface{}](maxBufferElements int, onBufferOverflow
 				if !ok { // notifier channel is closed
 					return
 				}
-			}
-			out <- buffer[0]
-			if len(buffer) == 1 {
-				buffer = nil
 			} else {
-				buffer = buffer[1:]
+				out <- buffer[0]
+				if len(buffer) == 1 {
+					buffer = nil
+				} else {
+					buffer = buffer[1:]
+				}
 			}
 		}
 	}
