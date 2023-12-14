@@ -215,7 +215,7 @@
           },
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "functionscmdbtxbeginclone_execution_time",
+          "expr": "functionscmdbtxbegin_clone_execution_time",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "instant": false,
