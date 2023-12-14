@@ -8,6 +8,7 @@ import (
 
 	"github.com/foliagecp/sdk/statefun"
 	lg "github.com/foliagecp/sdk/statefun/logger"
+	"github.com/foliagecp/sdk/statefun/system"
 )
 
 func KVMuticesSimpleTest(runtime *statefun.Runtime, testDurationSec int, workersCount int, workTimeMs int, afterWorkTimeMs int) {
@@ -17,6 +18,8 @@ func KVMuticesSimpleTest(runtime *statefun.Runtime, testDurationSec int, workers
 	stop := make(chan bool)
 
 	testFunc := func(i int) {
+		system.GlobalPrometrics.GetRoutinesCounter().Started("KVMuticesSimpleTest-testFunc")
+		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("KVMuticesSimpleTest-testFunc")
 		defer wg.Done()
 
 		for {
