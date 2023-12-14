@@ -614,7 +614,7 @@
           "useBackend": false
         }
       ],
-      "title": "Foliage Routines By Name",
+      "title": "Foliage Routines By Type",
       "type": "timeseries"
     }
   ],
