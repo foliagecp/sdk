@@ -19,6 +19,10 @@ import (
 	lg "github.com/foliagecp/sdk/statefun/logger"
 )
 
+var (
+	GlobalPrometrics *Prometrics
+)
+
 type KeyMutex struct {
 	m *sync.Map
 }
@@ -59,6 +63,8 @@ func CreateDimSizeChannel[T interface{}](maxBufferElements int, onBufferOverflow
 	var buffer []T
 
 	puller := func(notifier chan bool) {
+		GlobalPrometrics.GetRoutinesCounter().Started("CreateDimSizeChannel-puller")
+		defer GlobalPrometrics.GetRoutinesCounter().Stopped("CreateDimSizeChannel-puller")
 		defer close(notifier) // notifier channel is being closed
 		for {
 			val, ok := <-in
@@ -85,6 +91,8 @@ func CreateDimSizeChannel[T interface{}](maxBufferElements int, onBufferOverflow
 		}
 	}
 	pusher := func(notifier chan bool) {
+		GlobalPrometrics.GetRoutinesCounter().Started("CreateDimSizeChannel-pusher")
+		defer GlobalPrometrics.GetRoutinesCounter().Stopped("CreateDimSizeChannel-pusher")
 		defer close(out) // out channel is being closed
 		for {
 			if len(buffer) == 0 {

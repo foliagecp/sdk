@@ -16,7 +16,6 @@ import (
 	"time"
 
 	lg "github.com/foliagecp/sdk/statefun/logger"
-	"github.com/foliagecp/sdk/statefun/prometrics"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/foliagecp/easyjson"
@@ -153,6 +152,9 @@ func (csv *StoreValue) Put(value interface{}, updateInKV bool, customPutTime int
 }
 
 func (csv *StoreValue) collectGarbage() {
+	system.GlobalPrometrics.GetRoutinesCounter().Started("cache.csv.collectGarbage")
+	defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("cache.csv.collectGarbage")
+
 	var canBeDeletedFromParent bool
 
 	csv.Lock("collectGarbage")
@@ -175,6 +177,7 @@ func (csv *StoreValue) collectGarbage() {
 		delete(csv.parent.store, csv.keyInParent)
 		//lg.Logln("____________ PURGING " + fmt.Sprintln(csv.keyInParent))
 		csv.parent.Unlock("collectGarbageParent")
+
 		go csv.parent.collectGarbage()
 	}
 }
@@ -270,11 +273,9 @@ type Store struct {
 	transactions                sync.Map
 	transactionsMutex           *sync.Mutex
 	getKeysByPatternFromKVMutex *sync.Mutex
-
-	prometrics *prometrics.Prometrics
 }
 
-func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue, pm *prometrics.Prometrics) *Store {
+func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *Store {
 	cs := Store{
 		cacheConfig: cacheConfig,
 		kv:          kv,
@@ -296,13 +297,12 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue, p
 		transactionsMutex:           &sync.Mutex{},
 		getKeysByPatternFromKVMutex: &sync.Mutex{},
 	}
-	if cacheConfig.prometricsEnabled && pm != nil {
-		cs.prometrics = pm
-	}
 
 	cs.ctx, cs.cancel = context.WithCancel(ctx)
 
 	storeUpdatesHandler := func(cs *Store) {
+		system.GlobalPrometrics.GetRoutinesCounter().Started("cache.storeUpdatesHandler")
+		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("cache.storeUpdatesHandler")
 		if w, err := kv.Watch(cacheConfig.kvStorePrefix+".>", nats.IgnoreDeletes()); err == nil {
 			activeKVSync := true
 			for activeKVSync {
@@ -368,6 +368,8 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue, p
 		}
 	}
 	kvLazyWriter := func(cs *Store) {
+		system.GlobalPrometrics.GetRoutinesCounter().Started("cache.kvLazyWriter")
+		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("cache.kvLazyWriter")
 		for {
 			select {
 			case <-cs.ctx.Done():
@@ -478,11 +480,8 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue, p
 
 				cs.valuesInCache = len(lruTimes)
 
-				if cs.prometrics != nil {
-					measureName := "cache_values"
-					if gaugeVec, err := cs.prometrics.EnsureGaugeVecSimple(measureName, "", []string{"id"}); err == nil {
-						gaugeVec.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(cs.valuesInCache))
-					}
+				if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("cache_values", "", []string{"id"}); err == nil {
+					gaugeVec.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(cs.valuesInCache))
 				}
 
 				time.Sleep(100 * time.Millisecond) // Prevents too many locks and prevents too much processor time consumption
@@ -886,11 +885,8 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 		i++
 	}
 
-	if cs.prometrics != nil {
-		measureName := "cache_get_keys_by_pattern"
-		if gaugeVec, err := cs.prometrics.EnsureGaugeVecSimple(measureName, "", []string{"id"}); err == nil {
-			gaugeVec.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(time.Since(start).Microseconds()))
-		}
+	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("cache_get_keys_by_pattern", "", []string{"id"}); err == nil {
+		gaugeVec.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(time.Since(start).Microseconds()))
 	}
 
 	return keysSlice

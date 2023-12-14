@@ -10,6 +10,7 @@ import (
 	"time"
 
 	lg "github.com/foliagecp/sdk/statefun/logger"
+	"github.com/foliagecp/sdk/statefun/system"
 
 	"github.com/foliagecp/easyjson"
 
@@ -88,6 +89,8 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 
 		chacheUpdatedChannel := contextProcessor.GlobalCache.SubscribeLevelCallback(keyBase+".*", processID)
 		go func(chacheUpdatedChannel chan cache.KeyValue) {
+			system.GlobalPrometrics.GetRoutinesCounter().Started("LLAPIQueryJPGQLCallTreeResultAggregation-aggregation")
+			defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("LLAPIQueryJPGQLCallTreeResultAggregation-aggregation")
 			startedEvaluating := sfSystem.GetCurrentTimeNs()
 			for {
 				select {
@@ -479,6 +482,8 @@ func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExec
 		chacheUpdatedChannel := contextProcessor.GlobalCache.SubscribeLevelCallback(fmt.Sprintf("%s.%s.pending.%s", modifiedTypename, aggregationID, "*"), aggregationID)
 
 		go func(chacheUpdatedChannel chan cache.KeyValue) {
+			system.GlobalPrometrics.GetRoutinesCounter().Started("LLAPIQueryJPGQLDirectCacheResultAggregation-aggregation")
+			defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("LLAPIQueryJPGQLDirectCacheResultAggregation-aggregation")
 			startedEvaluating := sfSystem.GetCurrentTimeNs()
 			pendingMap := map[string]bool{}
 			resultObjects := []string{}

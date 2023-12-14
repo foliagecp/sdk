@@ -10,7 +10,6 @@ import (
 	"time"
 
 	lg "github.com/foliagecp/sdk/statefun/logger"
-	"github.com/foliagecp/sdk/statefun/prometrics"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/foliagecp/easyjson"
@@ -83,6 +82,7 @@ func (ft *FunctionType) sendMsg(id string, msg FunctionTypeMsg) {
 		msgChannel = value.(chan FunctionTypeMsg)
 	} else {
 		msgChannel = make(chan FunctionTypeMsg, ft.config.msgChannelSize)
+
 		go ft.idHandlerRoutine(id, msgChannel)
 		ft.idHandlersChannel.Store(id, msgChannel)
 		if ft.executor != nil {
@@ -113,19 +113,15 @@ func (ft *FunctionType) sendMsg(id string, msg FunctionTypeMsg) {
 }
 
 func (ft *FunctionType) idHandlerRoutine(id string, msgChannel chan FunctionTypeMsg) {
+	system.GlobalPrometrics.GetRoutinesCounter().Started("functiontype-idHandlerRoutine")
+	defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("functiontype-idHandlerRoutine")
 	typenameIDContextProcessor := sfPlugins.StatefunContextProcessor{
 		GlobalCache:        ft.runtime.cacheStore,
 		GetFunctionContext: func() *easyjson.JSON { return ft.getContext(ft.name + "." + id) },
 		SetFunctionContext: func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
 		GetObjectContext:   func() *easyjson.JSON { return ft.getContext(id) },
 		SetObjectContext:   func(context *easyjson.JSON) { ft.setContext(id, context) },
-		GetPrometrics: func() *prometrics.Prometrics {
-			if ft.config.prometricsEnabled {
-				return ft.runtime.prometrics
-			}
-			return nil
-		},
-		Self: sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
+		Self:               sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
 		Signal: func(signalProvider sfPlugins.SignalProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) error {
 			return ft.runtime.signal(signalProvider, ft.name, id, targetTypename, targetID, j, o)
 		},
@@ -227,11 +223,9 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 	}
 	// -------------------------------------------------------
 
-	if pm := typenameIDContextProcessor.GetPrometrics(); pm != nil {
-		measureName := fmt.Sprintf("%s_execution_time", strings.ReplaceAll(ft.name, ".", ""))
-		if gaugeVec, err := pm.EnsureGaugeVecSimple(measureName, "", []string{"id"}); err == nil {
-			gaugeVec.With(prometheus.Labels{"id": id}).Set(float64(time.Since(start).Microseconds()))
-		}
+	measureName := fmt.Sprintf("%s_execution_time", strings.ReplaceAll(ft.name, ".", ""))
+	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple(measureName, "", []string{"id"}); err == nil {
+		gaugeVec.With(prometheus.Labels{"id": id}).Set(float64(time.Since(start).Microseconds()))
 	}
 
 	if msg.AckCallback != nil {

@@ -7,13 +7,11 @@ package statefun
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"slices"
 	"sync/atomic"
 	"time"
 
 	lg "github.com/foliagecp/sdk/statefun/logger"
-	"github.com/foliagecp/sdk/statefun/prometrics"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/foliagecp/sdk/statefun/cache"
@@ -27,7 +25,6 @@ type Runtime struct {
 	js         nats.JetStreamContext
 	kv         nats.KeyValue
 	cacheStore *cache.Store
-	prometrics *prometrics.Prometrics
 
 	registeredFunctionTypes map[string]*FunctionType
 
@@ -82,11 +79,6 @@ func NewRuntime(config RuntimeConfig) (r *Runtime, err error) {
 }
 
 func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Runtime) error) (err error) {
-	if len(r.config.prometricsAddr) > 0 {
-		r.prometrics = prometrics.NewPrometricsWithServer("/", r.config.prometricsAddr)
-		go statsGolangStatsCollector(r.prometrics)
-	}
-
 	// Create streams if does not exist ------------------------------
 	/* Each stream contains a single subject (topic).
 	 * Differently named stream with overlapping subjects cannot exist!
@@ -109,12 +101,14 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 	// --------------------------------------------------------------
 
 	lg.Logln(lg.TraceLevel, "Initializing the cache store...")
-	r.cacheStore = cache.NewCacheStore(context.Background(), cacheConfig, r.kv, r.prometrics)
+	r.cacheStore = cache.NewCacheStore(context.Background(), cacheConfig, r.kv)
 	lg.Logln(lg.TraceLevel, "Cache store inited!")
 
 	// Functions running in a single instance controller --------------------------------
 	singleInstanceFunctionRevisions := map[string]uint64{}
 	singleInstanceFunctionLocksUpdater := func(sifr map[string]uint64) {
+		system.GlobalPrometrics.GetRoutinesCounter().Started("singleInstanceFunctionLocksUpdater")
+		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("singleInstanceFunctionLocksUpdater")
 		if len(sifr) > 0 {
 			for {
 				time.Sleep(time.Duration(r.config.kvMutexLifeTimeSec) / 2 * time.Second)
@@ -157,31 +151,14 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 
 	if onAfterStart != nil {
 		go func() {
+			system.GlobalPrometrics.GetRoutinesCounter().Started("runtime_onAfterStart")
+			defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("runtime_onAfterStart")
 			system.MsgOnErrorReturn(onAfterStart(r))
 		}()
 	}
 	system.MsgOnErrorReturn(r.runGarbageCellector())
 
 	return
-}
-
-func statsGolangStatsCollector(pm *prometrics.Prometrics) {
-	if pm == nil {
-		return
-	}
-
-	mem := &runtime.MemStats{}
-	for {
-		runtime.ReadMemStats(mem)
-		if gaugeVec, err := pm.EnsureGaugeVecSimple("fg_runtime_mem_alloc_bytes", "", []string{}); err == nil {
-			gaugeVec.With(prometheus.Labels{}).Set(float64(mem.Alloc))
-		}
-		if gaugeVec, err := pm.EnsureGaugeVecSimple("fg_runtime_routines", "", []string{}); err == nil {
-			gaugeVec.With(prometheus.Labels{}).Set(float64(runtime.NumGoroutine()))
-		}
-
-		time.Sleep(1 * time.Second)
-	}
 }
 
 func (r *Runtime) runGarbageCellector() (err error) {
@@ -193,20 +170,14 @@ func (r *Runtime) runGarbageCellector() (err error) {
 		measureName := "stetefun_instances"
 		var gaugeVec *prometheus.GaugeVec
 		var gaugeVecErr error
-		if len(r.config.prometricsAddr) > 0 {
-			if r.prometrics != nil {
-				gaugeVec, gaugeVecErr = r.prometrics.EnsureGaugeVecSimple(measureName, "Stateful function instances", []string{"typename"})
-			}
-		}
+		gaugeVec, gaugeVecErr = system.GlobalPrometrics.EnsureGaugeVecSimple(measureName, "Stateful function instances", []string{"typename"})
 
 		for _, ft := range r.registeredFunctionTypes {
 			n1, n2 := ft.gc(r.config.functionTypeIDLifetimeMs)
 			totalIdsGrbageCollected += n1
 			totalIDHandlersRunning += n2
-			if len(r.config.prometricsAddr) > 0 {
-				if gaugeVec != nil && gaugeVecErr == nil {
-					gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(float64(n2))
-				}
+			if gaugeVec != nil && gaugeVecErr == nil {
+				gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(float64(n2))
 			}
 		}
 
