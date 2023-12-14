@@ -7,6 +7,7 @@ package statefun
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -83,6 +84,7 @@ func NewRuntime(config RuntimeConfig) (r *Runtime, err error) {
 func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Runtime) error) (err error) {
 	if len(r.config.prometricsAddr) > 0 {
 		r.prometrics = prometrics.NewPrometricsWithServer("/", r.config.prometricsAddr)
+		go statsGolangStatsCollector(r.prometrics)
 	}
 
 	// Create streams if does not exist ------------------------------
@@ -163,6 +165,25 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 	return
 }
 
+func statsGolangStatsCollector(pm *prometrics.Prometrics) {
+	if pm == nil {
+		return
+	}
+
+	mem := &runtime.MemStats{}
+	for {
+		runtime.ReadMemStats(mem)
+		if gaugeVec, err := pm.EnsureGaugeVecSimple("fg_runtime_mem_alloc_bytes", "", []string{}); err == nil {
+			gaugeVec.With(prometheus.Labels{}).Set(float64(mem.Alloc))
+		}
+		if gaugeVec, err := pm.EnsureGaugeVecSimple("fg_runtime_routines", "", []string{}); err == nil {
+			gaugeVec.With(prometheus.Labels{}).Set(float64(runtime.NumGoroutine()))
+		}
+
+		time.Sleep(1 * time.Second)
+	}
+}
+
 func (r *Runtime) runGarbageCellector() (err error) {
 	for {
 		// Start function subscriptions ---------------------------------
@@ -172,16 +193,20 @@ func (r *Runtime) runGarbageCellector() (err error) {
 		measureName := "stetefun_instances"
 		var gaugeVec *prometheus.GaugeVec
 		var gaugeVecErr error
-		if r.prometrics != nil {
-			gaugeVec, gaugeVecErr = r.prometrics.EnsureGaugeVecSimple(measureName, "Stateful function instances", []string{"typename"})
+		if len(r.config.prometricsAddr) > 0 {
+			if r.prometrics != nil {
+				gaugeVec, gaugeVecErr = r.prometrics.EnsureGaugeVecSimple(measureName, "Stateful function instances", []string{"typename"})
+			}
 		}
 
 		for _, ft := range r.registeredFunctionTypes {
 			n1, n2 := ft.gc(r.config.functionTypeIDLifetimeMs)
 			totalIdsGrbageCollected += n1
 			totalIDHandlersRunning += n2
-			if gaugeVec != nil && gaugeVecErr == nil {
-				gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(float64(n2))
+			if len(r.config.prometricsAddr) > 0 {
+				if gaugeVec != nil && gaugeVecErr == nil {
+					gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(float64(n2))
+				}
 			}
 		}
 

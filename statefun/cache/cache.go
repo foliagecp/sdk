@@ -736,6 +736,8 @@ func (cs *Store) DeleteValue(key string, updateInKV bool, customDeleteTime int64
 }
 
 func (cs *Store) GetKeysByPattern(pattern string) []string {
+	start := time.Now()
+
 	keys := map[string]bool{}
 
 	appendKeysFromKV := func() {
@@ -883,6 +885,14 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 		keysSlice[i] = k
 		i++
 	}
+
+	if cs.prometrics != nil {
+		measureName := "cache_get_keys_by_pattern"
+		if gaugeVec, err := cs.prometrics.EnsureGaugeVecSimple(measureName, "", []string{"id"}); err == nil {
+			gaugeVec.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(time.Since(start).Microseconds()))
+		}
+	}
+
 	return keysSlice
 }
 
