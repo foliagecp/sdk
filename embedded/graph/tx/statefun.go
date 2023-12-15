@@ -38,26 +38,26 @@ var (
 )
 
 func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
-	statefun.NewFunctionType(runtime, "functions.cmdb.tx.begin", Begin, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetPrometricsEnabled(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.begin", Begin, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
-	statefun.NewFunctionType(runtime, "functions.cmdb.tx.type.create", CreateType, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetPrometricsEnabled(true))
-	statefun.NewFunctionType(runtime, "functions.cmdb.tx.type.update", UpdateType, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetPrometricsEnabled(true))
-	statefun.NewFunctionType(runtime, "functions.cmdb.tx.type.delete", DeleteType, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetPrometricsEnabled(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.type.create", CreateType, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.type.update", UpdateType, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.type.delete", DeleteType, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
-	statefun.NewFunctionType(runtime, "functions.cmdb.tx.object.create", CreateObject, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetPrometricsEnabled(true))
-	statefun.NewFunctionType(runtime, "functions.cmdb.tx.object.update", UpdateObject, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetPrometricsEnabled(true))
-	statefun.NewFunctionType(runtime, "functions.cmdb.tx.object.delete", DeleteObject, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetPrometricsEnabled(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.object.create", CreateObject, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.object.update", UpdateObject, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.object.delete", DeleteObject, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
-	statefun.NewFunctionType(runtime, "functions.cmdb.tx.types.link.create", CreateTypesLink, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetPrometricsEnabled(true))
-	statefun.NewFunctionType(runtime, "functions.cmdb.tx.types.link.update", UpdateTypesLink, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetPrometricsEnabled(true))
-	statefun.NewFunctionType(runtime, "functions.cmdb.tx.types.link.delete", DeleteTypesLink, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetPrometricsEnabled(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.types.link.create", CreateTypesLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.types.link.update", UpdateTypesLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.types.link.delete", DeleteTypesLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
-	statefun.NewFunctionType(runtime, "functions.cmdb.tx.objects.link.create", CreateObjectsLink, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetPrometricsEnabled(true))
-	statefun.NewFunctionType(runtime, "functions.cmdb.tx.objects.link.update", UpdateObjectsLink, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetPrometricsEnabled(true))
-	statefun.NewFunctionType(runtime, "functions.cmdb.tx.objects.link.delete", DeleteObjectsLink, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetPrometricsEnabled(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.objects.link.create", CreateObjectsLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.objects.link.update", UpdateObjectsLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.objects.link.delete", DeleteObjectsLink, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
-	statefun.NewFunctionType(runtime, "functions.cmdb.tx.commit", Commit, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetPrometricsEnabled(true))
-	statefun.NewFunctionType(runtime, "functions.cmdb.tx.push", Push, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetPrometricsEnabled(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.commit", Commit, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "functions.cmdb.tx.push", Push, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 }
 
 // exec on arbitrary id=txid,
@@ -122,14 +122,12 @@ func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 		return
 	}
 
-	if pm := contextProcessor.GetPrometrics(); pm != nil {
-		// Measure cloning duration ---------------------------
-		measureName := fmt.Sprintf("%sclone_execution_time", strings.ReplaceAll(contextProcessor.Self.Typename, ".", ""))
-		if gaugeVec, err := pm.EnsureGaugeVecSimple(measureName, "", []string{"type"}); err == nil {
-			gaugeVec.With(prometheus.Labels{"type": cloneMod}).Set(float64(time.Since(cloneStart).Microseconds()))
-		}
-		// ----------------------------------------------------
+	// Measure cloning duration ---------------------------
+	measureName := fmt.Sprintf("%sclone_execution_time", strings.ReplaceAll(contextProcessor.Self.Typename, ".", ""))
+	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple(measureName, "", []string{"type"}); err == nil {
+		gaugeVec.With(prometheus.Labels{"type": cloneMod}).Set(float64(time.Since(cloneStart).Microseconds()))
 	}
+	// ----------------------------------------------------
 
 	qid := common.GetQueryID(contextProcessor)
 

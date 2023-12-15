@@ -55,6 +55,8 @@ func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType) error {
 
 	// For auto message acking msg ----------------------------------
 	msgAcker := func(msgAckChannel chan *nats.Msg) {
+		system.GlobalPrometrics.GetRoutinesCounter().Started("AddSignalSourceJetstreamQueuePushConsumer-msgAcker")
+		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("AddSignalSourceJetstreamQueuePushConsumer-msgAcker")
 		for msg := range msgAckChannel {
 			system.MsgOnErrorReturn(msg.Ack())
 		}

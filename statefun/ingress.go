@@ -26,6 +26,8 @@ func buildNatsData(callerTypename string, callerID string, payload *easyjson.JSO
 func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) error {
 	jetstreamGlobalSignal := func() error {
 		go func() {
+			system.GlobalPrometrics.GetRoutinesCounter().Started("ingress-jetstreamGlobalSignal-gofunc")
+			defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("ingress-jetstreamGlobalSignal-gofunc")
 			system.MsgOnErrorReturn(r.nc.Publish(fmt.Sprintf("%s.%s", targetTypename, targetID), buildNatsData(callerTypename, callerID, payload, options)))
 		}()
 		return nil
