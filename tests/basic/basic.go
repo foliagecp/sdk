@@ -110,10 +110,8 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlu
 		contextProcessor.Reply.With(easyjson.NewJSONObjectWithKeyValue("counter", easyjson.NewJSON(incrementValue)).GetPtr())
 	}
 
-	if pm := contextProcessor.GetPrometrics(); pm != nil {
-		if gaugeVec, err := pm.EnsureGaugeVecSimple("master_function", "", []string{"id"}); err == nil {
-			gaugeVec.With(prometheus.Labels{"id": contextProcessor.Self.ID}).Set(float64(time.Since(start).Microseconds()))
-		}
+	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("master_function", "", []string{"id"}); err == nil {
+		gaugeVec.With(prometheus.Labels{"id": contextProcessor.Self.ID}).Set(float64(time.Since(start).Microseconds()))
 	}
 }
 
@@ -165,6 +163,8 @@ func RequestReplyTest(runtime *statefun.Runtime) {
 }
 
 func Start() {
+	system.GlobalPrometrics = system.NewPrometrics("", ":9901")
+
 	afterStart := func(runtime *statefun.Runtime) error {
 		RequestReplyTest(runtime)
 		if CreateSimpleGraphTest {
@@ -174,13 +174,13 @@ func Start() {
 		return nil
 	}
 
-	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "basic").SetPrometricsEnabled(":9901")); err == nil {
+	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "basic")); err == nil {
 		if KVMuticesTest {
 			KVMuticesSimpleTest(runtime, KVMuticesTestDurationSec, KVMuticesTestWorkers, 2, 1)
 		}
 
 		RegisterFunctionTypes(runtime)
-		if err := runtime.Start(cache.NewCacheConfig("main_cache").SetPrometricsEnabled(true), afterStart); err != nil {
+		if err := runtime.Start(cache.NewCacheConfig("main_cache"), afterStart); err != nil {
 			lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s\n", err)
 		}
 	} else {

@@ -10,7 +10,6 @@ const (
 	KVMutexIsOldPollingInterval = 10
 	FunctionTypeIDLifetimeMs    = 5000
 	RequestTimeoutSec           = 60
-	PrometricsAddr              = ""
 )
 
 type RuntimeConfig struct {
@@ -20,7 +19,6 @@ type RuntimeConfig struct {
 	kvMutexIsOldPollingIntervalSec int
 	functionTypeIDLifetimeMs       int
 	requestTimeoutSec              int
-	prometricsAddr                 string
 }
 
 func NewRuntimeConfig() *RuntimeConfig {
@@ -31,7 +29,6 @@ func NewRuntimeConfig() *RuntimeConfig {
 		kvMutexIsOldPollingIntervalSec: KVMutexIsOldPollingInterval,
 		functionTypeIDLifetimeMs:       FunctionTypeIDLifetimeMs,
 		requestTimeoutSec:              RequestTimeoutSec,
-		prometricsAddr:                 PrometricsAddr,
 	}
 }
 
@@ -67,10 +64,5 @@ func (ro *RuntimeConfig) SetFunctionTypeIDLifetimeMs(functionTypeIDLifetimeMs in
 
 func (ro *RuntimeConfig) SetRequestTimeoutSec(requestTimeoutSec int) *RuntimeConfig {
 	ro.requestTimeoutSec = requestTimeoutSec
-	return ro
-}
-
-func (ro *RuntimeConfig) SetPrometricsEnabled(address string) *RuntimeConfig {
-	ro.prometricsAddr = address
 	return ro
 }

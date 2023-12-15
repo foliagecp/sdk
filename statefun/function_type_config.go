@@ -11,7 +11,6 @@ const (
 	BalanceNeeded            = true
 	MutexLifetimeSec         = 120
 	MultipleInstancesAllowed = false
-	PrometricsEnabled        = false
 )
 
 type FunctionTypeConfig struct {
@@ -24,7 +23,6 @@ type FunctionTypeConfig struct {
 	mutexLifeTimeSec         int
 	options                  *easyjson.JSON
 	multipleInstancesAllowed bool
-	prometricsEnabled        bool
 }
 
 func NewFunctionTypeConfig() *FunctionTypeConfig {
@@ -36,7 +34,6 @@ func NewFunctionTypeConfig() *FunctionTypeConfig {
 		mutexLifeTimeSec:         MutexLifetimeSec,
 		options:                  easyjson.NewJSONObject().GetPtr(),
 		multipleInstancesAllowed: MultipleInstancesAllowed,
-		prometricsEnabled:        PrometricsEnabled,
 	}
 }
 
@@ -79,10 +76,5 @@ func (ftc *FunctionTypeConfig) SetMutexLifeTimeSec(mutexLifeTimeSec int) *Functi
 
 func (ftc *FunctionTypeConfig) SetOptions(options *easyjson.JSON) *FunctionTypeConfig {
 	ftc.options = options
-	return ftc
-}
-
-func (ftc *FunctionTypeConfig) SetPrometricsEnabled(enabled bool) *FunctionTypeConfig {
-	ftc.prometricsEnabled = enabled
 	return ftc
 }
