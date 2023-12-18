@@ -58,11 +58,12 @@ func (s KeyMutex) Lock(key interface{}) {
 func CreateDimSizeChannel[T interface{}](maxBufferElements int, onBufferOverflow func()) (in chan T, out chan T) {
 	in = make(chan T)
 	out = make(chan T)
-	notifier := make(chan bool)
+	notifier := make(chan struct{})
+	var mutex sync.Mutex
 
 	var buffer []T
 
-	puller := func(notifier chan bool) {
+	puller := func() {
 		GlobalPrometrics.GetRoutinesCounter().Started("CreateDimSizeChannel-puller")
 		defer GlobalPrometrics.GetRoutinesCounter().Stopped("CreateDimSizeChannel-puller")
 		defer close(notifier) // notifier channel is being closed
@@ -71,47 +72,48 @@ func CreateDimSizeChannel[T interface{}](maxBufferElements int, onBufferOverflow
 			if !ok { // in channel is closed
 				return
 			}
+			mutex.Lock()
 			buffer = append(buffer, val)
 			if len(buffer) > maxBufferElements {
 				if onBufferOverflow != nil {
-					onBufferOverflow()
+					go onBufferOverflow()
 				}
 			}
+			mutex.Unlock()
 
 			select {
-			case notifier <- true:
+			case notifier <- struct{}{}:
 			default:
 				continue
 			}
-
-			/*lg.Logf("%d, %d\n", len(notifier), cap(notifier))
-			if len(notifier) < cap(notifier) { // If room is available in the notifier channel
-				notifier <- true
-			}*/
 		}
 	}
-	pusher := func(notifier chan bool) {
+	pusher := func() {
 		GlobalPrometrics.GetRoutinesCounter().Started("CreateDimSizeChannel-pusher")
 		defer GlobalPrometrics.GetRoutinesCounter().Stopped("CreateDimSizeChannel-pusher")
 		defer close(out) // out channel is being closed
 		for {
+			mutex.Lock()
 			if len(buffer) == 0 {
+				mutex.Unlock()
 				_, ok := <-notifier
 				if !ok { // notifier channel is closed
 					return
 				}
 			} else {
-				out <- buffer[0]
+				v := buffer[0]
 				if len(buffer) == 1 {
 					buffer = nil
 				} else {
 					buffer = buffer[1:]
 				}
+				mutex.Unlock()
+				out <- v
 			}
 		}
 	}
-	go puller(notifier)
-	go pusher(notifier)
+	go puller()
+	go pusher()
 
 	return
 }
