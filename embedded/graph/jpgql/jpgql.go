@@ -635,12 +635,12 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime, jpgqlEvaluationTimeoutS
 		runtime,
 		"functions.graph.api.query.jpgql.ctra",
 		LLAPIQueryJPGQLCallTreeResultAggregation,
-		*statefun.NewFunctionTypeConfig().SetOptions(&options).SetServiceState(true).SetMultipleInstancesAllowance(false),
+		*statefun.NewFunctionTypeConfig().SetOptions(&options).SetServiceState(true).SetMultipleInstancesAllowance(false).SetMaxIdHandlers(100),
 	)
 	statefun.NewFunctionType(
 		runtime,
 		"functions.graph.api.query.jpgql.dcra",
 		LLAPIQueryJPGQLDirectCacheResultAggregation,
-		*statefun.NewFunctionTypeConfig().SetOptions(&options).SetServiceState(true).SetMultipleInstancesAllowance(false),
+		*statefun.NewFunctionTypeConfig().SetOptions(&options).SetServiceState(true).SetMultipleInstancesAllowance(false).SetMaxIdHandlers(100),
 	)
 }
