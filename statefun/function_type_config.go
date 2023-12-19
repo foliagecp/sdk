@@ -11,7 +11,7 @@ const (
 	BalanceNeeded            = true
 	MutexLifetimeSec         = 120
 	MultipleInstancesAllowed = false
-	MaxInstances             = 20
+	MaxIdHandlers            = 20
 )
 
 type FunctionTypeConfig struct {
@@ -24,7 +24,7 @@ type FunctionTypeConfig struct {
 	mutexLifeTimeSec         int
 	options                  *easyjson.JSON
 	multipleInstancesAllowed bool
-	maxInstances             int
+	maxIdHandlers            int
 }
 
 func NewFunctionTypeConfig() *FunctionTypeConfig {
@@ -36,7 +36,7 @@ func NewFunctionTypeConfig() *FunctionTypeConfig {
 		mutexLifeTimeSec:         MutexLifetimeSec,
 		options:                  easyjson.NewJSONObject().GetPtr(),
 		multipleInstancesAllowed: MultipleInstancesAllowed,
-		maxInstances:             MaxInstances,
+		maxIdHandlers:            MaxIdHandlers,
 	}
 }
 
@@ -82,7 +82,7 @@ func (ftc *FunctionTypeConfig) SetOptions(options *easyjson.JSON) *FunctionTypeC
 	return ftc
 }
 
-func (ftc *FunctionTypeConfig) SetMaxInstances(maxInstances int) *FunctionTypeConfig {
-	ftc.maxInstances = maxInstances
+func (ftc *FunctionTypeConfig) SetMaxIdHandlers(maxIdHandlers int) *FunctionTypeConfig {
+	ftc.maxIdHandlers = maxIdHandlers
 	return ftc
 }
