@@ -21,26 +21,31 @@ import (
 type FunctionLogicHandler func(sfPlugins.StatefunExecutor, *sfPlugins.StatefunContextProcessor)
 
 type FunctionType struct {
-	runtime                *Runtime
-	name                   string
-	subject                string
-	config                 FunctionTypeConfig
-	logicHandler           FunctionLogicHandler
-	idKeyMutex             system.KeyMutex
-	idHandlersChannel      sync.Map
-	idHandlersLastMsgTime  sync.Map
-	typenameLockRevisionID uint64
-	executor               *sfPlugins.TypenameExecutorPlugin
+	runtime                 *Runtime
+	name                    string
+	subject                 string
+	config                  FunctionTypeConfig
+	logicHandler            FunctionLogicHandler
+	idKeyMutex              system.KeyMutex
+	idHandlersChannel       sync.Map
+	idHandlersLastMsgTime   sync.Map
+	typenameLockRevisionID  uint64
+	executor                *sfPlugins.TypenameExecutorPlugin
+	instancesControlChannel chan struct{}
 }
 
 func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHandler, config FunctionTypeConfig) *FunctionType {
 	ft := &FunctionType{
-		runtime:      runtime,
-		name:         name,
-		subject:      name + ".*",
-		logicHandler: logicHandler,
-		idKeyMutex:   system.NewKeyMutex(),
-		config:       config,
+		runtime:                 runtime,
+		name:                    name,
+		subject:                 name + ".*",
+		logicHandler:            logicHandler,
+		idKeyMutex:              system.NewKeyMutex(),
+		config:                  config,
+		instancesControlChannel: nil,
+	}
+	if config.maxInstances > 0 {
+		ft.instancesControlChannel = make(chan struct{}, config.maxInstances)
 	}
 	runtime.registeredFunctionTypes[ft.name] = ft
 	return ft
@@ -81,6 +86,17 @@ func (ft *FunctionType) sendMsg(id string, msg FunctionTypeMsg) {
 	if value, ok := ft.idHandlersChannel.Load(id); ok {
 		msgChannel = value.(chan FunctionTypeMsg)
 	} else {
+		// Limit typename instances -----------------------
+		if ft.instancesControlChannel != nil {
+			select {
+			case ft.instancesControlChannel <- struct{}{}:
+			default: // Limit is reached
+				msg.RefusalCallback()
+				return
+			}
+		}
+		// ------------------------------------------------
+
 		msgChannel = make(chan FunctionTypeMsg, ft.config.msgChannelSize)
 
 		go ft.idHandlerRoutine(id, msgChannel)
@@ -137,6 +153,9 @@ func (ft *FunctionType) idHandlerRoutine(id string, msgChannel chan FunctionType
 
 	for msg := range msgChannel {
 		ft.handleMsgForID(id, msg, &typenameIDContextProcessor)
+	}
+	if ft.instancesControlChannel != nil {
+		<-ft.instancesControlChannel
 	}
 }
 
