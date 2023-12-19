@@ -44,8 +44,8 @@ func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHa
 		config:                  config,
 		instancesControlChannel: nil,
 	}
-	if config.maxInstances > 0 {
-		ft.instancesControlChannel = make(chan struct{}, config.maxInstances)
+	if config.maxIdHandlers > 0 {
+		ft.instancesControlChannel = make(chan struct{}, config.maxIdHandlers)
 	}
 	runtime.registeredFunctionTypes[ft.name] = ft
 	return ft
@@ -86,7 +86,7 @@ func (ft *FunctionType) sendMsg(id string, msg FunctionTypeMsg) {
 	if value, ok := ft.idHandlersChannel.Load(id); ok {
 		msgChannel = value.(chan FunctionTypeMsg)
 	} else {
-		// Limit typename instances -----------------------
+		// Limit typename's max id handlers running -------
 		if ft.instancesControlChannel != nil {
 			select {
 			case ft.instancesControlChannel <- struct{}{}:
