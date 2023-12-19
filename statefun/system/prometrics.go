@@ -59,9 +59,9 @@ func (pm *Prometrics) golangRuntimeStatsCollector() {
 			gaugeVec.With(prometheus.Labels{}).Set(float64(runtime.NumGoroutine()))
 		}
 
-		pm.GetRoutinesCounter().Read(func(key, value interface{}) bool {
+		pm.GetRoutinesCounter().Read(func(key string, counter int64) bool {
 			if gaugeVec, err := pm.EnsureGaugeVecSimple("fg_runtime_routines", "", []string{"routine_type_name"}); err == nil {
-				gaugeVec.With(prometheus.Labels{"routine_type_name": key.(string)}).Set(float64(value.(int)))
+				gaugeVec.With(prometheus.Labels{"routine_type_name": key}).Set(float64(counter))
 			}
 			return true
 		})
@@ -153,6 +153,11 @@ func (pm *Prometrics) EnsureHistogramVec(id string, metric *prometheus.Histogram
 
 // ------------------------------------------------------------------------------------------------
 
+type RoutinesCounterValue struct {
+	v int64
+	m sync.Mutex
+}
+
 type RoutinesCounter struct {
 	counter sync.Map
 }
@@ -162,10 +167,13 @@ func (rc *RoutinesCounter) Started(routineTypeName string) {
 		return
 	}
 	if v, ok := rc.counter.Load(routineTypeName); ok {
-		counter := v.(int)
-		rc.counter.Store(routineTypeName, counter+1)
+		rcv := v.(*RoutinesCounterValue)
+		rcv.m.Lock()
+		rcv.v++
+		rcv.m.Unlock()
 	} else {
-		rc.counter.Store(routineTypeName, 1)
+		rcv := &RoutinesCounterValue{}
+		rc.counter.Store(routineTypeName, rcv)
 	}
 }
 
@@ -175,19 +183,25 @@ func (rc *RoutinesCounter) Stopped(routineTypeName string) {
 	}
 
 	if v, ok := rc.counter.Load(routineTypeName); ok {
-		counter := v.(int)
-		if counter > 0 {
-			rc.counter.Store(routineTypeName, counter-1)
-		} else {
+		rcv := v.(*RoutinesCounterValue)
+		rcv.m.Lock()
+		rcv.v--
+		if rcv.v < 0 {
 			rc.counter.Delete(routineTypeName)
 		}
+		rcv.m.Unlock()
 	}
-
 }
 
-func (rc *RoutinesCounter) Read(f func(key any, value any) bool) {
+func (rc *RoutinesCounter) Read(f func(key string, value int64) bool) {
 	if rc == nil {
 		return
 	}
-	rc.counter.Range(f)
+	rc.counter.Range(func(k any, v any) bool {
+		rcv := v.(*RoutinesCounterValue)
+		rcv.m.Lock()
+		res := f(k.(string), rcv.v)
+		rcv.m.Unlock()
+		return res
+	})
 }
