@@ -25,7 +25,7 @@ nats -s nats://nats:foliage@nats:4222 kv ls -v --display-value basic_kv_store
 
 ### functions.graph.api.vertex.create.<object_id>
 
-[Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPIObjectCreate)
+[Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPIVertexCreate)
 
 Example:  
 ```sh
@@ -34,7 +34,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.vertex.c
 
 ### functions.graph.api.vertex.update.<object_id>
 
-[Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPIObjectUpdate)
+[Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPIVertexUpdate)
 
 Example:  
 ```sh
@@ -43,7 +43,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.vertex.u
 
 ### functions.graph.api.vertex.delete.<object_id>
 
-[Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPIObjectDelete)
+[Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPIVertexDelete)
 
 Example:  
 ```sh
