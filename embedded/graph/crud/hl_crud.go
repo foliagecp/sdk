@@ -534,7 +534,7 @@ func isVertexAnObject(ctx *sfplugins.StatefunContextProcessor, id string) bool {
 
 func executeObjectTriggers(ctx *sfplugins.StatefunContextProcessor, objectID string, oldObjectBody, newObjectBody *easyjson.JSON, tt int /*0 - create, 1 - update, 2 - delete*/) {
 	triggers := getObjectTypeTriggers(ctx, objectID)
-	if triggers.IsNonEmptyObject() && tt > 0 && tt < 3 {
+	if triggers.IsNonEmptyObject() && tt >= 0 && tt < 3 {
 		elems := []string{"create", "update", "delete"}
 		var functions []string
 		if arr, ok := triggers.GetByPath(elems[tt]).AsArrayString(); ok {
@@ -542,13 +542,11 @@ func executeObjectTriggers(ctx *sfplugins.StatefunContextProcessor, objectID str
 		}
 
 		triggerData := easyjson.NewJSONObject()
-		if tt > 0 {
-			if oldObjectBody != nil {
-				triggerData.SetByPath("old_body", *oldObjectBody)
-			}
-			if newObjectBody != nil {
-				triggerData.SetByPath("new_body", *newObjectBody)
-			}
+		if oldObjectBody != nil {
+			triggerData.SetByPath("old_body", *oldObjectBody)
+		}
+		if newObjectBody != nil {
+			triggerData.SetByPath("new_body", *newObjectBody)
 		}
 		payload := easyjson.NewJSONObject()
 		payload.SetByPath(fmt.Sprintf("trigger.object.%s", elems[tt]), triggerData)
@@ -562,8 +560,8 @@ func executeObjectTriggers(ctx *sfplugins.StatefunContextProcessor, objectID str
 
 func executeLinkTriggers(ctx *sfplugins.StatefunContextProcessor, fromObjectId, toObjectId, linkType string, oldLinkBody, newLinkBody *easyjson.JSON, tt int /*0 - create, 1 - update, 2 - delete*/) {
 	triggers := getObjectsLinkTypeTriggers(ctx, fromObjectId, toObjectId)
-	if triggers.IsNonEmptyObject() && tt > 0 && tt < 3 {
-		elems := []string{"create", "upadte", "delete"}
+	if triggers.IsNonEmptyObject() && tt >= 0 && tt < 3 {
+		elems := []string{"create", "update", "delete"}
 		var functions []string
 		if arr, ok := triggers.GetByPath(elems[tt]).AsArrayString(); ok {
 			functions = arr
@@ -575,15 +573,13 @@ func executeLinkTriggers(ctx *sfplugins.StatefunContextProcessor, fromObjectId, 
 		}
 
 		triggerData := easyjson.NewJSONObject()
-		if tt > 0 {
-			triggerData.SetByPath("to", easyjson.NewJSON(toObjectId))
-			triggerData.SetByPath("type", easyjson.NewJSON(linkType))
-			if oldLinkBody != nil {
-				triggerData.SetByPath("old_body", *oldLinkBody)
-			}
-			if newLinkBody != nil {
-				triggerData.SetByPath("new_body", *newLinkBody)
-			}
+		triggerData.SetByPath("to", easyjson.NewJSON(toObjectId))
+		triggerData.SetByPath("type", easyjson.NewJSON(linkType))
+		if oldLinkBody != nil {
+			triggerData.SetByPath("old_body", *oldLinkBody)
+		}
+		if newLinkBody != nil {
+			triggerData.SetByPath("new_body", *newLinkBody)
 		}
 		payload := easyjson.NewJSONObject()
 		payload.SetByPath(fmt.Sprintf("trigger.link.%s", elems[tt]), triggerData)
