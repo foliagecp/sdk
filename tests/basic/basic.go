@@ -43,6 +43,8 @@ var (
 	CreateSimpleGraphTest bool = system.GetEnvMustProceed("CREATE_SIMPLE_GRAPH_TEST", true)
 	// KVMuticesTest - test the Foliage global key/value mutices
 	KVMuticesTest bool = system.GetEnvMustProceed("KV_MUTICES_TEST", true)
+	// TriggersTest - test the Foliage cmdb crud triggers
+	TriggersTest bool = system.GetEnvMustProceed("TRIGGERS_TEST", true)
 	// KVMuticesTestDurationSec - key/value mutices test duration
 	KVMuticesTestDurationSec int = system.GetEnvMustProceed("KV_MUTICES_TEST_DURATION_SEC", 10)
 	// KVMuticesTestWorkers - key/value mutices workers to apply in the test
@@ -166,6 +168,9 @@ func Start() {
 	system.GlobalPrometrics = system.NewPrometrics("", ":9901")
 
 	afterStart := func(runtime *statefun.Runtime) error {
+		if TriggersTest {
+			RunTriggersTest(runtime)
+		}
 		RequestReplyTest(runtime)
 		if CreateSimpleGraphTest {
 			CreateTestGraph(runtime)
@@ -180,6 +185,9 @@ func Start() {
 		}
 
 		RegisterFunctionTypes(runtime)
+		if TriggersTest {
+			registerTriggerFunctions(runtime)
+		}
 		if err := runtime.Start(cache.NewCacheConfig("main_cache"), afterStart); err != nil {
 			lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s\n", err)
 		}
