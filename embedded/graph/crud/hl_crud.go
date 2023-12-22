@@ -375,7 +375,7 @@ func CreateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	objectLink := easyjson.NewJSONObject()
 	objectLink.SetByPath("descendant_uuid", easyjson.NewJSON(objectToID))
 	objectLink.SetByPath("link_type", easyjson.NewJSON(linkType))
-	objectLink.SetByPath("link_body", easyjson.NewJSONObject())
+	objectLink.SetByPath("link_body", payload.GetByPath("body"))
 
 	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
 	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.create", selfID, &objectLink, &options)
