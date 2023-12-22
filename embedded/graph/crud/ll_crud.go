@@ -49,6 +49,7 @@ func addLinkOpToOpStack(opStack *easyjson.JSON, opName string, fromVertexId stri
 		op := easyjson.NewJSONObjectWithKeyValue("op", easyjson.NewJSON(opName))
 		op.SetByPath("from_id", easyjson.NewJSON(fromVertexId))
 		op.SetByPath("to_id", easyjson.NewJSON(toVertexId))
+		op.SetByPath("type", easyjson.NewJSON(linkType))
 		if oldBody != nil {
 			op.SetByPath("old_body", *oldBody)
 		}
