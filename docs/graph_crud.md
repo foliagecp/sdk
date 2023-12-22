@@ -11,7 +11,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.object.d
 ```
 4. Inspect nats KV store via `io` container: 
 ```sh
-nats -s nats://nats:foliage@nats:4222 kv ls -v --display-value basic_kv_store
+nats -s nats://nats:foliage@nats:4222 kv ls -v --display-value common_kv_store
 ```
 
 ## Functions
