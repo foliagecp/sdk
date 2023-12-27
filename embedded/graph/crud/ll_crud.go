@@ -16,6 +16,69 @@ import (
 	"github.com/foliagecp/sdk/statefun/system"
 )
 
+func getOpStackFromOptions(options *easyjson.JSON) *easyjson.JSON {
+	returnOpStack := false
+	if options != nil {
+		returnOpStack = options.GetByPath("return_op_stack").AsBoolDefault(false)
+	}
+	var opStack *easyjson.JSON = nil
+	if returnOpStack {
+		opStack = easyjson.NewJSONArray().GetPtr()
+	}
+	return opStack
+}
+
+func addVertexOpToOpStack(opStack *easyjson.JSON, opName string, vertexId string, oldBody *easyjson.JSON, newBody *easyjson.JSON) bool {
+	if opStack != nil && opStack.IsArray() {
+		op := easyjson.NewJSONObjectWithKeyValue("op", easyjson.NewJSON(opName))
+		op.SetByPath("id", easyjson.NewJSON(vertexId))
+		if oldBody != nil {
+			op.SetByPath("old_body", *oldBody)
+		}
+		if newBody != nil {
+			op.SetByPath("new_body", *newBody)
+		}
+		opStack.AddToArray(op)
+		return true
+	}
+	return false
+}
+
+func addLinkOpToOpStack(opStack *easyjson.JSON, opName string, fromVertexId string, toVertexId string, linkType string, oldBody *easyjson.JSON, newBody *easyjson.JSON) bool {
+	if opStack != nil && opStack.IsArray() {
+		op := easyjson.NewJSONObjectWithKeyValue("op", easyjson.NewJSON(opName))
+		op.SetByPath("from_id", easyjson.NewJSON(fromVertexId))
+		op.SetByPath("to_id", easyjson.NewJSON(toVertexId))
+		op.SetByPath("type", easyjson.NewJSON(linkType))
+		if oldBody != nil {
+			op.SetByPath("old_body", *oldBody)
+		}
+		if newBody != nil {
+			op.SetByPath("new_body", *newBody)
+		}
+		opStack.AddToArray(op)
+		return true
+	}
+	return false
+}
+
+func mergeOpStack(opStackRecepient *easyjson.JSON, opStackDonor *easyjson.JSON) bool {
+	if opStackRecepient != nil && opStackRecepient.IsArray() && opStackDonor != nil && opStackDonor.IsArray() {
+		for i := 0; i < opStackDonor.ArraySize(); i++ {
+			opStackRecepient.AddToArray(opStackDonor.ArrayElement(i))
+		}
+	}
+	return false
+}
+
+func addOpStackToResult(result *easyjson.JSON, opStack *easyjson.JSON) bool {
+	if result != nil && result.IsObject() && opStack != nil && opStack.IsArray() {
+		result.SetByPath("op_stack", *opStack)
+		return true
+	}
+	return false
+}
+
 /*
 Creates an object in the graph with an id the function being called with. Preliminarily deletes an existing one with the same id, if present.
 If caller is not empty returns result to the caller else returns result to the nats topic.
@@ -28,16 +91,21 @@ Request:
 		body: json - required // Body for object to be created with.
 			<key>: <type> - optional // Any additional key and value to be stored in objects's body.
 
+	options: json - optional
+		return_op_stack: bool - optional
+
 Reply:
 
 	payload: json
 		status: string
 		result: any
+		op_stack: json array - optional
 */
-func LLAPIObjectCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func LLAPIVertexCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	payload := contextProcessor.Payload
 
-	result := easyjson.NewJSONObject()
+	result := easyjson.NewJSONObject().GetPtr()
+	opStack := getOpStackFromOptions(contextProcessor.Options)
 
 	queryID := common.GetQueryID(contextProcessor)
 	//contextProcessor.GlobalCache.TransactionBegin(queryID)
@@ -49,18 +117,27 @@ func LLAPIObjectCreate(executor sfplugins.StatefunExecutor, contextProcessor *sf
 		objectBody = easyjson.NewJSONObject()
 	}
 
-	// Delete existing object ---------------------------------------------
-	deleteObjectPayload := easyjson.NewJSONObject()
-	deleteObjectPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
-	system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.delete", contextProcessor.Self.ID, &deleteObjectPayload, nil))
-	// --------------------------------------------------------------------
+	_, err := contextProcessor.GlobalCache.GetValue(contextProcessor.Self.ID)
+	if err == nil { // If vertex already exists
+		// Delete existing object ---------------------------------------------
+		deleteObjectPayload := easyjson.NewJSONObject()
+		deleteObjectPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
+		res, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.delete", contextProcessor.Self.ID, &deleteObjectPayload, contextProcessor.Options)
+		system.MsgOnErrorReturn(err)
+		if res != nil {
+			mergeOpStack(opStack, res.GetByPath("op_stack").GetPtr())
+		}
+		// --------------------------------------------------------------------
+	}
 
 	contextProcessor.GlobalCache.SetValue(contextProcessor.Self.ID, objectBody.ToBytes(), true, -1, "")
+	addVertexOpToOpStack(opStack, contextProcessor.Self.Typename, contextProcessor.Self.ID, nil, &objectBody)
 
 	result.SetByPath("status", easyjson.NewJSON("ok"))
 	result.SetByPath("result", easyjson.NewJSON(""))
+	addOpStackToResult(result, opStack)
 
-	common.ReplyQueryID(queryID, &result, contextProcessor)
+	common.ReplyQueryID(queryID, result, contextProcessor)
 
 	//contextProcessor.GlobalCache.TransactionEnd(queryID)
 }
@@ -78,17 +155,22 @@ Request:
 			<key>: <type> - optional // Any additional key and value to be stored in objects's body.
 		mode: string - optional // "merge" (default) - deep merge old and new bodies, "replace" - replace old body with the new one, <other> is interpreted as "merge" without any notification
 
+	options: json - optional
+		return_op_stack: bool - optional
+
 Reply:
 
 	payload: json
 		status: string
 		result: any
+		op_stack: json array - optional
 */
-func LLAPIObjectUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func LLAPIVertexUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	payload := contextProcessor.Payload
 
 	errorString := ""
-	result := easyjson.NewJSONObject()
+	result := easyjson.NewJSONObject().GetPtr()
+	opStack := getOpStackFromOptions(contextProcessor.Options)
 
 	queryID := common.GetQueryID(contextProcessor)
 
@@ -96,28 +178,34 @@ func LLAPIObjectUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sf
 	if payload.GetByPath("body").IsObject() {
 		objectBody = payload.GetByPath("body")
 	} else {
-		errorString += fmt.Sprintf("ERROR LLAPIObjectUpdate %s: body:json is missing;", contextProcessor.Self.ID)
+		errorString += fmt.Sprintf("ERROR LLAPIVertexUpdate %s: body:json is missing;", contextProcessor.Self.ID)
 	}
 
+	fixedOldBody := contextProcessor.GetObjectContext()
+	newBody := fixedOldBody
 	if len(errorString) == 0 {
 		mode := payload.GetByPath("mode").AsStringDefault("merge")
 		switch mode {
 		case "replace":
-			contextProcessor.SetObjectContext(&objectBody) // Update an object
+			newBody = &objectBody
+			contextProcessor.SetObjectContext(newBody) // Update an object
 		case "merge":
 			fallthrough
 		default:
-			oldObjectBody := contextProcessor.GetObjectContext()
-			oldObjectBody.DeepMerge(objectBody)
-			contextProcessor.SetObjectContext(oldObjectBody) // Update an object
+			newBody = contextProcessor.GetObjectContext()
+			newBody.DeepMerge(objectBody)
+			contextProcessor.SetObjectContext(newBody) // Update an object
 			result.SetByPath("status", easyjson.NewJSON("ok"))
 		}
 	} else {
 		result.SetByPath("status", easyjson.NewJSON("failed"))
 	}
-	result.SetByPath("result", easyjson.NewJSON(errorString))
+	addVertexOpToOpStack(opStack, contextProcessor.Self.Typename, contextProcessor.Self.ID, fixedOldBody, newBody)
 
-	common.ReplyQueryID(queryID, &result, contextProcessor)
+	result.SetByPath("result", easyjson.NewJSON(errorString))
+	addOpStackToResult(result, opStack)
+
+	common.ReplyQueryID(queryID, result, contextProcessor)
 }
 
 /*
@@ -130,15 +218,20 @@ Request:
 		// Initial request from caller:
 		query_id: string - optional // ID for this query. Transaction id for operations with the cache. Do not use the same for concurrent graph modify operations.
 
+	options: json - optional
+		return_op_stack: bool - optional
+
 Reply:
 
 	payload: json
 		status: string
 		result: any
+		op_stack: json array - optional
 */
-func LLAPIObjectDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func LLAPIVertexDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	errorString := ""
-	result := easyjson.NewJSONObject()
+	result := easyjson.NewJSONObject().GetPtr()
+	opStack := getOpStackFromOptions(contextProcessor.Options)
 
 	queryID := common.GetQueryID(contextProcessor)
 	//contextProcessor.GlobalCache.TransactionBegin(queryID)
@@ -154,7 +247,11 @@ func LLAPIObjectDelete(executor sfplugins.StatefunExecutor, contextProcessor *sf
 		deleteLinkPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
 		deleteLinkPayload.SetByPath("descendant_uuid", easyjson.NewJSON(toObjectID))
 		deleteLinkPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
-		system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.delete", contextProcessor.Self.ID, &deleteLinkPayload, nil))
+		res, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.delete", contextProcessor.Self.ID, &deleteLinkPayload, contextProcessor.Options)
+		system.MsgOnErrorReturn(err)
+		if res != nil {
+			mergeOpStack(opStack, res.GetByPath("op_stack").GetPtr())
+		}
 	}
 	// ----------------------------------------------------
 
@@ -169,15 +266,25 @@ func LLAPIObjectDelete(executor sfplugins.StatefunExecutor, contextProcessor *sf
 		deleteLinkPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
 		deleteLinkPayload.SetByPath("descendant_uuid", easyjson.NewJSON(contextProcessor.Self.ID))
 		deleteLinkPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
-		system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.delete", fromObjectID, &deleteLinkPayload, nil))
+		res, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.delete", fromObjectID, &deleteLinkPayload, contextProcessor.Options)
+		system.MsgOnErrorReturn(err)
+		if res != nil {
+			mergeOpStack(opStack, res.GetByPath("op_stack").GetPtr())
+		}
 	}
 	// ----------------------------------------------------
+	var oldBody *easyjson.JSON = nil
+	if opStack != nil {
+		oldBody = contextProcessor.GetObjectContext()
+	}
 	contextProcessor.GlobalCache.DeleteValue(contextProcessor.Self.ID, true, -1, "") // Delete object's body
+	addVertexOpToOpStack(opStack, contextProcessor.Self.Typename, contextProcessor.Self.ID, oldBody, nil)
 
 	result.SetByPath("status", easyjson.NewJSON("ok"))
 	result.SetByPath("result", easyjson.NewJSON(errorString))
+	addOpStackToResult(result, opStack)
 
-	common.ReplyQueryID(queryID, &result, contextProcessor)
+	common.ReplyQueryID(queryID, result, contextProcessor)
 
 	//contextProcessor.GlobalCache.TransactionEnd(queryID)
 }
@@ -202,11 +309,15 @@ Request:
 			query_id: string - required // ID for this query.
 			in_link_type: string - required // Type of input link to create
 
+	options: json - optional
+		return_op_stack: bool - optional
+
 Reply:
 
 	payload: json
 		status: string
 		result: any
+		op_stack: json array - optional
 */
 func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	payload := contextProcessor.Payload
@@ -215,10 +326,12 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 	//contextProcessor.GlobalCache.TransactionBegin(queryID)
 
 	errorString := ""
-	result := easyjson.NewJSONObject()
+	result := easyjson.NewJSONObject().GetPtr()
+	opStack := getOpStackFromOptions(contextProcessor.Options)
 
 	if payload.PathExists("in_link_type") {
 		selfID := strings.Split(contextProcessor.Self.ID, "===")[0]
+		// TODO: This vertex might not exist at all, what to do about that?
 		if inLinkType, ok := payload.GetByPath("in_link_type").AsString(); ok && len(inLinkType) > 0 {
 			if linkFromObjectUUID := contextProcessor.Caller.ID; len(linkFromObjectUUID) > 0 {
 				contextProcessor.GlobalCache.SetValue(selfID+".in.oid_ltp-nil."+linkFromObjectUUID+"."+inLinkType, nil, true, -1, "")
@@ -230,7 +343,7 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			lg.Logln(lg.ErrorLevel, errorString)
 		}
 		result.SetByPath("result", easyjson.NewJSON(errorString))
-		common.ReplyQueryID(queryID, &result, contextProcessor)
+		common.ReplyQueryID(queryID, result, contextProcessor)
 	} else {
 		var linkBody easyjson.JSON
 		if payload.GetByPath("link_body").IsObject() {
@@ -253,11 +366,18 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			}
 
 			// Delete link if exists ----------------------------------
-			nextCallPayload := easyjson.NewJSONObject()
-			nextCallPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
-			nextCallPayload.SetByPath("descendant_uuid", easyjson.NewJSON(descendantUUID))
-			nextCallPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
-			system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.delete", contextProcessor.Self.ID, &nextCallPayload, nil))
+			_, err := contextProcessor.GlobalCache.GetValue(contextProcessor.Self.ID + ".out.ltp_oid-bdy." + linkType + "." + descendantUUID)
+			if err == nil {
+				nextCallPayload := easyjson.NewJSONObject()
+				nextCallPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
+				nextCallPayload.SetByPath("descendant_uuid", easyjson.NewJSON(descendantUUID))
+				nextCallPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
+				res, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.delete", contextProcessor.Self.ID, &nextCallPayload, contextProcessor.Options)
+				system.MsgOnErrorReturn(err)
+				if res != nil {
+					mergeOpStack(opStack, res.GetByPath("op_stack").GetPtr())
+				}
+			}
 			// --------------------------------------------------------
 
 			// Create out link on this object -------------------------
@@ -272,7 +392,7 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			// --------------------------------------------------------
 
 			// Create in link on descendant object --------------------
-			nextCallPayload = easyjson.NewJSONObject()
+			nextCallPayload := easyjson.NewJSONObject()
 			nextCallPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
 			nextCallPayload.SetByPath("in_link_type", easyjson.NewJSON(linkType))
 			if descendantUUID == contextProcessor.Self.ID {
@@ -282,13 +402,16 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			}
 			// --------------------------------------------------------
 
+			addLinkOpToOpStack(opStack, contextProcessor.Self.Typename, contextProcessor.Self.ID, descendantUUID, linkType, nil, &linkBody)
+
 			result.SetByPath("status", easyjson.NewJSON("ok"))
 			result.SetByPath("result", easyjson.NewJSON(errorString))
+			addOpStackToResult(result, opStack)
 		} else {
 			result.SetByPath("status", easyjson.NewJSON("failed"))
 			result.SetByPath("result", easyjson.NewJSON(errorString))
 		}
-		common.ReplyQueryID(queryID, &result, contextProcessor)
+		common.ReplyQueryID(queryID, result, contextProcessor)
 	}
 	//contextProcessor.GlobalCache.TransactionEnd(queryID)
 }
@@ -310,11 +433,15 @@ Request:
 			<key>: <type> - optional // Any additional key and value to be stored in link's body.
 		mode: string - optional // "merge" (default) - deep merge old and new bodies, "replace" - replace old body with the new one, <other> is interpreted as "merge" without any notification
 
+	options: json - optional
+		return_op_stack: bool - optional
+
 Reply:
 
 	payload: json
 		status: string
 		result: any
+		op_stack: json array - optional
 */
 func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	payload := contextProcessor.Payload
@@ -323,7 +450,8 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 	//contextProcessor.GlobalCache.TransactionBegin(queryID)
 
 	errorString := ""
-	result := easyjson.NewJSONObject()
+	result := easyjson.NewJSONObject().GetPtr()
+	opStack := getOpStackFromOptions(contextProcessor.Options)
 
 	var linkBody easyjson.JSON
 	if payload.GetByPath("link_body").IsObject() {
@@ -345,10 +473,10 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 	}
 
 	if len(errorString) == 0 {
-		if oldLinkBody, err := contextProcessor.GlobalCache.GetValueAsJSON(contextProcessor.Self.ID + ".out.ltp_oid-bdy." + linkType + "." + descendantUUID); err == nil {
+		if fixedOldLinkBody, err := contextProcessor.GlobalCache.GetValueAsJSON(contextProcessor.Self.ID + ".out.ltp_oid-bdy." + linkType + "." + descendantUUID); err == nil {
 			// Delete old indices -----------------------------------------
-			if oldLinkBody.GetByPath("tags").IsNonEmptyArray() {
-				if linkTags, ok := oldLinkBody.GetByPath("tags").AsArrayString(); ok {
+			if fixedOldLinkBody.GetByPath("tags").IsNonEmptyArray() {
+				if linkTags, ok := fixedOldLinkBody.GetByPath("tags").AsArrayString(); ok {
 					for _, linkTag := range linkTags {
 						contextProcessor.GlobalCache.DeleteValue(contextProcessor.Self.ID+".out.tag_ltp_oid-nil."+linkTag+"."+linkType+"."+descendantUUID, true, -1, "")
 					}
@@ -357,25 +485,28 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			// ------------------------------------------------------------
 			// Update link body -------------------------------------------
 			mode := payload.GetByPath("mode").AsStringDefault("merge")
+			newBody := fixedOldLinkBody
 			switch mode {
 			case "replace":
-				oldLinkBody = &linkBody
+				newBody = &linkBody
 			case "merge":
 				fallthrough
 			default:
-				oldLinkBody.DeepMerge(linkBody)
+				newBody = fixedOldLinkBody.Clone().GetPtr()
+				newBody.DeepMerge(linkBody)
 			}
-			contextProcessor.GlobalCache.SetValue(contextProcessor.Self.ID+".out.ltp_oid-bdy."+linkType+"."+descendantUUID, oldLinkBody.ToBytes(), true, -1, "") // Store link body in KV
+			contextProcessor.GlobalCache.SetValue(contextProcessor.Self.ID+".out.ltp_oid-bdy."+linkType+"."+descendantUUID, newBody.ToBytes(), true, -1, "") // Store link body in KV
 			// ------------------------------------------------------------
 			// Create new indices -----------------------------------------
-			if oldLinkBody.GetByPath("tags").IsNonEmptyArray() {
-				if linkTags, ok := oldLinkBody.GetByPath("tags").AsArrayString(); ok {
+			if newBody.GetByPath("tags").IsNonEmptyArray() {
+				if linkTags, ok := newBody.GetByPath("tags").AsArrayString(); ok {
 					for _, linkTag := range linkTags {
 						contextProcessor.GlobalCache.SetValue(contextProcessor.Self.ID+".out.tag_ltp_oid-nil."+linkTag+"."+linkType+"."+descendantUUID, nil, true, -1, "")
 					}
 				}
 			}
 			// ------------------------------------------------------------
+			addLinkOpToOpStack(opStack, contextProcessor.Self.Typename, contextProcessor.Self.ID, descendantUUID, linkType, fixedOldLinkBody, newBody)
 		} else {
 			// Create link if does not exist
 			createLinkPayload := easyjson.NewJSONObject()
@@ -383,7 +514,11 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			createLinkPayload.SetByPath("descendant_uuid", easyjson.NewJSON(descendantUUID))
 			createLinkPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
 			createLinkPayload.SetByPath("link_body", linkBody)
-			system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.create", contextProcessor.Self.ID, &createLinkPayload, nil))
+			res, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.create", contextProcessor.Self.ID, &createLinkPayload, contextProcessor.Options)
+			system.MsgOnErrorReturn(err)
+			if res != nil {
+				mergeOpStack(opStack, res.GetByPath("op_stack").GetPtr())
+			}
 		}
 
 		result.SetByPath("status", easyjson.NewJSON("ok"))
@@ -392,7 +527,8 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 		result.SetByPath("status", easyjson.NewJSON("failed"))
 		result.SetByPath("result", easyjson.NewJSON(errorString))
 	}
-	common.ReplyQueryID(queryID, &result, contextProcessor)
+	addOpStackToResult(result, opStack)
+	common.ReplyQueryID(queryID, result, contextProcessor)
 
 	//contextProcessor.GlobalCache.TransactionEnd(queryID)
 }
@@ -413,11 +549,15 @@ Request:
 		query_id: string - required // ID for this query.
 		in_link_type: string - required // Type of input link to delete
 
+	options: json - optional
+		return_op_stack: bool - optional
+
 Reply:
 
 	payload: json
 		status: string
 		result: any
+		op_stack: json array - optional
 */
 func LLAPILinkDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	payload := contextProcessor.Payload
@@ -426,7 +566,8 @@ func LLAPILinkDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 	//contextProcessor.GlobalCache.TransactionBegin(queryID)
 
 	errorString := ""
-	result := easyjson.NewJSONObject()
+	result := easyjson.NewJSONObject().GetPtr()
+	opStack := getOpStackFromOptions(contextProcessor.Options)
 
 	if payload.PathExists("in_link_type") {
 		selfID := strings.Split(contextProcessor.Self.ID, "===")[0]
@@ -441,7 +582,7 @@ func LLAPILinkDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			lg.Logln(lg.ErrorLevel, errorString)
 		}
 		result.SetByPath("result", easyjson.NewJSON(errorString))
-		common.ReplyQueryID(queryID, &result, contextProcessor)
+		common.ReplyQueryID(queryID, result, contextProcessor)
 	} else {
 		var linkType string
 		if s, ok := payload.GetByPath("link_type").AsString(); ok {
@@ -482,6 +623,9 @@ func LLAPILinkDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 				} else {
 					system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, contextProcessor.Self.Typename, descendantUUID, &nextCallPayload, nil))
 				}
+
+				addLinkOpToOpStack(opStack, contextProcessor.Self.Typename, contextProcessor.Self.ID, descendantUUID, linkType, linkBody, nil)
+
 				result.SetByPath("status", easyjson.NewJSON("ok"))
 				result.SetByPath("result", easyjson.NewJSON(errorString))
 			}
@@ -489,7 +633,8 @@ func LLAPILinkDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			result.SetByPath("status", easyjson.NewJSON("failed"))
 			result.SetByPath("result", easyjson.NewJSON(errorString))
 		}
-		common.ReplyQueryID(queryID, &result, contextProcessor)
+		addOpStackToResult(result, opStack)
+		common.ReplyQueryID(queryID, result, contextProcessor)
 	}
 	//contextProcessor.GlobalCache.TransactionEnd(queryID)
 }
