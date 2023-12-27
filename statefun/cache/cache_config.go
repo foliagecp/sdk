@@ -15,26 +15,37 @@ type Config struct {
 	levelSubscriptionNotificationsBufferMaxSize int
 }
 
-func NewCacheConfig(id string) *Config {
-	return &Config{
+type ConfigOpt func(c *Config)
+
+func WithStorePrefix(prefix string) ConfigOpt {
+	return func(c *Config) {
+		c.kvStorePrefix = prefix
+	}
+}
+
+func WithLRUSize(size int) ConfigOpt {
+	return func(c *Config) {
+		c.lruSize = size
+	}
+}
+
+func WithLevelSubscriptionBufferSize(size int) ConfigOpt {
+	return func(c *Config) {
+		c.levelSubscriptionNotificationsBufferMaxSize = size
+	}
+}
+
+func NewCacheConfig(id string, opts ...ConfigOpt) *Config {
+	c := &Config{
 		id:            id,
 		kvStorePrefix: KVStorePrefix,
 		lruSize:       LRUSize,
 		levelSubscriptionNotificationsBufferMaxSize: LevelSubscriptionNotificationsBufferMaxSize,
 	}
-}
 
-func (ro *Config) SetKVStorePrefix(kvStorePrefix string) *Config {
-	ro.kvStorePrefix = kvStorePrefix
-	return ro
-}
+	for _, opt := range opts {
+		opt(c)
+	}
 
-func (ro *Config) SetLRUSize(lruSize int) *Config {
-	ro.lruSize = lruSize
-	return ro
-}
-
-func (ro *Config) SetLevelSubscriptionNotificationsBufferMaxSize(levelSubscriptionNotificationsBufferMaxSize int) *Config {
-	ro.levelSubscriptionNotificationsBufferMaxSize = levelSubscriptionNotificationsBufferMaxSize
-	return ro
+	return c
 }

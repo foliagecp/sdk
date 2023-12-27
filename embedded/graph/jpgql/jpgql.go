@@ -11,12 +11,12 @@ import (
 
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/foliagecp/sdk/statefun/system"
+	"github.com/nats-io/nats.go"
 
 	"github.com/foliagecp/easyjson"
 
 	"github.com/foliagecp/sdk/embedded/graph/common"
 	"github.com/foliagecp/sdk/statefun"
-	"github.com/foliagecp/sdk/statefun/cache"
 	"github.com/foliagecp/sdk/statefun/plugins"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	sfSystem "github.com/foliagecp/sdk/statefun/system"
@@ -88,19 +88,20 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 		keyBase := fmt.Sprintf("jpgql_ctra.%s.%s", contextProcessor.Self.ID, processID)
 
 		chacheUpdatedChannel := contextProcessor.GlobalCache.SubscribeLevelCallback(keyBase+".*", processID)
-		go func(chacheUpdatedChannel chan cache.KeyValue) {
+		go func(chacheUpdatedChannel <-chan nats.KeyValueEntry) {
 			system.GlobalPrometrics.GetRoutinesCounter().Started("LLAPIQueryJPGQLCallTreeResultAggregation-aggregation")
 			defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("LLAPIQueryJPGQLCallTreeResultAggregation-aggregation")
 			startedEvaluating := sfSystem.GetCurrentTimeNs()
 			for {
 				select {
 				case kv := <-chacheUpdatedChannel:
-					//lg.Logln("____________ UPDATE FROM CACHE!!!!")
-					key, keyObtained := kv.Key.(string)
-					value, valueObtained := kv.Value.([]byte)
-					if !keyObtained || !valueObtained {
+					if kv == nil {
 						continue
 					}
+
+					//lg.Logln("____________ UPDATE FROM CACHE!!!!")
+					key := kv.Key()
+					value := kv.Value()
 
 					if key == "result" {
 						if result, ok := easyjson.JSONFromBytes(value); ok {
@@ -230,7 +231,7 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 
 				callerAggregationID, _ := replyPayload.GetByPath("aggregation_id").AsString()
 				//lg.Logln("----------->>> RESULT " + result.ToString())
-				contextProcessor.GlobalCache.SetValue(fmt.Sprintf("jpgql_ctra.%s.%s.result", thisObjectID, callerAggregationID), result.ToBytes(), false, -1, "")
+				contextProcessor.GlobalCache.Set(fmt.Sprintf("jpgql_ctra.%s.%s.result", thisObjectID, callerAggregationID), result.ToBytes())
 			}
 			unregisterAggregationQueryID(thisFunctionAggregationID)
 			return nil
@@ -472,7 +473,7 @@ func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExec
 		pendingProcessID := sfSystem.GetHashStr(objectID + "_" + objectQuery)
 		//lg.Logln("initPendingProcess 2", objectID)
 
-		return contextProcessor.GlobalCache.SetValueIfDoesNotExist(fmt.Sprintf("%s.%s.pending.%s", modifiedTypename, aggregationID, pendingProcessID), []byte{1}, true, -1)
+		return contextProcessor.GlobalCache.SetIfDoesNotExist(fmt.Sprintf("%s.%s.pending.%s", modifiedTypename, aggregationID, pendingProcessID), []byte{1})
 	}
 
 	if rootProcess {
@@ -481,7 +482,7 @@ func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExec
 		aggregationID := sfSystem.GetUniqueStrID()
 		chacheUpdatedChannel := contextProcessor.GlobalCache.SubscribeLevelCallback(fmt.Sprintf("%s.%s.pending.%s", modifiedTypename, aggregationID, "*"), aggregationID)
 
-		go func(chacheUpdatedChannel chan cache.KeyValue) {
+		go func(chacheUpdatedChannel <-chan nats.KeyValueEntry) {
 			system.GlobalPrometrics.GetRoutinesCounter().Started("LLAPIQueryJPGQLDirectCacheResultAggregation-aggregation")
 			defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("LLAPIQueryJPGQLDirectCacheResultAggregation-aggregation")
 			startedEvaluating := sfSystem.GetCurrentTimeNs()
@@ -490,11 +491,12 @@ func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExec
 			for {
 				select {
 				case kv := <-chacheUpdatedChannel:
-					key, keyObtained := kv.Key.(string)
-					value, valueObtained := kv.Value.([]byte)
-					if !keyObtained || !valueObtained {
+					if kv == nil {
 						continue
 					}
+
+					key := kv.Key()
+					value := kv.Value()
 
 					//lg.Logln("DCRA: " + key + " " + fmt.Sprintln(value))
 					if len(value) <= 1 { // Result can be: 0x0 - one byte when pending is in progress, [] - empty array (2 bytes), ["a", "b", ...] - non empty array (more than 2 bytes)
@@ -520,7 +522,7 @@ func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExec
 							//lg.Logln("--!! Returning result (all pending done):")
 							for k := range pendingMap {
 								//lg.Logln("--!! " + k)
-								contextProcessor.GlobalCache.DeleteValue(k, true, -1, "")
+								contextProcessor.GlobalCache.Delete(k)
 							}
 							contextProcessor.GlobalCache.UnsubscribeLevelCallback(fmt.Sprintf("%s.%s.pending.%s", modifiedTypename, aggregationID, "*"), aggregationID)
 
@@ -578,7 +580,7 @@ func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExec
 		thisProcessID := sfSystem.GetHashStr(thisObjectID + "_" + currentQuery)
 
 		thisPendingDone := func(foundObjects *[]string) bool {
-			contextProcessor.GlobalCache.SetValue(fmt.Sprintf("%s.%s.pending.%s", modifiedTypename, aggregationID, thisProcessID), easyjson.JSONFromArray(*foundObjects).ToBytes(), true, -1, "")
+			contextProcessor.GlobalCache.Set(fmt.Sprintf("%s.%s.pending.%s", modifiedTypename, aggregationID, thisProcessID), easyjson.JSONFromArray(*foundObjects).ToBytes())
 			//lg.Logln("-----------> PENDING DONE " + thisObjectID + ": " + fmt.Sprintf("%s.%s.pending.%s", modifiedTypename, aggregationID, thisProcessID))
 			return true
 		}

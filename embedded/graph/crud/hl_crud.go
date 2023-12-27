@@ -592,7 +592,7 @@ func executeLinkTriggers(ctx *sfplugins.StatefunContextProcessor, fromObjectId, 
 
 func getObjectTypeTriggers(ctx *sfplugins.StatefunContextProcessor, objectID string) easyjson.JSON {
 	typeName := findObjectType(ctx, objectID)
-	typeBody, err := ctx.GlobalCache.GetValueAsJSON(typeName)
+	typeBody, err := ctx.GlobalCache.GetAsJSON(typeName)
 	if err != nil || !typeBody.PathExists("triggers") {
 		return easyjson.NewJSONObject()
 	}
@@ -642,7 +642,7 @@ func findTypeObjects(ctx *sfplugins.StatefunContextProcessor, typeID string) []s
 func getTypesLinkBody(ctx *sfplugins.StatefunContextProcessor, from, to string) (*easyjson.JSON, error) {
 	id := fmt.Sprintf("%s.out.ltp_oid-bdy.__type.%s", from, to)
 
-	body, err := ctx.GlobalCache.GetValueAsJSON(id)
+	body, err := ctx.GlobalCache.GetAsJSON(id)
 	if err != nil {
 		return nil, fmt.Errorf("link %s, %s not found: %w", from, to, err)
 	}

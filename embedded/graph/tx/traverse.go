@@ -92,7 +92,7 @@ func graphState(ctx *sfplugins.StatefunContextProcessor, startPoint string) *sta
 		links:   make(map[string]link),
 	}
 
-	if _, err := ctx.GlobalCache.GetValue(startPoint); err != nil {
+	if _, err := ctx.GlobalCache.Get(startPoint); err != nil {
 		return state
 	}
 

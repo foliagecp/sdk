@@ -228,7 +228,7 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 		if err != nil {
 			return err
 		}
-		ft.runtime.cacheStore.DeleteValue(lockId, true, -1, "")
+		ft.runtime.cacheStore.Delete(lockId)
 		return nil
 	}
 
@@ -284,7 +284,7 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 				ft.executor.RemoveForID(id)
 			}
 			// TODO: When to delete  function context??? function's context may be needed later!!!!
-			// cacheStore.DeleteValue(ft.name+"."+id, true, -1, "") // Deleting function context
+			// cacheStore.Delete(ft.name+"."+id, true, -1, "") // Deleting function context
 			garbageCollected++
 			//lg.Logf(">>>>>>>>>>>>>> Garbage collected handler for %s:%s\n", ft.name, id)
 
@@ -306,7 +306,7 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 }
 
 func (ft *FunctionType) getContext(keyValueID string) *easyjson.JSON {
-	if j, err := ft.runtime.cacheStore.GetValueAsJSON(keyValueID); err == nil {
+	if j, err := ft.runtime.cacheStore.GetAsJSON(keyValueID); err == nil {
 		return j
 	}
 	j := easyjson.NewJSONObject()
@@ -315,9 +315,9 @@ func (ft *FunctionType) getContext(keyValueID string) *easyjson.JSON {
 
 func (ft *FunctionType) setContext(keyValueID string, context *easyjson.JSON) {
 	if context == nil {
-		ft.runtime.cacheStore.SetValue(keyValueID, nil, true, -1, "")
+		ft.runtime.cacheStore.Set(keyValueID, nil)
 	} else {
-		ft.runtime.cacheStore.SetValue(keyValueID, context.ToBytes(), true, -1, "")
+		ft.runtime.cacheStore.Set(keyValueID, context.ToBytes())
 	}
 }
 

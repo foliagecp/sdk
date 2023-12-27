@@ -31,7 +31,7 @@ func LLAPIObjectDebugPrint(executor sfplugins.StatefunExecutor, contextProcessor
 	lg.Logf(lg.DebugLevel, "************************* Out links:\n")
 	for _, key := range contextProcessor.GlobalCache.GetKeysByPattern(self.ID + ".out.ltp_oid-bdy.>") {
 		lg.Logln(lg.DebugLevel, key)
-		if j, err := contextProcessor.GlobalCache.GetValueAsJSON(key); err == nil {
+		if j, err := contextProcessor.GlobalCache.GetAsJSON(key); err == nil {
 			lg.Logln(lg.DebugLevel, j.ToString())
 		}
 	}

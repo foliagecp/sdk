@@ -101,7 +101,12 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 	// --------------------------------------------------------------
 
 	lg.Logln(lg.TraceLevel, "Initializing the cache store...")
-	r.cacheStore = cache.NewCacheStore(context.Background(), cacheConfig, r.kv)
+	store := cache.New(cacheConfig, r.kv)
+	if err := store.Start(context.Background()); err != nil {
+		return err
+	}
+
+	r.cacheStore = store
 	lg.Logln(lg.TraceLevel, "Cache store inited!")
 
 	// Functions running in a single instance controller --------------------------------

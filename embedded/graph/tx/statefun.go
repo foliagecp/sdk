@@ -270,7 +270,7 @@ func UpdateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 
 	// tx type doesn't created yet
 	if len(keys) == 0 {
-		originBody, err := contextProcessor.GlobalCache.GetValueAsJSON(typeID)
+		originBody, err := contextProcessor.GlobalCache.GetAsJSON(typeID)
 		if err != nil {
 			replyTxError(contextProcessor, err)
 			return
@@ -410,7 +410,7 @@ func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 
 	// tx object doesn't created yet
 	if len(keys) == 0 {
-		originBody, err := contextProcessor.GlobalCache.GetValueAsJSON(objectID)
+		originBody, err := contextProcessor.GlobalCache.GetAsJSON(objectID)
 		if err != nil {
 			replyTxError(contextProcessor, err)
 			return
@@ -572,10 +572,10 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	linkID := fmt.Sprintf("%s.out.ltp_oid-bdy.__type.%s", txFrom, txTo)
 
 	// if link to update doesn't exists, so we need to clone area from main graph
-	if _, err := contextProcessor.GlobalCache.GetValue(linkID); err != nil {
+	if _, err := contextProcessor.GlobalCache.Get(linkID); err != nil {
 
 		// if from doesn't exists, clone from main graph
-		if _, err := contextProcessor.GlobalCache.GetValue(txFrom); err != nil {
+		if _, err := contextProcessor.GlobalCache.Get(txFrom); err != nil {
 			// clone
 			if err := cloneTypeFromMainGraphToTx(contextProcessor, txID, from, txFrom); err != nil {
 				replyTxError(contextProcessor, err)
@@ -584,7 +584,7 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 		}
 
 		// if to doesn't exists, clone from main graph
-		if _, err := contextProcessor.GlobalCache.GetValue(txTo); err != nil {
+		if _, err := contextProcessor.GlobalCache.Get(txTo); err != nil {
 			// clone
 			if err := cloneTypeFromMainGraphToTx(contextProcessor, txID, to, txTo); err != nil {
 				replyTxError(contextProcessor, err)
@@ -641,7 +641,7 @@ func DeleteTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	txTo := prefix + to
 	linkID := fmt.Sprintf("%s.out.ltp_oid-bdy.__type.%s", txFrom, txTo)
 
-	linkBody, err := contextProcessor.GlobalCache.GetValueAsJSON(linkID)
+	linkBody, err := contextProcessor.GlobalCache.GetAsJSON(linkID)
 	if err != nil {
 		replyTxError(contextProcessor, err)
 		return
@@ -760,7 +760,7 @@ func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	toType := findObjectType(contextProcessor, to)
 
 	typesLink := fmt.Sprintf("%s.out.ltp_oid-bdy.__type.%s", fromType, toType)
-	typesLinkBody, err := contextProcessor.GlobalCache.GetValueAsJSON(typesLink)
+	typesLinkBody, err := contextProcessor.GlobalCache.GetAsJSON(typesLink)
 	if err != nil {
 		replyTxError(contextProcessor, err)
 		return
@@ -772,15 +772,15 @@ func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	objectLinkType := typesLinkBody.GetByPath("link_type").AsStringDefault("")
 	linkID := fmt.Sprintf("%s.out.ltp_oid-bdy.%s.%s", txFrom, objectLinkType, txTo)
 
-	if _, err := contextProcessor.GlobalCache.GetValue(linkID); err != nil {
-		if _, err := contextProcessor.GlobalCache.GetValue(txFrom); err != nil {
+	if _, err := contextProcessor.GlobalCache.Get(linkID); err != nil {
+		if _, err := contextProcessor.GlobalCache.Get(txFrom); err != nil {
 			if err := cloneObjectFromMainGraphToTx(contextProcessor, txID, from, txFrom, fromType); err != nil {
 				replyTxError(contextProcessor, err)
 				return
 			}
 		}
 
-		if _, err := contextProcessor.GlobalCache.GetValue(txTo); err != nil {
+		if _, err := contextProcessor.GlobalCache.Get(txTo); err != nil {
 			if err := cloneObjectFromMainGraphToTx(contextProcessor, txID, to, txTo, toType); err != nil {
 				replyTxError(contextProcessor, err)
 				return
@@ -952,7 +952,7 @@ func fullClone(ctx *sfplugins.StatefunContextProcessor, txID string) error {
 	state.initBuiltIn()
 
 	for id := range state.objects {
-		body, err := ctx.GlobalCache.GetValueAsJSON(id)
+		body, err := ctx.GlobalCache.GetAsJSON(id)
 		if err != nil {
 			body = easyjson.NewJSONObject().GetPtr()
 		}
@@ -963,7 +963,7 @@ func fullClone(ctx *sfplugins.StatefunContextProcessor, txID string) error {
 	}
 
 	for _, l := range state.links {
-		body, err := ctx.GlobalCache.GetValueAsJSON(l.cacheID)
+		body, err := ctx.GlobalCache.GetAsJSON(l.cacheID)
 		if err != nil {
 			body = easyjson.NewJSONObject().GetPtr()
 		}
@@ -997,7 +997,7 @@ func cloneGraphWithTypes(ctx *sfplugins.StatefunContextProcessor, txID string, t
 
 	for v, policy := range types {
 		// if type doesn't exists, continue
-		if _, err := ctx.GlobalCache.GetValue(v); err != nil {
+		if _, err := ctx.GlobalCache.Get(v); err != nil {
 			continue
 		}
 
@@ -1089,7 +1089,7 @@ func cloneGraphWithTypes(ctx *sfplugins.StatefunContextProcessor, txID string, t
 			continue
 		}
 
-		typesLink, err := ctx.GlobalCache.GetValueAsJSON(fmt.Sprintf("%s.out.ltp_oid-bdy.__type.%s", l.from, l.to))
+		typesLink, err := ctx.GlobalCache.GetAsJSON(fmt.Sprintf("%s.out.ltp_oid-bdy.__type.%s", l.from, l.to))
 		if err != nil {
 			continue
 		}
@@ -1123,7 +1123,7 @@ func cloneGraphWithTypes(ctx *sfplugins.StatefunContextProcessor, txID string, t
 	}
 
 	for id := range objects {
-		body, err := ctx.GlobalCache.GetValueAsJSON(id)
+		body, err := ctx.GlobalCache.GetAsJSON(id)
 		if err != nil {
 			body = easyjson.NewJSONObject().GetPtr()
 		}
@@ -1134,7 +1134,7 @@ func cloneGraphWithTypes(ctx *sfplugins.StatefunContextProcessor, txID string, t
 	}
 
 	for _, l := range links {
-		body, err := ctx.GlobalCache.GetValueAsJSON(fmt.Sprintf("%s.out.ltp_oid-bdy.%s.%s", l.from, l.lt, l.to))
+		body, err := ctx.GlobalCache.GetAsJSON(fmt.Sprintf("%s.out.ltp_oid-bdy.%s.%s", l.from, l.lt, l.to))
 		if err != nil {
 			body = easyjson.NewJSONObject().GetPtr()
 		}

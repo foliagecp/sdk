@@ -17,7 +17,7 @@ type beginTxType struct {
 }
 
 func cloneTypeFromMainGraphToTx(ctx *sfplugins.StatefunContextProcessor, txID, src, dst string) error {
-	originBody, err := ctx.GlobalCache.GetValueAsJSON(src)
+	originBody, err := ctx.GlobalCache.GetAsJSON(src)
 	if err != nil {
 		return err
 	}
@@ -34,7 +34,7 @@ func cloneTypeFromMainGraphToTx(ctx *sfplugins.StatefunContextProcessor, txID, s
 }
 
 func cloneObjectFromMainGraphToTx(ctx *sfplugins.StatefunContextProcessor, txID, src, dst, originType string) error {
-	originBody, err := ctx.GlobalCache.GetValueAsJSON(src)
+	originBody, err := ctx.GlobalCache.GetAsJSON(src)
 	if err != nil {
 		return err
 	}
@@ -53,7 +53,7 @@ func cloneObjectFromMainGraphToTx(ctx *sfplugins.StatefunContextProcessor, txID,
 
 func cloneLinkFromMainGraphToTx(ctx *sfplugins.StatefunContextProcessor, originFrom, originLt, originTo, txFrom, txLt, txTo string) error {
 	linkID := fmt.Sprintf("%s.out.ltp_oid-bdy.%s.%s", originFrom, originLt, originTo)
-	originBody, err := ctx.GlobalCache.GetValueAsJSON(linkID)
+	originBody, err := ctx.GlobalCache.GetAsJSON(linkID)
 	if err != nil {
 		return err
 	}

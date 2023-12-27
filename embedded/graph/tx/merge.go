@@ -76,7 +76,7 @@ func (m *merger) Merge(ctx *sfplugins.StatefunContextProcessor) error {
 	deleted := make(map[string]struct{})
 
 	for k := range txGraph.objects {
-		body, err := ctx.GlobalCache.GetValueAsJSON(k)
+		body, err := ctx.GlobalCache.GetAsJSON(k)
 		if err != nil {
 			return fmt.Errorf("tx graph object %s not found: %w", k, err)
 		}
@@ -106,7 +106,7 @@ func (m *merger) Merge(ctx *sfplugins.StatefunContextProcessor) error {
 			lg.Logln(lg.DebugLevel, "Create object", "id", normalID)
 
 			// uninited objects policy
-			if _, err := ctx.GlobalCache.GetValue(normalID); err == nil {
+			if _, err := ctx.GlobalCache.Get(normalID); err == nil {
 				if m.uninitedObjectsPolicy == strict {
 					lg.Logln(lg.WarnLevel, "Uninited object", "id", normalID)
 					return fmt.Errorf("uninited object: %s", normalID)
@@ -134,7 +134,7 @@ func (m *merger) Merge(ctx *sfplugins.StatefunContextProcessor) error {
 		normalLt := strings.TrimPrefix(l.lt, prefix)
 		normalID := normalParent + normalChild + normalLt
 
-		body, err := ctx.GlobalCache.GetValueAsJSON(l.cacheID)
+		body, err := ctx.GlobalCache.GetAsJSON(l.cacheID)
 		if err != nil {
 			return fmt.Errorf("tx graph link %s: %w", l.cacheID, err)
 		}
