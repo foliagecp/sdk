@@ -20,6 +20,7 @@ import (
 
 	"github.com/foliagecp/easyjson"
 
+	customNatsKv "github.com/foliagecp/sdk/embedded/nats/kv"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
 )
@@ -261,6 +262,7 @@ type Transaction struct {
 
 type Store struct {
 	cacheConfig *Config
+	js          nats.JetStreamContext
 	kv          nats.KeyValue
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -275,9 +277,10 @@ type Store struct {
 	getKeysByPatternFromKVMutex *sync.Mutex
 }
 
-func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *Store {
+func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamContext, kv nats.KeyValue) *Store {
 	cs := Store{
 		cacheConfig: cacheConfig,
+		js:          js,
 		kv:          kv,
 		initChan:    make(chan bool),
 		rootValue: &StoreValue{
@@ -324,7 +327,9 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *
 									cs.SetValue(key, valueBytes[9:], false, kvRecordTime, "")
 								} else { // Someone else (other module) deleted a key from the cache
 									//lg.Logf("---CACHE_KV TF DELETE: %s, %d, %d\n", key, kvRecordTime, appendFlag)
-									system.MsgOnErrorReturn(kv.Delete(entry.Key()))
+
+									//system.MsgOnErrorReturn(kv.Delete(entry.Key()))
+									customNatsKv.DeleteKeyValueValue(cs.js, cs.kv, entry.Key())
 
 									//cs.rootValue.purgeReady
 									//if csv := cs.getLastKeyCacheStoreValue(key); csv != nil {
@@ -333,7 +338,8 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *
 								}
 							} else if kvRecordTime == cacheRecordTime { // KV confirmes update
 								if appendFlag == 0 {
-									system.MsgOnErrorReturn(kv.Delete(entry.Key()))
+									//system.MsgOnErrorReturn(kv.Delete(entry.Key()))
+									customNatsKv.DeleteKeyValueValue(cs.js, cs.kv, entry.Key())
 								}
 								if csv := cs.getLastKeyCacheStoreValue(key); csv != nil {
 									csv.Lock("storeUpdatesHandler")
