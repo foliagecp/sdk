@@ -14,6 +14,7 @@ import (
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/foliagecp/sdk/embedded/nats/kv"
 	"github.com/foliagecp/sdk/statefun/cache"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
@@ -51,19 +52,17 @@ func NewRuntime(config RuntimeConfig) (r *Runtime, err error) {
 
 	// Create application key value store bucket if does not exist --
 	kvExists := false
-	for name := range r.js.KeyValueStoreNames() {
-		if name == "KV_"+config.keyValueStoreBucketName {
-			r.kv, err = r.js.KeyValue(config.keyValueStoreBucketName)
-			if err != nil {
-				return
-			}
-			kvExists = true
-		}
+	if kv, err := r.js.KeyValue(config.keyValueStoreBucketName); err == nil {
+		r.kv = kv
+		kvExists = true
 	}
 	if !kvExists {
-		r.kv, err = r.js.CreateKeyValue(&nats.KeyValueConfig{
+		r.kv, err = kv.CreateKeyValue(r.nc, r.js, &nats.KeyValueConfig{
 			Bucket: config.keyValueStoreBucketName,
 		})
+		/*r.kv, err = r.js.CreateKeyValue(&nats.KeyValueConfig{
+			Bucket: config.keyValueStoreBucketName,
+		})*/
 		if err != nil {
 			return
 		}
@@ -101,7 +100,7 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 	// --------------------------------------------------------------
 
 	lg.Logln(lg.TraceLevel, "Initializing the cache store...")
-	r.cacheStore = cache.NewCacheStore(context.Background(), cacheConfig, r.kv)
+	r.cacheStore = cache.NewCacheStore(context.Background(), cacheConfig, r.js, r.kv)
 	lg.Logln(lg.TraceLevel, "Cache store inited!")
 
 	// Functions running in a single instance controller --------------------------------
@@ -202,3 +201,15 @@ func (r *Runtime) runGarbageCellector() (err error) {
 		time.Sleep(1 * time.Second)
 	}
 }
+
+/*func (r *Runtime) TestKVCleanup() {
+	fmt.Println("!!!!!!!!!!!!!!!!! TestKVCleanup")
+	if w, err := r.kv.WatchAll(); err == nil {
+		for entry := range w.Updates() {
+			if entry == nil {
+				break
+			}
+			kv.DeleteKeyValueValue(r.js, r.kv, entry.Key())
+		}
+	}
+}*/
