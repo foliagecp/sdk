@@ -517,6 +517,7 @@ func CreateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	createLinkPayload := easyjson.NewJSONObject()
 	createLinkPayload.SetByPath("to", easyjson.NewJSON(txTo))
 	createLinkPayload.SetByPath("object_link_type", payload.GetByPath("object_link_type"))
+	createLinkPayload.SetByPath("body", payload.GetByPath("body"))
 
 	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.types.link.create", txFrom, &createLinkPayload, nil)
 	if err := checkRequestError(result, err); err != nil {
@@ -721,6 +722,7 @@ func CreateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 
 	createLinkPayload := easyjson.NewJSONObject()
 	createLinkPayload.SetByPath("to", easyjson.NewJSON(txTo))
+	createLinkPayload.SetByPath("body", payload.GetByPath("body"))
 
 	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.objects.link.create", txFrom, &createLinkPayload, nil)
 	if err := checkRequestError(result, err); err != nil {
