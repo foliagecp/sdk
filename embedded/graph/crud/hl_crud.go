@@ -179,7 +179,7 @@ func DeleteObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 
 		for len(queue) > 0 {
 			elem := queue[0]
-			pattern := elem + ".out.ltp_oid-bdy.>"
+			pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, elem, ">")
 			children := contextProcessor.GlobalCache.GetKeysByPattern(pattern)
 
 			for _, v := range children {
@@ -319,7 +319,7 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	if needUpdateObjectLinkType {
 		objects := findTypeObjects(contextProcessor, selfID)
 		for _, objectID := range objects {
-			pattern := fmt.Sprintf("%s.out.ltp_oid-bdy.%s.>", objectID, currentObjectLinkType)
+			pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, objectID, currentObjectLinkType, ">")
 			keys := contextProcessor.GlobalCache.GetKeysByPattern(pattern)
 
 			for _, key := range keys {
@@ -610,7 +610,7 @@ func getObjectsLinkTypeTriggers(ctx *sfplugins.StatefunContextProcessor, fromObj
 }
 
 func findObjectType(ctx *sfplugins.StatefunContextProcessor, objectID string) string {
-	pattern := objectID + ".out.ltp_oid-bdy.__type.>"
+	pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, objectID, "_type", ">")
 
 	keys := ctx.GlobalCache.GetKeysByPattern(pattern)
 	if len(keys) == 0 {
@@ -623,7 +623,7 @@ func findObjectType(ctx *sfplugins.StatefunContextProcessor, objectID string) st
 }
 
 func findTypeObjects(ctx *sfplugins.StatefunContextProcessor, typeID string) []string {
-	pattern := typeID + ".out.ltp_oid-bdy.__object.>"
+	pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, typeID, "__object", ">")
 
 	keys := ctx.GlobalCache.GetKeysByPattern(pattern)
 	if len(keys) == 0 {
@@ -640,7 +640,7 @@ func findTypeObjects(ctx *sfplugins.StatefunContextProcessor, typeID string) []s
 }
 
 func getTypesLinkBody(ctx *sfplugins.StatefunContextProcessor, from, to string) (*easyjson.JSON, error) {
-	id := fmt.Sprintf("%s.out.ltp_oid-bdy.__type.%s", from, to)
+	id := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, from, "__type", to)
 
 	body, err := ctx.GlobalCache.GetValueAsJSON(id)
 	if err != nil {

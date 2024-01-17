@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/foliagecp/sdk/embedded/graph/crud"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 
 	"github.com/PaesslerAG/gval"
@@ -114,9 +115,9 @@ func GetObjectIDsFromLinkType(cacheStore *cache.Store, objectID string, linkType
 		return resultObjects
 	}
 
-	linksQuery := objectID + ".out.ltp_oid-bdy.>"
+	linksQuery := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff1Pattern, objectID, ">")
 	if linkType != "*" {
-		linksQuery = objectID + ".out.ltp_oid-bdy." + linkType + ".>"
+		linksQuery = fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, objectID, linkType, ">")
 	}
 	// Get all links matching defined link type ---------------------------
 	for _, key := range cacheStore.GetKeysByPattern(linksQuery) {
@@ -136,9 +137,9 @@ func GetObjectIDsFromLinkTypeAndTag(cacheStore *cache.Store, objectID string, li
 
 	resultObjects := map[string]int{}
 
-	linksQuery := objectID + ".out.tag_ltp_oid-nil." + tag + ".>"
+	linksQuery := fmt.Sprintf(crud.OutLinkTagKeyPrefPattern+crud.LinkKeySuff2Pattern, objectID, tag, ">")
 	if linkType != "*" {
-		linksQuery = objectID + ".out.tag_ltp_oid-nil." + tag + "." + linkType + ".*"
+		linksQuery = fmt.Sprintf(crud.OutLinkTagKeyPrefPattern+crud.LinkKeySuff3Pattern, objectID, tag, linkType, "*")
 	}
 
 	// Get all links matching defined link type ---------------------------

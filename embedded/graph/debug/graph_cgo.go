@@ -10,10 +10,12 @@ package debug
 
 import (
 	"container/list"
+	"fmt"
 	"math"
 	"path/filepath"
 	"strings"
 
+	"github.com/foliagecp/sdk/embedded/graph/crud"
 	"github.com/foliagecp/sdk/statefun/logger"
 	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/goccy/go-graphviz"
@@ -143,7 +145,7 @@ func LLAPIPrintGraph(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 }
 
 func getParents(ctx *sfplugins.StatefunContextProcessor, id string) []node {
-	pattern := id + ".in.oid_ltp-nil.>"
+	pattern := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff1Pattern, id, ">")
 	parents := ctx.GlobalCache.GetKeysByPattern(pattern)
 
 	nodes := make([]node, 0, len(parents))
@@ -165,8 +167,7 @@ func getParents(ctx *sfplugins.StatefunContextProcessor, id string) []node {
 }
 
 func getChildren(ctx *sfplugins.StatefunContextProcessor, id string) []node {
-	pattern := id + ".out.ltp_oid-bdy.>"
-	children := ctx.GlobalCache.GetKeysByPattern(pattern)
+	children := ctx.GlobalCache.GetKeysByPattern(fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff1Pattern, id, ">"))
 
 	nodes := make([]node, 0, len(children))
 

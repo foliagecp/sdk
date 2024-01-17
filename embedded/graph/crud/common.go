@@ -4,6 +4,19 @@ import (
 	"github.com/foliagecp/sdk/statefun"
 )
 
+const (
+	LinkKeySuff1Pattern = "%s"
+	LinkKeySuff2Pattern = "%s.%s"
+	LinkKeySuff3Pattern = "%s.%s.%s"
+
+	// key=fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, <fromVertexId>, <linkType>, <toVertexId>), value=<linkBody>
+	OutLinkBodyKeyPrefPattern = "%s.out.body."
+	// key=fmt.Sprintf(OutLinkTagKeyPrefPattern+LinkKeySuff3Pattern, <fromVertexId>, <tag>, <linkType>, <toVertexId>), value=nil
+	OutLinkTagKeyPrefPattern = "%s.out.tag."
+	// key=fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff2Pattern, <toVertexId>, <fromVertexId>, <linkType>), value=nil
+	InLinkKeyPrefPattern = "%s.in."
+)
+
 var (
 	llAPIVertexCUDNames = []string{"functions.graph.api.vertex.create", "functions.graph.api.vertex.update", "functions.graph.api.vertex.delete"}
 	llAPILinkCUDNames   = []string{"functions.graph.api.link.create", "functions.graph.api.link.update", "functions.graph.api.link.delete"}

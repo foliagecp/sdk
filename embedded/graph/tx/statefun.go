@@ -9,6 +9,7 @@ import (
 
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/embedded/graph/common"
+	"github.com/foliagecp/sdk/embedded/graph/crud"
 	"github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/logger"
 	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
@@ -265,7 +266,7 @@ func UpdateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 	txTypes := prefix + BUILT_IN_TYPES
 	txType := prefix + typeID
 
-	pattern := fmt.Sprintf("%s.out.ltp_oid-bdy.%s.%s", txTypes, TYPE_TYPELINK, txType)
+	pattern := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, txTypes, TYPE_TYPELINK, txType)
 	keys := contextProcessor.GlobalCache.GetKeysByPattern(pattern)
 
 	// tx type doesn't created yet
@@ -405,7 +406,7 @@ func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 	txObjects := prefix + BUILT_IN_OBJECTS
 	txObject := prefix + objectID
 
-	pattern := fmt.Sprintf("%s.out.ltp_oid-bdy.%s.%s", txObjects, OBJECT_TYPELINK, txObject)
+	pattern := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, txObjects, OBJECT_TYPELINK, txObject)
 	keys := contextProcessor.GlobalCache.GetKeysByPattern(pattern)
 
 	// tx object doesn't created yet
@@ -416,7 +417,7 @@ func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 			return
 		}
 
-		linkPattern := fmt.Sprintf("%s.out.ltp_oid-bdy.%s.>", objectID, TYPE_TYPELINK)
+		linkPattern := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, objectID, TYPE_TYPELINK, ">")
 		typeKeys := contextProcessor.GlobalCache.GetKeysByPattern(linkPattern)
 		if len(typeKeys) == 0 {
 			replyTxError(contextProcessor, fmt.Errorf("missing links: %s", linkPattern))
@@ -570,7 +571,7 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 		updatePayload.SetByPath("body", payload.GetByPath("body"))
 	}
 
-	linkID := fmt.Sprintf("%s.out.ltp_oid-bdy.__type.%s", txFrom, txTo)
+	linkID := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, txFrom, "__type", txTo)
 
 	// if link to update doesn't exists, so we need to clone area from main graph
 	if _, err := contextProcessor.GlobalCache.GetValue(linkID); err != nil {
@@ -640,7 +641,7 @@ func DeleteTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 
 	txFrom := prefix + from
 	txTo := prefix + to
-	linkID := fmt.Sprintf("%s.out.ltp_oid-bdy.__type.%s", txFrom, txTo)
+	linkID := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, txFrom, "__type", txTo)
 
 	linkBody, err := contextProcessor.GlobalCache.GetValueAsJSON(linkID)
 	if err != nil {
@@ -656,7 +657,7 @@ func DeleteTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 
 	// delete objects links
 	for _, objectID := range findTypeObjects(contextProcessor, txFrom) {
-		links := contextProcessor.GlobalCache.GetKeysByPattern(fmt.Sprintf("%s.out.ltp_oid-bdy.%s.>", objectID, linkType))
+		links := contextProcessor.GlobalCache.GetKeysByPattern(fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, objectID, linkType, ">"))
 		for _, v := range links {
 			split := strings.Split(v, ".")
 			if len(split) == 0 {
@@ -761,7 +762,7 @@ func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	fromType := findObjectType(contextProcessor, from)
 	toType := findObjectType(contextProcessor, to)
 
-	typesLink := fmt.Sprintf("%s.out.ltp_oid-bdy.__type.%s", fromType, toType)
+	typesLink := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, fromType, "__type", toType)
 	typesLinkBody, err := contextProcessor.GlobalCache.GetValueAsJSON(typesLink)
 	if err != nil {
 		replyTxError(contextProcessor, err)
@@ -772,7 +773,7 @@ func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	txTo := prefix + to
 
 	objectLinkType := typesLinkBody.GetByPath("link_type").AsStringDefault("")
-	linkID := fmt.Sprintf("%s.out.ltp_oid-bdy.%s.%s", txFrom, objectLinkType, txTo)
+	linkID := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, txFrom, objectLinkType, txTo)
 
 	if _, err := contextProcessor.GlobalCache.GetValue(linkID); err != nil {
 		if _, err := contextProcessor.GlobalCache.GetValue(txFrom); err != nil {
@@ -1015,7 +1016,7 @@ func cloneGraphWithTypes(ctx *sfplugins.StatefunContextProcessor, txID string, t
 			lt:   TYPE_TYPELINK,
 		}
 
-		pattern := v + ".out.ltp_oid-bdy.>"
+		pattern := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff1Pattern, v, ">")
 		outLinks := ctx.GlobalCache.GetKeysByPattern(pattern)
 
 		for _, outLink := range outLinks {
@@ -1091,7 +1092,7 @@ func cloneGraphWithTypes(ctx *sfplugins.StatefunContextProcessor, txID string, t
 			continue
 		}
 
-		typesLink, err := ctx.GlobalCache.GetValueAsJSON(fmt.Sprintf("%s.out.ltp_oid-bdy.__type.%s", l.from, l.to))
+		typesLink, err := ctx.GlobalCache.GetValueAsJSON(fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, l.from, "__type", l.to))
 		if err != nil {
 			continue
 		}
@@ -1102,7 +1103,7 @@ func cloneGraphWithTypes(ctx *sfplugins.StatefunContextProcessor, txID string, t
 		}
 
 		for objectFrom := range objectsFrom {
-			out := ctx.GlobalCache.GetKeysByPattern(fmt.Sprintf("%s.out.ltp_oid-bdy.%s.>", objectFrom, linkType))
+			out := ctx.GlobalCache.GetKeysByPattern(fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, objectFrom, linkType, ">"))
 			for _, v := range out {
 				split := strings.Split(v, ".")
 				if len(split) == 0 {
@@ -1136,7 +1137,7 @@ func cloneGraphWithTypes(ctx *sfplugins.StatefunContextProcessor, txID string, t
 	}
 
 	for _, l := range links {
-		body, err := ctx.GlobalCache.GetValueAsJSON(fmt.Sprintf("%s.out.ltp_oid-bdy.%s.%s", l.from, l.lt, l.to))
+		body, err := ctx.GlobalCache.GetValueAsJSON(fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, l.from, l.lt, l.to))
 		if err != nil {
 			body = easyjson.NewJSONObject().GetPtr()
 		}

@@ -5,6 +5,9 @@
 package debug
 
 import (
+	"fmt"
+
+	"github.com/foliagecp/sdk/embedded/graph/crud"
 	"github.com/foliagecp/sdk/statefun"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
@@ -25,11 +28,11 @@ func LLAPIObjectDebugPrint(executor sfplugins.StatefunExecutor, contextProcessor
 	lg.Logf(lg.DebugLevel, "************************* Object's body (id=%s):\n", self.ID)
 	lg.Logln(lg.DebugLevel, objectContext.ToString())
 	lg.Logf(lg.DebugLevel, "************************* In links:\n")
-	for _, key := range contextProcessor.GlobalCache.GetKeysByPattern(self.ID + ".in.oid_ltp-nil.>") {
+	for _, key := range contextProcessor.GlobalCache.GetKeysByPattern(fmt.Sprintf(crud.InLinkKeyPrefPattern+crud.LinkKeySuff1Pattern, self.ID, ">")) {
 		lg.Logln(lg.DebugLevel, key)
 	}
 	lg.Logf(lg.DebugLevel, "************************* Out links:\n")
-	for _, key := range contextProcessor.GlobalCache.GetKeysByPattern(self.ID + ".out.ltp_oid-bdy.>") {
+	for _, key := range contextProcessor.GlobalCache.GetKeysByPattern(fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff1Pattern, self.ID, ">")) {
 		lg.Logln(lg.DebugLevel, key)
 		if j, err := contextProcessor.GlobalCache.GetValueAsJSON(key); err == nil {
 			lg.Logln(lg.DebugLevel, j.ToString())

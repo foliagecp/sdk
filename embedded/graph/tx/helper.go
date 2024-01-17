@@ -7,6 +7,7 @@ import (
 
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/embedded/graph/common"
+	"github.com/foliagecp/sdk/embedded/graph/crud"
 	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 )
@@ -52,7 +53,7 @@ func cloneObjectFromMainGraphToTx(ctx *sfplugins.StatefunContextProcessor, txID,
 }
 
 func cloneLinkFromMainGraphToTx(ctx *sfplugins.StatefunContextProcessor, originFrom, originLt, originTo, txFrom, txLt, txTo string) error {
-	linkID := fmt.Sprintf("%s.out.ltp_oid-bdy.%s.%s", originFrom, originLt, originTo)
+	linkID := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, originFrom, originLt, originTo)
 	originBody, err := ctx.GlobalCache.GetValueAsJSON(linkID)
 	if err != nil {
 		return err
@@ -170,7 +171,7 @@ func reply(ctx *sfplugins.StatefunContextProcessor, status string, data any) {
 }
 
 func findObjectType(ctx *sfplugins.StatefunContextProcessor, objectID string) string {
-	pattern := objectID + ".out.ltp_oid-bdy.__type.>"
+	pattern := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, objectID, "__type", ">")
 
 	keys := ctx.GlobalCache.GetKeysByPattern(pattern)
 	if len(keys) == 0 {
@@ -195,7 +196,7 @@ func checkRequestError(result *easyjson.JSON, err error) error {
 }
 
 func findTypeObjects(ctx *sfplugins.StatefunContextProcessor, typeID string) []string {
-	pattern := typeID + ".out.ltp_oid-bdy.__object.>"
+	pattern := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, typeID, "__object", ">")
 
 	keys := ctx.GlobalCache.GetKeysByPattern(pattern)
 	if len(keys) == 0 {

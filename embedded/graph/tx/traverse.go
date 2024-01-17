@@ -2,8 +2,10 @@ package tx
 
 import (
 	"container/list"
+	"fmt"
 	"strings"
 
+	"github.com/foliagecp/sdk/embedded/graph/crud"
 	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
@@ -136,7 +138,7 @@ func graphState(ctx *sfplugins.StatefunContextProcessor, startPoint string) *sta
 }
 
 func getChildren(ctx *sfplugins.StatefunContextProcessor, id string) []node {
-	pattern := id + ".out.ltp_oid-bdy.>"
+	pattern := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff1Pattern, id, ">")
 	children := ctx.GlobalCache.GetKeysByPattern(pattern)
 
 	nodes := make([]node, 0, len(children))
