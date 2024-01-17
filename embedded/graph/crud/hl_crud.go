@@ -610,7 +610,7 @@ func getObjectsLinkTypeTriggers(ctx *sfplugins.StatefunContextProcessor, fromObj
 }
 
 func findObjectType(ctx *sfplugins.StatefunContextProcessor, objectID string) string {
-	pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, objectID, "_type", ">")
+	pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, objectID, "__type", ">")
 
 	keys := ctx.GlobalCache.GetKeysByPattern(pattern)
 	if len(keys) == 0 {
