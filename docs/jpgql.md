@@ -146,11 +146,11 @@ docker logs foliage-nats-test-statefun_sf_1 --tail 100 -f
 ************************* Object's body (id=g):
 {}
 ************************* In links:
-g.in.oid_ltp-nil.f.type5
+g.in.f.type5
 ************************* Out links:
-g.out.ltp_oid-bdy.type2.d
+g.out.body.type2.d
 {"tags":["t5"]}
-g.out.ltp_oid-bdy.type2.h
+g.out.body.type2.h
 {"tags":[]}
 ...
 ```
