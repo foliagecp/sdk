@@ -364,7 +364,10 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 							lg.Logf(lg.ErrorLevel, "storeUpdatesHandler: received value without time and append flag!\n")
 						}
 					} else {
-						close(cs.initChan)
+						if cs.initChan != nil { // Closing init channel only once
+							close(cs.initChan)
+							cs.initChan = nil
+						}
 					}
 				}
 			}
