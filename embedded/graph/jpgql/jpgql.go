@@ -365,7 +365,7 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 			//lg.Logln(processID + ":1:: " + "(" + thisObjectID + ") " + "12")
 			callbacks--
 			totalResult, _ := context.GetByPath(thisFunctionAggregationID + "_result").AsObject()
-			totalResult = sfSystem.MergeMaps[interface{}](totalResult, result)
+			totalResult = sfSystem.MapsUnion[interface{}](totalResult, result)
 			context.SetByPath(thisFunctionAggregationID+"_result", easyjson.NewJSON(totalResult))
 			context.SetByPath(thisFunctionAggregationID+"_callbacks", easyjson.NewJSON(callbacks))
 
