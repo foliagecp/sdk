@@ -273,6 +273,11 @@ func LLAPIVertexDelete(executor sfplugins.StatefunExecutor, contextProcessor *sf
 		}
 	}
 	// ----------------------------------------------------
+
+	// Delete link name generator -------------------------
+	contextProcessor.GlobalCache.DeleteValue(fmt.Sprintf(OutLinkNameGenKeyPattern, contextProcessor.Self.ID), true, -1, "")
+	// ----------------------------------------------------
+
 	var oldBody *easyjson.JSON = nil
 	if opStack != nil {
 		oldBody = contextProcessor.GetObjectContext()
@@ -302,6 +307,7 @@ Request:
 		descendant_uuid: string - optional // ID for descendant object. If not defined random UUID will be generated. If a descandant with the specified uuid does not exist - will be created with empty body.
 		link_type: string - optional // Type of link leading to descendant. If not defined random UUID will be used.
 		link_body: json - optional // Body for link leading to descendant.
+			name: string - optional // Defines link's name which is unique among all object's output links. Will be generated automatically if not defined or if same named out link already exists.
 			tags: []string - optional // Defines link tags.
 			<key>: <type> - optional // Any additional key and value to be stored in link's body.
 
@@ -381,7 +387,35 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			// --------------------------------------------------------
 
 			// Create out link on this object -------------------------
+			// Create unique link name ----------
+			linkName, linkNameDefined := linkBody.GetByPath("name").AsString()
+			if len(linkName) == 0 {
+				linkNameDefined = false
+			}
+			sameNamedLinkExists := false
+			if linkNameDefined {
+				if _, err := contextProcessor.GlobalCache.GetValue(fmt.Sprintf(OutLinkNameKeyPrefPattern+LinkKeySuff3Pattern, contextProcessor.Self.ID, linkName, linkType, descendantUUID)); err == nil {
+					sameNamedLinkExists = true
+				}
+			}
+			if !linkNameDefined || sameNamedLinkExists {
+				var namegen int64 = 0
+				if v, err := contextProcessor.GlobalCache.GetValue(fmt.Sprintf(OutLinkNameGenKeyPattern, contextProcessor.Self.ID)); err == nil {
+					namegen = system.BytesToInt64(v)
+				}
+				linkName = fmt.Sprintf("name%d", namegen)
+				namegen++
+				contextProcessor.GlobalCache.SetValue(fmt.Sprintf(OutLinkNameGenKeyPattern, contextProcessor.Self.ID), system.Int64ToBytes(namegen), true, -1, "")
+				linkBody.SetByPath("name", easyjson.NewJSON(linkName))
+			}
+			// ----------------------------------
+			// Index link name ------------------
+			contextProcessor.GlobalCache.SetValue(fmt.Sprintf(OutLinkNameKeyPrefPattern+LinkKeySuff3Pattern, contextProcessor.Self.ID, linkName, linkType, descendantUUID), nil, true, -1, "")
+			// ----------------------------------
+			// Set link body --------------------
 			contextProcessor.GlobalCache.SetValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, contextProcessor.Self.ID, linkType, descendantUUID), linkBody.ToBytes(), true, -1, "") // Store link body in KV
+			// ----------------------------------
+			// Store tags -----------------------
 			if linkBody.GetByPath("tags").IsNonEmptyArray() {
 				if linkTags, ok := linkBody.GetByPath("tags").AsArrayString(); ok {
 					for _, linkTag := range linkTags {
@@ -389,6 +423,7 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 					}
 				}
 			}
+			// ----------------------------------
 			// --------------------------------------------------------
 
 			// Create in link on descendant object --------------------
@@ -475,6 +510,12 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 	if len(errorString) == 0 {
 		if fixedOldLinkBody, err := contextProcessor.GlobalCache.GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, contextProcessor.Self.ID, linkType, descendantUUID)); err == nil {
 			// Delete old indices -----------------------------------------
+			// Link name ------------------------
+			if linkName, ok := fixedOldLinkBody.GetByPath("name").AsString(); ok {
+				contextProcessor.GlobalCache.DeleteValue(fmt.Sprintf(OutLinkNameKeyPrefPattern+LinkKeySuff3Pattern, contextProcessor.Self.ID, linkName, linkType, descendantUUID), true, -1, "")
+			}
+			// ----------------------------------
+			// Link tags ------------------------
 			if fixedOldLinkBody.GetByPath("tags").IsNonEmptyArray() {
 				if linkTags, ok := fixedOldLinkBody.GetByPath("tags").AsArrayString(); ok {
 					for _, linkTag := range linkTags {
@@ -482,8 +523,9 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 					}
 				}
 			}
+			// ----------------------------------
 			// ------------------------------------------------------------
-			// Update link body -------------------------------------------
+			// Generate new link body -------------------------------------
 			mode := payload.GetByPath("mode").AsStringDefault("merge")
 			newBody := fixedOldLinkBody
 			switch mode {
@@ -495,6 +537,33 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 				newBody = fixedOldLinkBody.Clone().GetPtr()
 				newBody.DeepMerge(linkBody)
 			}
+			// ------------------------------------------------------------
+			// Create unique link name ------------------------------------
+			linkName, linkNameDefined := newBody.GetByPath("name").AsString()
+			if len(linkName) == 0 {
+				linkNameDefined = false
+			}
+			sameNamedLinkExists := false
+			if linkNameDefined {
+				if _, err := contextProcessor.GlobalCache.GetValue(fmt.Sprintf(OutLinkNameKeyPrefPattern+LinkKeySuff3Pattern, contextProcessor.Self.ID, linkName, linkType, descendantUUID)); err == nil {
+					sameNamedLinkExists = true
+				}
+			}
+			if !linkNameDefined || sameNamedLinkExists {
+				var namegen int64 = 0
+				if v, err := contextProcessor.GlobalCache.GetValue(fmt.Sprintf(OutLinkNameGenKeyPattern, contextProcessor.Self.ID)); err == nil {
+					namegen = system.BytesToInt64(v)
+				}
+				linkName = fmt.Sprintf("name%d", namegen)
+				namegen++
+				contextProcessor.GlobalCache.SetValue(fmt.Sprintf(OutLinkNameGenKeyPattern, contextProcessor.Self.ID), system.Int64ToBytes(namegen), true, -1, "")
+				newBody.SetByPath("name", easyjson.NewJSON(linkName))
+			}
+			// ------------------------------------------------------------
+			// Index link name --------------------------------------------
+			contextProcessor.GlobalCache.SetValue(fmt.Sprintf(OutLinkNameKeyPrefPattern+LinkKeySuff3Pattern, contextProcessor.Self.ID, linkName, linkType, descendantUUID), nil, true, -1, "")
+			// ------------------------------------------------------------
+			// Update link body -------------------------------------------
 			contextProcessor.GlobalCache.SetValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, contextProcessor.Self.ID, linkType, descendantUUID), newBody.ToBytes(), true, -1, "") // Store link body in KV
 			// ------------------------------------------------------------
 			// Create new indices -----------------------------------------
@@ -607,12 +676,21 @@ func LLAPILinkDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 				linkBody, _ := contextProcessor.GlobalCache.GetValueAsJSON(lbk)
 				contextProcessor.GlobalCache.DeleteValue(lbk, true, -1, "")
 
-				if linkBody != nil && linkBody.GetByPath("tags").IsNonEmptyArray() {
-					if linkTags, ok := linkBody.GetByPath("tags").AsArrayString(); ok {
-						for _, linkTag := range linkTags {
-							contextProcessor.GlobalCache.DeleteValue(fmt.Sprintf(OutLinkTagKeyPrefPattern+LinkKeySuff3Pattern, contextProcessor.Self.ID, linkTag, linkType, descendantUUID), true, -1, "")
+				if linkBody != nil {
+					// Delete link name -------------------
+					if linkName, ok := linkBody.GetByPath("name").AsString(); ok {
+						contextProcessor.GlobalCache.DeleteValue(fmt.Sprintf(OutLinkNameKeyPrefPattern+LinkKeySuff3Pattern, contextProcessor.Self.ID, linkName, linkType, descendantUUID), true, -1, "")
+					}
+					// -----------------------------------
+					// Delete tags -----------------------
+					if linkBody.GetByPath("tags").IsNonEmptyArray() {
+						if linkTags, ok := linkBody.GetByPath("tags").AsArrayString(); ok {
+							for _, linkTag := range linkTags {
+								contextProcessor.GlobalCache.DeleteValue(fmt.Sprintf(OutLinkTagKeyPrefPattern+LinkKeySuff3Pattern, contextProcessor.Self.ID, linkTag, linkType, descendantUUID), true, -1, "")
+							}
 						}
 					}
+					// ------------------------------------
 				}
 
 				nextCallPayload := easyjson.NewJSONObject()
