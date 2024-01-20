@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/foliagecp/sdk/embedded/graph/crud"
-	lg "github.com/foliagecp/sdk/statefun/logger"
 
 	"github.com/PaesslerAG/gval"
 	"github.com/foliagecp/sdk/statefun/cache"
@@ -179,36 +178,24 @@ func GetAllLinksFromSpecifiedLinkType(cacheStore *cache.Store, objectID string, 
 	return resultPairs
 }
 
-func GetObjectIDFromLinkName(cacheStore *cache.Store, objectID string, name string) (string, error) {
-	if len(name) == 0 {
-		return "", fmt.Errorf("link's name cannot be an empty string")
+func GetSpecificLinkIndices(cacheStore *cache.Store, fromObjectID string, linkType string, toObjectId string) map[string]struct{} { // Returns map which contains [<indexName>.<indexValue>, <indexName1>.<indexValue1>, ...]
+	resultIndices := map[string]struct{}{}
+
+	if len(linkType) == 0 { // No link type - return object itself
+		return resultIndices
 	}
 
-	resultObjects := map[string]int{}
-
-	linksQuery := fmt.Sprintf(crud.OutLinkNameKeyPrefPattern+crud.LinkKeySuff2Pattern, objectID, name, ">")
+	linksQuery := fmt.Sprintf(crud.OutLinkIndexPrefPattern+crud.LinkKeySuff3Pattern, fromObjectID, linkType, toObjectId, ">")
 	// Get all links matching defined link type ---------------------------
 	for _, key := range cacheStore.GetKeysByPattern(linksQuery) {
-		if tokens := strings.Split(key, "."); len(tokens) == 6 {
-			objectID := string(tokens[len(tokens)-1])
-			resultObjects[objectID] = 0
-		} else {
-			lg.Logf(lg.ErrorLevel, "GetObjectIDFromLinkName: linksQuery GetKeysByPattern key %s must consist from 6 tokens, but consists from %d\n", key, len(tokens))
-		}
+		linkKeyTokens := strings.Split(key, ".")
+		indexName := linkKeyTokens[len(linkKeyTokens)-2]
+		indexValue := linkKeyTokens[len(linkKeyTokens)-1]
+		resultIndices[indexName+"."+indexValue] = struct{}{}
 	}
 	// --------------------------------------------------------------------
 
-	resultId := ""
-	var resultErr error = nil
-	for key := range resultObjects {
-		resultId = key
-		break
-	}
-	if len(resultObjects) > 1 {
-		resultErr = fmt.Errorf("object cannot have multiple samely named output links")
-	}
-
-	return resultId, resultErr
+	return resultIndices
 }
 
 func GetObjectIDsFromLinkTypeAndFilterData(cacheStore *cache.Store, objectID string, linkType string, filterData *FilterData) map[string]int {
@@ -220,27 +207,14 @@ func GetObjectIDsFromLinkTypeAndFilterData(cacheStore *cache.Store, objectID str
 	for _, pair := range linkTypeObjectIdPairs {
 		realLinkType := pair[0]
 		realObjectId := pair[1]
+		linkIndicesMap := GetSpecificLinkIndices(cacheStore, objectID, realLinkType, realObjectId)
 		if _, added := resultObjects[realObjectId]; !added {
 			for _, features := range filterData.disjunctiveNormalFormOfFeatures {
 				featuresFromDisjunctionFound := true
 				for _, feature := range features {
-					switch feature.name {
-					case "tag":
-						{
-							key := fmt.Sprintf(crud.OutLinkTagKeyPrefPattern+crud.LinkKeySuff3Pattern, objectID, feature.value, realLinkType, realObjectId)
-							if _, err := cacheStore.GetValue(key); err != nil {
-								featuresFromDisjunctionFound = false
-								break
-							}
-						}
-					case "name":
-						{
-							key := fmt.Sprintf(crud.OutLinkNameKeyPrefPattern+crud.LinkKeySuff3Pattern, objectID, feature.value, realLinkType, realObjectId)
-							if _, err := cacheStore.GetValue(key); err != nil {
-								featuresFromDisjunctionFound = false
-								break
-							}
-						}
+					if _, ok := linkIndicesMap[feature.name+"."+feature.value]; !ok {
+						featuresFromDisjunctionFound = false
+						break
 					}
 				}
 				if featuresFromDisjunctionFound {
