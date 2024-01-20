@@ -205,15 +205,30 @@ func Str2Int(s string) int64 {
 	return 0
 }
 
-func MergeMaps[T interface{}](m1 map[string]T, m2 map[string]T) map[string]T {
+func MapsUnion[T interface{}](m1 map[string]T, m2 map[string]T) map[string]T {
 	merged := make(map[string]T)
-	for k, v := range m1 {
-		merged[k] = v
+	for k1, v1 := range m1 {
+		merged[k1] = v1
 	}
-	for key, value := range m2 {
-		merged[key] = value
+	for k2, v2 := range m2 {
+		merged[k2] = v2
 	}
 	return merged
+}
+
+func MapsIntersection[T interface{}](m1 map[string]T, m2 map[string]T, valuesFromMap1 bool) map[string]T {
+	intersection := make(map[string]T)
+	for k, v1 := range m1 {
+		if v2, ok := m2[k]; ok {
+			if valuesFromMap1 {
+				intersection[k] = v1
+			} else {
+				intersection[k] = v2
+			}
+
+		}
+	}
+	return intersection
 }
 
 func Int64ToBytes(v int64) []byte {
