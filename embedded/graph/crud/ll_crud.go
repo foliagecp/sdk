@@ -394,7 +394,7 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			}
 			sameNamedLinkExists := false
 			if linkNameDefined {
-				if _, err := contextProcessor.GlobalCache.GetValue(fmt.Sprintf(OutLinkNameKeyPrefPattern+LinkKeySuff3Pattern, contextProcessor.Self.ID, linkName, linkType, descendantUUID)); err == nil {
+				if _, err := contextProcessor.GlobalCache.GetValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, contextProcessor.Self.ID, linkType, descendantUUID, "name", linkName)); err == nil {
 					sameNamedLinkExists = true
 				}
 			}
@@ -410,7 +410,7 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			}
 			// ----------------------------------
 			// Index link name ------------------
-			contextProcessor.GlobalCache.SetValue(fmt.Sprintf(OutLinkNameKeyPrefPattern+LinkKeySuff3Pattern, contextProcessor.Self.ID, linkName, linkType, descendantUUID), nil, true, -1, "")
+			contextProcessor.GlobalCache.SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, contextProcessor.Self.ID, linkType, descendantUUID, "name", linkName), nil, true, -1, "")
 			// ----------------------------------
 			// Set link body --------------------
 			contextProcessor.GlobalCache.SetValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, contextProcessor.Self.ID, linkType, descendantUUID), linkBody.ToBytes(), true, -1, "") // Store link body in KV
@@ -419,7 +419,7 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			if linkBody.GetByPath("tags").IsNonEmptyArray() {
 				if linkTags, ok := linkBody.GetByPath("tags").AsArrayString(); ok {
 					for _, linkTag := range linkTags {
-						contextProcessor.GlobalCache.SetValue(fmt.Sprintf(OutLinkTagKeyPrefPattern+LinkKeySuff3Pattern, contextProcessor.Self.ID, linkTag, linkType, descendantUUID), nil, true, -1, "")
+						contextProcessor.GlobalCache.SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, contextProcessor.Self.ID, linkType, descendantUUID, "tag", linkTag), nil, true, -1, "")
 					}
 				}
 			}
@@ -512,14 +512,14 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			// Delete old indices -----------------------------------------
 			// Link name ------------------------
 			if linkName, ok := fixedOldLinkBody.GetByPath("name").AsString(); ok {
-				contextProcessor.GlobalCache.DeleteValue(fmt.Sprintf(OutLinkNameKeyPrefPattern+LinkKeySuff3Pattern, contextProcessor.Self.ID, linkName, linkType, descendantUUID), true, -1, "")
+				contextProcessor.GlobalCache.DeleteValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, contextProcessor.Self.ID, linkType, descendantUUID, "name", linkName), true, -1, "")
 			}
 			// ----------------------------------
 			// Link tags ------------------------
 			if fixedOldLinkBody.GetByPath("tags").IsNonEmptyArray() {
 				if linkTags, ok := fixedOldLinkBody.GetByPath("tags").AsArrayString(); ok {
 					for _, linkTag := range linkTags {
-						contextProcessor.GlobalCache.DeleteValue(fmt.Sprintf(OutLinkTagKeyPrefPattern+LinkKeySuff3Pattern, contextProcessor.Self.ID, linkTag, linkType, descendantUUID), true, -1, "")
+						contextProcessor.GlobalCache.DeleteValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, contextProcessor.Self.ID, linkType, descendantUUID, "tag", linkTag), true, -1, "")
 					}
 				}
 			}
@@ -545,7 +545,7 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			}
 			sameNamedLinkExists := false
 			if linkNameDefined {
-				if _, err := contextProcessor.GlobalCache.GetValue(fmt.Sprintf(OutLinkNameKeyPrefPattern+LinkKeySuff3Pattern, contextProcessor.Self.ID, linkName, linkType, descendantUUID)); err == nil {
+				if _, err := contextProcessor.GlobalCache.GetValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, contextProcessor.Self.ID, linkType, descendantUUID, "name", linkName)); err == nil {
 					sameNamedLinkExists = true
 				}
 			}
@@ -561,7 +561,7 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			}
 			// ------------------------------------------------------------
 			// Index link name --------------------------------------------
-			contextProcessor.GlobalCache.SetValue(fmt.Sprintf(OutLinkNameKeyPrefPattern+LinkKeySuff3Pattern, contextProcessor.Self.ID, linkName, linkType, descendantUUID), nil, true, -1, "")
+			contextProcessor.GlobalCache.SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, contextProcessor.Self.ID, linkType, descendantUUID, "name", linkName), nil, true, -1, "")
 			// ------------------------------------------------------------
 			// Update link body -------------------------------------------
 			contextProcessor.GlobalCache.SetValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, contextProcessor.Self.ID, linkType, descendantUUID), newBody.ToBytes(), true, -1, "") // Store link body in KV
@@ -570,7 +570,7 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			if newBody.GetByPath("tags").IsNonEmptyArray() {
 				if linkTags, ok := newBody.GetByPath("tags").AsArrayString(); ok {
 					for _, linkTag := range linkTags {
-						contextProcessor.GlobalCache.SetValue(fmt.Sprintf(OutLinkTagKeyPrefPattern+LinkKeySuff3Pattern, contextProcessor.Self.ID, linkTag, linkType, descendantUUID), nil, true, -1, "")
+						contextProcessor.GlobalCache.SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, contextProcessor.Self.ID, linkType, descendantUUID, "tag", linkTag), nil, true, -1, "")
 					}
 				}
 			}
@@ -679,14 +679,14 @@ func LLAPILinkDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 				if linkBody != nil {
 					// Delete link name -------------------
 					if linkName, ok := linkBody.GetByPath("name").AsString(); ok {
-						contextProcessor.GlobalCache.DeleteValue(fmt.Sprintf(OutLinkNameKeyPrefPattern+LinkKeySuff3Pattern, contextProcessor.Self.ID, linkName, linkType, descendantUUID), true, -1, "")
+						contextProcessor.GlobalCache.DeleteValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, contextProcessor.Self.ID, linkType, descendantUUID, "name", linkName), true, -1, "")
 					}
 					// -----------------------------------
 					// Delete tags -----------------------
 					if linkBody.GetByPath("tags").IsNonEmptyArray() {
 						if linkTags, ok := linkBody.GetByPath("tags").AsArrayString(); ok {
 							for _, linkTag := range linkTags {
-								contextProcessor.GlobalCache.DeleteValue(fmt.Sprintf(OutLinkTagKeyPrefPattern+LinkKeySuff3Pattern, contextProcessor.Self.ID, linkTag, linkType, descendantUUID), true, -1, "")
+								contextProcessor.GlobalCache.DeleteValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, contextProcessor.Self.ID, linkType, descendantUUID, "tag", linkTag), true, -1, "")
 							}
 						}
 					}

@@ -8,13 +8,12 @@ const (
 	LinkKeySuff1Pattern = "%s"
 	LinkKeySuff2Pattern = "%s.%s"
 	LinkKeySuff3Pattern = "%s.%s.%s"
+	LinkKeySuff4Pattern = "%s.%s.%s.%s"
 
 	// key=fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, <fromVertexId>, <linkType>, <toVertexId>), value=<linkBody>
 	OutLinkBodyKeyPrefPattern = "%s.out.body."
-	// key=fmt.Sprintf(OutLinkTagKeyPrefPattern+LinkKeySuff3Pattern, <fromVertexId>, <tag>, <linkType>, <toVertexId>), value=nil
-	OutLinkTagKeyPrefPattern = "%s.out.tag."
-	// key=fmt.Sprintf(OutLinkTagKeyPrefPattern+LinkKeySuff3Pattern, <fromVertexId>, <name>, <linkType>, <toVertexId>), value=nil
-	OutLinkNameKeyPrefPattern = "%s.out.name."
+	// key=fmt.Sprintf(OutLinkTagKeyPrefPattern+LinkKeySuff3Pattern, <fromVertexId>, <linkType>, <toVertexId>, <index_name>, <tag>), value=nil
+	OutLinkIndexPrefPattern = "%s.out.index."
 	// key=fmt.Sprintf(OutLinkNameGenKeyPattern, <fromVertexId>), value=counter[int64]
 	OutLinkNameGenKeyPattern = "%s.out.namegen"
 	// key=fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff2Pattern, <toVertexId>, <fromVertexId>, <linkType>), value=nil
