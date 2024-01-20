@@ -43,6 +43,8 @@ var (
 	CreateSimpleGraphTest bool = system.GetEnvMustProceed("CREATE_SIMPLE_GRAPH_TEST", true)
 	// KVMuticesTest - test the Foliage global key/value mutices
 	KVMuticesTest bool = system.GetEnvMustProceed("KV_MUTICES_TEST", true)
+	// RequestReplyTest - test the Foliage sync calls
+	RequestReplyTest bool = system.GetEnvMustProceed("REQUEST_REPLY_TEST", true)
 	// TriggersTest - test the Foliage cmdb crud triggers
 	TriggersTest bool = system.GetEnvMustProceed("TRIGGERS_TEST", true)
 	// KVMuticesTestDurationSec - key/value mutices test duration
@@ -139,7 +141,7 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	jpgql.RegisterAllFunctionTypes(runtime, 30)
 }
 
-func RequestReplyTest(runtime *statefun.Runtime) {
+func RunRequestReplyTest(runtime *statefun.Runtime) {
 	lg.Logln(lg.DebugLevel, ">>> Test started: request reply calls")
 
 	funcTypename := "functions.tests.basic.master"
@@ -171,7 +173,9 @@ func Start() {
 		if TriggersTest {
 			RunTriggersTest(runtime)
 		}
-		RequestReplyTest(runtime)
+		if RequestReplyTest {
+			RunRequestReplyTest(runtime)
+		}
 		if CreateSimpleGraphTest {
 			CreateTestGraph(runtime)
 		}
