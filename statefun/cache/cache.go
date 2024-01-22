@@ -507,7 +507,6 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 // callbackID - unique id for this subscription
 func (cs *Store) SubscribeLevelCallback(key string, callbackID string) chan KeyValue {
 	if _, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true); parentCacheStoreValue != nil {
-
 		onBufferOverflow := func() {
 			lg.Logf(lg.WarnLevel, "SubscribeLevelCallback SubscriptionNotificationsBuffer overflow for key=%s!\n", key)
 		}
@@ -521,6 +520,11 @@ func (cs *Store) SubscribeLevelCallback(key string, callbackID string) chan KeyV
 
 func (cs *Store) UnsubscribeLevelCallback(key string, callbackID string) {
 	if _, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, false); parentCacheStoreValue != nil {
+		if v, ok := parentCacheStoreValue.notifyUpdates.Load(callbackID); ok {
+			if callbackChannelIn, ok := v.(chan KeyValue); ok {
+				close(callbackChannelIn)
+			}
+		}
 		parentCacheStoreValue.notifyUpdates.Delete(callbackID)
 	}
 }
