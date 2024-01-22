@@ -76,7 +76,7 @@ func CreateDimSizeChannel[T interface{}](maxBufferElements int, onBufferOverflow
 			buffer = append(buffer, val)
 			if len(buffer) > maxBufferElements {
 				if onBufferOverflow != nil {
-					go onBufferOverflow()
+					go onBufferOverflow() // Call user's function in a separate routines
 				}
 			}
 			mutex.Unlock()
