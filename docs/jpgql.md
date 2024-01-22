@@ -31,10 +31,14 @@ The JPGQL syntax follows this pattern:
 2. A filter may contain only predifined functions connected via `&&` and `||`
 3. Link types valid characters: `a-zA-Z_-`
 
-## Predefined functions
+## Predefined filter functions
+### name(name:string)
+
+Each out link of a vertex has its own unique name. Desired link should be named as defined.
+
 ### tags(tag1:string, tag2:string, ...)
 
-Check that a link contains all of the defined tags
+Desired links should contain all of the defined tags.
 
 ## Examples
 ### Finds all objects from the target one via its output routes that satisfy:
@@ -47,6 +51,12 @@ Any links of depth=1 that contain tag `tag1`:
 
 Link typed as `type1` at depth=1 that contain both tags `tag1` and `tag2`:  
 `.a[tags('tag1', 'tag2')]`
+
+Link typed as `type1` at depth=1 that contain both tags `tag1` and `tag2` at depth=2 followed by link with name `name1`:  
+`.a[tags('tag1', 'tag2')].*[name('name1')]`
+
+Full address of a vertex via names `name1` and `name2` and `name3`:  
+`.*[name('name1')].*[name('name2')].*[name('name3')]`
 
 Links at any depth that contain both tags `tag1` and `tag2`:  
 `..*[tags("tag1", "tag2")]`
@@ -130,6 +140,15 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.query.jp
 ```
 ```json
 {"result":{"b":true,"f":true},"status":"ok"}
+```
+
+1. Access vertex `e` through one of it's names from `root` vertex: `2c`, `2d`, `2b`, `2e`:
+
+```sh
+nats request -s nats://nats:foliage@nats:4222 service.functions.graph.api.query.jpgql.ctra.root "{\"payload\":{\"jpgql_query\":\".*[name('2c')].*[name('2d')].*[name('2b')].*[name('2e')]\"}}"
+```
+```json
+{"result":{"e":true},"status":"ok"}
 ```
 
 ## JPGQL_CTRA query examples with call on targets
