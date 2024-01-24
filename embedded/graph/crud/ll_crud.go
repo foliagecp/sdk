@@ -394,7 +394,7 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			}
 			sameNamedLinkExists := false
 			if linkNameDefined {
-				if _, err := contextProcessor.GlobalCache.GetValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, contextProcessor.Self.ID, linkType, descendantUUID, "name", linkName)); err == nil {
+				if _, err := contextProcessor.GlobalCache.GetValue(fmt.Sprintf(OutLinkLinkNamePrefPattern+LinkKeySuff1Pattern, contextProcessor.Self.ID, linkName)); err == nil {
 					sameNamedLinkExists = true
 				}
 			}
@@ -408,6 +408,9 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 				contextProcessor.GlobalCache.SetValue(fmt.Sprintf(OutLinkNameGenKeyPattern, contextProcessor.Self.ID), system.Int64ToBytes(namegen), true, -1, "")
 				linkBody.SetByPath("name", easyjson.NewJSON(linkName))
 			}
+			// ----------------------------------
+			// Create link name -----------------
+			contextProcessor.GlobalCache.SetValue(fmt.Sprintf(OutLinkLinkNamePrefPattern+LinkKeySuff1Pattern, contextProcessor.Self.ID, linkName), nil, true, -1, "")
 			// ----------------------------------
 			// Index link name ------------------
 			contextProcessor.GlobalCache.SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, contextProcessor.Self.ID, linkType, descendantUUID, "name", linkName), nil, true, -1, "")
@@ -512,6 +515,7 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			// Delete old indices -----------------------------------------
 			// Link name ------------------------
 			if linkName, ok := fixedOldLinkBody.GetByPath("name").AsString(); ok {
+				contextProcessor.GlobalCache.DeleteValue(fmt.Sprintf(OutLinkLinkNamePrefPattern+LinkKeySuff1Pattern, contextProcessor.Self.ID, linkName), true, -1, "")
 				contextProcessor.GlobalCache.DeleteValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, contextProcessor.Self.ID, linkType, descendantUUID, "name", linkName), true, -1, "")
 			}
 			// ----------------------------------
@@ -545,7 +549,7 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			}
 			sameNamedLinkExists := false
 			if linkNameDefined {
-				if _, err := contextProcessor.GlobalCache.GetValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, contextProcessor.Self.ID, linkType, descendantUUID, "name", linkName)); err == nil {
+				if _, err := contextProcessor.GlobalCache.GetValue(fmt.Sprintf(OutLinkLinkNamePrefPattern+LinkKeySuff1Pattern, contextProcessor.Self.ID, linkName)); err == nil {
 					sameNamedLinkExists = true
 				}
 			}
@@ -559,6 +563,9 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 				contextProcessor.GlobalCache.SetValue(fmt.Sprintf(OutLinkNameGenKeyPattern, contextProcessor.Self.ID), system.Int64ToBytes(namegen), true, -1, "")
 				newBody.SetByPath("name", easyjson.NewJSON(linkName))
 			}
+			// ------------------------------------------------------------
+			// Create link name -------------------------------------------
+			contextProcessor.GlobalCache.SetValue(fmt.Sprintf(OutLinkLinkNamePrefPattern+LinkKeySuff1Pattern, contextProcessor.Self.ID, linkName), nil, true, -1, "")
 			// ------------------------------------------------------------
 			// Index link name --------------------------------------------
 			contextProcessor.GlobalCache.SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, contextProcessor.Self.ID, linkType, descendantUUID, "name", linkName), nil, true, -1, "")
@@ -679,6 +686,7 @@ func LLAPILinkDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 				if linkBody != nil {
 					// Delete link name -------------------
 					if linkName, ok := linkBody.GetByPath("name").AsString(); ok {
+						contextProcessor.GlobalCache.DeleteValue(fmt.Sprintf(OutLinkLinkNamePrefPattern+LinkKeySuff1Pattern, contextProcessor.Self.ID, linkName), true, -1, "")
 						contextProcessor.GlobalCache.DeleteValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, contextProcessor.Self.ID, linkType, descendantUUID, "name", linkName), true, -1, "")
 					}
 					// -----------------------------------

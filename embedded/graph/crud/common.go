@@ -12,8 +12,10 @@ const (
 
 	// key=fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, <fromVertexId>, <linkType>, <toVertexId>), value=<linkBody>
 	OutLinkBodyKeyPrefPattern = "%s.out.body."
-	// key=fmt.Sprintf(OutLinkTagKeyPrefPattern+LinkKeySuff3Pattern, <fromVertexId>, <linkType>, <toVertexId>, <index_name>, <tag>), value=nil
+	// key=fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff3Pattern, <fromVertexId>, <linkType>, <toVertexId>, <index_name>, <tag>), value=nil
 	OutLinkIndexPrefPattern = "%s.out.index."
+	// key=fmt.Sprintf(OutLinkLinkNamePrefPattern+LinkKeySuff1Pattern, <fromVertexId>, <link_name>), value=nil
+	OutLinkLinkNamePrefPattern = "%s.out.name."
 	// key=fmt.Sprintf(OutLinkNameGenKeyPattern, <fromVertexId>), value=counter[int64]
 	OutLinkNameGenKeyPattern = "%s.out.namegen"
 	// key=fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff2Pattern, <toVertexId>, <fromVertexId>, <linkType>), value=nil
