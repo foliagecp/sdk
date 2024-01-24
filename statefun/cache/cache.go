@@ -45,7 +45,7 @@ type StoreValue struct {
 	// "0" if store contains all keys and all subkeys (no lru purged ones at any next level)
 	storeConsistencyWithKVLossTime int64
 	valueUpdateTime                int64
-	storeMutex                     *sync.Mutex
+	storeMutex                     sync.Mutex
 	notifyUpdates                  sync.Map
 	syncNeeded                     bool
 	syncedWithKV                   bool
@@ -267,7 +267,6 @@ type Store struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 
-	initChan        chan bool
 	rootValue       *StoreValue
 	lruTresholdTime int64
 	valuesInCache   int
@@ -278,15 +277,15 @@ type Store struct {
 }
 
 func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamContext, kv nats.KeyValue) *Store {
+	var inited atomic.Bool
+	initChan := make(chan bool)
 	cs := Store{
 		cacheConfig: cacheConfig,
 		js:          js,
 		kv:          kv,
-		initChan:    make(chan bool),
 		rootValue: &StoreValue{
 			parent:                         nil,
 			value:                          nil,
-			storeMutex:                     &sync.Mutex{},
 			store:                          make(map[interface{}]*StoreValue),
 			storeConsistencyWithKVLossTime: 0,
 			valueExists:                    false,
@@ -364,9 +363,8 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 							lg.Logf(lg.ErrorLevel, "storeUpdatesHandler: received value without time and append flag!\n")
 						}
 					} else {
-						if cs.initChan != nil { // Closing init channel only once
-							close(cs.initChan)
-							cs.initChan = nil
+						if inited.CompareAndSwap(false, true) {
+							close(initChan)
 						}
 					}
 				}
@@ -499,7 +497,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 	}
 	go storeUpdatesHandler(&cs)
 	go kvLazyWriter(&cs)
-	<-cs.initChan
+	<-initChan
 	return &cs
 }
 
@@ -533,9 +531,11 @@ func (cs *Store) GetValueUpdateTime(key string) int64 {
 	var result int64 = -1
 
 	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, false); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
-		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken, true); ok && csv.valueExists {
+		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken, true); ok {
 			csv.Lock("GetValueUpdateTime")
-			result = csv.valueUpdateTime
+			if csv.valueExists {
+				result = csv.valueUpdateTime
+			}
 			csv.Unlock("GetValueUpdateTime")
 		}
 	}
@@ -674,7 +674,7 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 				return true
 			}
 		} else {
-			csvUpdate = &StoreValue{value: newValue, storeMutex: &sync.Mutex{}, store: make(map[interface{}]*StoreValue), storeConsistencyWithKVLossTime: 0, valueExists: true, purgeState: 0, syncNeeded: updateInKV, syncedWithKV: !updateInKV, valueUpdateTime: customSetTime}
+			csvUpdate = &StoreValue{value: newValue, store: make(map[interface{}]*StoreValue), storeConsistencyWithKVLossTime: 0, valueExists: true, purgeState: 0, syncNeeded: updateInKV, syncedWithKV: !updateInKV, valueUpdateTime: customSetTime}
 			parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate, false)
 			return true
 		}
@@ -700,7 +700,7 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 				csv.Put(value, updateInKV, customSetTime)
 			} else {
 				//lg.Logln(">>4 " + key)
-				csvUpdate = &StoreValue{value: value, storeMutex: &sync.Mutex{}, store: make(map[interface{}]*StoreValue), storeConsistencyWithKVLossTime: 0, valueExists: true, purgeState: 0, syncNeeded: updateInKV, syncedWithKV: !updateInKV, valueUpdateTime: customSetTime}
+				csvUpdate = &StoreValue{value: value, store: make(map[interface{}]*StoreValue), storeConsistencyWithKVLossTime: 0, valueExists: true, purgeState: 0, syncNeeded: updateInKV, syncedWithKV: !updateInKV, valueUpdateTime: customSetTime}
 				//lg.Logln(">>5 " + key)
 				parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate, true)
 				//lg.Logln(">>6 " + key)
@@ -917,7 +917,6 @@ func (cs *Store) getLastKeyTokenAndItsParentCacheStoreValue(key string, createIf
 			if createIfNotexists {
 				csv := StoreValue{
 					value:                          nil,
-					storeMutex:                     &sync.Mutex{},
 					store:                          make(map[interface{}]*StoreValue),
 					storeConsistencyWithKVLossTime: 0,
 					valueExists:                    false,
