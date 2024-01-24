@@ -70,10 +70,20 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 
 			resultJSONChannel := make(chan *easyjson.JSON)
 
+			// Do not send original data, prevents same data concurrent access from different functions
+			var payloadCopy *easyjson.JSON = nil
+			var optionsCopy *easyjson.JSON = nil
+			if payload != nil {
+				payloadCopy = payload.Clone().GetPtr()
+			}
+			if options != nil {
+				optionsCopy = options.Clone().GetPtr()
+			}
+			// ----------------------------------------------------------------------------------------
 			functionMsg := FunctionTypeMsg{
 				Caller:  &sfPlugins.StatefunAddress{Typename: callerTypename, ID: callerID},
-				Payload: payload,
-				Options: options,
+				Payload: payloadCopy,
+				Options: optionsCopy,
 			}
 
 			functionMsg.RequestCallback = func(data *easyjson.JSON) {
