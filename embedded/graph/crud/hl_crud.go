@@ -216,6 +216,17 @@ func DeleteObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 			}
 		}
 	case "vertex":
+		empty := easyjson.NewJSONObject()
+		options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
+		result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.delete", selfID, &empty, &options)
+		if err := checkRequestError(result, err); err != nil {
+			replyError(contextProcessor, err)
+			return
+		}
+
+		if result.PathExists("op_stack") {
+			executeTriggersFromLLOpStack(contextProcessor, result.GetByPath("op_stack").GetPtr())
+		}
 	}
 
 	replyOk(contextProcessor)
