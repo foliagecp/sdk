@@ -1,6 +1,4 @@
-
-
-package basic
+package main
 
 import (
 	"github.com/foliagecp/easyjson"
