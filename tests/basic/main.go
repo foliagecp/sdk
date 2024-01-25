@@ -18,7 +18,7 @@ func main() {
 	flag.Parse()
 
 	if *helpFlag || *helpFlagAlias {
-		fmt.Println("usage: basic [option]")
+		fmt.Println("usage: foliage [option]")
 		fmt.Println("Options:")
 		flag.PrintDefaults()
 		return
