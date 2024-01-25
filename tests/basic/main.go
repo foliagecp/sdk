@@ -1,5 +1,3 @@
-// Copyright 2023 NJWS Inc.
-
 // Foliage tests main package.
 // Provides configurable running of different test samples that goes along with the SDK.
 package main
@@ -7,10 +5,8 @@ package main
 import (
 	"flag"
 	"fmt"
-	"os"
 
 	lg "github.com/foliagecp/sdk/statefun/logger"
-	"github.com/foliagecp/sdk/tests/basic"
 )
 
 func main() {
@@ -21,8 +17,8 @@ func main() {
 
 	flag.Parse()
 
-	if *helpFlag || *helpFlagAlias || flag.NArg() == 0 {
-		fmt.Println("usage: tests [option] <test_name>")
+	if *helpFlag || *helpFlagAlias {
+		fmt.Println("usage: basic [option]")
 		fmt.Println("Options:")
 		flag.PrintDefaults()
 		return
@@ -31,19 +27,5 @@ func main() {
 	lg.SetOutputLevel(lg.LogLevel(*logLevelFlag))
 	lg.SetReportCaller(*logReportCallerFlag)
 
-	testName := flag.Arg(flag.NArg() - 1)
-
-	switch testName {
-	case "basic":
-		defer basic.Start()
-	default:
-		lg.Logf(lg.ErrorLevel, "Test named \"%s\" not found!\n", testName)
-		return
-	}
-
-	err := os.Chdir(fmt.Sprintf("./%s", testName))
-	if err != nil {
-		lg.Logf(lg.ErrorLevel, "Could not chdir to test \"%s\": %s\n", testName, err)
-		os.Exit(1)
-	}
+	Start()
 }

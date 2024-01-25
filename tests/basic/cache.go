@@ -1,6 +1,4 @@
-// Copyright 2023 NJWS Inc.
-
-package basic
+package main
 
 import "github.com/foliagecp/sdk/statefun/cache"
 
