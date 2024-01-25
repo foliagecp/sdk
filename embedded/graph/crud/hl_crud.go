@@ -24,6 +24,12 @@ func CreateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 
 	prefix := payload.GetByPath("prefix").AsStringDefault("")
 
+	linkBodyKey := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, prefix+Types, TypeLink, selfID)
+	if _, err := contextProcessor.GlobalCache.GetValue(linkBodyKey); err == nil {
+		replyOk(contextProcessor)
+		return
+	}
+
 	_, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.create", selfID, payload, nil)
 	if err != nil {
 		replyError(contextProcessor, err)
@@ -32,10 +38,10 @@ func CreateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 
 	link := easyjson.NewJSONObject()
 	link.SetByPath("descendant_uuid", easyjson.NewJSON(selfID))
-	link.SetByPath("link_type", easyjson.NewJSON("__type"))
-	link.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{"TYPE_" + selfID}))
+	link.SetByPath("link_type", easyjson.NewJSON(TypeLink))
+	link.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{TypeTag + selfID}))
 
-	_, err = contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.create", prefix+"types", &link, nil)
+	_, err = contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.create", prefix+Types, &link, nil)
 	if err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -94,6 +100,12 @@ func CreateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 
 	prefix := payload.GetByPath("prefix").AsStringDefault("")
 
+	linkBodyKey := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, prefix+Objects, ObjectLink, selfID)
+	if _, err := contextProcessor.GlobalCache.GetValue(linkBodyKey); err == nil {
+		replyOk(contextProcessor)
+		return
+	}
+
 	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
 	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.create", selfID, payload, &options)
 	if err := checkRequestError(result, err); err != nil {
@@ -106,9 +118,9 @@ func CreateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 	}
 
 	needLinks := []_link{
-		{from: prefix + "objects", to: selfID, lt: "__object"},
-		{from: selfID, to: prefix + originType, lt: "__type"},
-		{from: prefix + originType, to: selfID, lt: "__object"},
+		{from: prefix + Objects, to: selfID, lt: ObjectLink},
+		{from: selfID, to: prefix + originType, lt: TypeLink},
+		{from: prefix + originType, to: selfID, lt: ObjectLink},
 	}
 
 	for _, l := range needLinks {
@@ -118,8 +130,8 @@ func CreateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 		link.SetByPath("link_body", easyjson.NewJSONObject())
 
 		switch l.lt {
-		case "__type":
-			link.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{"TYPE_" + l.to}))
+		case TypeLink:
+			link.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{TypeTag + l.to}))
 		}
 
 		r, e := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.create", l.from, &link, nil)
@@ -255,11 +267,17 @@ func CreateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 		return
 	}
 
+	linkBodyKey := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, selfID, TypeLink, to)
+	if _, err := contextProcessor.GlobalCache.GetValue(linkBodyKey); err == nil {
+		replyOk(contextProcessor)
+		return
+	}
+
 	link := easyjson.NewJSONObject()
 	link.SetByPath("descendant_uuid", easyjson.NewJSON(to))
-	link.SetByPath("link_type", easyjson.NewJSON("__type"))
+	link.SetByPath("link_type", easyjson.NewJSON(TypeLink))
 	link.SetByPath("link_body.link_type", easyjson.NewJSON(objectLinkType))
-	link.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{"TYPE_" + to}))
+	link.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{TypeTag + to}))
 
 	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.create", selfID, &link, nil)
 	if err := checkRequestError(result, err); err != nil {
@@ -301,9 +319,9 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 
 	updateLinkPayload := easyjson.NewJSONObject()
 	updateLinkPayload.SetByPath("descendant_uuid", easyjson.NewJSON(to))
-	updateLinkPayload.SetByPath("link_type", easyjson.NewJSON("__type"))
+	updateLinkPayload.SetByPath("link_type", easyjson.NewJSON(TypeLink))
 	updateLinkPayload.SetByPath("link_body", body)
-	updateLinkPayload.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{"TYPE_" + to}))
+	updateLinkPayload.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{TypeTag + to}))
 
 	needUpdateObjectLinkType := objectLinkType != ""
 	currentObjectLinkType := ""
@@ -380,6 +398,12 @@ func CreateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	linkType, err := getReferenceLinkTypeBetweenTwoObjects(contextProcessor, selfID, objectToID)
 	if err != nil {
 		replyError(contextProcessor, err)
+		return
+	}
+
+	linkBodyKey := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, selfID, linkType, objectToID)
+	if _, err := contextProcessor.GlobalCache.GetValue(linkBodyKey); err == nil {
+		replyOk(contextProcessor)
 		return
 	}
 
@@ -621,7 +645,7 @@ func getObjectsLinkTypeTriggers(ctx *sfplugins.StatefunContextProcessor, fromObj
 }
 
 func findObjectType(ctx *sfplugins.StatefunContextProcessor, objectID string) string {
-	pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, objectID, "__type", ">")
+	pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, objectID, TypeLink, ">")
 
 	keys := ctx.GlobalCache.GetKeysByPattern(pattern)
 	if len(keys) == 0 {
@@ -634,7 +658,7 @@ func findObjectType(ctx *sfplugins.StatefunContextProcessor, objectID string) st
 }
 
 func findTypeObjects(ctx *sfplugins.StatefunContextProcessor, typeID string) []string {
-	pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, typeID, "__object", ">")
+	pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, typeID, ObjectLink, ">")
 
 	keys := ctx.GlobalCache.GetKeysByPattern(pattern)
 	if len(keys) == 0 {
@@ -651,7 +675,7 @@ func findTypeObjects(ctx *sfplugins.StatefunContextProcessor, typeID string) []s
 }
 
 func getTypesLinkBody(ctx *sfplugins.StatefunContextProcessor, from, to string) (*easyjson.JSON, error) {
-	id := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, from, "__type", to)
+	id := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, from, TypeLink, to)
 
 	body, err := ctx.GlobalCache.GetValueAsJSON(id)
 	if err != nil {
