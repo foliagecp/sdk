@@ -22,6 +22,16 @@ const (
 	InLinkKeyPrefPattern = "%s.in."
 )
 
+const (
+	Types   = "types"
+	Objects = "objects"
+
+	TypeLink   = "__type"
+	ObjectLink = "__object"
+
+	TypeTag = "TYPE_"
+)
+
 var (
 	llAPIVertexCUDNames = []string{"functions.graph.api.vertex.create", "functions.graph.api.vertex.update", "functions.graph.api.vertex.delete"}
 	llAPILinkCUDNames   = []string{"functions.graph.api.link.create", "functions.graph.api.link.update", "functions.graph.api.link.delete"}

@@ -171,7 +171,7 @@ func reply(ctx *sfplugins.StatefunContextProcessor, status string, data any) {
 }
 
 func findObjectType(ctx *sfplugins.StatefunContextProcessor, objectID string) string {
-	pattern := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, objectID, "__type", ">")
+	pattern := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, objectID, crud.TypeLink, ">")
 
 	keys := ctx.GlobalCache.GetKeysByPattern(pattern)
 	if len(keys) == 0 {
@@ -196,7 +196,7 @@ func checkRequestError(result *easyjson.JSON, err error) error {
 }
 
 func findTypeObjects(ctx *sfplugins.StatefunContextProcessor, typeID string) []string {
-	pattern := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, typeID, "__object", ">")
+	pattern := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, typeID, crud.ObjectLink, ">")
 
 	keys := ctx.GlobalCache.GetKeysByPattern(pattern)
 	if len(keys) == 0 {
