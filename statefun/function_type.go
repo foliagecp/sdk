@@ -32,6 +32,7 @@ type FunctionType struct {
 	typenameLockRevisionID  uint64
 	executor                *sfPlugins.TypenameExecutorPlugin
 	instancesControlChannel chan struct{}
+	resourceMutex           sync.Mutex
 }
 
 func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHandler, config FunctionTypeConfig) *FunctionType {
@@ -197,7 +198,9 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 	if typenameIDContextProcessor.Payload == nil {
 		typenameIDContextProcessor.Payload = easyjson.NewJSONObject().GetPtr()
 	}
-	typenameIDContextProcessor.Options = ft.config.options
+	ft.resourceMutex.Lock()
+	typenameIDContextProcessor.Options = ft.config.options.Clone().GetPtr()
+	ft.resourceMutex.Unlock()
 	if msg.Options != nil {
 		typenameIDContextProcessor.Options.DeepMerge(*msg.Options)
 	}
