@@ -78,7 +78,7 @@ func (ftc *FunctionTypeConfig) SetMutexLifeTimeSec(mutexLifeTimeSec int) *Functi
 }
 
 func (ftc *FunctionTypeConfig) SetOptions(options *easyjson.JSON) *FunctionTypeConfig {
-	ftc.options = options
+	ftc.options = options.Clone().GetPtr()
 	return ftc
 }
 
