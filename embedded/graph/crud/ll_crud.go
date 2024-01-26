@@ -189,6 +189,7 @@ func LLAPIVertexUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sf
 		case "replace":
 			newBody = &objectBody
 			contextProcessor.SetObjectContext(newBody) // Update an object
+			result.SetByPath("status", easyjson.NewJSON("ok"))
 		case "merge":
 			fallthrough
 		default:
