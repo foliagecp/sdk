@@ -45,7 +45,7 @@ func (ftc *FunctionTypeConfig) SetMsgAckWaitMs(msgAckWaitMs int) *FunctionTypeCo
 	return ftc
 }
 
-func (ftc *FunctionTypeConfig) SeMsgChannelSize(msgChannelSize int) *FunctionTypeConfig {
+func (ftc *FunctionTypeConfig) SetMsgChannelSize(msgChannelSize int) *FunctionTypeConfig {
 	ftc.msgChannelSize = msgChannelSize
 	return ftc
 }
