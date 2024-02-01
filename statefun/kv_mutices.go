@@ -147,7 +147,7 @@ func KeyMutexLockUpdate(runtime *Runtime, key string, lockRevisionID uint64) (ui
 			return 0, err
 		}
 		le.Logf(lg.TraceLevel, "============== Updated %s\n", keyMutex)
-		return revId, err
+		return revId, nil
 	} else {
 		return 0, fmt.Errorf("Context mutex for key=%s was already unlocked", key)
 	}
