@@ -114,7 +114,7 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 				for ftName, revId := range sifr {
 					newRevId, err := KeyMutexLockUpdate(r, system.GetHashStr(ftName), revId)
 					if err != nil {
-						lg.Logf(lg.ErrorLevel, "KeyMutexLockUpdate for single instance function type %s failed", ftName)
+						lg.Logf(lg.ErrorLevel, "KeyMutexLockUpdate for single instance function type %s failed: %s", ftName, err.Error())
 					} else {
 						sifr[ftName] = newRevId
 					}
