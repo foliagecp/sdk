@@ -32,19 +32,31 @@ services:
     depends_on:
       - nats-hub
 
-  runtime:
+  runtime-hub:
     image: foliage-sdk-tests-distributed:latest
     command: /usr/bin/foliage -ll 6
     ports:
       - "9901:9901"
-    env_file: ./configs/.env
+    env_file: ./configs/hub.env
     depends_on:
       - nats-leaf
     build:
       context: ../..
       dockerfile: tests/distributed/Dockerfile
 
-  nats-hub-exporter:
+  runtime-leaf:
+    image: foliage-sdk-tests-distributed:latest
+    command: /usr/bin/foliage -ll 6
+    ports:
+      - "9902:9901"
+    env_file: ./configs/leaf.env
+    depends_on:
+      - nats-leaf
+    build:
+      context: ../..
+      dockerfile: tests/distributed/Dockerfile
+
+  nats-exporter-hub:
     image: natsio/prometheus-nats-exporter:latest
     depends_on:
      - nats-hub
@@ -52,7 +64,7 @@ services:
      - '7777:7777'
     command: -varz -jsz=all http://nats-hub:8222
 
-  nats-leaf-exporter:
+  nats-exporter-leaf:
     image: natsio/prometheus-nats-exporter:latest
     depends_on:
      - nats-leaf
