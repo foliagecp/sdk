@@ -1,0 +1,77 @@
+version: "2.1"
+
+services:
+  nats-hub:
+    image: nats:latest
+    command: -c /etc/nats/hub.conf -js -sd /data/jetstream --user nats --pass foliage
+    ports:
+      - "4222:4222"
+      - "6222:6222"
+      - "8222:8222"
+      - "7422:7422"
+    volumes:
+       - ./configs/nats/hub.conf/:/etc/nats/hub.conf
+
+  nats-leaf:
+    image: nats:latest
+    command: -c /etc/nats/leaf.conf -js -sd /data/jetstream --user nats --pass foliage
+    ports:
+      - "4223:4223"
+      - "6223:6223"
+      - "8223:8223"
+    depends_on:
+      - nats-hub
+    volumes:
+       - ./configs/nats/leaf.conf/:/etc/nats/leaf.conf
+
+  io:
+    image: natsio/nats-box:latest
+    entrypoint:
+      - /bin/sh
+    tty: true
+    depends_on:
+      - nats-hub
+
+  runtime:
+    image: foliage-sdk-tests-distributed:latest
+    command: /usr/bin/foliage -ll 6
+    ports:
+      - "9901:9901"
+    env_file: ./configs/.env
+    depends_on:
+      - nats-leaf
+    build:
+      context: ../..
+      dockerfile: tests/distributed/Dockerfile
+
+  nats-hub-exporter:
+    image: natsio/prometheus-nats-exporter:latest
+    depends_on:
+     - nats-hub
+    ports:
+     - '7777:7777'
+    command: -varz -jsz=all http://nats-hub:8222
+
+  nats-leaf-exporter:
+    image: natsio/prometheus-nats-exporter:latest
+    depends_on:
+     - nats-leaf
+    ports:
+     - '7778:7778'
+    command: -varz -jsz=all http://nats-leaf:8223
+
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - 9090:9090
+    volumes:
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+
+  grafana:
+    ports:
+     - '3000:3000'
+    image: grafana/grafana-enterprise
+    volumes:
+      - ./configs/grafana/dashboards.yaml:/etc/grafana/provisioning/dashboards/main.yaml
+      - ./configs/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/main.yaml
+      - ./configs/grafana/dashboards:/var/lib/grafana/dashboards
