@@ -11,8 +11,8 @@ scrape_configs:
   # The job name is added as a label `job=<job_name>` to any timeseries scraped from this config.
   - job_name: 'nats-servers'
     static_configs:
-      - targets: ['nats-exporter:7777', 'nats-exporter:7778']
+      - targets: ['nats-exporter-hub:7777', 'nats-exporter-leaf:7778']
 
   - job_name: 'foliage-runtimes'
     static_configs:
-      - targets: ['runtime:9901']
+      - targets: ['runtime-hub:9901', 'runtime-leaf:9902']
