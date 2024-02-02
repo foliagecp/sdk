@@ -30,7 +30,7 @@ const (
 	hubEventStreamName         = "hub_events"
 	shardIngressStreamName     = "shard_ingress"
 	shardEgressStreamName      = "shard_egress"
-	routerConsumerMaxAckWaitMs = 1000
+	routerConsumerMaxAckWaitMs = 10 * 60 * 1000
 )
 
 type Shard struct {
@@ -193,15 +193,18 @@ func (s *Shard) createRouter(sourceStreamName string, subject string, tsc target
 		consumerGroup,
 		func(msg *nats.Msg) {
 			targetSubject, err := tsc(msg)
-			lg.Logf(lg.DebugLevel, "ROUTING (domain=%s) %s:%s -> %s\n", s.DomainName, sourceStreamName, msg.Subject, targetSubject)
+			lg.Logf(lg.TraceLevel, "Routing (from_domain=%s) %s:%s -> %s\n", s.DomainName, sourceStreamName, msg.Subject, targetSubject)
 			if err == nil {
-				err = s.nc.Publish(targetSubject, msg.Data)
+				pubAck, err := s.js.Publish(targetSubject, msg.Data)
 				if err == nil {
+					lg.Logf(lg.TraceLevel, "Routed (from_domain=%s) %s:%s -> (to_domain=%s) %s:%s\n", s.DomainName, sourceStreamName, msg.Subject, pubAck.Domain, pubAck.Stream, targetSubject)
 					msg.Ack()
+					return
 				} else {
 					lg.Logf(lg.ErrorLevel, "Shard (domain=%s) router with sourceStreamName=%s cannot republish message: %s\n", s.DomainName, sourceStreamName, err)
 				}
 			}
+			msg.Nak()
 		},
 		nats.Bind(sourceStreamName, consumerName),
 		nats.ManualAck(),
