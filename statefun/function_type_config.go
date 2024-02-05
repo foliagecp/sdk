@@ -15,11 +15,11 @@ const (
 )
 
 type FunctionTypeConfig struct {
-	msgAckWaitMs             int
-	msgChannelSize           int
-	msgAckChannelSize        int
-	balanceNeeded            bool
-	balanced                 bool
+	msgAckWaitMs      int
+	msgChannelSize    int
+	msgAckChannelSize int
+	balanceNeeded     bool
+	//balanced                 bool
 	serviceActive            bool
 	mutexLifeTimeSec         int
 	options                  *easyjson.JSON

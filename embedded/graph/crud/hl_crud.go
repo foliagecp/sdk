@@ -8,6 +8,7 @@ import (
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/embedded/graph/common"
 	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
+	"github.com/foliagecp/sdk/statefun/system"
 )
 
 /*
@@ -587,7 +588,7 @@ func executeObjectTriggers(ctx *sfplugins.StatefunContextProcessor, objectID str
 		payload.SetByPath(fmt.Sprintf("trigger.object.%s", elems[tt]), triggerData)
 
 		for _, f := range functions {
-			ctx.Signal(sfplugins.JetstreamGlobalSignal, f, objectID, &payload, nil)
+			system.MsgOnErrorReturn(ctx.Signal(sfplugins.JetstreamGlobalSignal, f, objectID, &payload, nil))
 		}
 		// TODO: object deletion leads to object links deletions
 	}
@@ -620,7 +621,7 @@ func executeLinkTriggers(ctx *sfplugins.StatefunContextProcessor, fromObjectId, 
 		payload.SetByPath(fmt.Sprintf("trigger.link.%s", elems[tt]), triggerData)
 
 		for _, f := range functions {
-			ctx.Signal(sfplugins.JetstreamGlobalSignal, f, fromObjectId, &payload, nil)
+			system.MsgOnErrorReturn(ctx.Signal(sfplugins.JetstreamGlobalSignal, f, fromObjectId, &payload, nil))
 		}
 	}
 }

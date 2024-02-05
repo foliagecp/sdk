@@ -26,11 +26,6 @@ import (
 )
 
 const (
-	_EMPTY_          = ""
-	defaultAPIPrefix = "$JS.API."
-)
-
-const (
 	kvBucketNamePre         = "KV_"
 	kvBucketNameTmpl        = "KV_%s"
 	kvSubjectsTmpl          = "$KV.%s.>"
@@ -41,7 +36,6 @@ const (
 
 var (
 	validBucketRe = regexp.MustCompile(`\A[a-zA-Z0-9_-]+\z`)
-	validKeyRe    = regexp.MustCompile(`\A[-/_=\.a-zA-Z0-9]+\z`)
 	semVerRe      = regexp.MustCompile(`\Av?([0-9]+)\.?([0-9]+)?\.?([0-9]+)?`)
 )
 
@@ -181,7 +175,7 @@ func CreateKeyValue(nc *nats.Conn, js nats.JetStreamContext, cfg *nats.KeyValueC
 		scfg.Discard = nats.DiscardNew
 	}
 
-	si, err := js.AddStream(scfg)
+	_, err := js.AddStream(scfg)
 	if err != nil {
 		// If we have a failure to add, it could be because we have
 		// a config change if the KV was created against a pre 2.7.2
@@ -191,14 +185,14 @@ func CreateKeyValue(nc *nats.Conn, js nats.JetStreamContext, cfg *nats.KeyValueC
 		// The same logic applies for KVs created pre 2.9.x and
 		// the AllowDirect setting.
 		if err == nats.ErrStreamNameAlreadyInUse {
-			if si, _ = js.StreamInfo(scfg.Name); si != nil {
+			if si, _ := js.StreamInfo(scfg.Name); si != nil {
 				// To compare, make the server's stream info discard
 				// policy same than ours.
 				si.Config.Discard = scfg.Discard
 				// Also need to set allow direct for v2.9.x+
 				si.Config.AllowDirect = scfg.AllowDirect
 				if reflect.DeepEqual(&si.Config, scfg) {
-					si, err = js.UpdateStream(scfg)
+					_, err = js.UpdateStream(scfg)
 				}
 			}
 		}
