@@ -27,10 +27,13 @@ const (
 
 	streamPrefix = "$JS.%s.API"
 
-	hubEventStreamName         = "hub_events"
-	shardIngressStreamName     = "shard_ingress"
-	shardEgressStreamName      = "shard_egress"
-	routerConsumerMaxAckWaitMs = 10 * 60 * 1000
+	hubEventStreamName     = "hub_events"
+	shardIngressStreamName = "shard_ingress"
+	shardEgressStreamName  = "shard_egress"
+
+	routerConsumerMaxAckWaitMs           = 2000
+	lostConnectionSingleMsgProcessTimeMs = 700
+	maxPendingMessages                   = routerConsumerMaxAckWaitMs / lostConnectionSingleMsgProcessTimeMs
 )
 
 type Shard struct {
@@ -183,6 +186,7 @@ func (s *Shard) createRouter(sourceStreamName string, subject string, tsc target
 			FilterSubject:  subject,
 			AckPolicy:      nats.AckExplicitPolicy,
 			AckWait:        time.Duration(routerConsumerMaxAckWaitMs) * time.Millisecond,
+			MaxAckPending:  maxPendingMessages,
 		})
 		system.MsgOnErrorReturn(err)
 	}
