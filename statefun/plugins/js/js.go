@@ -3,9 +3,8 @@
 package js
 
 import (
-	"fmt"
-
 	"github.com/foliagecp/easyjson"
+	lg "github.com/foliagecp/sdk/statefun/logger"
 
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
@@ -28,9 +27,9 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 
 	// () -> string
 	statefunGetSelfTypenane := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//fmt.Printf("statefun_getSelfTypename: %v\n", info.Args()) // when the JS function is called this Go callback will execute
+		//lg.Logf("statefun_getSelfTypename: %v\n", info.Args()) // when the JS function is called this Go callback will execute
 		if len(info.Args()) != 0 {
-			fmt.Printf("statefun_getSelfTypename error: requires no arguments but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_getSelfTypename requires no arguments but got %d\n", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
@@ -39,9 +38,9 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 	})
 	// () -> string
 	statefunGetSelfID := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//fmt.Printf("statefun_getSelfId: %v\n", info.Args())
+		//lg.Logf("statefun_getSelfId: %v\n", info.Args())
 		if len(info.Args()) != 0 {
-			fmt.Printf("statefun_getSelfId error: requires no arguments but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_getSelfId requires no arguments but got %d\n", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
@@ -50,9 +49,9 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 	})
 	// () -> string
 	statefunGetCallerTypenane := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//fmt.Printf("statefun_getCallerTypename: %v\n", info.Args()) // when the JS function is called this Go callback will execute
+		//lg.Logf("statefun_getCallerTypename: %v\n", info.Args()) // when the JS function is called this Go callback will execute
 		if len(info.Args()) != 0 {
-			fmt.Printf("statefun_getCallerTypename error: requires no arguments but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_getCallerTypename requires no arguments but got %d\n", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
@@ -61,9 +60,9 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 	})
 	// () -> string
 	statefunGetCallerID := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//fmt.Printf("statefun_getCallerId: %v\n", info.Args())
+		//lg.Logf("statefun_getCallerId: %v\n", info.Args())
 		if len(info.Args()) != 0 {
-			fmt.Printf("statefun_getCallerId error: requires no arguments but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_getCallerId requires no arguments but got %d\n", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
@@ -72,9 +71,9 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 	})
 	// () -> string
 	statefunGetFunctionContext := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//fmt.Printf("statefun_getFunctionContext: %v\n", info.Args())
+		//lg.Logf("statefun_getFunctionContext: %v\n", info.Args())
 		if len(info.Args()) != 0 {
-			fmt.Printf("statefun_getFunctionContext error: requires no arguments but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_getFunctionContext requires no arguments but got %d\n", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
@@ -83,9 +82,9 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 	})
 	// (string) -> int
 	statefunSetFunctionContext := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//fmt.Printf("statefun_setFunctionContext: %v\n", info.Args())
+		//lg.Logf("statefun_setFunctionContext: %v\n", info.Args())
 		if len(info.Args()) != 1 {
-			fmt.Printf("statefun_setFunctionContext error: requires 1 argument but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_setFunctionContext requires 1 argument but got %d\n", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, int32(1))
 			return v
 		}
@@ -106,9 +105,9 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 	})
 	// (string) -> int
 	statefunSetRequestReplyData := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//fmt.Printf("statefun_setRequestReplyData: %v\n", info.Args())
+		//lg.Logf("statefun_setRequestReplyData: %v\n", info.Args())
 		if len(info.Args()) != 1 {
-			fmt.Printf("statefun_setRequestReplyData error: requires 1 argument but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_setRequestReplyData requires 1 argument but got %d\n", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, int32(1))
 			return v
 		}
@@ -116,22 +115,25 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 			v, _ := v8.NewValue(sfejs.vw, int32(2))
 			return v
 		}
-
-		requestReplyDataStr := info.Args()[0].String()
-		requestReplyData, ok := easyjson.JSONFromString(requestReplyDataStr)
-		if !ok {
+		if sfejs.contextProcessor.Reply == nil {
 			v, _ := v8.NewValue(sfejs.vw, int32(3))
 			return v
 		}
-		sfejs.contextProcessor.RequestReplyData = &requestReplyData
+		requestReplyDataStr := info.Args()[0].String()
+		requestReplyData, ok := easyjson.JSONFromString(requestReplyDataStr)
+		if !ok {
+			v, _ := v8.NewValue(sfejs.vw, int32(4))
+			return v
+		}
+		sfejs.contextProcessor.Reply.With(&requestReplyData)
 		v, _ := v8.NewValue(sfejs.vw, int32(0))
 		return v
 	})
 	// () -> string
 	statefunGetObjectContext := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//fmt.Printf("statefun_getObjectContext: %v\n", info.Args())
+		//lg.Logf("statefun_getObjectContext: %v\n", info.Args())
 		if len(info.Args()) != 0 {
-			fmt.Printf("statefun_getObjectContext error: requires no arguments but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_getObjectContext requires no arguments but got %d\n", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
@@ -140,9 +142,9 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 	})
 	// (string) -> int
 	statefunSetObjectContext := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//fmt.Printf("statefun_setObjectContext: %v\n", info.Args())
+		//lg.Logf("statefun_setObjectContext: %v\n", info.Args())
 		if len(info.Args()) != 1 {
-			fmt.Printf("statefun_setObjectContext error: requires 1 argument but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_setObjectContext requires 1 argument but got %d\n", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, int32(1))
 			return v
 		}
@@ -163,9 +165,9 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 	})
 	// () -> string
 	statefunGetPayload := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//fmt.Printf("statefun_getPayload: %v", info.Args())
+		//lg.Logf("statefun_getPayload: %v", info.Args())
 		if len(info.Args()) != 0 {
-			fmt.Printf("statefun_getPayload error: requires no arguments but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_getPayload requires no arguments but got %d\n", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
@@ -174,34 +176,20 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 	})
 	// () -> string
 	statefunGetOptions := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//fmt.Printf("statefun_getOptions: %v", info.Args())
+		//lg.Logf("statefun_getOptions: %v", info.Args())
 		if len(info.Args()) != 0 {
-			fmt.Printf("statefun_getOptions error: requires no arguments but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_getOptions requires no arguments but got %d\n", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
 		v, _ := v8.NewValue(sfejs.vw, sfejs.contextProcessor.Options.ToString())
 		return v
 	})
-	// () -> string
-	statefunGetRequestReplyData := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//fmt.Printf("statefun_getRequestReplyData: %v", info.Args())
-		if len(info.Args()) != 0 {
-			fmt.Printf("statefun_getRequestReplyData error: requires no arguments but got %d\n", len(info.Args()))
-			v, _ := v8.NewValue(sfejs.vw, nil)
-			return v
-		}
-		v, _ := v8.NewValue(sfejs.vw, "")
-		if sfejs.contextProcessor.RequestReplyData != nil {
-			v, _ = v8.NewValue(sfejs.vw, sfejs.contextProcessor.RequestReplyData.ToString())
-		}
-		return v
-	})
 	// (int, string, string, string, string) -> int
 	statefunSignal := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//fmt.Printf("statefun_signal: %v\n", info.Args())
+		//lg.Logf("statefun_signal: %v\n", info.Args())
 		if len(info.Args()) != 5 {
-			fmt.Printf("statefun_signal error: requires 5 argument but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_signal requires 5 argument but got %d\n", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, int32(1))
 			return v
 		}
@@ -212,7 +200,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 					if o, ok := easyjson.JSONFromString(info.Args()[4].String()); ok {
 						options = &o
 					} else {
-						fmt.Printf("statefunSignal options is not empty and not a JSON: %s\n", info.Args()[4].String())
+						lg.Logf(lg.ErrorLevel, "statefunSignal options is not empty and not a JSON: %s\n", info.Args()[4].String())
 						v, _ := v8.NewValue(sfejs.vw, int32(4))
 						return v
 					}
@@ -227,7 +215,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 				v, _ := v8.NewValue(sfejs.vw, int32(0))
 				return v
 			}
-			fmt.Printf("statefunSignal payload is not a JSON: %s\n", info.Args()[2].String())
+			lg.Logf(lg.ErrorLevel, "statefunSignal payload is not a JSON: %s\n", info.Args()[2].String())
 			v, _ := v8.NewValue(sfejs.vw, int32(3))
 			return v
 		}
@@ -236,9 +224,9 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 	})
 	// (int, string, string, string, string) -> int|string
 	statefunRequest := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//fmt.Printf("statefun_request: %v\n", info.Args())
+		//lg.Logf("statefun_request: %v\n", info.Args())
 		if len(info.Args()) != 5 {
-			fmt.Printf("statefun_request error: requires 5 argument but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_request requires 5 argument but got %d\n", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, int32(1))
 			return v
 		}
@@ -249,7 +237,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 					if o, ok := easyjson.JSONFromString(info.Args()[4].String()); ok {
 						options = &o
 					} else {
-						fmt.Printf("statefunRequest options is not empty and not a JSON: %s\n", info.Args()[4].String())
+						lg.Logf(lg.ErrorLevel, "statefunRequest options is not empty and not a JSON: %s\n", info.Args()[4].String())
 						v, _ := v8.NewValue(sfejs.vw, int32(4))
 						return v
 					}
@@ -268,7 +256,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 				v, _ := v8.NewValue(sfejs.vw, j.ToString())
 				return v
 			}
-			fmt.Printf("statefunRequest payload is not a JSON: %s\n", info.Args()[2].String())
+			lg.Logf(lg.ErrorLevel, "statefunRequest payload is not a JSON: %s\n", info.Args()[2].String())
 			v, _ := v8.NewValue(sfejs.vw, int32(3))
 			return v
 		}
@@ -277,7 +265,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 	})
 	// (string)
 	print := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		fmt.Printf("%s: %v\n", alias, info.Args())
+		lg.Logf(lg.InfoLevel, "%s: %v\n", alias, info.Args())
 		return nil
 	})
 
@@ -290,7 +278,6 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 	system.MsgOnErrorReturn(global.Set("statefun_getObjectContext", statefunGetObjectContext))
 	system.MsgOnErrorReturn(global.Set("statefun_getPayload", statefunGetPayload))
 	system.MsgOnErrorReturn(global.Set("statefun_getOptions", statefunGetOptions))
-	system.MsgOnErrorReturn(global.Set("statefun_getRequestReplyData", statefunGetRequestReplyData))
 
 	system.MsgOnErrorReturn(global.Set("statefun_setObjectContext", statefunSetObjectContext))
 	system.MsgOnErrorReturn(global.Set("statefun_setFunctionContext", statefunSetFunctionContext))

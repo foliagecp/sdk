@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/foliagecp/sdk/embedded/graph/crud"
+
 	"github.com/PaesslerAG/gval"
 	"github.com/foliagecp/sdk/statefun/cache"
 )
@@ -18,43 +20,68 @@ var filterParseLanguage = gval.NewLanguage(gval.Base(), gval.PropositionalLogic(
 	gval.InfixOperator("||", func(a, b interface{}) (interface{}, error) {
 		filterA := a.(*FilterData)
 		filterB := b.(*FilterData)
-		filterA.disjunctiveSlicesOfTags = append(filterA.disjunctiveSlicesOfTags, filterB.disjunctiveSlicesOfTags...)
+		filterA.disjunctiveNormalFormOfFeatures = append(filterA.disjunctiveNormalFormOfFeatures, filterB.disjunctiveNormalFormOfFeatures...)
 		return filterA, nil
 	}),
 	gval.InfixOperator("&&", func(a, b interface{}) (interface{}, error) {
 		filterA := a.(*FilterData)
 		filterB := b.(*FilterData)
-		for _, tagsB := range filterB.disjunctiveSlicesOfTags {
-			for i := 0; i < len(filterA.disjunctiveSlicesOfTags); i++ {
-				filterA.disjunctiveSlicesOfTags[i] = append(filterA.disjunctiveSlicesOfTags[i], tagsB...)
+		for _, tagsB := range filterB.disjunctiveNormalFormOfFeatures {
+			for i := 0; i < len(filterA.disjunctiveNormalFormOfFeatures); i++ {
+				filterA.disjunctiveNormalFormOfFeatures[i] = append(filterA.disjunctiveNormalFormOfFeatures[i], tagsB...)
 			}
 		}
 		return filterA, nil
 	}),
 	gval.Function("tags", func(args ...interface{}) (interface{}, error) {
-		filterData := NewFilterData()
-		tags := []string{}
-		for _, arg := range args {
-			tag2Check := arg.(string)
-			tags = append(tags, tag2Check)
+		if len(args) == 0 {
+			return nil, fmt.Errorf("at least one tag must be declared")
 		}
-		filterData.disjunctiveSlicesOfTags = append(filterData.disjunctiveSlicesOfTags, tags)
-		return filterData, nil
+		tagFeatures := []filterFeature{}
+		for _, arg := range args {
+			tagFeatures = append(tagFeatures, filterFeature{"tag", arg.(string)})
+		}
+		return NewFilterDataWithConjunctionFeatures(tagFeatures), nil
+	}),
+	gval.Function("name", func(args ...interface{}) (interface{}, error) {
+		if len(args) > 1 {
+			return nil, fmt.Errorf("multiple names are not permitted")
+		}
+		if len(args) < 1 {
+			return nil, fmt.Errorf("name must be declared")
+		}
+		name := args[0].(string)
+		if len(name) == 0 {
+			return nil, fmt.Errorf("name must not be empty")
+		}
+		return NewFilterDataWithOneFeature(filterFeature{"name", name}), nil
 	}),
 )
 
-type FilterData struct {
-	disjunctiveSlicesOfTags [][]string // [["tag1", "tag2"], ["tag3", "tag4"]] == "tag1" && "tag2" || "tag3" && "tag4"
+type filterFeature struct {
+	name  string
+	value string
 }
+
+type FilterData struct {
+	disjunctiveNormalFormOfFeatures [][]filterFeature // [[tag:tag1, tag:tag2], [tag:tag3, name:link001]] == tag:tag1 && tag:tag2 || tag:tag3 && name:link001
+}
+
 type AnyDepthStop struct {
 	LinkType    string
 	FilterQeury string
 	QueryTail   string
 }
 
-func NewFilterData() *FilterData {
+func NewFilterDataWithConjunctionFeatures(conjunctionFeatures []filterFeature) *FilterData {
 	filterData := &FilterData{}
-	filterData.disjunctiveSlicesOfTags = make([][]string, 0)
+	filterData.disjunctiveNormalFormOfFeatures = [][]filterFeature{conjunctionFeatures}
+	return filterData
+}
+
+func NewFilterDataWithOneFeature(feature filterFeature) *FilterData {
+	filterData := &FilterData{}
+	filterData.disjunctiveNormalFormOfFeatures = [][]filterFeature{{feature}}
 	return filterData
 }
 
@@ -112,9 +139,9 @@ func GetObjectIDsFromLinkType(cacheStore *cache.Store, objectID string, linkType
 		return resultObjects
 	}
 
-	linksQuery := objectID + ".out.ltp_oid-bdy.>"
+	linksQuery := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff1Pattern, objectID, ">")
 	if linkType != "*" {
-		linksQuery = objectID + ".out.ltp_oid-bdy." + linkType + ".>"
+		linksQuery = fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, objectID, linkType, ">")
 	}
 	// Get all links matching defined link type ---------------------------
 	for _, key := range cacheStore.GetKeysByPattern(linksQuery) {
@@ -127,56 +154,77 @@ func GetObjectIDsFromLinkType(cacheStore *cache.Store, objectID string, linkType
 	return resultObjects
 }
 
-func GetObjectIDsFromLinkTypeAndTag(cacheStore *cache.Store, objectID string, linkType string, tag string) map[string]int {
-	if len(tag) == 0 {
-		return GetObjectIDsFromLinkType(cacheStore, objectID, linkType)
+func GetAllLinksFromSpecifiedLinkType(cacheStore *cache.Store, objectID string, linkType string) [][]string { // Returns pairs [["type1", "toObjectId1"], ["type2", "toObjectId2"], ...]
+	resultPairs := [][]string{}
+
+	if len(linkType) == 0 { // No link type - return object itself
+		return resultPairs
 	}
 
-	resultObjects := map[string]int{}
-
-	linksQuery := objectID + ".out.tag_ltp_oid-nil." + tag + ".>"
+	linksQuery := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff1Pattern, objectID, ">")
 	if linkType != "*" {
-		linksQuery = objectID + ".out.tag_ltp_oid-nil." + tag + "." + linkType + ".*"
+		linksQuery = fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, objectID, linkType, ">")
 	}
-
 	// Get all links matching defined link type ---------------------------
 	for _, key := range cacheStore.GetKeysByPattern(linksQuery) {
-		if tokens := strings.Split(key, "."); len(tokens) == 6 {
-			objectID := string(tokens[len(tokens)-1])
-			resultObjects[objectID] = 0
-		} else {
-			fmt.Printf("ERROR getObjectIDsFromLinkTypeAndTag: linksQuery GetKeysByPattern key %s must consist from 6 tokens, but consists from %d\n", key, len(tokens))
-		}
+		linkKeyTokens := strings.Split(key, ".")
+		linkTypeToObject := linkKeyTokens[len(linkKeyTokens)-2]
+		targetObjectID := linkKeyTokens[len(linkKeyTokens)-1]
+		pair := []string{linkTypeToObject, targetObjectID}
+		resultPairs = append(resultPairs, pair)
 	}
 	// --------------------------------------------------------------------
 
-	return resultObjects
+	return resultPairs
+}
+
+func GetSpecificLinkIndices(cacheStore *cache.Store, fromObjectID string, linkType string, toObjectId string) map[string]struct{} { // Returns map which contains [<indexName>.<indexValue>, <indexName1>.<indexValue1>, ...]
+	resultIndices := map[string]struct{}{}
+
+	if len(linkType) == 0 { // No link type - return object itself
+		return resultIndices
+	}
+
+	linksQuery := fmt.Sprintf(crud.OutLinkIndexPrefPattern+crud.LinkKeySuff3Pattern, fromObjectID, linkType, toObjectId, ">")
+	// Get all links matching defined link type ---------------------------
+	for _, key := range cacheStore.GetKeysByPattern(linksQuery) {
+		linkKeyTokens := strings.Split(key, ".")
+		indexName := linkKeyTokens[len(linkKeyTokens)-2]
+		indexValue := linkKeyTokens[len(linkKeyTokens)-1]
+		resultIndices[indexName+"."+indexValue] = struct{}{}
+	}
+	// --------------------------------------------------------------------
+
+	return resultIndices
 }
 
 func GetObjectIDsFromLinkTypeAndFilterData(cacheStore *cache.Store, objectID string, linkType string, filterData *FilterData) map[string]int {
-	if len(filterData.disjunctiveSlicesOfTags) == 0 {
+	if len(filterData.disjunctiveNormalFormOfFeatures) == 0 {
 		return GetObjectIDsFromLinkType(cacheStore, objectID, linkType)
 	}
-	disjunctionResultObjects := map[string]int{}
-	for _, tags := range filterData.disjunctiveSlicesOfTags {
-		conjunctionResultObjects := map[string]int{}
-		for _, tag := range tags {
-			linksWithTypeAngTag := GetObjectIDsFromLinkTypeAndTag(cacheStore, objectID, linkType, tag)
-			for linkObjectID := range linksWithTypeAngTag {
-				if _, ok := conjunctionResultObjects[linkObjectID]; ok {
-					conjunctionResultObjects[linkObjectID] = conjunctionResultObjects[linkObjectID] + 1
-				} else {
-					conjunctionResultObjects[linkObjectID] = 1
+	resultObjects := map[string]int{}
+	linkTypeObjectIdPairs := GetAllLinksFromSpecifiedLinkType(cacheStore, objectID, linkType)
+	for _, pair := range linkTypeObjectIdPairs {
+		realLinkType := pair[0]
+		realObjectId := pair[1]
+		linkIndicesMap := GetSpecificLinkIndices(cacheStore, objectID, realLinkType, realObjectId)
+		if _, added := resultObjects[realObjectId]; !added {
+			for _, features := range filterData.disjunctiveNormalFormOfFeatures {
+				featuresFromDisjunctionFound := true
+				for _, feature := range features {
+					if _, ok := linkIndicesMap[feature.name+"."+feature.value]; !ok {
+						featuresFromDisjunctionFound = false
+						break
+					}
+				}
+				if featuresFromDisjunctionFound {
+					resultObjects[realObjectId] = 0
+					break // No need to test other disjunctions
 				}
 			}
 		}
-		for linkObjectID, tagsCount := range conjunctionResultObjects {
-			if tagsCount == len(tags) {
-				disjunctionResultObjects[linkObjectID] = 0
-			}
-		}
 	}
-	return disjunctionResultObjects
+	return resultObjects
 }
 
 func GetObjectIDsFromLinkTypeAndLinkFilterQuery(cacheStore *cache.Store, objectID string, linkType string, linkFilterQuery string) map[string]int {

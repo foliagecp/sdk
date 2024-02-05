@@ -4,8 +4,8 @@ JPGQL is a lightweight asynchronous and parallel graph query language, similar t
 
 ## Functions
 
-  - [functions.graph.ll.api.query.jpgql.ctra](#Usage-of-JPGQL_CTRA-call-tree-result-aggregation)
-  - [functions.graph.ll.api.query.jpgql.dcra](#Usage-of-JPGQL_DCRA-direct-cache-result-aggregation)
+  - [functions.graph.api.query.jpgql.ctra](#Usage-of-JPGQL_CTRA-call-tree-result-aggregation)
+  - [functions.graph.api.query.jpgql.dcra](#Usage-of-JPGQL_DCRA-direct-cache-result-aggregation)
 ## Original jsonpath syntax:
 https://support.smartbear.com/alertsite/docs/monitors/api/endpoint/jsonpath.html
 
@@ -31,10 +31,14 @@ The JPGQL syntax follows this pattern:
 2. A filter may contain only predifined functions connected via `&&` and `||`
 3. Link types valid characters: `a-zA-Z_-`
 
-## Predefined functions
+## Predefined filter functions
+### name(name:string)
+
+Each out link of a vertex has its own unique name. Desired link should be named as defined.
+
 ### tags(tag1:string, tag2:string, ...)
 
-Check that a link contains all of the defined tags
+Desired links should contain all of the defined tags.
 
 ## Examples
 ### Finds all objects from the target one via its output routes that satisfy:
@@ -47,6 +51,12 @@ Any links of depth=1 that contain tag `tag1`:
 
 Link typed as `type1` at depth=1 that contain both tags `tag1` and `tag2`:  
 `.a[tags('tag1', 'tag2')]`
+
+Link typed as `type1` at depth=1 that contain both tags `tag1` and `tag2` at depth=2 followed by link with name `name1`:  
+`.a[tags('tag1', 'tag2')].*[name('name1')]`
+
+Full address of a vertex via names `name1` and `name2` and `name3`:  
+`.*[name('name1')].*[name('name2')].*[name('name3')]`
 
 Links at any depth that contain both tags `tag1` and `tag2`:  
 `..*[tags("tag1", "tag2")]`
@@ -61,7 +71,7 @@ Routes which goes through links typed as `type1` at depth=4:
 > 
 > For e.g.:   
 > ```sh
-> nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query.jpgql.dcra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\".type2[tags('t2')]\"}}"
+> nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.query.jpgql.dcra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\".type2[tags('t2')]\"}}"
 >```
 
 # Small test graph
@@ -74,14 +84,14 @@ Small test graph shown on a picture below is created automatically on start in t
 [Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/jpgql/#LLAPIQueryJPGQLCallTreeResultAggregation)
 1. Subscribe and listen for result:
 ```nats sub -s nats://nats:foliage@nats:4222 functions.graph.query.QUERYID```
-1. Call `functions.graph.ll.api.query.jpgql.ctra.<object_id>`
+1. Call `functions.graph.api.query.jpgql.ctra.<object_id>`
 
 ## JPGQL_CTRA query examples
 
 1. From the `root` at any depth find all objects preceded by link with the type `type5`  
 
 ```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\"..type5\"}}"
+nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\"..type5\"}}"
 ```
 ```json
 {"result":{"g":true},"status":"ok"}
@@ -90,7 +100,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query
 2. From the `root` at any depth find all objects preceded by link which contains both tags `t1` and `t3` 
 
 ```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\"..*[tags('t1','t3')]\"}}"
+nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\"..*[tags('t1','t3')]\"}}"
 ```
 ```json
 {"result":{"b":true,"e":true,"g":true},"status":"ok"}
@@ -99,7 +109,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query
 3. Find all `root`'s descendants
    
 ```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\".*\"}}"
+nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\".*\"}}"
 ```
 ```json
 {"result":{"a":true,"b":true,"c":true},"status":"ok"}
@@ -108,7 +118,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query
 4. Find all `root`'s descendants through links of type `type1` and from them get as the result all descendants through links of type `type3`
 
 ```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\".type1.type3\"}}"
+nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\".type1.type3\"}}"
 ```
 ```json
 {"result":{"d":true,"e":true},"status":"ok"}
@@ -117,7 +127,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query
 5. From the `root` get all objects at depth=5, where `root`'s depth=0
  
 ```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\".*.*.*.*.*\"}}"
+nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\".*.*.*.*.*\"}}"
 ```
 ```json
 {"result":{"b":true,"d":true,"f":true,"h":true},"status":"ok"}
@@ -126,19 +136,28 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query
 6. Find all `root`'s descendants through links of type `type1` then get all their descendants and from them as the result get all objects preceded by link which contains either tag `t1` or `t4`
 
 ```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\".type1.*.*[tags('t1') || tags('t4')]\"}}"
+nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"jpgql_query\":\".type1.*.*[tags('t1') || tags('t4')]\"}}"
 ```
 ```json
 {"result":{"b":true,"f":true},"status":"ok"}
 ```
 
+1. Access vertex `e` through one of it's names from `root` vertex: `2c`, `2d`, `2b`, `2e`:
+
+```sh
+nats request -s nats://nats:foliage@nats:4222 service.functions.graph.api.query.jpgql.ctra.root "{\"payload\":{\"jpgql_query\":\".*[name('2c')].*[name('2d')].*[name('2b')].*[name('2e')]\"}}"
+```
+```json
+{"result":{"e":true},"status":"ok"}
+```
+
 ## JPGQL_CTRA query examples with call on targets
 
-Make `functions.graph.ll.api.query.jpgql.ctra` to call `functions.graph.ll.api.object.debug.print` on each found object. 
+Make `functions.graph.api.query.jpgql.ctra` to call `functions.graph.api.object.debug.print` on each found object. 
 
 Example:  
 ```sh
-nats pub --count=2 -s nats://nats:foliage@nats:4222 functions.graph.ll.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\": \"QUERYID\", \"jpgql_query\":\"..type5\", \"call\":{\"typename\": \"functions.graph.ll.api.object.debug.print\", \"payload\":{}}}}"
+nats pub --count=2 -s nats://nats:foliage@nats:4222 functions.graph.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\": \"QUERYID\", \"jpgql_query\":\"..type5\", \"call\":{\"typename\": \"functions.graph.api.object.debug.print\", \"payload\":{}}}}"
 ```
 ```
 docker logs foliage-nats-test-statefun_sf_1 --tail 100 -f
@@ -146,11 +165,11 @@ docker logs foliage-nats-test-statefun_sf_1 --tail 100 -f
 ************************* Object's body (id=g):
 {}
 ************************* In links:
-g.in.oid_ltp-nil.f.type5
+g.in.f.type5
 ************************* Out links:
-g.out.ltp_oid-bdy.type2.d
+g.out.body.type2.d
 {"tags":["t5"]}
-g.out.ltp_oid-bdy.type2.h
+g.out.body.type2.h
 {"tags":[]}
 ...
 ```
@@ -161,7 +180,7 @@ g.out.ltp_oid-bdy.type2.h
 
 1. Subscribe and listen for result:
 ```nats sub -s nats://nats:foliage@nats:4222 functions.graph.query.QUERYID```
-1. Call `functions.graph.ll.api.query.jpgql.dcra.<object_id>`:
+1. Call `functions.graph.api.query.jpgql.dcra.<object_id>`:
 
 ## JPGQL_DCRA query examples
 

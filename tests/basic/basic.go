@@ -1,19 +1,21 @@
-
-
 // Foliage basic test package.
 // Provides the basic example of usage of the SDK.
-package basic
+package main
 
 import (
-	"fmt"
 	"os"
+	"time"
 
 	"github.com/foliagecp/easyjson"
+	"github.com/prometheus/client_golang/prometheus"
 
 	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
+	lg "github.com/foliagecp/sdk/statefun/logger"
+
 	// Comment out and no not use graphDebug for resolving the cgo conflict between go-graphviz and rogchap (when --ldflags '-extldflags "-Wl,--allow-multiple-definition"' does not help)
 	graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
 	"github.com/foliagecp/sdk/embedded/graph/jpgql"
+	graphTX "github.com/foliagecp/sdk/embedded/graph/tx"
 	statefun "github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/cache"
 	"github.com/foliagecp/sdk/statefun/plugins"
@@ -39,6 +41,10 @@ var (
 	CreateSimpleGraphTest bool = system.GetEnvMustProceed("CREATE_SIMPLE_GRAPH_TEST", true)
 	// KVMuticesTest - test the Foliage global key/value mutices
 	KVMuticesTest bool = system.GetEnvMustProceed("KV_MUTICES_TEST", true)
+	// RequestReplyTest - test the Foliage sync calls
+	RequestReplyTest bool = system.GetEnvMustProceed("REQUEST_REPLY_TEST", true)
+	// TriggersTest - test the Foliage cmdb crud triggers
+	TriggersTest bool = system.GetEnvMustProceed("TRIGGERS_TEST", true)
 	// KVMuticesTestDurationSec - key/value mutices test duration
 	KVMuticesTestDurationSec int = system.GetEnvMustProceed("KV_MUTICES_TEST_DURATION_SEC", 10)
 	// KVMuticesTestWorkers - key/value mutices workers to apply in the test
@@ -46,6 +52,8 @@ var (
 )
 
 func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
+	start := time.Now()
+
 	var functionContext *easyjson.JSON
 	if MasterFunctionContextIncrement {
 		functionContext = contextProcessor.GetFunctionContext()
@@ -55,26 +63,26 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlu
 	increment := int(options.GetByPath("increment").AsNumericDefault(0))
 
 	if MasterFunctionLogs {
-		fmt.Printf("-------> %s:%s\n", contextProcessor.Self.Typename, contextProcessor.Self.ID)
-		fmt.Println("== Payload:", contextProcessor.Payload.ToString())
-		fmt.Println("== Context:", functionContext.ToString())
+		lg.Logf(lg.DebugLevel, "-------> %s:%s\n", contextProcessor.Self.Typename, contextProcessor.Self.ID)
+		lg.Logln(lg.DebugLevel, "== Payload:", contextProcessor.Payload.ToString())
+		lg.Logln(lg.DebugLevel, "== Context:", functionContext.ToString())
 	}
 
 	var objectContext *easyjson.JSON
 	if MasterFunctionObjectContextProcess {
 		objectContext = contextProcessor.GetObjectContext()
 		if MasterFunctionLogs {
-			fmt.Println("== Object context:", objectContext.ToString())
+			lg.Logln(lg.DebugLevel, "== Object context:", objectContext.ToString())
 		}
 	}
 
 	if MasterFunctionJSPlugin {
 		if executor != nil {
 			if err := executor.BuildError(); err != nil {
-				fmt.Println(err)
+				lg.Logln(lg.ErrorLevel, err)
 			} else {
 				if err := executor.Run(contextProcessor); err != nil {
-					fmt.Println(err)
+					lg.Logln(lg.ErrorLevel, err)
 
 				}
 			}
@@ -89,7 +97,7 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlu
 		}
 		incrementValue += increment
 		functionContext.SetByPath("counter", easyjson.NewJSON(incrementValue))
-		fmt.Printf("++ Function context's counter value incrementated by %d\n", increment)
+		lg.Logf(lg.DebugLevel, "++ Function context's counter value incrementated by %d\n", increment)
 	}
 
 	if MasterFunctionObjectContextProcess {
@@ -100,8 +108,12 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlu
 		contextProcessor.SetFunctionContext(functionContext)
 	}
 
-	if contextProcessor.RequestReplyData != nil { // Request call is being made
-		contextProcessor.RequestReplyData = easyjson.NewJSONObjectWithKeyValue("counter", easyjson.NewJSON(incrementValue)).GetPtr()
+	if contextProcessor.Reply != nil { // Request call is being made
+		contextProcessor.Reply.With(easyjson.NewJSONObjectWithKeyValue("counter", easyjson.NewJSON(incrementValue)).GetPtr())
+	}
+
+	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("master_function", "", []string{"id"}); err == nil {
+		gaugeVec.With(prometheus.Labels{"id": contextProcessor.Self.ID}).Set(float64(time.Since(start).Microseconds()))
 	}
 }
 
@@ -117,17 +129,18 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 			// Assign JavaScript StatefunExecutor for TypenameExecutorPlugin
 			system.MsgOnErrorReturn(ft.SetExecutor(jsFileName, string(content), sfPluginJS.StatefunExecutorPluginJSContructor))
 		} else {
-			fmt.Printf("ERROR: Could not load JS script: %v\n", err)
+			lg.Logf(lg.ErrorLevel, "Could not load JS script: %v\n", err)
 		}
 	}
 
 	graphCRUD.RegisterAllFunctionTypes(runtime)
+	graphTX.RegisterAllFunctionTypes(runtime)
 	graphDebug.RegisterAllFunctionTypes(runtime)
 	jpgql.RegisterAllFunctionTypes(runtime, 30)
 }
 
-func RequestReplyTest(runtime *statefun.Runtime) {
-	fmt.Println(">>> Test started: request reply calls")
+func RunRequestReplyTest(runtime *statefun.Runtime) {
+	lg.Logln(lg.DebugLevel, ">>> Test started: request reply calls")
 
 	funcTypename := "functions.tests.basic.master"
 	replyJson, err := runtime.Request(plugins.GolangLocalRequest, funcTypename, "synctest", easyjson.NewJSONObject().GetPtr(), nil)
@@ -135,7 +148,7 @@ func RequestReplyTest(runtime *statefun.Runtime) {
 		system.MsgOnErrorReturn(err)
 	} else {
 		if _, ok := replyJson.GetByPath("counter").AsNumeric(); ok {
-			fmt.Printf("GolangLocalRequest test passed! Got reply from %s: %s\n", funcTypename, replyJson.ToString())
+			lg.Logf(lg.DebugLevel, "GolangLocalRequest test passed! Got reply from %s: %s\n", funcTypename, replyJson.ToString())
 		}
 	}
 
@@ -144,16 +157,23 @@ func RequestReplyTest(runtime *statefun.Runtime) {
 		system.MsgOnErrorReturn(err)
 	} else {
 		if _, ok := replyJson.GetByPath("counter").AsNumeric(); ok {
-			fmt.Printf("NatsCoreGlobalRequest test passed! Got reply from %s: %s\n", funcTypename, replyJson.ToString())
+			lg.Logf(lg.DebugLevel, "NatsCoreGlobalRequest test passed! Got reply from %s: %s\n", funcTypename, replyJson.ToString())
 		}
 	}
 
-	fmt.Println("<<< Test ended: request reply calls")
+	lg.Logln(lg.DebugLevel, "<<< Test ended: request reply calls")
 }
 
 func Start() {
+	system.GlobalPrometrics = system.NewPrometrics("", ":9901")
+
 	afterStart := func(runtime *statefun.Runtime) error {
-		RequestReplyTest(runtime)
+		if TriggersTest {
+			RunTriggersTest(runtime)
+		}
+		if RequestReplyTest {
+			RunRequestReplyTest(runtime)
+		}
 		if CreateSimpleGraphTest {
 			CreateTestGraph(runtime)
 		}
@@ -166,11 +186,14 @@ func Start() {
 		}
 
 		RegisterFunctionTypes(runtime)
-		if err := runtime.Start(cache.NewCacheConfig(), afterStart); err != nil {
-			fmt.Printf("Cannot start due to an error: %s\n", err)
+		if TriggersTest {
+			registerTriggerFunctions(runtime)
+		}
+		if err := runtime.Start(cache.NewCacheConfig("main_cache"), afterStart); err != nil {
+			lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s\n", err)
 		}
 	} else {
-		fmt.Printf("Cannot create statefun runtime due to an error: %s\n", err)
+		lg.Logf(lg.ErrorLevel, "Cannot create statefun runtime due to an error: %s\n", err)
 	}
 }
 

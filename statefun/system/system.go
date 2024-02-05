@@ -11,70 +11,116 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"runtime"
 	"strconv"
+	"sync"
 	"time"
+
+	lg "github.com/foliagecp/sdk/statefun/logger"
 )
+
+var (
+	GlobalPrometrics *Prometrics
+)
+
+type KeyMutex struct {
+	m *sync.Map
+}
+
+func NewKeyMutex() KeyMutex {
+	m := sync.Map{}
+	return KeyMutex{&m}
+}
+
+func (s KeyMutex) Unlock(key interface{}) {
+	l, exist := s.m.Load(key)
+	if !exist {
+		panic("kmutex: unlock of unlocked mutex")
+	}
+	l_ := l.(*sync.Mutex)
+	s.m.Delete(key)
+	l_.Unlock()
+}
+
+func (s KeyMutex) Lock(key interface{}) {
+	m := sync.Mutex{}
+	m_, _ := s.m.LoadOrStore(key, &m)
+	mm := m_.(*sync.Mutex)
+	mm.Lock()
+	if mm != &m {
+		mm.Unlock()
+		s.Lock(key)
+	}
+}
 
 func CreateDimSizeChannel[T interface{}](maxBufferElements int, onBufferOverflow func()) (in chan T, out chan T) {
 	in = make(chan T)
 	out = make(chan T)
-	notifier := make(chan bool)
+	notifier := make(chan struct{})
+	var mutex sync.Mutex
 
 	var buffer []T
 
-	puller := func(notifier chan bool) {
+	puller := func() {
+		GlobalPrometrics.GetRoutinesCounter().Started("CreateDimSizeChannel-puller")
+		defer GlobalPrometrics.GetRoutinesCounter().Stopped("CreateDimSizeChannel-puller")
 		defer close(notifier) // notifier channel is being closed
 		for {
 			val, ok := <-in
 			if !ok { // in channel is closed
 				return
 			}
+			mutex.Lock()
 			buffer = append(buffer, val)
 			if len(buffer) > maxBufferElements {
 				if onBufferOverflow != nil {
-					onBufferOverflow()
+					go onBufferOverflow() // Call user's function in a separate routines
 				}
 			}
+			mutex.Unlock()
 
 			select {
-			case notifier <- true:
+			case notifier <- struct{}{}:
 			default:
 				continue
 			}
-
-			/*fmt.Printf("%d, %d\n", len(notifier), cap(notifier))
-			if len(notifier) < cap(notifier) { // If room is available in the notifier channel
-				notifier <- true
-			}*/
 		}
 	}
-	pusher := func(notifier chan bool) {
+	pusher := func() {
+		GlobalPrometrics.GetRoutinesCounter().Started("CreateDimSizeChannel-pusher")
+		defer GlobalPrometrics.GetRoutinesCounter().Stopped("CreateDimSizeChannel-pusher")
 		defer close(out) // out channel is being closed
 		for {
+			mutex.Lock()
 			if len(buffer) == 0 {
+				mutex.Unlock()
 				_, ok := <-notifier
 				if !ok { // notifier channel is closed
 					return
 				}
-			}
-			out <- buffer[0]
-			if len(buffer) == 1 {
-				buffer = nil
 			} else {
-				buffer = buffer[1:]
+				v := buffer[0]
+				if len(buffer) == 1 {
+					buffer = nil
+				} else {
+					buffer = buffer[1:]
+				}
+				mutex.Unlock()
+				out <- v
 			}
 		}
 	}
-	go puller(notifier)
-	go pusher(notifier)
+	go puller()
+	go pusher()
 
 	return
 }
 
 func MsgOnErrorReturn(retVars ...interface{}) {
+	le := lg.GetCustomLogEntry(runtime.Caller(1))
 	for _, retVar := range retVars {
 		if err, ok := retVar.(error); ok {
-			fmt.Printf("ERROR: %s\n", err)
+			le.Logf(lg.ErrorLevel, "%s\n", err)
 		}
 	}
 }
@@ -157,15 +203,30 @@ func Str2Int(s string) int64 {
 	return 0
 }
 
-func MergeMaps[T interface{}](m1 map[string]T, m2 map[string]T) map[string]T {
+func MapsUnion[T interface{}](m1 map[string]T, m2 map[string]T) map[string]T {
 	merged := make(map[string]T)
-	for k, v := range m1 {
-		merged[k] = v
+	for k1, v1 := range m1 {
+		merged[k1] = v1
 	}
-	for key, value := range m2 {
-		merged[key] = value
+	for k2, v2 := range m2 {
+		merged[k2] = v2
 	}
 	return merged
+}
+
+func MapsIntersection[T interface{}](m1 map[string]T, m2 map[string]T, valuesFromMap1 bool) map[string]T {
+	intersection := make(map[string]T)
+	for k, v1 := range m1 {
+		if v2, ok := m2[k]; ok {
+			if valuesFromMap1 {
+				intersection[k] = v1
+			} else {
+				intersection[k] = v2
+			}
+
+		}
+	}
+	return intersection
 }
 
 func Int64ToBytes(v int64) []byte {

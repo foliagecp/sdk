@@ -5,10 +5,9 @@
 package common
 
 import (
-	"fmt"
-
 	"github.com/foliagecp/easyjson"
 
+	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/foliagecp/sdk/statefun/plugins"
 	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
 	sfSystem "github.com/foliagecp/sdk/statefun/system"
@@ -28,12 +27,14 @@ func GetQueryID(contextProcessor *sfplugins.StatefunContextProcessor) string {
 
 func ReplyQueryID(queryID string, result *easyjson.JSON, contextProcessor *sfplugins.StatefunContextProcessor) {
 	if result != nil && contextProcessor != nil {
-		if len(contextProcessor.Caller.Typename) == 0 || len(contextProcessor.Caller.ID) == 0 { // Signal was sent from a NATS cli
-			sfSystem.MsgOnErrorReturn(contextProcessor.Signal(plugins.JetstreamGlobalSignal, QueryResultTopic, queryID, result, nil)) // Publish result to NATS special query reply topic (no JetStream)
+		if contextProcessor.Reply != nil {
+			contextProcessor.Reply.With(result)
 		} else {
-			contextProcessor.RequestReplyData = result
+			if len(contextProcessor.Caller.Typename) == 0 || len(contextProcessor.Caller.ID) == 0 { // Signal was sent from a NATS cli
+				sfSystem.MsgOnErrorReturn(contextProcessor.Signal(plugins.JetstreamGlobalSignal, QueryResultTopic, queryID, result, nil)) // Publish result to NATS special query reply topic (no JetStream)
+			} // else do not reply to a signal from another statefun
 		}
 	} else {
-		fmt.Println("ERROR: replyQueryId")
+		lg.Logln(lg.WarnLevel, "replyQueryId has no target to reply")
 	}
 }

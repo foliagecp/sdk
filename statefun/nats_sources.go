@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	lg "github.com/foliagecp/sdk/statefun/logger"
+
 	"github.com/foliagecp/easyjson"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
@@ -18,27 +20,27 @@ func AddRequestSourceNatsCore(ft *FunctionType) error {
 	})
 
 	if err != nil {
-		fmt.Printf("Invalid request reply subscription for function type %s: %s\n", ft.name, err)
+		lg.Logf(lg.ErrorLevel, "Invalid request reply subscription for function type %s: %s\n", ft.name, err)
 		return err
 	}
 
 	return nil
 }
 
-func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType, streamName string) error {
+func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType) error {
 	consumerName := strings.ReplaceAll(ft.name, ".", "")
 	consumerGroup := consumerName + "-group"
-	fmt.Printf("Handling function type %s\n", ft.name)
+	lg.Logf(lg.TraceLevel, "Handling function type %s\n", ft.name)
 
 	// Create stream consumer if does not exist ---------------------
 	consumerExists := false
-	for info := range ft.runtime.js.Consumers(streamName, nats.MaxWait(10*time.Second)) {
+	for info := range ft.runtime.js.Consumers(ft.getStreamName(), nats.MaxWait(10*time.Second)) {
 		if info.Name == consumerName {
 			consumerExists = true
 		}
 	}
 	if !consumerExists {
-		_, err := ft.runtime.js.AddConsumer(streamName, &nats.ConsumerConfig{
+		_, err := ft.runtime.js.AddConsumer(ft.getStreamName(), &nats.ConsumerConfig{
 			Name:           consumerName,
 			Durable:        consumerName,
 			DeliverSubject: consumerName,
@@ -53,6 +55,8 @@ func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType, streamName stri
 
 	// For auto message acking msg ----------------------------------
 	msgAcker := func(msgAckChannel chan *nats.Msg) {
+		system.GlobalPrometrics.GetRoutinesCounter().Started("AddSignalSourceJetstreamQueuePushConsumer-msgAcker")
+		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("AddSignalSourceJetstreamQueuePushConsumer-msgAcker")
 		for msg := range msgAckChannel {
 			system.MsgOnErrorReturn(msg.Ack())
 		}
@@ -67,11 +71,11 @@ func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType, streamName stri
 		func(msg *nats.Msg) {
 			system.MsgOnErrorReturn(handleNatsMsg(ft, msg, false, msgAckChannel))
 		},
-		nats.Bind(streamName, consumerName),
+		nats.Bind(ft.getStreamName(), consumerName),
 		nats.ManualAck(),
 	)
 	if err != nil {
-		fmt.Printf("Invalid signal subscription for function type %s: %s\n", ft.name, err)
+		lg.Logf(lg.ErrorLevel, "Invalid signal subscription for function type %s: %s\n", ft.name, err)
 		return err
 	}
 	return nil
@@ -83,6 +87,7 @@ func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool, msgAckCha
 
 	data, ok := easyjson.JSONFromBytes(msg.Data)
 	if !ok {
+		system.MsgOnErrorReturn(msg.Ack())
 		return fmt.Errorf("nats.Msg for function %s with id=%s is not a JSON\n", ft.name, id)
 	}
 

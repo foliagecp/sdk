@@ -1,0 +1,56 @@
+version: "2.1"
+
+services:
+  nats:
+    image: nats:latest
+    command: -c /etc/nats/nats.conf -js -sd /data/jetstream --user nats --pass foliage
+    ports:
+      - "4222:4222"
+      - "6222:6222"
+      - "8222:8222"
+    volumes:
+       - ./configs/nats/nats.conf/:/etc/nats/nats.conf
+
+  io:
+    image: natsio/nats-box:latest
+    entrypoint:
+      - /bin/sh
+    tty: true
+    depends_on:
+      - nats
+
+  runtime:
+    image: foliage-sdk-tests-basic:latest
+    command: /usr/bin/foliage -ll 6
+    ports:
+      - "9901:9901"
+    env_file: ./configs/.env
+    depends_on:
+      - nats
+    build:
+      context: ../..
+      dockerfile: tests/basic/Dockerfile
+
+  nats-exporter:
+    image: natsio/prometheus-nats-exporter:latest
+    depends_on:
+     - nats
+    ports:
+     - '7777:7777'
+    command: -varz -jsz=all http://nats:8222
+
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - 9090:9090
+    volumes:
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+
+  grafana:
+    ports:
+     - '3000:3000'
+    image: grafana/grafana-enterprise
+    volumes:
+      - ./configs/grafana/dashboards.yaml:/etc/grafana/provisioning/dashboards/main.yaml
+      - ./configs/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/main.yaml
+      - ./configs/grafana/dashboards:/var/lib/grafana/dashboards

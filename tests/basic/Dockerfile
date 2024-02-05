@@ -1,4 +1,4 @@
-FROM golang:1.20 as builder
+FROM golang:1.21 as builder
 
 WORKDIR /usr/src/app
 
@@ -13,15 +13,15 @@ RUN go mod tidy
 
 # --ldflags '-extldflags "-Wl,--allow-multiple-definition"' for resolving the following cgo conflict between go-graphviz and rogchap:
 # running g++ failed: exit status 1; multiple definition of `Version'
-RUN cd ./tests && go build --ldflags '-extldflags "-Wl,--allow-multiple-definition"' -o /usr/bin/tests
+RUN cd ./tests/basic && go build --ldflags '-extldflags "-Wl,--allow-multiple-definition"' -o /usr/bin/foliage
 
 FROM ubuntu:22.04
 
-WORKDIR /tests
+WORKDIR /foliage
 
 RUN apt update && \
     apt install ca-certificates curl -y && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /usr/bin/tests /usr/bin/
+COPY --from=builder /usr/bin/foliage /usr/bin/
 

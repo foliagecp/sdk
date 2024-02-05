@@ -26,6 +26,8 @@ func buildNatsData(callerTypename string, callerID string, payload *easyjson.JSO
 func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) error {
 	jetstreamGlobalSignal := func() error {
 		go func() {
+			system.GlobalPrometrics.GetRoutinesCounter().Started("ingress-jetstreamGlobalSignal-gofunc")
+			defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("ingress-jetstreamGlobalSignal-gofunc")
 			system.MsgOnErrorReturn(r.nc.Publish(fmt.Sprintf("%s.%s", targetTypename, targetID), buildNatsData(callerTypename, callerID, payload, options)))
 		}()
 		return nil
@@ -48,7 +50,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 		resp, err := r.nc.Request(
 			fmt.Sprintf("service.%s.%s", targetTypename, targetID),
 			buildNatsData(callerTypename, callerID, payload, options),
-			time.Duration(r.config.ingressCallGoLangSyncTimeoutSec)*time.Second,
+			time.Duration(r.config.requestTimeoutSec)*time.Second,
 		)
 		if err == nil {
 			if j, ok := easyjson.JSONFromBytes(resp.Data); ok {
@@ -61,12 +63,27 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 
 	goLangLocalRequest := func() (*easyjson.JSON, error) {
 		if targetFT, ok := r.registeredFunctionTypes[targetTypename]; ok {
+			// TODO: localGolangServiceActive ???
+			/*if !targetFT.config.serviceActive {
+				return nil, fmt.Errorf("callFunctionGolangSync cannot request function with the typename %s, not running as a service", callerTypename)
+			}*/
+
 			resultJSONChannel := make(chan *easyjson.JSON)
 
+			// Do not send original data, prevents same data concurrent access from different functions
+			var payloadCopy *easyjson.JSON = nil
+			var optionsCopy *easyjson.JSON = nil
+			if payload != nil {
+				payloadCopy = payload.Clone().GetPtr()
+			}
+			if options != nil {
+				optionsCopy = options.Clone().GetPtr()
+			}
+			// ----------------------------------------------------------------------------------------
 			functionMsg := FunctionTypeMsg{
 				Caller:  &sfPlugins.StatefunAddress{Typename: callerTypename, ID: callerID},
-				Payload: payload,
-				Options: options,
+				Payload: payloadCopy,
+				Options: optionsCopy,
 			}
 
 			functionMsg.RequestCallback = func(data *easyjson.JSON) {
@@ -84,11 +101,11 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 					return resultJSON, nil
 				}
 				return nil, fmt.Errorf("target function typename \"%s\" with id \"%s\" resufes to handle request", targetTypename, targetID)
-			case <-time.After(time.Duration(r.config.ingressCallGoLangSyncTimeoutSec) * time.Second):
+			case <-time.After(time.Duration(r.config.requestTimeoutSec) * time.Second):
 				return nil, fmt.Errorf("timeout occured while requesting function typename \"%s\" with id \"%s\"", targetTypename, targetID)
 			}
 		} else {
-			return nil, fmt.Errorf("callFunctionGolangSync cannot call function with the typename %s, not registered", callerTypename)
+			return nil, fmt.Errorf("callFunctionGolangSync cannot request function with the typename %s, not registered", callerTypename)
 		}
 	}
 

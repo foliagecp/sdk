@@ -7,9 +7,14 @@ package statefun
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync/atomic"
 	"time"
 
+	lg "github.com/foliagecp/sdk/statefun/logger"
+	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/foliagecp/sdk/embedded/nats/kv"
 	"github.com/foliagecp/sdk/statefun/cache"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
@@ -47,19 +52,17 @@ func NewRuntime(config RuntimeConfig) (r *Runtime, err error) {
 
 	// Create application key value store bucket if does not exist --
 	kvExists := false
-	for name := range r.js.KeyValueStoreNames() {
-		if name == "KV_"+config.keyValueStoreBucketName {
-			r.kv, err = r.js.KeyValue(config.keyValueStoreBucketName)
-			if err != nil {
-				return
-			}
-			kvExists = true
-		}
+	if kv, err := r.js.KeyValue(config.keyValueStoreBucketName); err == nil {
+		r.kv = kv
+		kvExists = true
 	}
 	if !kvExists {
-		r.kv, err = r.js.CreateKeyValue(&nats.KeyValueConfig{
+		r.kv, err = kv.CreateKeyValue(r.nc, r.js, &nats.KeyValueConfig{
 			Bucket: config.keyValueStoreBucketName,
 		})
+		/*r.kv, err = r.js.CreateKeyValue(&nats.KeyValueConfig{
+			Bucket: config.keyValueStoreBucketName,
+		})*/
 		if err != nil {
 			return
 		}
@@ -75,44 +78,82 @@ func NewRuntime(config RuntimeConfig) (r *Runtime, err error) {
 }
 
 func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Runtime) error) (err error) {
-	// Create stream if does not exist ------------------------------
-	streamExists := false
+	// Create streams if does not exist ------------------------------
+	/* Each stream contains a single subject (topic).
+	 * Differently named stream with overlapping subjects cannot exist!
+	 */
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	var existingStreams []string
 	for info := range r.js.StreamsInfo(nats.Context(ctx)) {
-		if info.Config.Name == r.config.functionTypesStreamName {
-			streamExists = true
-			break
-		}
+		existingStreams = append(existingStreams, info.Config.Name)
 	}
-	if !streamExists {
-		var subjects []string
-		for _, functionType := range r.registeredFunctionTypes {
-			subjects = append(subjects, functionType.subject)
+	for _, functionType := range r.registeredFunctionTypes {
+		if !slices.Contains(existingStreams, functionType.getStreamName()) {
+			_, err := r.js.AddStream(&nats.StreamConfig{
+				Name:     functionType.getStreamName(),
+				Subjects: []string{functionType.subject},
+			})
+			system.MsgOnErrorReturn(err)
 		}
-		_, err := r.js.AddStream(&nats.StreamConfig{
-			Name:     r.config.functionTypesStreamName,
-			Subjects: subjects,
-		})
-		system.MsgOnErrorReturn(err)
 	}
 	// --------------------------------------------------------------
 
-	fmt.Println("Initializing the cache store...")
-	r.cacheStore = cache.NewCacheStore(context.Background(), cacheConfig, r.kv)
-	fmt.Println("Cache store inited!")
+	lg.Logln(lg.TraceLevel, "Initializing the cache store...")
+	r.cacheStore = cache.NewCacheStore(context.Background(), cacheConfig, r.js, r.kv)
+	lg.Logln(lg.TraceLevel, "Cache store inited!")
+
+	// Functions running in a single instance controller --------------------------------
+	singleInstanceFunctionRevisions := map[string]uint64{}
+	singleInstanceFunctionLocksUpdater := func(sifr map[string]uint64) {
+		system.GlobalPrometrics.GetRoutinesCounter().Started("singleInstanceFunctionLocksUpdater")
+		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("singleInstanceFunctionLocksUpdater")
+		if len(sifr) > 0 {
+			for {
+				time.Sleep(time.Duration(r.config.kvMutexLifeTimeSec) / 2 * time.Second)
+				for ftName, revId := range sifr {
+					newRevId, err := KeyMutexLockUpdate(r, system.GetHashStr(ftName), revId)
+					if err != nil {
+						lg.Logf(lg.ErrorLevel, "KeyMutexLockUpdate for single instance function type %s failed: %s", ftName, err.Error())
+					} else {
+						sifr[ftName] = newRevId
+					}
+				}
+			}
+		}
+	}
+	// ----------------------------------------------------------------------------------
 
 	// Start function subscriptions ---------------------------------
-	for _, ft := range r.registeredFunctionTypes {
-		system.MsgOnErrorReturn(AddSignalSourceJetstreamQueuePushConsumer(ft, r.config.functionTypesStreamName))
+	for ftName, ft := range r.registeredFunctionTypes {
+		if !ft.config.multipleInstancesAllowed {
+			revId, err := KeyMutexLock(r, system.GetHashStr(ftName), true)
+			if err != nil {
+				if err == mutexLockedError {
+					lg.Logf(lg.WarnLevel, "Function type %s is already running somewhere and multipleInstancesAllowed==false, skipping", ft.name)
+					continue
+				} else {
+					return err
+				}
+			}
+			singleInstanceFunctionRevisions[ftName] = revId
+		}
+
+		system.MsgOnErrorReturn(AddSignalSourceJetstreamQueuePushConsumer(ft))
 		if ft.config.serviceActive {
 			system.MsgOnErrorReturn(AddRequestSourceNatsCore(ft))
 		}
 	}
 	// --------------------------------------------------------------
 
+	go singleInstanceFunctionLocksUpdater(singleInstanceFunctionRevisions)
+
 	if onAfterStart != nil {
-		system.MsgOnErrorReturn(onAfterStart(r))
+		go func() {
+			system.GlobalPrometrics.GetRoutinesCounter().Started("runtime_onAfterStart")
+			defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("runtime_onAfterStart")
+			system.MsgOnErrorReturn(onAfterStart(r))
+		}()
 	}
 	system.MsgOnErrorReturn(r.runGarbageCellector())
 
@@ -124,11 +165,21 @@ func (r *Runtime) runGarbageCellector() (err error) {
 		// Start function subscriptions ---------------------------------
 		var totalIdsGrbageCollected int
 		var totalIDHandlersRunning int
+
+		measureName := "stetefun_instances"
+		var gaugeVec *prometheus.GaugeVec
+		var gaugeVecErr error
+		gaugeVec, gaugeVecErr = system.GlobalPrometrics.EnsureGaugeVecSimple(measureName, "Stateful function instances", []string{"typename"})
+
 		for _, ft := range r.registeredFunctionTypes {
 			n1, n2 := ft.gc(r.config.functionTypeIDLifetimeMs)
 			totalIdsGrbageCollected += n1
 			totalIDHandlersRunning += n2
+			if gaugeVec != nil && gaugeVecErr == nil {
+				gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(float64(n2))
+			}
 		}
+
 		if totalIdsGrbageCollected > 0 && totalIDHandlersRunning == 0 {
 			// Result time output -----------------------------------------------------------------
 			if totalIDHandlersRunning == 0 {
@@ -139,13 +190,26 @@ func (r *Runtime) runGarbageCellector() (err error) {
 				dt := glce - gt0
 
 				if gc > 0 && dt > 0 {
-					fmt.Printf("!!!!!!!!!!!!!!!!! %d runs, total time (ns/ms): %d/%d, function dt (ns/ms): %d/%d -> %dHz\n", gc, dt, dt/1000000, dt/gc, dt/gc/1000000, gc*1000000000/dt)
+					lg.Logf(lg.TraceLevel, "!!!!!!!!!!!!!!!!! %d runs, total time (ns/ms): %d/%d, function dt (ns/ms): %d/%d -> %dHz\n", gc, dt, dt/1000000, dt/gc, dt/gc/1000000, gc*1000000000/dt)
 					atomic.StoreInt64(&r.gc, 0)
 				}
-				// ------------------------------------------------------------------------------------
 			}
-			// --------------------------------------------------------------
+			// ------------------------------------------------------------------------------------
 		}
+		// --------------------------------------------------------------
+
 		time.Sleep(1 * time.Second)
 	}
 }
+
+/*func (r *Runtime) TestKVCleanup() {
+	fmt.Println("!!!!!!!!!!!!!!!!! TestKVCleanup")
+	if w, err := r.kv.WatchAll(); err == nil {
+		for entry := range w.Updates() {
+			if entry == nil {
+				break
+			}
+			kv.DeleteKeyValueValue(r.js, r.kv, entry.Key())
+		}
+	}
+}*/

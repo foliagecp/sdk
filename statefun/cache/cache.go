@@ -8,16 +8,25 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	lg "github.com/foliagecp/sdk/statefun/logger"
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/foliagecp/easyjson"
 
+	customNatsKv "github.com/foliagecp/sdk/embedded/nats/kv"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
+)
+
+var (
+	keyValidationRegexp *regexp.Regexp = regexp.MustCompile(`^[a-zA-Z0-9=_-][a-zA-Z0-9=._-]+[a-zA-Z0-9=_-]$|^[a-zA-Z0-9=_-]*$`)
 )
 
 type KeyValue struct {
@@ -36,7 +45,7 @@ type StoreValue struct {
 	// "0" if store contains all keys and all subkeys (no lru purged ones at any next level)
 	storeConsistencyWithKVLossTime int64
 	valueUpdateTime                int64
-	storeMutex                     *sync.Mutex
+	storeMutex                     sync.Mutex
 	notifyUpdates                  sync.Map
 	syncNeeded                     bool
 	syncedWithKV                   bool
@@ -47,15 +56,15 @@ func notifySubscriber(c chan KeyValue, key interface{}, value interface{}) {
 }
 
 func (csv *StoreValue) Lock(caller string) {
-	//fmt.Printf("------- Locking '%s' by '%s'\n", csv.keyInParent, caller)
+	//lg.Logf("------- Locking '%s' by '%s'\n", csv.keyInParent, caller)
 	csv.storeMutex.Lock()
-	//fmt.Printf(">>>>>>> Locked '%s' by '%s'\n", csv.keyInParent, caller)
+	//lg.Logf(">>>>>>> Locked '%s' by '%s'\n", csv.keyInParent, caller)
 }
 
 func (csv *StoreValue) Unlock(caller string) {
-	//fmt.Printf(">>>>>>> Unlocking '%s' by '%s'\n", csv.keyInParent, caller)
+	//lg.Logf(">>>>>>> Unlocking '%s' by '%s'\n", csv.keyInParent, caller)
 	csv.storeMutex.Unlock()
-	//fmt.Printf("------- Unlocked '%s' by '%s'\n", csv.keyInParent, caller)
+	//lg.Logf("------- Unlocked '%s' by '%s'\n", csv.keyInParent, caller)
 }
 
 func (csv *StoreValue) GetFullKeyString() string {
@@ -144,6 +153,9 @@ func (csv *StoreValue) Put(value interface{}, updateInKV bool, customPutTime int
 }
 
 func (csv *StoreValue) collectGarbage() {
+	system.GlobalPrometrics.GetRoutinesCounter().Started("cache.csv.collectGarbage")
+	defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("cache.csv.collectGarbage")
+
 	var canBeDeletedFromParent bool
 
 	csv.Lock("collectGarbage")
@@ -164,8 +176,9 @@ func (csv *StoreValue) collectGarbage() {
 	if csv.parent != nil && canBeDeletedFromParent {
 		csv.parent.Lock("collectGarbageParent")
 		delete(csv.parent.store, csv.keyInParent)
-		//fmt.Println("____________ PURGING " + fmt.Sprintln(csv.keyInParent))
+		//lg.Logln("____________ PURGING " + fmt.Sprintln(csv.keyInParent))
 		csv.parent.Unlock("collectGarbageParent")
+
 		go csv.parent.collectGarbage()
 	}
 }
@@ -249,11 +262,11 @@ type Transaction struct {
 
 type Store struct {
 	cacheConfig *Config
+	js          nats.JetStreamContext
 	kv          nats.KeyValue
 	ctx         context.Context
 	cancel      context.CancelFunc
 
-	initChan        chan bool
 	rootValue       *StoreValue
 	lruTresholdTime int64
 	valuesInCache   int
@@ -263,15 +276,16 @@ type Store struct {
 	getKeysByPatternFromKVMutex *sync.Mutex
 }
 
-func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *Store {
+func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamContext, kv nats.KeyValue) *Store {
+	var inited atomic.Bool
+	initChan := make(chan bool)
 	cs := Store{
 		cacheConfig: cacheConfig,
+		js:          js,
 		kv:          kv,
-		initChan:    make(chan bool),
 		rootValue: &StoreValue{
 			parent:                         nil,
 			value:                          nil,
-			storeMutex:                     &sync.Mutex{},
 			store:                          make(map[interface{}]*StoreValue),
 			storeConsistencyWithKVLossTime: 0,
 			valueExists:                    false,
@@ -289,7 +303,9 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *
 	cs.ctx, cs.cancel = context.WithCancel(ctx)
 
 	storeUpdatesHandler := func(cs *Store) {
-		if w, err := kv.Watch(cacheConfig.kvStorePrefix + ".>"); err == nil {
+		system.GlobalPrometrics.GetRoutinesCounter().Started("cache.storeUpdatesHandler")
+		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("cache.storeUpdatesHandler")
+		if w, err := kv.Watch(cacheConfig.kvStorePrefix+".>", nats.IgnoreDeletes()); err == nil {
 			activeKVSync := true
 			for activeKVSync {
 				select {
@@ -306,11 +322,13 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *
 							cacheRecordTime := cs.GetValueUpdateTime(key)
 							if kvRecordTime > cacheRecordTime {
 								if appendFlag == 1 {
-									//fmt.Printf("---CACHE_KV TF UPDATE: %s, %d, %d\n", key, kvRecordTime, appendFlag)
+									//lg.Logf("---CACHE_KV TF UPDATE: %s, %d, %d\n", key, kvRecordTime, appendFlag)
 									cs.SetValue(key, valueBytes[9:], false, kvRecordTime, "")
 								} else { // Someone else (other module) deleted a key from the cache
-									//fmt.Printf("---CACHE_KV TF DELETE: %s, %d, %d\n", key, kvRecordTime, appendFlag)
-									system.MsgOnErrorReturn(kv.Delete(entry.Key()))
+									//lg.Logf("---CACHE_KV TF DELETE: %s, %d, %d\n", key, kvRecordTime, appendFlag)
+
+									//system.MsgOnErrorReturn(kv.Delete(entry.Key()))
+									system.MsgOnErrorReturn(customNatsKv.DeleteKeyValueValue(cs.js, cs.kv, entry.Key()))
 
 									//cs.rootValue.purgeReady
 									//if csv := cs.getLastKeyCacheStoreValue(key); csv != nil {
@@ -319,7 +337,8 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *
 								}
 							} else if kvRecordTime == cacheRecordTime { // KV confirmes update
 								if appendFlag == 0 {
-									system.MsgOnErrorReturn(kv.Delete(entry.Key()))
+									//system.MsgOnErrorReturn(kv.Delete(entry.Key()))
+									system.MsgOnErrorReturn(customNatsKv.DeleteKeyValueValue(cs.js, cs.kv, entry.Key()))
 								}
 								if csv := cs.getLastKeyCacheStoreValue(key); csv != nil {
 									csv.Lock("storeUpdatesHandler")
@@ -327,7 +346,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *
 									csv.TryPurgeConfirm(false)
 									csv.Unlock("storeUpdatesHandler")
 								}
-								//fmt.Printf("---CACHE_KV TF TOO OLD: %s, %d, %d\n", key, kvRecordTime, appendFlag)
+								//lg.Logf("---CACHE_KV TF TOO OLD: %s, %d, %d\n", key, kvRecordTime, appendFlag)
 							}
 						} else if len(valueBytes) == 0 { // Complete delete signal from KV store
 							if csv := cs.getLastKeyCacheStoreValue(key); csv != nil {
@@ -337,23 +356,27 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *
 								csv.TryPurgeConfirm(false)
 								csv.Unlock("storeUpdatesHandler complete_delete")
 							}
-							//fmt.Printf("---CACHE_KV EMPTY: %s\n", key)
+							//lg.Logf("---CACHE_KV EMPTY: %s\n", key)
 							// Deletion notify - omitting cause value must already be deleted from the cache
 						} else {
-							//fmt.Printf("---CACHE_KV !T!F: %s\n", key)
-							fmt.Printf("ERROR storeUpdatesHandler: received value without time and append flag!\n")
+							//lg.Logf("---CACHE_KV !T!F: %s\n", key)
+							lg.Logf(lg.ErrorLevel, "storeUpdatesHandler: received value without time and append flag!\n")
 						}
 					} else {
-						close(cs.initChan)
+						if inited.CompareAndSwap(false, true) {
+							close(initChan)
+						}
 					}
 				}
 			}
 			system.MsgOnErrorReturn(w.Stop())
 		} else {
-			fmt.Printf("storeUpdatesHandler kv.Watch error %s\n", err)
+			lg.Logf(lg.ErrorLevel, "storeUpdatesHandler kv.Watch error %s\n", err)
 		}
 	}
 	kvLazyWriter := func(cs *Store) {
+		system.GlobalPrometrics.GetRoutinesCounter().Started("cache.kvLazyWriter")
+		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("cache.kvLazyWriter")
 		for {
 			select {
 			case <-cs.ctx.Done():
@@ -410,8 +433,8 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *
 							if csvChild.valueUpdateTime > 0 && csvChild.valueUpdateTime <= cs.lruTresholdTime && csvChild.purgeState == 0 { // Older than or equal to specific time
 								// currentStoreValue locked by range no locking/unlocking needed
 								currentStoreValue.ConsistencyLoss(system.GetCurrentTimeNs())
-								//fmt.Printf("Consistency lost for key=\"%s\" store\n", currentStoreValue.GetFullKeyString())
-								//fmt.Println("Purging: " + newSuffix)
+								//lg.Logf("Consistency lost for key=\"%s\" store\n", currentStoreValue.GetFullKeyString())
+								//lg.Logln("Purging: " + newSuffix)
 								csvChild.TryPurgeReady(false)
 								csvChild.TryPurgeConfirm(false)
 							}
@@ -429,7 +452,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *
 								}
 								csvChild.Unlock("kvLazyWriter")
 							} else {
-								fmt.Printf("Store kvLazyWriter cannot update key=%s\n: %s", keyStr, putErr)
+								lg.Logf(lg.ErrorLevel, "Store kvLazyWriter cannot update key=%s\n: %s", keyStr, putErr)
 							}
 						}
 						// ----------------------------------------------
@@ -458,11 +481,15 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *
 					for i := 0; i < len(lruTimes); i++ {
 						cmpr = append(cmpr, lruTimes[i] > 0 && lruTimes[i] <= cs.lruTresholdTime)
 					}
-					fmt.Printf("LEFT IN CACHE: %d (%d) - %s %s\n", len(lruTimes), cs.lruTresholdTime, fmt.Sprintln(cmpr), fmt.Sprintln(lruTimes))
+					lg.Logf("LEFT IN CACHE: %d (%d) - %s %s\n", len(lruTimes), cs.lruTresholdTime, fmt.Sprintln(cmpr), fmt.Sprintln(lruTimes))
 				}
 				// ----------------------------------------------------------------*/
 
 				cs.valuesInCache = len(lruTimes)
+
+				if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("cache_values", "", []string{"id"}); err == nil {
+					gaugeVec.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(cs.valuesInCache))
+				}
 
 				time.Sleep(100 * time.Millisecond) // Prevents too many locks and prevents too much processor time consumption
 			}
@@ -470,7 +497,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *
 	}
 	go storeUpdatesHandler(&cs)
 	go kvLazyWriter(&cs)
-	<-cs.initChan
+	<-initChan
 	return &cs
 }
 
@@ -478,9 +505,8 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, kv nats.KeyValue) *
 // callbackID - unique id for this subscription
 func (cs *Store) SubscribeLevelCallback(key string, callbackID string) chan KeyValue {
 	if _, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true); parentCacheStoreValue != nil {
-
 		onBufferOverflow := func() {
-			fmt.Printf("WARNING: SubscribeLevelCallback SubscriptionNotificationsBuffer overflow for key=%s!\n", key)
+			lg.Logf(lg.WarnLevel, "SubscribeLevelCallback SubscriptionNotificationsBuffer overflow for key=%s!\n", key)
 		}
 		callbackChannelIn, callbackChannelOut := system.CreateDimSizeChannel[KeyValue](cs.cacheConfig.levelSubscriptionNotificationsBufferMaxSize, onBufferOverflow)
 		parentCacheStoreValue.notifyUpdates.Store(callbackID, callbackChannelIn)
@@ -492,6 +518,11 @@ func (cs *Store) SubscribeLevelCallback(key string, callbackID string) chan KeyV
 
 func (cs *Store) UnsubscribeLevelCallback(key string, callbackID string) {
 	if _, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, false); parentCacheStoreValue != nil {
+		if v, ok := parentCacheStoreValue.notifyUpdates.Load(callbackID); ok {
+			if callbackChannelIn, ok := v.(chan KeyValue); ok {
+				close(callbackChannelIn)
+			}
+		}
 		parentCacheStoreValue.notifyUpdates.Delete(callbackID)
 	}
 }
@@ -502,7 +533,9 @@ func (cs *Store) GetValueUpdateTime(key string) int64 {
 	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, false); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
 		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken, true); ok {
 			csv.Lock("GetValueUpdateTime")
-			result = csv.valueUpdateTime
+			if csv.valueExists {
+				result = csv.valueUpdateTime
+			}
 			csv.Unlock("GetValueUpdateTime")
 		}
 	}
@@ -623,6 +656,10 @@ func (cs *Store) TransactionEnd(transactionID string) {
 }*/
 
 func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV bool, customSetTime int64) bool {
+	if !keyValidationRegexp.MatchString(key) {
+		return false
+	}
+
 	if customSetTime < 0 {
 		customSetTime = system.GetCurrentTimeNs()
 	}
@@ -637,7 +674,7 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 				return true
 			}
 		} else {
-			csvUpdate = &StoreValue{value: newValue, storeMutex: &sync.Mutex{}, store: make(map[interface{}]*StoreValue), storeConsistencyWithKVLossTime: 0, valueExists: true, purgeState: 0, syncNeeded: updateInKV, syncedWithKV: !updateInKV, valueUpdateTime: customSetTime}
+			csvUpdate = &StoreValue{value: newValue, store: make(map[interface{}]*StoreValue), storeConsistencyWithKVLossTime: 0, valueExists: true, purgeState: 0, syncNeeded: updateInKV, syncedWithKV: !updateInKV, valueUpdateTime: customSetTime}
 			parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate, false)
 			return true
 		}
@@ -645,24 +682,28 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 	return false
 }
 
-func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTime int64, transactionID string) {
+func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTime int64, transactionID string) bool {
+	if !keyValidationRegexp.MatchString(key) {
+		return false
+	}
+
 	if customSetTime < 0 {
 		customSetTime = system.GetCurrentTimeNs()
 	}
 	if len(transactionID) == 0 {
-		//fmt.Println(">>1 " + key)
+		//lg.Logln(">>1 " + key)
 		if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
-			//fmt.Println(">>2 " + key)
+			//lg.Logln(">>2 " + key)
 			var csvUpdate *StoreValue
 			if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken, true); ok {
-				//fmt.Println(">>3 " + key)
+				//lg.Logln(">>3 " + key)
 				csv.Put(value, updateInKV, customSetTime)
 			} else {
-				//fmt.Println(">>4 " + key)
-				csvUpdate = &StoreValue{value: value, storeMutex: &sync.Mutex{}, store: make(map[interface{}]*StoreValue), storeConsistencyWithKVLossTime: 0, valueExists: true, purgeState: 0, syncNeeded: updateInKV, syncedWithKV: !updateInKV, valueUpdateTime: customSetTime}
-				//fmt.Println(">>5 " + key)
+				//lg.Logln(">>4 " + key)
+				csvUpdate = &StoreValue{value: value, store: make(map[interface{}]*StoreValue), storeConsistencyWithKVLossTime: 0, valueExists: true, purgeState: 0, syncNeeded: updateInKV, syncedWithKV: !updateInKV, valueUpdateTime: customSetTime}
+				//lg.Logln(">>5 " + key)
 				parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate, true)
-				//fmt.Println(">>6 " + key)
+				//lg.Logln(">>6 " + key)
 			}
 		}
 	} else {
@@ -672,9 +713,10 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 			transaction.operators = append(transaction.operators, &TransactionOperator{operatorType: 0, key: key, value: value, updateInKV: updateInKV, customTime: customSetTime})
 			transaction.mutex.Unlock()
 		} else {
-			fmt.Printf("ERROR SetValue: transaction with id=%s doesn't exist\n", transactionID)
+			lg.Logf(lg.ErrorLevel, "SetValue: transaction with id=%s doesn't exist\n", transactionID)
 		}
 	}
+	return true
 }
 
 func (cs *Store) Destroy() {
@@ -700,18 +742,20 @@ func (cs *Store) DeleteValue(key string, updateInKV bool, customDeleteTime int64
 			transaction.operators = append(transaction.operators, &TransactionOperator{operatorType: 1, key: key, value: nil, updateInKV: updateInKV, customTime: customDeleteTime})
 			transaction.mutex.Unlock()
 		} else {
-			fmt.Printf("ERROR DeleteValue: transaction with id=%s doesn't exist\n", transactionID)
+			lg.Logf(lg.ErrorLevel, "DeleteValue: transaction with id=%s doesn't exist\n", transactionID)
 		}
 	}
 }
 
 func (cs *Store) GetKeysByPattern(pattern string) []string {
+	start := time.Now()
+
 	keys := map[string]bool{}
 
 	appendKeysFromKV := func() {
 		cs.getKeysByPatternFromKVMutex.Lock()
-		//fmt.Println("!!! GetKeysByPattern started appendKeysFromKV")
-		if w, err := cs.kv.Watch(cs.toStoreKey(pattern)); err == nil {
+		//lg.Logln("!!! GetKeysByPattern started appendKeysFromKV")
+		if w, err := cs.kv.Watch(cs.toStoreKey(pattern), nats.IgnoreDeletes()); err == nil {
 			for entry := range w.Updates() {
 				if entry != nil && len(entry.Value()) >= 9 {
 					keys[cs.fromStoreKey(entry.Key())] = true
@@ -720,9 +764,9 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 				}
 			}
 		} else {
-			fmt.Printf("GetKeysByPattern kv.Watch error %s\n", err)
+			lg.Logf(lg.ErrorLevel, "GetKeysByPattern kv.Watch error %s\n", err)
 		}
-		//fmt.Println("!!! GetKeysByPattern ended appendKeysFromKV")
+		//lg.Logln("!!! GetKeysByPattern ended appendKeysFromKV")
 		cs.getKeysByPatternFromKVMutex.Unlock()
 	}
 
@@ -754,7 +798,7 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 				if keysCountBefore == keysCountAfter && childrenStoresAreConsistentWithKV {
 					// Restore consistency if relevant
 					//if atomic.CompareAndSwapInt64(&parentCacheStoreValue.storeConsistencyWithKVLossTime, consistencyWithKVLossTime, 0) {
-					//fmt.Printf("Consistency restored for key=\"%s\" store\n", parentCacheStoreValue.GetFullKeyString())
+					//lg.Logf("Consistency restored for key=\"%s\" store\n", parentCacheStoreValue.GetFullKeyString())
 					//}
 					atomic.CompareAndSwapInt64(&parentCacheStoreValue.storeConsistencyWithKVLossTime, consistencyWithKVLossTime, 0)
 				}
@@ -813,7 +857,7 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 					for subCSV, subCSVConsistencyWithKVLossTime := range allSubCSVsToConsistencyWithKVLossTime {
 						// Restore consistency if relevant
 						//if atomic.CompareAndSwapInt64(&subCSV.storeConsistencyWithKVLossTime, subCSVConsistencyWithKVLossTime, 0) {
-						//fmt.Printf("Consistency restored for key=\"%s\" store\n", subCSV.GetFullKeyString())
+						//lg.Logf("Consistency restored for key=\"%s\" store\n", subCSV.GetFullKeyString())
 						//}
 						atomic.CompareAndSwapInt64(&subCSV.storeConsistencyWithKVLossTime, subCSVConsistencyWithKVLossTime, 0)
 					}
@@ -843,7 +887,7 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 				// Cannot restore consistency here
 			}
 		} else {
-			fmt.Printf("ERROR GetKeysByPattern: getLastExistingCacheStoreValueByKey returns nil\n")
+			lg.Logf(lg.ErrorLevel, "GetKeysByPattern: getLastExistingCacheStoreValueByKey returns nil\n")
 		}
 	}
 
@@ -853,6 +897,11 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 		keysSlice[i] = k
 		i++
 	}
+
+	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("cache_get_keys_by_pattern", "", []string{"id"}); err == nil {
+		gaugeVec.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(time.Since(start).Microseconds()))
+	}
+
 	return keysSlice
 }
 
@@ -868,7 +917,6 @@ func (cs *Store) getLastKeyTokenAndItsParentCacheStoreValue(key string, createIf
 			if createIfNotexists {
 				csv := StoreValue{
 					value:                          nil,
-					storeMutex:                     &sync.Mutex{},
 					store:                          make(map[interface{}]*StoreValue),
 					storeConsistencyWithKVLossTime: 0,
 					valueExists:                    false,

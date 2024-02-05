@@ -5,8 +5,9 @@
 package plugins
 
 import (
-	"fmt"
 	"sync"
+
+	lg "github.com/foliagecp/sdk/statefun/logger"
 
 	"github.com/foliagecp/easyjson"
 
@@ -31,20 +32,27 @@ const (
 	GolangLocalRequest
 )
 
+type SyncReply struct {
+	With          func(*easyjson.JSON)
+	CancelDefault func()
+}
+
 type StatefunContextProcessor struct {
 	GlobalCache        *cache.Store
 	GetFunctionContext func() *easyjson.JSON
 	SetFunctionContext func(*easyjson.JSON)
 	GetObjectContext   func() *easyjson.JSON
 	SetObjectContext   func(*easyjson.JSON)
+	ObjectMutexLock    func(errorOnLocked bool) error
+	ObjectMutexUnlock  func() error
 	// TODO: DownstreamSignal(<function type>, <links filters>, <payload>, <options>)
-	Signal           func(SignalProvider, string, string, *easyjson.JSON, *easyjson.JSON) error
-	Request          func(RequestProvider, string, string, *easyjson.JSON, *easyjson.JSON) (*easyjson.JSON, error)
-	Self             StatefunAddress
-	Caller           StatefunAddress
-	Payload          *easyjson.JSON
-	Options          *easyjson.JSON
-	RequestReplyData *easyjson.JSON // when requested in function: nil - function was signaled, !nil - function was requested
+	Signal  func(SignalProvider, string, string, *easyjson.JSON, *easyjson.JSON) error
+	Request func(RequestProvider, string, string, *easyjson.JSON, *easyjson.JSON) (*easyjson.JSON, error)
+	Self    StatefunAddress
+	Caller  StatefunAddress
+	Payload *easyjson.JSON
+	Options *easyjson.JSON
+	Reply   *SyncReply // when requested in function: nil - function was signaled, !nil - function was requested
 }
 
 type StatefunExecutor interface {
@@ -68,10 +76,10 @@ func NewTypenameExecutor(alias string, source string, executorContructorFunction
 
 func (tnex *TypenameExecutorPlugin) AddForID(id string) {
 	if tnex.executorContructorFunction == nil {
-		fmt.Printf("Cannot create new StatefunExecutor for id=%s: missing newExecutor function\n", id)
+		lg.Logf(lg.ErrorLevel, "Cannot create new StatefunExecutor for id=%s: missing newExecutor function\n", id)
 		tnex.idExecutors.Store(id, nil)
 	} else {
-		fmt.Printf("______________ Created StatefunExecutor for id=%s\n", id)
+		lg.Logf(lg.TraceLevel, "______________ Created StatefunExecutor for id=%s\n", id)
 		executor := tnex.executorContructorFunction(tnex.alias, tnex.source)
 		tnex.idExecutors.Store(id, executor)
 	}

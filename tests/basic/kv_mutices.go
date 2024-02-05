@@ -1,34 +1,34 @@
-
-
-package basic
+package main
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
 	"github.com/foliagecp/sdk/statefun"
+	lg "github.com/foliagecp/sdk/statefun/logger"
+	"github.com/foliagecp/sdk/statefun/system"
 )
 
 func KVMuticesSimpleTest(runtime *statefun.Runtime, testDurationSec int, workersCount int, workTimeMs int, afterWorkTimeMs int) {
-	fmt.Println(">>> Test started: kv mutices")
+	lg.Logln(lg.DebugLevel, ">>> Test started: kv mutices")
 
 	wg := new(sync.WaitGroup)
 	stop := make(chan bool)
 
 	testFunc := func(i int) {
+		system.GlobalPrometrics.GetRoutinesCounter().Started("KVMuticesSimpleTest-testFunc")
+		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("KVMuticesSimpleTest-testFunc")
 		defer wg.Done()
 
-		s := fmt.Sprintf("W%d", i)
 		for {
-			v, err := statefun.KeyMutexLock(runtime, "test.object", false, s)
+			v, err := statefun.KeyMutexLock(runtime, "test.object", false)
 			if err != nil {
-				fmt.Printf("ERR KeyMutexLock test: %v\n", err)
+				lg.Logf(lg.ErrorLevel, "KeyMutexLock test: %v\n", err)
 			}
 			time.Sleep(time.Duration(workTimeMs) * time.Millisecond)
-			err = statefun.KeyMutexUnlock(runtime, "test.object", v, s)
+			err = statefun.KeyMutexUnlock(runtime, "test.object", v)
 			if err != nil {
-				fmt.Printf("ERR KeyMutexUnlock test: %v\n", err)
+				lg.Logf(lg.ErrorLevel, "KeyMutexUnlock test: %v\n", err)
 			}
 			time.Sleep(time.Duration(afterWorkTimeMs) * time.Millisecond)
 
@@ -51,5 +51,5 @@ func KVMuticesSimpleTest(runtime *statefun.Runtime, testDurationSec int, workers
 	close(stop)
 	wg.Wait()
 
-	fmt.Println("<<< Test ended: kv mutices")
+	lg.Logln(lg.DebugLevel, "<<< Test ended: kv mutices")
 }

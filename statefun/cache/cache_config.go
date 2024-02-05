@@ -9,13 +9,15 @@ const (
 )
 
 type Config struct {
+	id                                          string
 	kvStorePrefix                               string
 	lruSize                                     int
 	levelSubscriptionNotificationsBufferMaxSize int
 }
 
-func NewCacheConfig() *Config {
+func NewCacheConfig(id string) *Config {
 	return &Config{
+		id:            id,
 		kvStorePrefix: KVStorePrefix,
 		lruSize:       LRUSize,
 		levelSubscriptionNotificationsBufferMaxSize: LevelSubscriptionNotificationsBufferMaxSize,
