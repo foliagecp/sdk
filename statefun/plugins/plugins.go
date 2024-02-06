@@ -15,6 +15,7 @@ import (
 )
 
 type StatefunAddress struct {
+	Domain   string
 	Typename string
 	ID       string
 }
@@ -45,14 +46,17 @@ type StatefunContextProcessor struct {
 	SetObjectContext   func(*easyjson.JSON)
 	ObjectMutexLock    func(errorOnLocked bool) error
 	ObjectMutexUnlock  func() error
+	HubDomainName      string
 	// TODO: DownstreamSignal(<function type>, <links filters>, <payload>, <options>)
-	Signal  func(SignalProvider, string, string, *easyjson.JSON, *easyjson.JSON) error
-	Request func(RequestProvider, string, string, *easyjson.JSON, *easyjson.JSON) (*easyjson.JSON, error)
-	Self    StatefunAddress
-	Caller  StatefunAddress
-	Payload *easyjson.JSON
-	Options *easyjson.JSON
-	Reply   *SyncReply // when requested in function: nil - function was signaled, !nil - function was requested
+	Signal        func(SignalProvider, string, string, *easyjson.JSON, *easyjson.JSON) error
+	Request       func(RequestProvider, string, string, *easyjson.JSON, *easyjson.JSON) (*easyjson.JSON, error)
+	SignalDomain  func(SignalProvider, string, string, string, *easyjson.JSON, *easyjson.JSON) error
+	RequestDomain func(RequestProvider, string, string, string, *easyjson.JSON, *easyjson.JSON) (*easyjson.JSON, error)
+	Self          StatefunAddress
+	Caller        StatefunAddress
+	Payload       *easyjson.JSON
+	Options       *easyjson.JSON
+	Reply         *SyncReply // when requested in function: nil - function was signaled, !nil - function was requested
 }
 
 type StatefunExecutor interface {

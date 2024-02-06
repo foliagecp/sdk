@@ -15,7 +15,7 @@ import (
 )
 
 func AddRequestSourceNatsCore(ft *FunctionType) error {
-	_, err := ft.runtime.nc.Subscribe(fmt.Sprintf("service.%s", ft.subject), func(msg *nats.Msg) {
+	_, err := ft.runtime.nc.Subscribe("request."+ft.runtime.Domain.Name+"."+ft.name+".*", func(msg *nats.Msg) {
 		system.MsgOnErrorReturn(handleNatsMsg(ft, msg, true, nil))
 	})
 
@@ -28,7 +28,7 @@ func AddRequestSourceNatsCore(ft *FunctionType) error {
 }
 
 func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType) error {
-	consumerName := strings.ReplaceAll(ft.name, ".", "")
+	consumerName := ft.runtime.Domain.Name + "-" + strings.ReplaceAll(ft.name, ".", "")
 	consumerGroup := consumerName + "-group"
 	lg.Logf(lg.TraceLevel, "Handling function type %s\n", ft.name)
 
@@ -108,7 +108,8 @@ func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool, msgAckCha
 	}
 
 	caller := sfPlugins.StatefunAddress{}
-	if data.GetByPath("caller_typename").IsString() && data.GetByPath("caller_id").IsString() {
+	if data.GetByPath("caller_domain").IsString() && data.GetByPath("caller_typename").IsString() && data.GetByPath("caller_id").IsString() {
+		caller.Domain, _ = data.GetByPath("caller_domain").AsString()
 		caller.Typename, _ = data.GetByPath("caller_typename").AsString()
 		caller.ID, _ = data.GetByPath("caller_id").AsString()
 	}

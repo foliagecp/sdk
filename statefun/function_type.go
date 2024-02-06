@@ -39,7 +39,7 @@ func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHa
 	ft := &FunctionType{
 		runtime:                 runtime,
 		name:                    name,
-		subject:                 name + ".*",
+		subject:                 fmt.Sprintf(DomainIngressSubjectsTmpl, runtime.Domain.Name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, runtime.Domain.Name, name, "*")),
 		logicHandler:            logicHandler,
 		idKeyMutex:              system.NewKeyMutex(),
 		config:                  config,
@@ -138,12 +138,19 @@ func (ft *FunctionType) idHandlerRoutine(id string, msgChannel chan FunctionType
 		SetFunctionContext: func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
 		GetObjectContext:   func() *easyjson.JSON { return ft.getContext(id) },
 		SetObjectContext:   func(context *easyjson.JSON) { ft.setContext(id, context) },
-		Self:               sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
+		HubDomainName:      ft.runtime.Domain.HubDomainName,
+		Self:               sfPlugins.StatefunAddress{Domain: ft.runtime.Domain.Name, Typename: ft.name, ID: id},
 		Signal: func(signalProvider sfPlugins.SignalProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) error {
 			return ft.runtime.signal(signalProvider, ft.name, id, targetTypename, targetID, j, o)
 		},
 		Request: func(requestProvider sfPlugins.RequestProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) (*easyjson.JSON, error) {
 			return ft.runtime.request(requestProvider, ft.name, id, targetTypename, targetID, j, o)
+		},
+		SignalDomain: func(signalProvider sfPlugins.SignalProvider, targetDomain string, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) error {
+			return ft.runtime.signalDomain(signalProvider, ft.name, id, targetDomain, targetTypename, targetID, j, o)
+		},
+		RequestDomain: func(requestProvider sfPlugins.RequestProvider, targetDomain string, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) (*easyjson.JSON, error) {
+			return ft.runtime.requestDomain(requestProvider, ft.name, id, targetDomain, targetTypename, targetID, j, o)
 		},
 		// To be assigned later:
 		// Call: ...

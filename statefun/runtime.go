@@ -26,6 +26,7 @@ type Runtime struct {
 	js         nats.JetStreamContext
 	kv         nats.KeyValue
 	cacheStore *cache.Store
+	Domain     *Domain
 
 	registeredFunctionTypes map[string]*FunctionType
 
@@ -46,6 +47,11 @@ func NewRuntime(config RuntimeConfig) (r *Runtime, err error) {
 	}
 
 	r.js, err = r.nc.JetStream(nats.PublishAsyncMaxPending(256))
+	if err != nil {
+		return
+	}
+
+	r.Domain, err = NewDomain(r.nc, r.js, config.hubDomainName)
 	if err != nil {
 		return
 	}
@@ -98,6 +104,10 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 		}
 	}
 	// --------------------------------------------------------------
+
+	if err := r.Domain.start(); err != nil {
+		return err
+	}
 
 	lg.Logln(lg.TraceLevel, "Initializing the cache store...")
 	r.cacheStore = cache.NewCacheStore(context.Background(), cacheConfig, r.js, r.kv)

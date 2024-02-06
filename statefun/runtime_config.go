@@ -10,6 +10,7 @@ const (
 	KVMutexIsOldPollingInterval = 10
 	FunctionTypeIDLifetimeMs    = 5000
 	RequestTimeoutSec           = 60
+	HubDomainName               = "hub"
 )
 
 type RuntimeConfig struct {
@@ -19,6 +20,7 @@ type RuntimeConfig struct {
 	kvMutexIsOldPollingIntervalSec int
 	functionTypeIDLifetimeMs       int
 	requestTimeoutSec              int
+	hubDomainName                  string
 }
 
 func NewRuntimeConfig() *RuntimeConfig {
@@ -29,12 +31,18 @@ func NewRuntimeConfig() *RuntimeConfig {
 		kvMutexIsOldPollingIntervalSec: KVMutexIsOldPollingInterval,
 		functionTypeIDLifetimeMs:       FunctionTypeIDLifetimeMs,
 		requestTimeoutSec:              RequestTimeoutSec,
+		hubDomainName:                  HubDomainName,
 	}
 }
 
 func NewRuntimeConfigSimple(natsURL string, runtimeName string) *RuntimeConfig {
 	ro := NewRuntimeConfig()
 	return ro.SetNatsURL(natsURL).SeKeyValueStoreBucketName("common_kv_store")
+}
+
+func (ro *RuntimeConfig) SetHubDomainName(hubDomainName string) *RuntimeConfig {
+	ro.hubDomainName = hubDomainName
+	return ro
 }
 
 func (ro *RuntimeConfig) SetNatsURL(natsURL string) *RuntimeConfig {
