@@ -3,31 +3,22 @@
 package main
 
 import (
-	/*"time"
+	"time"
 
 	"github.com/foliagecp/easyjson"
-	"github.com/nats-io/nats.go"
-	"github.com/prometheus/client_golang/prometheus"
-
-	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
-
-
-	lg "github.com/foliagecp/sdk/statefun/logger"
+	//graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
 
 	// Comment out and no not use graphDebug for resolving the cgo conflict between go-graphviz and rogchap (when --ldflags '-extldflags "-Wl,--allow-multiple-definition"' does not help)
-	graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
-	"github.com/foliagecp/sdk/embedded/graph/jpgql"
-	graphTX "github.com/foliagecp/sdk/embedded/graph/tx"
+	//graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
+	//"github.com/foliagecp/sdk/embedded/graph/jpgql"
+	//graphTX "github.com/foliagecp/sdk/embedded/graph/tx"
+
 	statefun "github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/cache"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
-	"github.com/foliagecp/sdk/statefun/system"*/
+	"github.com/foliagecp/sdk/statefun/system"
 
 	lg "github.com/foliagecp/sdk/statefun/logger"
-	"github.com/foliagecp/sdk/statefun/sharding"
-	"github.com/foliagecp/sdk/statefun/system"
-	"github.com/nats-io/nats.go"
-	"time"
 )
 
 var (
@@ -41,8 +32,73 @@ var (
 	MasterFunctionLogs bool = system.GetEnvMustProceed("MASTER_FUNC_LOGS", true)*/
 )
 
-/*func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-	start := time.Now()
+func TestFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
+
+	if contextProcessor.Reply == nil { // Signal came
+		lg.Logf(
+			lg.InfoLevel,
+			">>> Signal from caller %s::%s:%s on %s::%s:%s\n",
+			contextProcessor.Caller.Domain,
+			contextProcessor.Caller.Typename,
+			contextProcessor.Caller.ID,
+			contextProcessor.Self.Domain,
+			contextProcessor.Self.Typename,
+			contextProcessor.Self.ID,
+		)
+		if contextProcessor.Self.Domain == contextProcessor.HubDomainName { // Function on HUB
+			contextProcessor.SignalDomain(
+				sfPlugins.JetstreamGlobalSignal,
+				"leaf",
+				contextProcessor.Self.Typename,
+				contextProcessor.Self.ID+"A",
+				contextProcessor.Payload,
+				contextProcessor.Options,
+			)
+		} else { // Function on LEAF
+			if contextProcessor.Caller.Domain == contextProcessor.HubDomainName { // from HUB
+				contextProcessor.SignalDomain(
+					sfPlugins.JetstreamGlobalSignal,
+					"leaf",
+					contextProcessor.Self.Typename,
+					contextProcessor.Self.ID+"B",
+					contextProcessor.Payload,
+					contextProcessor.Options,
+				)
+			} else { // from LEAF
+				contextProcessor.RequestDomain(
+					sfPlugins.NatsCoreGlobalRequest,
+					contextProcessor.HubDomainName,
+					contextProcessor.Self.Typename,
+					contextProcessor.Self.ID+"C",
+					contextProcessor.Payload,
+					contextProcessor.Options,
+				)
+			}
+		}
+	} else { // Request came
+		lg.Logf(
+			lg.InfoLevel,
+			">>>>>> Request from caller %s::%s:%s on %s::%s:%s\n",
+			contextProcessor.Caller.Domain,
+			contextProcessor.Caller.Typename,
+			contextProcessor.Caller.ID,
+			contextProcessor.Self.Domain,
+			contextProcessor.Self.Typename,
+			contextProcessor.Self.ID,
+		)
+		if contextProcessor.Self.Domain == contextProcessor.HubDomainName { // Function on HUB
+			contextProcessor.RequestDomain(
+				sfPlugins.NatsCoreGlobalRequest,
+				"leaf",
+				contextProcessor.Self.Typename,
+				contextProcessor.Self.ID+"D",
+				contextProcessor.Payload,
+				contextProcessor.Options,
+			)
+		}
+	}
+
+	/*start := time.Now()
 
 	var functionContext *easyjson.JSON
 	if MasterFunctionContextIncrement {
@@ -78,24 +134,27 @@ var (
 
 	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("master_function", "", []string{"id"}); err == nil {
 		gaugeVec.With(prometheus.Labels{"id": contextProcessor.Self.ID}).Set(float64(time.Since(start).Microseconds()))
-	}
+	}*/
 }
 
 func RegisterFunctionTypes(runtime *statefun.Runtime) {
-	ftOptions := easyjson.NewJSONObjectWithKeyValue("increment", easyjson.NewJSON(MasterFunctionContextIncrementOption))
-	statefun.NewFunctionType(runtime, "functions.tests.basic.master", MasterFunction, *statefun.NewFunctionTypeConfig().SetOptions(&ftOptions).SetServiceState(true))
+	statefun.NewFunctionType(runtime, "domains.test", TestFunction, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
-	graphCRUD.RegisterAllFunctionTypes(runtime)
-	graphTX.RegisterAllFunctionTypes(runtime)
-	graphDebug.RegisterAllFunctionTypes(runtime)
-	jpgql.RegisterAllFunctionTypes(runtime, 30)
-}*/
+	//graphCRUD.RegisterAllFunctionTypes(runtime)
+	//graphTX.RegisterAllFunctionTypes(runtime)
+	//graphDebug.RegisterAllFunctionTypes(runtime)
+	//jpgql.RegisterAllFunctionTypes(runtime, 30)
+}
 
 func Start() {
-	/*system.GlobalPrometrics = system.NewPrometrics("", ":9901")
+	system.GlobalPrometrics = system.NewPrometrics("", ":9901")
 
 	afterStart := func(runtime *statefun.Runtime) error {
-		CreateTestGraph(runtime)
+		//CreateTestGraph(runtime)
+		if runtime.Domain.Name == runtime.Domain.HubDomainName {
+			time.Sleep(5 * time.Second) // Wait for everithing to bring up
+			runtime.Signal(sfPlugins.JetstreamGlobalSignal, "domains.test", "foo", easyjson.NewJSONObject().GetPtr(), nil)
+		}
 		return nil
 	}
 
@@ -106,27 +165,6 @@ func Start() {
 		}
 	} else {
 		lg.Logf(lg.ErrorLevel, "Cannot create statefun runtime due to an error: %s\n", err)
-	}*/
-
-	nc, err := nats.Connect(NatsURL)
-	if err != nil {
-		return
-	}
-
-	js, err := nc.JetStream(nats.PublishAsyncMaxPending(256))
-	if err != nil {
-		return
-	}
-
-	s, e := sharding.NewShard(nc, js, "hub")
-	if e == nil {
-		s.Start()
-	} else {
-		lg.Logln(lg.ErrorLevel, e)
-	}
-
-	for true {
-		time.Sleep(1 * time.Second)
 	}
 }
 

@@ -1,4 +1,4 @@
-package sharding
+package statefun
 
 import (
 	"context"
@@ -18,49 +18,49 @@ type (
 )
 
 const (
-	signalPrefix               = "signal"
-	fromGlobalSignalTmpl       = signalPrefix + ".%s.%s"
-	shardSubjectsIngressPrefix = "$SI"
-	shardSubjectsEgressPrefix  = "$SE"
-	shardIngressSubjectsTmpl   = shardSubjectsIngressPrefix + ".%s.%s"
-	shardEgressSubjectsTmpl    = shardSubjectsEgressPrefix + ".%s.%s"
+	SignalPrefix                = "signal"
+	FromGlobalSignalTmpl        = SignalPrefix + ".%s.%s"
+	DomainSubjectsIngressPrefix = "$SI"
+	DomainSubjectsEgressPrefix  = "$SE"
+	DomainIngressSubjectsTmpl   = DomainSubjectsIngressPrefix + ".%s.%s"
+	DomainEgressSubjectsTmpl    = DomainSubjectsEgressPrefix + ".%s.%s"
 
 	streamPrefix = "$JS.%s.API"
 
-	hubEventStreamName     = "hub_events"
-	shardIngressStreamName = "shard_ingress"
-	shardEgressStreamName  = "shard_egress"
+	hubEventStreamName      = "hub_events"
+	domainIngressStreamName = "domain_ingress"
+	domainEgressStreamName  = "domain_egress"
 
 	routerConsumerMaxAckWaitMs           = 2000
 	lostConnectionSingleMsgProcessTimeMs = 700
 	maxPendingMessages                   = routerConsumerMaxAckWaitMs / lostConnectionSingleMsgProcessTimeMs
 )
 
-type Shard struct {
+type Domain struct {
 	HubDomainName string
-	DomainName    string
+	Name          string
 	nc            *nats.Conn
 	js            nats.JetStreamContext
 }
 
-func NewShard(nc *nats.Conn, js nats.JetStreamContext, hubDomainName string) (s *Shard, e error) {
+func NewDomain(nc *nats.Conn, js nats.JetStreamContext, hubDomainName string) (s *Domain, e error) {
 	accInfo, err := js.AccountInfo()
 	if err != nil {
 		return nil, err
 	}
 
-	shard := &Shard{
+	domain := &Domain{
 		HubDomainName: hubDomainName,
-		DomainName:    accInfo.Domain,
+		Name:          accInfo.Domain,
 		nc:            nc,
 		js:            js,
 	}
 
-	return shard, nil
+	return domain, nil
 }
 
-func (s *Shard) Start() error {
-	if s.HubDomainName == s.DomainName {
+func (s *Domain) start() error {
+	if s.HubDomainName == s.Name {
 		if err := s.createHubSignalStream(); err != nil {
 			return err
 		}
@@ -80,14 +80,14 @@ func (s *Shard) Start() error {
 	return nil
 }
 
-func (s *Shard) createIngressRouter() error {
+func (s *Domain) createIngressRouter() error {
 	targetSubjectCalculator := func(msg *nats.Msg) (string, error) {
-		return fmt.Sprintf(shardIngressSubjectsTmpl, s.DomainName, msg.Subject), nil
+		return fmt.Sprintf(DomainIngressSubjectsTmpl, s.Name, msg.Subject), nil
 	}
-	return s.createRouter(shardIngressStreamName, fmt.Sprintf(fromGlobalSignalTmpl, s.DomainName, ">"), targetSubjectCalculator)
+	return s.createRouter(domainIngressStreamName, fmt.Sprintf(FromGlobalSignalTmpl, s.Name, ">"), targetSubjectCalculator)
 }
 
-func (s *Shard) createEgressRouter() error {
+func (s *Domain) createEgressRouter() error {
 	targetSubjectCalculator := func(msg *nats.Msg) (string, error) {
 		tokens := strings.Split(msg.Subject, ".")
 		if len(tokens) < 5 { // $SE.<domain_name>.signal.<signal_domain_name>.<function_name>
@@ -95,30 +95,30 @@ func (s *Shard) createEgressRouter() error {
 		}
 		targetSubject := ""
 		if tokens[1] == tokens[3] { // Signalling function is in the same domain
-			tokens[0] = shardSubjectsIngressPrefix
+			tokens[0] = DomainSubjectsIngressPrefix
 			targetSubject = strings.Join(tokens, ".")
 		} else {
 			targetSubject = strings.Join(tokens[2:], ".")
 		}
 		return targetSubject, nil
 	}
-	return s.createRouter(shardEgressStreamName, fmt.Sprintf(shardEgressSubjectsTmpl, s.DomainName, ">"), targetSubjectCalculator)
+	return s.createRouter(domainEgressStreamName, fmt.Sprintf(DomainEgressSubjectsTmpl, s.Name, ">"), targetSubjectCalculator)
 }
 
-func (s *Shard) createHubSignalStream() error {
+func (s *Domain) createHubSignalStream() error {
 	sc := &nats.StreamConfig{
 		Name:     hubEventStreamName,
-		Subjects: []string{signalPrefix + ".>"},
+		Subjects: []string{SignalPrefix + ".>"},
 	}
 	return s.createStreamIfNotExists(sc)
 }
 
-func (s *Shard) createIngresSignalStream() error {
+func (s *Domain) createIngresSignalStream() error {
 	var ss *nats.StreamSource
-	if s.HubDomainName == s.DomainName {
+	if s.HubDomainName == s.Name {
 		ss = &nats.StreamSource{
 			Name:          hubEventStreamName,
-			FilterSubject: fmt.Sprintf(fromGlobalSignalTmpl, s.DomainName, ">"),
+			FilterSubject: fmt.Sprintf(FromGlobalSignalTmpl, s.Name, ">"),
 		}
 	} else {
 		ext := &nats.ExternalStream{
@@ -126,26 +126,26 @@ func (s *Shard) createIngresSignalStream() error {
 		}
 		ss = &nats.StreamSource{
 			Name:          hubEventStreamName,
-			FilterSubject: fmt.Sprintf(fromGlobalSignalTmpl, s.DomainName, ">"),
+			FilterSubject: fmt.Sprintf(FromGlobalSignalTmpl, s.Name, ">"),
 			External:      ext,
 		}
 	}
 	sc := &nats.StreamConfig{
-		Name:    shardIngressStreamName,
+		Name:    domainIngressStreamName,
 		Sources: []*nats.StreamSource{ss},
 	}
 	return s.createStreamIfNotExists(sc)
 }
 
-func (s *Shard) createEngresSignalStream() error {
+func (s *Domain) createEngresSignalStream() error {
 	sc := &nats.StreamConfig{
-		Name:     shardEgressStreamName,
-		Subjects: []string{fmt.Sprintf(shardEgressSubjectsTmpl, s.DomainName, ">")},
+		Name:     domainEgressStreamName,
+		Subjects: []string{fmt.Sprintf(DomainEgressSubjectsTmpl, s.Name, ">")},
 	}
 	return s.createStreamIfNotExists(sc)
 }
 
-func (s *Shard) createStreamIfNotExists(sc *nats.StreamConfig) error {
+func (s *Domain) createStreamIfNotExists(sc *nats.StreamConfig) error {
 	// Create streams if does not exist ------------------------------
 	/* Each stream contains a single subject (topic).
 	 * Differently named stream with overlapping subjects cannot exist!
@@ -165,10 +165,10 @@ func (s *Shard) createStreamIfNotExists(sc *nats.StreamConfig) error {
 	// --------------------------------------------------------------
 }
 
-func (s *Shard) createRouter(sourceStreamName string, subject string, tsc targetSubjectCalculator) error {
-	consumerName := sourceStreamName + "-" + s.DomainName + "-consumer"
+func (s *Domain) createRouter(sourceStreamName string, subject string, tsc targetSubjectCalculator) error {
+	consumerName := sourceStreamName + "-" + s.Name + "-consumer"
 	consumerGroup := consumerName + "-group"
-	lg.Logf(lg.TraceLevel, "Handling shard (domain=%s) router for sourceStreamName=%s\n", s.DomainName, sourceStreamName)
+	lg.Logf(lg.TraceLevel, "Handling domain (domain=%s) router for sourceStreamName=%s\n", s.Name, sourceStreamName)
 
 	// Create stream consumer if does not exist ---------------------
 	consumerExists := false
@@ -197,15 +197,15 @@ func (s *Shard) createRouter(sourceStreamName string, subject string, tsc target
 		consumerGroup,
 		func(msg *nats.Msg) {
 			targetSubject, err := tsc(msg)
-			lg.Logf(lg.TraceLevel, "Routing (from_domain=%s) %s:%s -> %s\n", s.DomainName, sourceStreamName, msg.Subject, targetSubject)
+			//lg.Logf(lg.TraceLevel, "Routing (from_domain=%s) %s:%s -> %s\n", s.Name, sourceStreamName, msg.Subject, targetSubject)
 			if err == nil {
 				pubAck, err := s.js.Publish(targetSubject, msg.Data)
 				if err == nil {
-					lg.Logf(lg.TraceLevel, "Routed (from_domain=%s) %s:%s -> (to_domain=%s) %s:%s\n", s.DomainName, sourceStreamName, msg.Subject, pubAck.Domain, pubAck.Stream, targetSubject)
+					lg.Logf(lg.TraceLevel, "Routed (from_domain=%s) %s:%s -> (to_domain=%s) %s:%s\n", s.Name, sourceStreamName, msg.Subject, pubAck.Domain, pubAck.Stream, targetSubject)
 					msg.Ack()
 					return
 				} else {
-					lg.Logf(lg.ErrorLevel, "Shard (domain=%s) router with sourceStreamName=%s cannot republish message: %s\n", s.DomainName, sourceStreamName, err)
+					lg.Logf(lg.ErrorLevel, "Domain (domain=%s) router with sourceStreamName=%s cannot republish message: %s\n", s.Name, sourceStreamName, err)
 				}
 			}
 			msg.Nak()
@@ -214,7 +214,7 @@ func (s *Shard) createRouter(sourceStreamName string, subject string, tsc target
 		nats.ManualAck(),
 	)
 	if err != nil {
-		lg.Logf(lg.ErrorLevel, "Invalid subscription for shard (domain=%s) router with sourceStreamName=%s: %s\n", s.DomainName, sourceStreamName, err)
+		lg.Logf(lg.ErrorLevel, "Invalid subscription for domain (domain=%s) router with sourceStreamName=%s: %s\n", s.Name, sourceStreamName, err)
 		return err
 	}
 	return nil

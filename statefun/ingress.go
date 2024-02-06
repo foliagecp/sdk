@@ -10,8 +10,9 @@ import (
 	"github.com/foliagecp/sdk/statefun/system"
 )
 
-func buildNatsData(callerTypename string, callerID string, payload *easyjson.JSON, options *easyjson.JSON) []byte {
+func buildNatsData(callerDomain string, callerTypename string, callerID string, payload *easyjson.JSON, options *easyjson.JSON) []byte {
 	data := easyjson.NewJSONObject()
+	data.SetByPath("caller_domain", easyjson.NewJSON(callerDomain))
 	data.SetByPath("caller_typename", easyjson.NewJSON(callerTypename))
 	data.SetByPath("caller_id", easyjson.NewJSON(callerID))
 	if payload != nil {
@@ -23,12 +24,15 @@ func buildNatsData(callerTypename string, callerID string, payload *easyjson.JSO
 	return data.ToBytes()
 }
 
-func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) error {
+func (r *Runtime) signalDomain(signalProvider sfPlugins.SignalProvider, callerTypename string, callerID string, targetDomain string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) error {
 	jetstreamGlobalSignal := func() error {
 		go func() {
 			system.GlobalPrometrics.GetRoutinesCounter().Started("ingress-jetstreamGlobalSignal-gofunc")
 			defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("ingress-jetstreamGlobalSignal-gofunc")
-			system.MsgOnErrorReturn(r.nc.Publish(fmt.Sprintf("%s.%s", targetTypename, targetID), buildNatsData(callerTypename, callerID, payload, options)))
+			system.MsgOnErrorReturn(r.nc.Publish(
+				fmt.Sprintf(DomainEgressSubjectsTmpl, r.Domain.Name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, targetDomain, targetTypename, targetID)),
+				buildNatsData(r.Domain.Name, callerTypename, callerID, payload, options),
+			))
 		}()
 		return nil
 	}
@@ -41,15 +45,11 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 	}
 }
 
-func (r *Runtime) Signal(signalProvider sfPlugins.SignalProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) error {
-	return r.signal(signalProvider, "ingress", "nats", typename, id, payload, options)
-}
-
-func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) (*easyjson.JSON, error) {
+func (r *Runtime) requestDomain(requestProvider sfPlugins.RequestProvider, callerTypename string, callerID string, targetDomain string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) (*easyjson.JSON, error) {
 	natsCoreGlobalRequest := func() (*easyjson.JSON, error) {
 		resp, err := r.nc.Request(
-			fmt.Sprintf("service.%s.%s", targetTypename, targetID),
-			buildNatsData(callerTypename, callerID, payload, options),
+			fmt.Sprintf("request.%s.%s.%s", targetDomain, targetTypename, targetID),
+			buildNatsData(r.Domain.Name, callerTypename, callerID, payload, options),
 			time.Duration(r.config.requestTimeoutSec)*time.Second,
 		)
 		if err == nil {
@@ -81,7 +81,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 			}
 			// ----------------------------------------------------------------------------------------
 			functionMsg := FunctionTypeMsg{
-				Caller:  &sfPlugins.StatefunAddress{Typename: callerTypename, ID: callerID},
+				Caller:  &sfPlugins.StatefunAddress{Domain: r.Domain.Name, Typename: callerTypename, ID: callerID},
 				Payload: payloadCopy,
 				Options: optionsCopy,
 			}
@@ -100,7 +100,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 				if ok {
 					return resultJSON, nil
 				}
-				return nil, fmt.Errorf("target function typename \"%s\" with id \"%s\" resufes to handle request", targetTypename, targetID)
+				return nil, fmt.Errorf("target function in domain %s with typename \"%s\" with id \"%s\" resufes to handle request", targetDomain, targetTypename, targetID)
 			case <-time.After(time.Duration(r.config.requestTimeoutSec) * time.Second):
 				return nil, fmt.Errorf("timeout occured while requesting function typename \"%s\" with id \"%s\"", targetTypename, targetID)
 			}
@@ -119,6 +119,28 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 	}
 }
 
+func (r *Runtime) SignalDomain(signalProvider sfPlugins.SignalProvider, domain string, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) error {
+	return r.signalDomain(signalProvider, "ingress", "nats", domain, typename, id, payload, options)
+}
+
+func (r *Runtime) RequestDomain(requestProvider sfPlugins.RequestProvider, domain string, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) (*easyjson.JSON, error) {
+	return r.requestDomain(requestProvider, "ingress", "go", domain, typename, id, payload, options)
+}
+
+// ------------------------------------------------------------------------------------------------
+
+func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) error {
+	return r.signalDomain(signalProvider, callerTypename, callerID, r.Domain.Name, targetTypename, targetID, payload, options)
+}
+
+func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) (*easyjson.JSON, error) {
+	return r.requestDomain(requestProvider, callerTypename, callerID, r.Domain.Name, targetTypename, targetID, payload, options)
+}
+
+func (r *Runtime) Signal(signalProvider sfPlugins.SignalProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) error {
+	return r.SignalDomain(signalProvider, r.Domain.Name, typename, id, payload, options)
+}
+
 func (r *Runtime) Request(requestProvider sfPlugins.RequestProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) (*easyjson.JSON, error) {
-	return r.request(requestProvider, "ingress", "go", typename, id, payload, options)
+	return r.RequestDomain(requestProvider, r.Domain.Name, typename, id, payload, options)
 }
