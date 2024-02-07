@@ -15,7 +15,7 @@ import (
 )
 
 func AddRequestSourceNatsCore(ft *FunctionType) error {
-	_, err := ft.runtime.nc.Subscribe("request."+ft.runtime.Domain.Name+"."+ft.name+".*", func(msg *nats.Msg) {
+	_, err := ft.runtime.nc.Subscribe("request."+ft.runtime.Domain.name+"."+ft.name+".*", func(msg *nats.Msg) {
 		system.MsgOnErrorReturn(handleNatsMsg(ft, msg, true, nil))
 	})
 
@@ -28,7 +28,7 @@ func AddRequestSourceNatsCore(ft *FunctionType) error {
 }
 
 func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType) error {
-	consumerName := ft.runtime.Domain.Name + "-" + strings.ReplaceAll(ft.name, ".", "")
+	consumerName := ft.runtime.Domain.name + "-" + strings.ReplaceAll(ft.name, ".", "")
 	consumerGroup := consumerName + "-group"
 	lg.Logf(lg.TraceLevel, "Handling function type %s\n", ft.name)
 
@@ -83,7 +83,8 @@ func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType) error {
 
 func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool, msgAckChannel chan *nats.Msg) (err error) {
 	tokens := strings.Split(msg.Subject, ".")
-	id := tokens[len(tokens)-1]
+	originId := tokens[len(tokens)-1]
+	id := ft.runtime.Domain.CreateObjectIDWithDomain(ft.runtime.Domain.name, originId)
 
 	data, ok := easyjson.JSONFromBytes(msg.Data)
 	if !ok {
@@ -108,8 +109,7 @@ func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool, msgAckCha
 	}
 
 	caller := sfPlugins.StatefunAddress{}
-	if data.GetByPath("caller_domain").IsString() && data.GetByPath("caller_typename").IsString() && data.GetByPath("caller_id").IsString() {
-		caller.Domain, _ = data.GetByPath("caller_domain").AsString()
+	if data.GetByPath("caller_typename").IsString() && data.GetByPath("caller_id").IsString() {
 		caller.Typename, _ = data.GetByPath("caller_typename").AsString()
 		caller.ID, _ = data.GetByPath("caller_id").AsString()
 	}

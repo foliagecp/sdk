@@ -33,43 +33,40 @@ var (
 )
 
 func TestFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-
+	hubDomain := contextProcessor.Domain.HubDomainName()
+	callerDomain := contextProcessor.Domain.GetDomainFromObjectID(contextProcessor.Caller.ID)
+	functionDomain := contextProcessor.Domain.GetDomainFromObjectID(contextProcessor.Self.ID)
 	if contextProcessor.Reply == nil { // Signal came
 		lg.Logf(
 			lg.InfoLevel,
-			">>> Signal from caller %s::%s:%s on %s::%s:%s\n",
-			contextProcessor.Caller.Domain,
+			">>> Signal from caller %s:%s on %s:%s\n",
 			contextProcessor.Caller.Typename,
 			contextProcessor.Caller.ID,
-			contextProcessor.Self.Domain,
 			contextProcessor.Self.Typename,
 			contextProcessor.Self.ID,
 		)
-		if contextProcessor.Self.Domain == contextProcessor.HubDomainName { // Function on HUB
-			contextProcessor.SignalDomain(
+		if functionDomain == hubDomain { // Function on HUB
+			contextProcessor.Signal(
 				sfPlugins.JetstreamGlobalSignal,
-				"leaf",
 				contextProcessor.Self.Typename,
-				contextProcessor.Self.ID+"A",
+				contextProcessor.Domain.CreateObjectIDWithDomain("leaf", contextProcessor.Self.ID+"A"),
 				contextProcessor.Payload,
 				contextProcessor.Options,
 			)
 		} else { // Function on LEAF
-			if contextProcessor.Caller.Domain == contextProcessor.HubDomainName { // from HUB
-				contextProcessor.SignalDomain(
+			if callerDomain == hubDomain { // from HUB
+				contextProcessor.Signal(
 					sfPlugins.JetstreamGlobalSignal,
-					"leaf",
 					contextProcessor.Self.Typename,
-					contextProcessor.Self.ID+"B",
+					contextProcessor.Domain.CreateObjectIDWithDomain("leaf", contextProcessor.Self.ID+"B"),
 					contextProcessor.Payload,
 					contextProcessor.Options,
 				)
 			} else { // from LEAF
-				contextProcessor.RequestDomain(
+				contextProcessor.Request(
 					sfPlugins.NatsCoreGlobalRequest,
-					contextProcessor.HubDomainName,
 					contextProcessor.Self.Typename,
-					contextProcessor.Self.ID+"C",
+					contextProcessor.Domain.CreateObjectIDWithDomain(hubDomain, contextProcessor.Self.ID+"C"),
 					contextProcessor.Payload,
 					contextProcessor.Options,
 				)
@@ -78,20 +75,17 @@ func TestFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugi
 	} else { // Request came
 		lg.Logf(
 			lg.InfoLevel,
-			">>>>>> Request from caller %s::%s:%s on %s::%s:%s\n",
-			contextProcessor.Caller.Domain,
+			">>>>>> Request from caller %s:%s on %s:%s\n",
 			contextProcessor.Caller.Typename,
 			contextProcessor.Caller.ID,
-			contextProcessor.Self.Domain,
 			contextProcessor.Self.Typename,
 			contextProcessor.Self.ID,
 		)
-		if contextProcessor.Self.Domain == contextProcessor.HubDomainName { // Function on HUB
-			contextProcessor.RequestDomain(
+		if functionDomain == hubDomain { // Function on HUB
+			contextProcessor.Request(
 				sfPlugins.NatsCoreGlobalRequest,
-				"leaf",
 				contextProcessor.Self.Typename,
-				contextProcessor.Self.ID+"D",
+				contextProcessor.Domain.CreateObjectIDWithDomain("leaf", contextProcessor.Self.ID+"D"),
 				contextProcessor.Payload,
 				contextProcessor.Options,
 			)
@@ -151,7 +145,7 @@ func Start() {
 
 	afterStart := func(runtime *statefun.Runtime) error {
 		//CreateTestGraph(runtime)
-		if runtime.Domain.Name == runtime.Domain.HubDomainName {
+		if runtime.Domain.Name() == runtime.Domain.HubDomainName() {
 			time.Sleep(5 * time.Second) // Wait for everithing to bring up
 			runtime.Signal(sfPlugins.JetstreamGlobalSignal, "domains.test", "foo", easyjson.NewJSONObject().GetPtr(), nil)
 		}

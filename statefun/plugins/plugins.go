@@ -15,7 +15,6 @@ import (
 )
 
 type StatefunAddress struct {
-	Domain   string
 	Typename string
 	ID       string
 }
@@ -38,6 +37,14 @@ type SyncReply struct {
 	CancelDefault func()
 }
 
+type Domain interface {
+	HubDomainName() string
+	Name() string
+	GetDomainFromObjectID(objectID string) string
+	GetObjectIDWithoutDomain(objectID string) string
+	CreateObjectIDWithDomain(domain string, objectID string) string
+}
+
 type StatefunContextProcessor struct {
 	GlobalCache        *cache.Store
 	GetFunctionContext func() *easyjson.JSON
@@ -46,17 +53,15 @@ type StatefunContextProcessor struct {
 	SetObjectContext   func(*easyjson.JSON)
 	ObjectMutexLock    func(errorOnLocked bool) error
 	ObjectMutexUnlock  func() error
-	HubDomainName      string
+	Domain             Domain
 	// TODO: DownstreamSignal(<function type>, <links filters>, <payload>, <options>)
-	Signal        func(SignalProvider, string, string, *easyjson.JSON, *easyjson.JSON) error
-	Request       func(RequestProvider, string, string, *easyjson.JSON, *easyjson.JSON) (*easyjson.JSON, error)
-	SignalDomain  func(SignalProvider, string, string, string, *easyjson.JSON, *easyjson.JSON) error
-	RequestDomain func(RequestProvider, string, string, string, *easyjson.JSON, *easyjson.JSON) (*easyjson.JSON, error)
-	Self          StatefunAddress
-	Caller        StatefunAddress
-	Payload       *easyjson.JSON
-	Options       *easyjson.JSON
-	Reply         *SyncReply // when requested in function: nil - function was signaled, !nil - function was requested
+	Signal  func(SignalProvider, string, string, *easyjson.JSON, *easyjson.JSON) error
+	Request func(RequestProvider, string, string, *easyjson.JSON, *easyjson.JSON) (*easyjson.JSON, error)
+	Self    StatefunAddress
+	Caller  StatefunAddress
+	Payload *easyjson.JSON
+	Options *easyjson.JSON
+	Reply   *SyncReply // when requested in function: nil - function was signaled, !nil - function was requested
 }
 
 type StatefunExecutor interface {
