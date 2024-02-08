@@ -28,6 +28,7 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 		go func() {
 			system.GlobalPrometrics.GetRoutinesCounter().Started("ingress-jetstreamGlobalSignal-gofunc")
 			defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("ingress-jetstreamGlobalSignal-gofunc")
+
 			system.MsgOnErrorReturn(r.nc.Publish(
 				fmt.Sprintf(DomainEgressSubjectsTmpl, r.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, r.Domain.GetDomainFromObjectID(targetID), targetTypename, targetID)),
 				buildNatsData(r.Domain.name, callerTypename, callerID, payload, options),
@@ -113,6 +114,12 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 		return natsCoreGlobalRequest()
 	case sfPlugins.GolangLocalRequest:
 		return goLangLocalRequest()
+	case sfPlugins.AutoSelect:
+		selection := sfPlugins.GolangLocalRequest
+		if r.Domain.GetDomainFromObjectID(callerID) != r.Domain.GetDomainFromObjectID(targetID) {
+			selection = sfPlugins.NatsCoreGlobalRequest
+		}
+		return r.request(selection, callerTypename, callerID, targetTypename, targetID, payload, options)
 	default:
 		return nil, fmt.Errorf("unknown request provider: %d", requestProvider)
 	}
