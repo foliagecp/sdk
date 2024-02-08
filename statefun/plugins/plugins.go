@@ -30,6 +30,7 @@ type RequestProvider int
 const (
 	NatsCoreGlobalRequest RequestProvider = iota
 	GolangLocalRequest
+	AutoSelect
 )
 
 type SyncReply struct {

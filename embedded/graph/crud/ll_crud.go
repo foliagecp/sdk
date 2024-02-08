@@ -122,7 +122,7 @@ func LLAPIVertexCreate(executor sfplugins.StatefunExecutor, contextProcessor *sf
 		// Delete existing object ---------------------------------------------
 		deleteObjectPayload := easyjson.NewJSONObject()
 		deleteObjectPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
-		res, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.delete", contextProcessor.Self.ID, &deleteObjectPayload, contextProcessor.Options)
+		res, err := contextProcessor.Request(sfplugins.AutoSelect, "functions.graph.api.vertex.delete", contextProcessor.Self.ID, &deleteObjectPayload, contextProcessor.Options)
 		system.MsgOnErrorReturn(err)
 		if res != nil {
 			mergeOpStack(opStack, res.GetByPath("op_stack").GetPtr())
@@ -248,7 +248,7 @@ func LLAPIVertexDelete(executor sfplugins.StatefunExecutor, contextProcessor *sf
 		deleteLinkPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
 		deleteLinkPayload.SetByPath("descendant_uuid", easyjson.NewJSON(toObjectID))
 		deleteLinkPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
-		res, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.delete", contextProcessor.Self.ID, &deleteLinkPayload, contextProcessor.Options)
+		res, err := contextProcessor.Request(sfplugins.AutoSelect, "functions.graph.api.link.delete", contextProcessor.Self.ID, &deleteLinkPayload, contextProcessor.Options)
 		system.MsgOnErrorReturn(err)
 		if res != nil {
 			mergeOpStack(opStack, res.GetByPath("op_stack").GetPtr())
@@ -267,7 +267,7 @@ func LLAPIVertexDelete(executor sfplugins.StatefunExecutor, contextProcessor *sf
 		deleteLinkPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
 		deleteLinkPayload.SetByPath("descendant_uuid", easyjson.NewJSON(contextProcessor.Self.ID))
 		deleteLinkPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
-		res, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.delete", fromObjectID, &deleteLinkPayload, contextProcessor.Options)
+		res, err := contextProcessor.Request(sfplugins.AutoSelect, "functions.graph.api.link.delete", fromObjectID, &deleteLinkPayload, contextProcessor.Options)
 		system.MsgOnErrorReturn(err)
 		if res != nil {
 			mergeOpStack(opStack, res.GetByPath("op_stack").GetPtr())
@@ -379,7 +379,7 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 				nextCallPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
 				nextCallPayload.SetByPath("descendant_uuid", easyjson.NewJSON(descendantUUID))
 				nextCallPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
-				res, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.delete", contextProcessor.Self.ID, &nextCallPayload, contextProcessor.Options)
+				res, err := contextProcessor.Request(sfplugins.AutoSelect, "functions.graph.api.link.delete", contextProcessor.Self.ID, &nextCallPayload, contextProcessor.Options)
 				system.MsgOnErrorReturn(err)
 				if res != nil {
 					mergeOpStack(opStack, res.GetByPath("op_stack").GetPtr())
@@ -435,9 +435,9 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			nextCallPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
 			nextCallPayload.SetByPath("in_link_type", easyjson.NewJSON(linkType))
 			if descendantUUID == contextProcessor.Self.ID {
-				system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, contextProcessor.Self.Typename, descendantUUID+"===create_in_link", &nextCallPayload, nil))
+				system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.AutoSelect, contextProcessor.Self.Typename, descendantUUID+"===create_in_link", &nextCallPayload, nil))
 			} else {
-				system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, contextProcessor.Self.Typename, descendantUUID, &nextCallPayload, nil))
+				system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.AutoSelect, contextProcessor.Self.Typename, descendantUUID, &nextCallPayload, nil))
 			}
 			// --------------------------------------------------------
 
@@ -591,7 +591,7 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			createLinkPayload.SetByPath("descendant_uuid", easyjson.NewJSON(descendantUUID))
 			createLinkPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
 			createLinkPayload.SetByPath("link_body", linkBody)
-			res, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.create", contextProcessor.Self.ID, &createLinkPayload, contextProcessor.Options)
+			res, err := contextProcessor.Request(sfplugins.AutoSelect, "functions.graph.api.link.create", contextProcessor.Self.ID, &createLinkPayload, contextProcessor.Options)
 			system.MsgOnErrorReturn(err)
 			if res != nil {
 				mergeOpStack(opStack, res.GetByPath("op_stack").GetPtr())
@@ -706,9 +706,9 @@ func LLAPILinkDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 				nextCallPayload.SetByPath("query_id", easyjson.NewJSON(queryID))
 				nextCallPayload.SetByPath("in_link_type", easyjson.NewJSON(linkType))
 				if descendantUUID == contextProcessor.Self.ID {
-					system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, contextProcessor.Self.Typename, descendantUUID+"===delete_in_link", &nextCallPayload, nil))
+					system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.AutoSelect, contextProcessor.Self.Typename, descendantUUID+"===delete_in_link", &nextCallPayload, nil))
 				} else {
-					system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, contextProcessor.Self.Typename, descendantUUID, &nextCallPayload, nil))
+					system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.AutoSelect, contextProcessor.Self.Typename, descendantUUID, &nextCallPayload, nil))
 				}
 
 				addLinkOpToOpStack(opStack, contextProcessor.Self.Typename, contextProcessor.Self.ID, descendantUUID, linkType, linkBody, nil)

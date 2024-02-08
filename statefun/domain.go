@@ -24,7 +24,7 @@ const (
 	DomainSubjectsEgressPrefix  = "$SE"
 	DomainIngressSubjectsTmpl   = DomainSubjectsIngressPrefix + ".%s.%s"
 	DomainEgressSubjectsTmpl    = DomainSubjectsEgressPrefix + ".%s.%s"
-	ObjectIDDomainSeparator     = "#"
+	ObjectIDDomainSeparator     = "/"
 
 	streamPrefix = "$JS.%s.API"
 
@@ -194,9 +194,8 @@ func (s *Domain) createStreamIfNotExists(sc *nats.StreamConfig) error {
 	if !slices.Contains(existingStreams, sc.Name) {
 		_, err := s.js.AddStream(sc)
 		return err
-	} else {
-		return fmt.Errorf("stream already exists")
 	}
+	return nil
 	// --------------------------------------------------------------
 }
 

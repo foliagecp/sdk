@@ -5,12 +5,12 @@ package main
 import (
 	"time"
 
-	"github.com/foliagecp/easyjson"
-	//graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
+	//"github.com/foliagecp/easyjson"
+	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
 
 	// Comment out and no not use graphDebug for resolving the cgo conflict between go-graphviz and rogchap (when --ldflags '-extldflags "-Wl,--allow-multiple-definition"' does not help)
 	//graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
-	//"github.com/foliagecp/sdk/embedded/graph/jpgql"
+	"github.com/foliagecp/sdk/embedded/graph/jpgql"
 	//graphTX "github.com/foliagecp/sdk/embedded/graph/tx"
 
 	statefun "github.com/foliagecp/sdk/statefun"
@@ -24,6 +24,8 @@ import (
 var (
 	// NatsURL - nats server url
 	NatsURL string = system.GetEnvMustProceed("NATS_URL", "nats://nats:foliage@nats:4222")
+	// NatsURL - nats server url
+	PrometricsServerPort string = system.GetEnvMustProceed("PROMETRICS_PORT", "9901")
 	/*// MasterFunctionContextIncrement - does the master stateful function do the increment operation on each call in its context
 	MasterFunctionContextIncrement bool = system.GetEnvMustProceed("MASTER_FUNC_CONTEXT_INCREMENT", true)
 	// MasterFunctionContextIncrementOption - Default increment value
@@ -134,25 +136,26 @@ func TestFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugi
 func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	statefun.NewFunctionType(runtime, "domains.test", TestFunction, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
-	//graphCRUD.RegisterAllFunctionTypes(runtime)
+	graphCRUD.RegisterAllFunctionTypes(runtime)
 	//graphTX.RegisterAllFunctionTypes(runtime)
 	//graphDebug.RegisterAllFunctionTypes(runtime)
-	//jpgql.RegisterAllFunctionTypes(runtime, 30)
+	jpgql.RegisterAllFunctionTypes(runtime, 30)
 }
 
 func Start() {
-	system.GlobalPrometrics = system.NewPrometrics("", ":9901")
+	system.GlobalPrometrics = system.NewPrometrics("", ":"+PrometricsServerPort)
 
 	afterStart := func(runtime *statefun.Runtime) error {
-		//CreateTestGraph(runtime)
 		if runtime.Domain.Name() == runtime.Domain.HubDomainName() {
 			time.Sleep(5 * time.Second) // Wait for everithing to bring up
-			runtime.Signal(sfPlugins.JetstreamGlobalSignal, "domains.test", "foo", easyjson.NewJSONObject().GetPtr(), nil)
+			CreateTestGraph(runtime)
+			//time.Sleep(1 * time.Second)
+			//runtime.Signal(sfPlugins.JetstreamGlobalSignal, "domains.test", "foo", easyjson.NewJSONObject().GetPtr(), nil)
 		}
 		return nil
 	}
 
-	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "basic")); err == nil {
+	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "distributed")); err == nil {
 		RegisterFunctionTypes(runtime)
 		if err := runtime.Start(cache.NewCacheConfig("main_cache"), afterStart); err != nil {
 			lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s\n", err)
