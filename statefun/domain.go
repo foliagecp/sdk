@@ -50,9 +50,14 @@ func NewDomain(nc *nats.Conn, js nats.JetStreamContext, hubDomainName string) (s
 		return nil, err
 	}
 
+	domainName := accInfo.Domain
+	if domainName == "" {
+		domainName = HubDomainName
+	}
+
 	domain := &Domain{
 		hubDomainName: hubDomainName,
-		name:          accInfo.Domain,
+		name:          domainName,
 		nc:            nc,
 		js:            js,
 	}
