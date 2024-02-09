@@ -283,6 +283,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 	system.MsgOnErrorReturn(global.Set("statefun_setFunctionContext", statefunSetFunctionContext))
 	system.MsgOnErrorReturn(global.Set("statefun_setRequestReplyData", statefunSetRequestReplyData))
 
+	// TODO: make statefun_egress
 	system.MsgOnErrorReturn(global.Set("statefun_signal", statefunSignal))
 	system.MsgOnErrorReturn(global.Set("statefun_request", statefunRequest))
 	system.MsgOnErrorReturn(global.Set("print", print))

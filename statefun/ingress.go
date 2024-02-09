@@ -23,6 +23,8 @@ func buildNatsData(callerDomain string, callerTypename string, callerID string, 
 	return data.ToBytes()
 }
 
+// TODO: make statefun_egress (not a signal to persistent stream but a simple NATS core PUT)
+
 func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) error {
 	jetstreamGlobalSignal := func() error {
 		go func() {
