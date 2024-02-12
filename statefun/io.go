@@ -23,7 +23,27 @@ func buildNatsData(callerDomain string, callerTypename string, callerID string, 
 	return data.ToBytes()
 }
 
-// TODO: make statefun_egress (not a signal to persistent stream but a simple NATS core PUT)
+func (r *Runtime) egress(egressProvider sfPlugins.EgressProvider, callerTypename string, callerID string, payload *easyjson.JSON) error {
+	natsCoreEgress := func() error {
+		go func() {
+			system.GlobalPrometrics.GetRoutinesCounter().Started("ingress-jetstreamGlobalSignal-gofunc")
+			defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("ingress-jetstreamGlobalSignal-gofunc")
+
+			system.MsgOnErrorReturn(r.nc.Publish(
+				fmt.Sprintf("%s.%s.%s", "egress", callerTypename, callerID),
+				payload.ToBytes(),
+			))
+		}()
+		return nil
+	}
+
+	switch egressProvider {
+	case sfPlugins.NatsCoreEgress:
+		return natsCoreEgress()
+	default:
+		return fmt.Errorf("unknown egress provider: %d", egressProvider)
+	}
+}
 
 func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) error {
 	jetstreamGlobalSignal := func() error {
