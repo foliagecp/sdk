@@ -371,7 +371,7 @@ func LLAPILinkCreate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 			} else {
 				descendantUUID = system.GetUniqueStrID()
 			}
-			descendantUUID = contextProcessor.Domain.CreateObjectIDWithDomain(contextProcessor.Domain.Name(), descendantUUID)
+			descendantUUID = contextProcessor.Domain.CreateObjectIDWithThisDomain(descendantUUID)
 
 			// Delete link if exists ----------------------------------
 			_, err := contextProcessor.GlobalCache.GetValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, contextProcessor.Self.ID, linkType, descendantUUID))
@@ -511,7 +511,7 @@ func LLAPILinkUpdate(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 	} else {
 		errorString += fmt.Sprintf("ERROR LLAPILinkUpdate %s: descendant_uuid:string is missing;", contextProcessor.Self.ID)
 	}
-	descendantUUID = contextProcessor.Domain.CreateObjectIDWithDomain(contextProcessor.Domain.Name(), descendantUUID)
+	descendantUUID = contextProcessor.Domain.CreateObjectIDWithThisDomain(descendantUUID)
 
 	if len(errorString) == 0 {
 		if fixedOldLinkBody, err := contextProcessor.GlobalCache.GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, contextProcessor.Self.ID, linkType, descendantUUID)); err == nil {
@@ -675,7 +675,7 @@ func LLAPILinkDelete(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 		} else {
 			errorString += fmt.Sprintf("ERROR LLAPILinkDelete %s: descendant_uuid:string is missing;", contextProcessor.Self.ID)
 		}
-		descendantUUID = contextProcessor.Domain.CreateObjectIDWithDomain(contextProcessor.Domain.Name(), descendantUUID)
+		descendantUUID = contextProcessor.Domain.CreateObjectIDWithThisDomain(descendantUUID)
 
 		if len(errorString) == 0 {
 			if _, err := contextProcessor.GlobalCache.GetValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, contextProcessor.Self.ID, linkType, descendantUUID)); err != nil {
