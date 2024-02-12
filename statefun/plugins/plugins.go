@@ -33,6 +33,12 @@ const (
 	AutoSelect
 )
 
+type EgressProvider int
+
+const (
+	NatsCoreEgress EgressProvider = iota
+)
+
 type SyncReply struct {
 	With          func(*easyjson.JSON)
 	CancelDefault func()
@@ -58,6 +64,7 @@ type StatefunContextProcessor struct {
 	// TODO: DownstreamSignal(<function type>, <links filters>, <payload>, <options>)
 	Signal  func(SignalProvider, string, string, *easyjson.JSON, *easyjson.JSON) error
 	Request func(RequestProvider, string, string, *easyjson.JSON, *easyjson.JSON) (*easyjson.JSON, error)
+	Egress  func(EgressProvider, *easyjson.JSON) error
 	Self    StatefunAddress
 	Caller  StatefunAddress
 	Payload *easyjson.JSON

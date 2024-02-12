@@ -200,7 +200,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 					if o, ok := easyjson.JSONFromString(info.Args()[4].String()); ok {
 						options = &o
 					} else {
-						lg.Logf(lg.ErrorLevel, "statefunSignal options is not empty and not a JSON: %s\n", info.Args()[4].String())
+						lg.Logf(lg.ErrorLevel, "statefun_signal options is not empty and not a JSON: %s\n", info.Args()[4].String())
 						v, _ := v8.NewValue(sfejs.vw, int32(4))
 						return v
 					}
@@ -215,7 +215,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 				v, _ := v8.NewValue(sfejs.vw, int32(0))
 				return v
 			}
-			lg.Logf(lg.ErrorLevel, "statefunSignal payload is not a JSON: %s\n", info.Args()[2].String())
+			lg.Logf(lg.ErrorLevel, "statefun_signal payload is not a JSON: %s\n", info.Args()[2].String())
 			v, _ := v8.NewValue(sfejs.vw, int32(3))
 			return v
 		}
@@ -237,7 +237,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 					if o, ok := easyjson.JSONFromString(info.Args()[4].String()); ok {
 						options = &o
 					} else {
-						lg.Logf(lg.ErrorLevel, "statefunRequest options is not empty and not a JSON: %s\n", info.Args()[4].String())
+						lg.Logf(lg.ErrorLevel, "statefun_request options is not empty and not a JSON: %s\n", info.Args()[4].String())
 						v, _ := v8.NewValue(sfejs.vw, int32(4))
 						return v
 					}
@@ -256,7 +256,31 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 				v, _ := v8.NewValue(sfejs.vw, j.ToString())
 				return v
 			}
-			lg.Logf(lg.ErrorLevel, "statefunRequest payload is not a JSON: %s\n", info.Args()[2].String())
+			lg.Logf(lg.ErrorLevel, "statefun_request payload is not a JSON: %s\n", info.Args()[2].String())
+			v, _ := v8.NewValue(sfejs.vw, int32(3))
+			return v
+		}
+		v, _ := v8.NewValue(sfejs.vw, int32(2))
+		return v
+	})
+	// (int, string) -> int
+	statefunEgress := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		//lg.Logf("statefun_egress: %v\n", info.Args())
+		if len(info.Args()) != 2 {
+			lg.Logf(lg.ErrorLevel, "statefun_egress requires 2 argument but got %d\n", len(info.Args()))
+			v, _ := v8.NewValue(sfejs.vw, int32(1))
+			return v
+		}
+		if info.Args()[0].IsInt32() && info.Args()[1].IsString() {
+			if j, ok := easyjson.JSONFromString(info.Args()[1].String()); ok {
+				system.MsgOnErrorReturn(sfejs.contextProcessor.Egress(
+					sfPlugins.EgressProvider(info.Args()[0].Int32()),
+					&j,
+				))
+				v, _ := v8.NewValue(sfejs.vw, int32(0))
+				return v
+			}
+			lg.Logf(lg.ErrorLevel, "statefun_egress payload is not a JSON: %s\n", info.Args()[2].String())
 			v, _ := v8.NewValue(sfejs.vw, int32(3))
 			return v
 		}
@@ -283,9 +307,9 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 	system.MsgOnErrorReturn(global.Set("statefun_setFunctionContext", statefunSetFunctionContext))
 	system.MsgOnErrorReturn(global.Set("statefun_setRequestReplyData", statefunSetRequestReplyData))
 
-	// TODO: make statefun_egress
 	system.MsgOnErrorReturn(global.Set("statefun_signal", statefunSignal))
 	system.MsgOnErrorReturn(global.Set("statefun_request", statefunRequest))
+	system.MsgOnErrorReturn(global.Set("statefun_egress", statefunEgress))
 	system.MsgOnErrorReturn(global.Set("print", print))
 
 	sfejs.vmContect = v8.NewContext(sfejs.vw, global)                                                         // new context within the VM
