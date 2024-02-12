@@ -124,7 +124,7 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	// Add TypenameExecutorPlugin which will provide StatefunExecutor for each stateful instance for this typename function (skip this if TypenameExecutorPlugin is not needed)
 
 	if MasterFunctionJSPlugin {
-		jsFileName := "master_function_plugin.js"
+		jsFileName := "./js/master_function_plugin.js"
 		if content, err := os.ReadFile(jsFileName); err == nil {
 			// Assign JavaScript StatefunExecutor for TypenameExecutorPlugin
 			system.MsgOnErrorReturn(ft.SetExecutor(jsFileName, string(content), sfPluginJS.StatefunExecutorPluginJSContructor))
