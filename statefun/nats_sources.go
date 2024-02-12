@@ -83,8 +83,7 @@ func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType) error {
 
 func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool, msgAckChannel chan *nats.Msg) (err error) {
 	tokens := strings.Split(msg.Subject, ".")
-	originId := tokens[len(tokens)-1]
-	id := ft.runtime.Domain.CreateObjectIDWithDomain(ft.runtime.Domain.name, originId)
+	id := tokens[len(tokens)-1]
 
 	data, ok := easyjson.JSONFromBytes(msg.Data)
 	if !ok {
