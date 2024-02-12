@@ -59,7 +59,9 @@ func (ft *FunctionType) SetExecutor(alias string, content string, constructor fu
 	return nil
 }
 
-func (ft *FunctionType) sendMsg(id string, msg FunctionTypeMsg) {
+func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
+	id := ft.runtime.Domain.CreateObjectIDWithDomain(ft.runtime.Domain.name, originId)
+
 	/*// After message was received do typename balance if the one is needed and hasn't been done yet -------
 	if ft.config.balanceNeeded {
 		if !ft.config.balanced {
@@ -145,6 +147,9 @@ func (ft *FunctionType) idHandlerRoutine(id string, msgChannel chan FunctionType
 		},
 		Request: func(requestProvider sfPlugins.RequestProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) (*easyjson.JSON, error) {
 			return ft.runtime.request(requestProvider, ft.name, id, targetTypename, targetID, j, o)
+		},
+		Egress: func(egressProvider sfPlugins.EgressProvider, j *easyjson.JSON) error {
+			return ft.runtime.egress(egressProvider, ft.name, id, j)
 		},
 		// To be assigned later:
 		// Call: ...
