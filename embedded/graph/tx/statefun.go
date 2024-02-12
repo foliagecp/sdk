@@ -175,7 +175,7 @@ func Commit(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCo
 */
 func Push(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
 	selfID := contextProcessor.Self.ID
-	if selfID != _TX_MASTER {
+	if selfID != contextProcessor.Domain.CreateObjectIDWithThisDomain(_TX_MASTER) {
 		return
 	}
 

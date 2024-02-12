@@ -60,7 +60,7 @@ func (ft *FunctionType) SetExecutor(alias string, content string, constructor fu
 }
 
 func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
-	id := ft.runtime.Domain.CreateObjectIDWithDomain(ft.runtime.Domain.name, originId)
+	id := ft.runtime.Domain.CreateObjectIDWithThisDomain(originId)
 
 	/*// After message was received do typename balance if the one is needed and hasn't been done yet -------
 	if ft.config.balanceNeeded {

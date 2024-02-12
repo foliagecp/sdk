@@ -99,6 +99,10 @@ func (s *Domain) CreateObjectIDWithDomain(domain string, objectID string) string
 	return domain + ObjectIDDomainSeparator + s.GetObjectIDWithoutDomain(objectID)
 }
 
+func (s *Domain) CreateObjectIDWithThisDomain(objectID string) string {
+	return s.CreateObjectIDWithDomain(s.name, objectID)
+}
+
 func (s *Domain) start() error {
 	if s.hubDomainName == s.name {
 		if err := s.createHubSignalStream(); err != nil {

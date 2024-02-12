@@ -50,6 +50,7 @@ type Domain interface {
 	GetDomainFromObjectID(objectID string) string
 	GetObjectIDWithoutDomain(objectID string) string
 	CreateObjectIDWithDomain(domain string, objectID string) string
+	CreateObjectIDWithThisDomain(objectID string) string
 }
 
 type StatefunContextProcessor struct {

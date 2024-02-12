@@ -263,6 +263,7 @@ func CreateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	}
 
 	to, ok := payload.GetByPath("to").AsString()
+	to = contextProcessor.Domain.CreateObjectIDWithThisDomain(to)
 	if !ok {
 		return
 	}
@@ -304,6 +305,7 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	payload := contextProcessor.Payload
 
 	to, ok := payload.GetByPath("to").AsString()
+	to = contextProcessor.Domain.CreateObjectIDWithThisDomain(to)
 	if !ok {
 		replyError(contextProcessor, errors.New("to undefined"))
 		return
@@ -390,6 +392,7 @@ func CreateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	payload := contextProcessor.Payload
 
 	objectToID, ok := payload.GetByPath("to").AsString()
+	objectToID = contextProcessor.Domain.CreateObjectIDWithThisDomain(objectToID)
 	if !ok {
 		replyError(contextProcessor, errors.New("to undefined"))
 		return
@@ -437,6 +440,7 @@ func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	payload := contextProcessor.Payload
 
 	objectToID, ok := payload.GetByPath("to").AsString()
+	objectToID = contextProcessor.Domain.CreateObjectIDWithThisDomain(objectToID)
 	if !ok {
 		return
 	}
@@ -476,6 +480,7 @@ func DeleteObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	payload := contextProcessor.Payload
 
 	objectToID, ok := payload.GetByPath("to").AsString()
+	objectToID = contextProcessor.Domain.CreateObjectIDWithThisDomain(objectToID)
 	if !ok {
 		return
 	}
