@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/foliagecp/sdk/embedded/graph/crud"
-	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
+	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
 type state struct {
@@ -88,7 +88,7 @@ type link struct {
 	from, to, lt, objectLt, cacheID string
 }
 
-func graphState(ctx *sfplugins.StatefunContextProcessor, startPoint string) *state {
+func graphState(ctx *sfPlugins.StatefunContextProcessor, startPoint string) *state {
 	state := &state{
 		objects: make(map[string]struct{}),
 		links:   make(map[string]link),
@@ -137,7 +137,7 @@ func graphState(ctx *sfplugins.StatefunContextProcessor, startPoint string) *sta
 	return state
 }
 
-func getChildren(ctx *sfplugins.StatefunContextProcessor, id string) []node {
+func getChildren(ctx *sfPlugins.StatefunContextProcessor, id string) []node {
 	pattern := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff1Pattern, id, ">")
 	children := ctx.GlobalCache.GetKeysByPattern(pattern)
 

@@ -18,7 +18,6 @@ import (
 	graphTX "github.com/foliagecp/sdk/embedded/graph/tx"
 	statefun "github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/cache"
-	"github.com/foliagecp/sdk/statefun/plugins"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	sfPluginJS "github.com/foliagecp/sdk/statefun/plugins/js"
 	"github.com/foliagecp/sdk/statefun/system"
@@ -143,7 +142,7 @@ func RunRequestReplyTest(runtime *statefun.Runtime) {
 	lg.Logln(lg.DebugLevel, ">>> Test started: request reply calls")
 
 	funcTypename := "functions.tests.basic.master"
-	replyJson, err := runtime.Request(plugins.GolangLocalRequest, funcTypename, "synctest", easyjson.NewJSONObject().GetPtr(), nil)
+	replyJson, err := runtime.Request(sfPlugins.GolangLocalRequest, funcTypename, "synctest", easyjson.NewJSONObject().GetPtr(), nil)
 	if err != nil {
 		system.MsgOnErrorReturn(err)
 	} else {
@@ -152,7 +151,7 @@ func RunRequestReplyTest(runtime *statefun.Runtime) {
 		}
 	}
 
-	replyJson, err = runtime.Request(plugins.NatsCoreGlobalRequest, funcTypename, "synctest", easyjson.NewJSONObject().GetPtr(), nil)
+	replyJson, err = runtime.Request(sfPlugins.NatsCoreGlobalRequest, funcTypename, "synctest", easyjson.NewJSONObject().GetPtr(), nil)
 	if err != nil {
 		system.MsgOnErrorReturn(err)
 	} else {

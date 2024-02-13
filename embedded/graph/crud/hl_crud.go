@@ -7,7 +7,7 @@ import (
 
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/embedded/graph/common"
-	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
+	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
 /*
@@ -18,7 +18,7 @@ import (
 
 create types -> type link
 */
-func CreateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func CreateType(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	selfID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -30,7 +30,7 @@ func CreateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 		return
 	}
 
-	_, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.create", selfID, payload, nil)
+	_, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.create", selfID, payload, nil)
 	if err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -41,7 +41,7 @@ func CreateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 	link.SetByPath("link_type", easyjson.NewJSON(TypeLink))
 	link.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{TypeTag + selfID}))
 
-	_, err = contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.create", prefix+Types, &link, nil)
+	_, err = contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.link.create", prefix+Types, &link, nil)
 	if err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -56,12 +56,12 @@ func CreateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 		"body": json
 	}
 */
-func UpdateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func UpdateType(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	selfID := contextProcessor.Self.ID
 
 	payload := contextProcessor.Payload
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.update", selfID, payload, nil)
+	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.update", selfID, payload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -70,7 +70,7 @@ func UpdateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 	replyOk(contextProcessor)
 }
 
-func DeleteType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func DeleteType(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	replyOk(contextProcessor)
 }
 
@@ -89,7 +89,7 @@ create object -> type link
 
 TODO: Add origin type check
 */
-func CreateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func CreateObject(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	selfID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -97,6 +97,7 @@ func CreateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 	if !ok {
 		return
 	}
+	originType = contextProcessor.Domain.CreateObjectIDWithThisDomain(originType)
 
 	prefix := payload.GetByPath("prefix").AsStringDefault("")
 
@@ -107,7 +108,7 @@ func CreateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 	}
 
 	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.create", selfID, payload, &options)
+	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.create", selfID, payload, &options)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -134,7 +135,7 @@ func CreateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 			link.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{TypeTag + l.to}))
 		}
 
-		r, e := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.create", l.from, &link, nil)
+		r, e := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.link.create", l.from, &link, nil)
 		if e := checkRequestError(r, e); e != nil {
 			replyError(contextProcessor, e)
 			return
@@ -154,12 +155,12 @@ func CreateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 		"body": json
 	}
 */
-func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func UpdateObject(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	selfID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
 	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.update", selfID, payload, &options)
+	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.update", selfID, payload, &options)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -177,7 +178,7 @@ func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 		"mode": "vertex" | "cascade", optional, default: vertex
 	}
 */
-func DeleteObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func DeleteObject(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	selfID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -217,7 +218,7 @@ func DeleteObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 
 			empty := easyjson.NewJSONObject()
 			options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-			result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.delete", elem, &empty, &options)
+			result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.delete", elem, &empty, &options)
 			if err := checkRequestError(result, err); err != nil {
 				replyError(contextProcessor, err)
 				return
@@ -230,7 +231,7 @@ func DeleteObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 	case "vertex":
 		empty := easyjson.NewJSONObject()
 		options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-		result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.delete", selfID, &empty, &options)
+		result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.delete", selfID, &empty, &options)
 		if err := checkRequestError(result, err); err != nil {
 			replyError(contextProcessor, err)
 			return
@@ -253,7 +254,7 @@ func DeleteObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 
 create type -> type link
 */
-func CreateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func CreateTypesLink(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	selfID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -280,7 +281,7 @@ func CreateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	link.SetByPath("link_body.link_type", easyjson.NewJSON(objectLinkType))
 	link.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{TypeTag + to}))
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.create", selfID, &link, nil)
+	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.link.create", selfID, &link, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -300,7 +301,7 @@ if object_link_type not empty
   - prepare link_body.link_type = object_link_type
   - after success updating, find all objects with certain types and change link_type
 */
-func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func UpdateTypesLink(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	selfID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -331,7 +332,7 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	if needUpdateObjectLinkType {
 		updateLinkPayload.SetByPath("link_body.link_type", easyjson.NewJSON(objectLinkType))
 
-		currentBody, err := getTypesLinkBody(contextProcessor, selfID, to)
+		currentBody, err := GetTypesLinkBody(contextProcessor, selfID, to)
 		if err != nil {
 			replyError(contextProcessor, err)
 			return
@@ -340,7 +341,7 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 		currentObjectLinkType, _ = currentBody.GetByPath("link_body.link_type").AsString()
 	}
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.update", selfID, &updateLinkPayload, nil)
+	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.link.update", selfID, &updateLinkPayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -348,7 +349,7 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 
 	// update link type of objects with certain types
 	if needUpdateObjectLinkType {
-		objects := findTypeObjects(contextProcessor, selfID)
+		objects := FindTypeObjects(contextProcessor, selfID)
 		for _, objectID := range objects {
 			pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, objectID, currentObjectLinkType, ">")
 			keys := contextProcessor.GlobalCache.GetKeysByPattern(pattern)
@@ -363,7 +364,7 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 				updateObjectLinkPayload.SetByPath("link_type", easyjson.NewJSON(objectLinkType))
 				updateObjectLinkPayload.SetByPath("link_body", easyjson.NewJSONObject())
 
-				result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.update", objectID, &updateObjectLinkPayload, nil)
+				result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.link.update", objectID, &updateObjectLinkPayload, nil)
 				if err := checkRequestError(result, err); err != nil {
 					replyError(contextProcessor, err)
 					return
@@ -375,7 +376,7 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	replyOk(contextProcessor)
 }
 
-func DeleteTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func DeleteTypesLink(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	replyOk(contextProcessor)
 }
 
@@ -387,7 +388,7 @@ func DeleteTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 
 create object -> object link
 */
-func CreateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func CreateObjectsLink(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	selfID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -416,7 +417,7 @@ func CreateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	objectLink.SetByPath("link_body", payload.GetByPath("body"))
 
 	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.create", selfID, &objectLink, &options)
+	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.link.create", selfID, &objectLink, &options)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -435,7 +436,7 @@ func CreateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 		"body": json
 	}
 */
-func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	selfID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -457,7 +458,7 @@ func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	objectLink.SetByPath("link_body", payload.GetByPath("body"))
 
 	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.update", selfID, &objectLink, &options)
+	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.link.update", selfID, &objectLink, &options)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -475,7 +476,7 @@ func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 		"to": string,
 	}
 */
-func DeleteObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	selfID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -496,7 +497,7 @@ func DeleteObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	objectLink.SetByPath("link_type", easyjson.NewJSON(linkType))
 
 	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.delete", selfID, &objectLink, &options)
+	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.link.delete", selfID, &objectLink, &options)
 	if err := checkRequestError(result, err); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -509,11 +510,11 @@ func DeleteObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	replyOk(contextProcessor)
 }
 
-func getReferenceLinkTypeBetweenTwoObjects(ctx *sfplugins.StatefunContextProcessor, fromObjectId, toObjectId string) (string, error) {
-	fromTypeID := findObjectType(ctx, fromObjectId)
-	toTypeID := findObjectType(ctx, toObjectId)
+func getReferenceLinkTypeBetweenTwoObjects(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId string) (string, error) {
+	fromTypeID := FindObjectType(ctx, fromObjectId)
+	toTypeID := FindObjectType(ctx, toObjectId)
 
-	linkBody, err := getTypesLinkBody(ctx, fromTypeID, toTypeID)
+	linkBody, err := GetTypesLinkBody(ctx, fromTypeID, toTypeID)
 	if err != nil {
 		return "", err
 	}
@@ -525,7 +526,7 @@ func getReferenceLinkTypeBetweenTwoObjects(ctx *sfplugins.StatefunContextProcess
 	return linkType, nil
 }
 
-func executeTriggersFromLLOpStack(ctx *sfplugins.StatefunContextProcessor, opStack *easyjson.JSON) {
+func executeTriggersFromLLOpStack(ctx *sfPlugins.StatefunContextProcessor, opStack *easyjson.JSON) {
 	if opStack != nil && opStack.IsArray() {
 		for i := 0; i < opStack.ArraySize(); i++ {
 			opData := opStack.ArrayElement(i)
@@ -568,12 +569,12 @@ func executeTriggersFromLLOpStack(ctx *sfplugins.StatefunContextProcessor, opSta
 	}
 }
 
-func isVertexAnObject(ctx *sfplugins.StatefunContextProcessor, id string) bool {
-	return len(findObjectType(ctx, id)) > 0
+func isVertexAnObject(ctx *sfPlugins.StatefunContextProcessor, id string) bool {
+	return len(FindObjectType(ctx, id)) > 0
 }
 
-func executeObjectTriggers(ctx *sfplugins.StatefunContextProcessor, objectID string, oldObjectBody, newObjectBody *easyjson.JSON, tt int /*0 - create, 1 - update, 2 - delete*/) {
-	triggers := getObjectTypeTriggers(ctx, objectID)
+func executeObjectTriggers(ctx *sfPlugins.StatefunContextProcessor, objectID string, oldObjectBody, newObjectBody *easyjson.JSON, tt int /*0 - create, 1 - update, 2 - delete*/) {
+	triggers := GetObjectTypeTriggers(ctx, objectID)
 	if triggers.IsNonEmptyObject() && tt >= 0 && tt < 3 {
 		elems := []string{"create", "update", "delete"}
 		var functions []string
@@ -592,14 +593,14 @@ func executeObjectTriggers(ctx *sfplugins.StatefunContextProcessor, objectID str
 		payload.SetByPath(fmt.Sprintf("trigger.object.%s", elems[tt]), triggerData)
 
 		for _, f := range functions {
-			ctx.Signal(sfplugins.JetstreamGlobalSignal, f, objectID, &payload, nil)
+			ctx.Signal(sfPlugins.JetstreamGlobalSignal, f, objectID, &payload, nil)
 		}
 		// TODO: object deletion leads to object links deletions
 	}
 }
 
-func executeLinkTriggers(ctx *sfplugins.StatefunContextProcessor, fromObjectId, toObjectId, linkType string, oldLinkBody, newLinkBody *easyjson.JSON, tt int /*0 - create, 1 - update, 2 - delete*/) {
-	triggers := getObjectsLinkTypeTriggers(ctx, fromObjectId, toObjectId)
+func executeLinkTriggers(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId, linkType string, oldLinkBody, newLinkBody *easyjson.JSON, tt int /*0 - create, 1 - update, 2 - delete*/) {
+	triggers := GetObjectsLinkTypeTriggers(ctx, fromObjectId, toObjectId)
 	if triggers.IsNonEmptyObject() && tt >= 0 && tt < 3 {
 		elems := []string{"create", "update", "delete"}
 		var functions []string
@@ -625,44 +626,14 @@ func executeLinkTriggers(ctx *sfplugins.StatefunContextProcessor, fromObjectId, 
 		payload.SetByPath(fmt.Sprintf("trigger.link.%s", elems[tt]), triggerData)
 
 		for _, f := range functions {
-			ctx.Signal(sfplugins.JetstreamGlobalSignal, f, fromObjectId, &payload, nil)
+			ctx.Signal(sfPlugins.JetstreamGlobalSignal, f, fromObjectId, &payload, nil)
 		}
 	}
 }
 
-func getObjectTypeTriggers(ctx *sfplugins.StatefunContextProcessor, objectID string) easyjson.JSON {
-	typeName := findObjectType(ctx, objectID)
-	typeBody, err := ctx.GlobalCache.GetValueAsJSON(typeName)
-	if err != nil || !typeBody.PathExists("triggers") {
-		return easyjson.NewJSONObject()
-	}
-	return typeBody.GetByPath("triggers")
-}
+/*
 
-func getObjectsLinkTypeTriggers(ctx *sfplugins.StatefunContextProcessor, fromObjectId, toObjectId string) easyjson.JSON {
-	fromTypeName := findObjectType(ctx, fromObjectId)
-	toTypeName := findObjectType(ctx, toObjectId)
-	typesLinkBody, err := getTypesLinkBody(ctx, fromTypeName, toTypeName)
-	if err != nil || !typesLinkBody.PathExists("triggers") {
-		return easyjson.NewJSONObject()
-	}
-	return typesLinkBody.GetByPath("triggers")
-}
-
-func findObjectType(ctx *sfplugins.StatefunContextProcessor, objectID string) string {
-	pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, objectID, TypeLink, ">")
-
-	keys := ctx.GlobalCache.GetKeysByPattern(pattern)
-	if len(keys) == 0 {
-		return ""
-	}
-
-	split := strings.Split(keys[0], ".")
-
-	return split[len(split)-1]
-}
-
-func findTypeObjects(ctx *sfplugins.StatefunContextProcessor, typeID string) []string {
+func findTypeObjects(ctx *sfPlugins.StatefunContextProcessor, typeID string) []string {
 	pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, typeID, ObjectLink, ">")
 
 	keys := ctx.GlobalCache.GetKeysByPattern(pattern)
@@ -679,26 +650,17 @@ func findTypeObjects(ctx *sfplugins.StatefunContextProcessor, typeID string) []s
 	return out
 }
 
-func getTypesLinkBody(ctx *sfplugins.StatefunContextProcessor, from, to string) (*easyjson.JSON, error) {
-	id := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, from, TypeLink, to)
+*/
 
-	body, err := ctx.GlobalCache.GetValueAsJSON(id)
-	if err != nil {
-		return nil, fmt.Errorf("link %s, %s not found: %w", from, to, err)
-	}
-
-	return body, nil
-}
-
-func replyOk(ctx *sfplugins.StatefunContextProcessor, msg ...string) {
+func replyOk(ctx *sfPlugins.StatefunContextProcessor, msg ...string) {
 	reply(ctx, "ok", msg)
 }
 
-func replyError(ctx *sfplugins.StatefunContextProcessor, err error) {
+func replyError(ctx *sfPlugins.StatefunContextProcessor, err error) {
 	reply(ctx, "failed", err.Error())
 }
 
-func reply(ctx *sfplugins.StatefunContextProcessor, status string, data any) {
+func reply(ctx *sfPlugins.StatefunContextProcessor, status string, data any) {
 	qid := common.GetQueryID(ctx)
 	reply := easyjson.NewJSONObject()
 	reply.SetByPath("status", easyjson.NewJSON(status))

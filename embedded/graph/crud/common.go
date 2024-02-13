@@ -33,11 +33,16 @@ const (
 )
 
 var (
-	llAPIVertexCUDNames = []string{"functions.graph.api.vertex.create", "functions.graph.api.vertex.update", "functions.graph.api.vertex.delete"}
-	llAPILinkCUDNames   = []string{"functions.graph.api.link.create", "functions.graph.api.link.update", "functions.graph.api.link.delete"}
+	llAPIVertexCUDNames = []string{"functions.graph.api.vertex.create", "functions.graph.api.vertex.update", "functions.graph.api.vertex.delete", "functions.graph.api.vertex.read"}
+	llAPILinkCUDNames   = []string{"functions.graph.api.link.create", "functions.graph.api.link.update", "functions.graph.api.link.delete", "functions.graph.api.link.read"}
 )
 
 func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
+	// High-Level API Helpers
+	statefun.NewFunctionType(runtime, "functions.cmdb.api.get_object_type_triggers", GetObjectTypeTriggersStatefun, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetMaxIdHandlers(-1))
+	statefun.NewFunctionType(runtime, "functions.cmdb.api.find_object_type", FindObjectTypeStatefun, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetMaxIdHandlers(-1))
+	statefun.NewFunctionType(runtime, "functions.cmdb.api.find_type_objects", FindTypeObjectsStatefun, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetMaxIdHandlers(-1))
+
 	// High-Level API Registration
 	statefun.NewFunctionType(runtime, "functions.cmdb.api.type.create", CreateType, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetMaxIdHandlers(-1))
 	statefun.NewFunctionType(runtime, "functions.cmdb.api.type.update", UpdateType, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetMaxIdHandlers(-1))
@@ -59,8 +64,10 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 	statefun.NewFunctionType(runtime, llAPIVertexCUDNames[0], LLAPIVertexCreate, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetMaxIdHandlers(-1))
 	statefun.NewFunctionType(runtime, llAPIVertexCUDNames[1], LLAPIVertexUpdate, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetMaxIdHandlers(-1))
 	statefun.NewFunctionType(runtime, llAPIVertexCUDNames[2], LLAPIVertexDelete, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetMaxIdHandlers(-1))
+	statefun.NewFunctionType(runtime, llAPIVertexCUDNames[3], LLAPIVertexRead, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetMaxIdHandlers(-1))
 
 	statefun.NewFunctionType(runtime, llAPILinkCUDNames[0], LLAPILinkCreate, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetMaxIdHandlers(-1))
 	statefun.NewFunctionType(runtime, llAPILinkCUDNames[1], LLAPILinkUpdate, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetMaxIdHandlers(-1))
 	statefun.NewFunctionType(runtime, llAPILinkCUDNames[2], LLAPILinkDelete, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetMaxIdHandlers(-1))
+	statefun.NewFunctionType(runtime, llAPILinkCUDNames[3], LLAPILinkRead, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetMaxIdHandlers(-1))
 }
