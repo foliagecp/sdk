@@ -115,7 +115,7 @@ func (s *Domain) start() error {
 	if err := s.createIngresSignalStream(); err != nil {
 		return err
 	}
-	if err := s.createEngresSignalStream(); err != nil {
+	if err := s.createEgressSignalStream(); err != nil {
 		return err
 	}
 	if err := s.createIngressRouter(); err != nil {
@@ -184,7 +184,7 @@ func (s *Domain) createIngresSignalStream() error {
 	return s.createStreamIfNotExists(sc)
 }
 
-func (s *Domain) createEngresSignalStream() error {
+func (s *Domain) createEgressSignalStream() error {
 	sc := &nats.StreamConfig{
 		Name:     domainEgressStreamName,
 		Subjects: []string{fmt.Sprintf(DomainEgressSubjectsTmpl, s.name, ">")},
