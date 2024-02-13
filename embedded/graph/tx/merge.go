@@ -8,7 +8,7 @@ import (
 	lg "github.com/foliagecp/sdk/statefun/logger"
 
 	"github.com/foliagecp/easyjson"
-	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
+	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
 type objectsPolicy int8
@@ -63,7 +63,7 @@ func newMerger(txID string, opts ...mergerOpt) *merger {
 
 // merge v0
 // TODO: add rollback
-func (m *merger) Merge(ctx *sfplugins.StatefunContextProcessor) error {
+func (m *merger) Merge(ctx *sfPlugins.StatefunContextProcessor) error {
 	lg.Logln(lg.DebugLevel, "Start merging", "tx", m.txID, "with mode", m.mode)
 	start := time.Now()
 

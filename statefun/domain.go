@@ -96,6 +96,9 @@ func (s *Domain) GetObjectIDWithoutDomain(objectID string) string {
 }
 
 func (s *Domain) CreateObjectIDWithDomain(domain string, objectID string) string {
+	if s.GetObjectIDWithoutDomain(objectID) != objectID {
+		return objectID
+	}
 	return domain + ObjectIDDomainSeparator + s.GetObjectIDWithoutDomain(objectID)
 }
 

@@ -17,7 +17,7 @@ import (
 
 	"github.com/foliagecp/sdk/embedded/graph/crud"
 	"github.com/foliagecp/sdk/statefun/logger"
-	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
+	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/goccy/go-graphviz"
 	"github.com/goccy/go-graphviz/cgraph"
 )
@@ -39,7 +39,7 @@ Algorithm: Sync BFS
 		"depth": uint // optional, default: 256
 	}
 */
-func LLAPIPrintGraph(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	self := contextProcessor.Self
 	payload := contextProcessor.Payload
 
@@ -144,7 +144,7 @@ func LLAPIPrintGraph(executor sfplugins.StatefunExecutor, contextProcessor *sfpl
 	}
 }
 
-func getParents(ctx *sfplugins.StatefunContextProcessor, id string) []node {
+func getParents(ctx *sfPlugins.StatefunContextProcessor, id string) []node {
 	pattern := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff1Pattern, id, ">")
 	parents := ctx.GlobalCache.GetKeysByPattern(pattern)
 
@@ -166,7 +166,7 @@ func getParents(ctx *sfplugins.StatefunContextProcessor, id string) []node {
 	return nodes
 }
 
-func getChildren(ctx *sfplugins.StatefunContextProcessor, id string) []node {
+func getChildren(ctx *sfPlugins.StatefunContextProcessor, id string) []node {
 	children := ctx.GlobalCache.GetKeysByPattern(fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff1Pattern, id, ">"))
 
 	nodes := make([]node, 0, len(children))
@@ -213,7 +213,7 @@ func createEdge(graph *cgraph.Graph, name string, start, end *cgraph.Node) (*cgr
 	return edge, nil
 }
 
-func addParents(ctx *sfplugins.StatefunContextProcessor, g *cgraph.Graph, allNodes map[string]*cgraph.Node, root *cgraph.Node) {
+func addParents(ctx *sfPlugins.StatefunContextProcessor, g *cgraph.Graph, allNodes map[string]*cgraph.Node, root *cgraph.Node) {
 	rootID := root.Name()
 
 	for _, parentNode := range getParents(ctx, rootID) {

@@ -12,7 +12,7 @@ import (
 	"github.com/foliagecp/sdk/embedded/graph/crud"
 	"github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/logger"
-	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
+	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -65,7 +65,7 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 // id must not belong to an existing object in graph! otherwise object will be rewritten
 // create tx_id, clone exist graph with tx_id prefix, return tx_id to client
 
-func replyTxError(ctx *sfplugins.StatefunContextProcessor, err error) {
+func replyTxError(ctx *sfPlugins.StatefunContextProcessor, err error) {
 	system.MsgOnErrorReturn(ctx.ObjectMutexUnlock())
 	reply(ctx, "failed", err.Error())
 }
@@ -76,7 +76,7 @@ func replyTxError(ctx *sfplugins.StatefunContextProcessor, err error) {
 		"types": map[string]beginTxType, only with "clone":"with_types"
 	}
 */
-func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func Begin(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	if err := contextProcessor.ObjectMutexLock(false); err != nil {
 		replyError(contextProcessor, err)
 		return
@@ -144,7 +144,7 @@ func Begin(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCon
 	}
 */
 // exec on transaction
-func Commit(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func Commit(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	// add validating stage
 	payload := contextProcessor.Payload
 	push := easyjson.NewJSONObject()
@@ -157,7 +157,7 @@ func Commit(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCo
 		push.SetByPath("debug", easyjson.NewJSON(debug))
 	}
 
-	system.MsgOnErrorReturn(contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.tx.push", _TX_MASTER, &push, nil))
+	system.MsgOnErrorReturn(contextProcessor.Request(sfPlugins.AutoSelect, "functions.cmdb.tx.push", _TX_MASTER, &push, nil))
 
 	qid := common.GetQueryID(contextProcessor)
 	reply := easyjson.NewJSONObject()
@@ -173,7 +173,7 @@ func Commit(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCo
 		"mode": "merge" | "replace", optional, default: "merge"
 	}
 */
-func Push(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func Push(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	selfID := contextProcessor.Self.ID
 	if selfID != contextProcessor.Domain.CreateObjectIDWithThisDomain(_TX_MASTER) {
 		return
@@ -203,7 +203,7 @@ func Push(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCont
 	delete := easyjson.NewJSONObject()
 	delete.SetByPath("mode", easyjson.NewJSON("cascade"))
 
-	if _, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.object.delete", txID, &delete, nil); err != nil {
+	if _, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.cmdb.api.object.delete", txID, &delete, nil); err != nil {
 		replyTxError(contextProcessor, err)
 		return
 	}
@@ -219,7 +219,7 @@ func Push(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunCont
 
 create types -> type link
 */
-func CreateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func CreateType(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	txID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -232,7 +232,7 @@ func CreateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 	createTypePayload.SetByPath("prefix", easyjson.NewJSON(prefix))
 	createTypePayload.SetByPath("body", payload.GetByPath("body"))
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.type.create", txTypeID, &createTypePayload, nil)
+	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.cmdb.api.type.create", txTypeID, &createTypePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyTxError(contextProcessor, err)
 		return
@@ -251,7 +251,7 @@ clone type from main graph if not exists
 
 update type body
 */
-func UpdateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func UpdateType(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	txID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -281,7 +281,7 @@ func UpdateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 		createPayload.SetByPath("id", easyjson.NewJSON(typeID))
 		createPayload.SetByPath("body", *originBody)
 
-		result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.tx.type.create", txID, &createPayload, nil)
+		result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.cmdb.tx.type.create", txID, &createPayload, nil)
 		if err := checkRequestError(result, err); err != nil {
 			replyTxError(contextProcessor, err)
 			return
@@ -291,7 +291,7 @@ func UpdateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 	updatePayload := easyjson.NewJSONObject()
 	updatePayload.SetByPath("body", payload.GetByPath("body"))
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.type.update", txType, &updatePayload, nil)
+	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.cmdb.api.type.update", txType, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyTxError(contextProcessor, err)
 		return
@@ -305,7 +305,7 @@ func UpdateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 		"id": string
 	}
 */
-func DeleteType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func DeleteType(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	txID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -320,11 +320,11 @@ func DeleteType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 	meta := generateDeletedMeta()
 
 	// delete objects which implement this type
-	for _, v := range findTypeObjects(contextProcessor, txType) {
+	for _, v := range crud.FindTypeObjects(contextProcessor, txType) {
 		updatePayload := easyjson.NewJSONObject()
 		updatePayload.SetByPath("body", meta)
 
-		result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.object.update", v, &updatePayload, nil)
+		result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.cmdb.api.object.update", v, &updatePayload, nil)
 		if err := checkRequestError(result, err); err != nil {
 			replyTxError(contextProcessor, err)
 			return
@@ -335,7 +335,7 @@ func DeleteType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Statef
 	updatePayload := easyjson.NewJSONObject()
 	updatePayload.SetByPath("body", meta)
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.type.update", txType, &updatePayload, nil)
+	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.cmdb.api.type.update", txType, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyTxError(contextProcessor, err)
 		return
@@ -357,7 +357,7 @@ create type -> object link
 
 create object -> type link
 */
-func CreateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func CreateObject(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	txID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -371,7 +371,7 @@ func CreateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 	createObjPayload.SetByPath("origin_type", payload.GetByPath("origin_type"))
 	createObjPayload.SetByPath("body", payload.GetByPath("body"))
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.object.create", txObjID, &createObjPayload, nil)
+	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.cmdb.api.object.create", txObjID, &createObjPayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyTxError(contextProcessor, err)
 		return
@@ -391,7 +391,7 @@ clone object from main graph if not exists
 
 update object body
 */
-func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func UpdateObject(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	txID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -429,7 +429,7 @@ func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 		createPayload.SetByPath("origin_type", easyjson.NewJSON(typeKeys[0]))
 		createPayload.SetByPath("body", *originBody)
 
-		result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.tx.object.create", txID, &createPayload, nil)
+		result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.cmdb.tx.object.create", txID, &createPayload, nil)
 		if err := checkRequestError(result, err); err != nil {
 			replyTxError(contextProcessor, err)
 			return
@@ -443,7 +443,7 @@ func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 		updatePayload.SetByPath("mode", easyjson.NewJSON(mode))
 	}
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.object.update", txObject, &updatePayload, nil)
+	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.cmdb.api.object.update", txObject, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyTxError(contextProcessor, err)
 		return
@@ -459,7 +459,7 @@ func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 
 TODO: mark for delete all link from/in object
 */
-func DeleteObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func DeleteObject(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	txID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -476,7 +476,7 @@ func DeleteObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 	updatePayload := easyjson.NewJSONObject()
 	updatePayload.SetByPath("body", meta)
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.object.update", txObject, &updatePayload, nil)
+	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.cmdb.api.object.update", txObject, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyTxError(contextProcessor, err)
 		return
@@ -495,7 +495,7 @@ func DeleteObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.Stat
 
 create type -> type link
 */
-func CreateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func CreateTypesLink(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	txID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -520,7 +520,7 @@ func CreateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	createLinkPayload.SetByPath("object_link_type", payload.GetByPath("object_link_type"))
 	createLinkPayload.SetByPath("body", payload.GetByPath("body"))
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.types.link.create", txFrom, &createLinkPayload, nil)
+	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.cmdb.api.types.link.create", txFrom, &createLinkPayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyTxError(contextProcessor, err)
 		return
@@ -537,7 +537,7 @@ func CreateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 		"body": json, optional
 	}
 */
-func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func UpdateTypesLink(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	txID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -605,7 +605,7 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 		//}
 	}
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.types.link.update", txFrom, &updatePayload, nil)
+	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.cmdb.api.types.link.update", txFrom, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyTxError(contextProcessor, err)
 		return
@@ -620,7 +620,7 @@ func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 		"to": string,
 	}
 */
-func DeleteTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func DeleteTypesLink(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	txID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -656,7 +656,7 @@ func DeleteTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	}
 
 	// delete objects links
-	for _, objectID := range findTypeObjects(contextProcessor, txFrom) {
+	for _, objectID := range crud.FindTypeObjects(contextProcessor, txFrom) {
 		links := contextProcessor.GlobalCache.GetKeysByPattern(fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, objectID, linkType, ">"))
 		for _, v := range links {
 			split := strings.Split(v, ".")
@@ -670,7 +670,7 @@ func DeleteTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 			updatePayload.SetByPath("to", easyjson.NewJSON(id))
 			updatePayload.SetByPath("body", meta)
 
-			result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.objects.link.update", objectID, &updatePayload, nil)
+			result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.cmdb.api.objects.link.update", objectID, &updatePayload, nil)
 			if err := checkRequestError(result, err); err != nil {
 				replyTxError(contextProcessor, err)
 				return
@@ -682,7 +682,7 @@ func DeleteTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 	updatePayload.SetByPath("to", easyjson.NewJSON(txTo))
 	updatePayload.SetByPath("body", meta)
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.types.link.update", txFrom, &updatePayload, nil)
+	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.cmdb.api.types.link.update", txFrom, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyTxError(contextProcessor, err)
 		return
@@ -700,7 +700,7 @@ func DeleteTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.S
 
 create object -> object link
 */
-func CreateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func CreateObjectsLink(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	txID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -725,7 +725,7 @@ func CreateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	createLinkPayload.SetByPath("to", easyjson.NewJSON(txTo))
 	createLinkPayload.SetByPath("body", payload.GetByPath("body"))
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.objects.link.create", txFrom, &createLinkPayload, nil)
+	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.cmdb.api.objects.link.create", txFrom, &createLinkPayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyTxError(contextProcessor, err)
 		return
@@ -741,7 +741,7 @@ func CreateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 		"body": json, optional
 	}
 */
-func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	txID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -759,8 +759,8 @@ func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 		return
 	}
 
-	fromType := findObjectType(contextProcessor, from)
-	toType := findObjectType(contextProcessor, to)
+	fromType := crud.FindObjectType(contextProcessor, from)
+	toType := crud.FindObjectType(contextProcessor, to)
 
 	typesLink := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff2Pattern, fromType, "__type", toType)
 	typesLinkBody, err := contextProcessor.GlobalCache.GetValueAsJSON(typesLink)
@@ -803,7 +803,7 @@ func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 		updatePayload.SetByPath("body", payload.GetByPath("body"))
 	}
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.objects.link.update", txFrom, &updatePayload, nil)
+	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.cmdb.api.objects.link.update", txFrom, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyTxError(contextProcessor, err)
 		return
@@ -818,7 +818,7 @@ func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 		"to": string,
 	}
 */
-func DeleteObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	txID := contextProcessor.Self.ID
 	payload := contextProcessor.Payload
 
@@ -843,7 +843,7 @@ func DeleteObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	updatePayload.SetByPath("to", easyjson.NewJSON(txTo))
 	updatePayload.SetByPath("body", meta)
 
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.cmdb.api.objects.link.update", txFrom, &updatePayload, nil)
+	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.cmdb.api.objects.link.update", txFrom, &updatePayload, nil)
 	if err := checkRequestError(result, err); err != nil {
 		replyTxError(contextProcessor, err)
 		return
@@ -852,7 +852,7 @@ func DeleteObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 	replyOk(contextProcessor)
 }
 
-func cloneGraph(ctx *sfplugins.StatefunContextProcessor, txID, cloneMod string, types map[string]beginTxType) error {
+func cloneGraph(ctx *sfPlugins.StatefunContextProcessor, txID, cloneMod string, types map[string]beginTxType) error {
 	switch cloneMod {
 	case "min":
 		if err := cloneGraphWithTypes(ctx, txID, types); err != nil {
@@ -871,12 +871,12 @@ func cloneGraph(ctx *sfplugins.StatefunContextProcessor, txID, cloneMod string, 
 	return nil
 }
 
-func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) error {
+func initBuilInObjects(ctx *sfPlugins.StatefunContextProcessor, txID string) error {
 	prefix := generatePrefix(txID)
 
 	// create root
 	root := prefix + BUILT_IN_ROOT
-	_, err := ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.create", root, easyjson.NewJSONObject().GetPtr(), nil)
+	_, err := ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.create", root, easyjson.NewJSONObject().GetPtr(), nil)
 	if err != nil {
 		return err
 	}
@@ -887,13 +887,13 @@ func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) err
 
 	// create objects and types
 	objects := prefix + BUILT_IN_OBJECTS
-	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.create", objects, easyjson.NewJSONObject().GetPtr(), nil)
+	_, err = ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.create", objects, easyjson.NewJSONObject().GetPtr(), nil)
 	if err != nil {
 		return err
 	}
 
 	types := prefix + BUILT_IN_TYPES
-	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.create", types, easyjson.NewJSONObject().GetPtr(), nil)
+	_, err = ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.create", types, easyjson.NewJSONObject().GetPtr(), nil)
 	if err != nil {
 		return err
 	}
@@ -910,7 +910,7 @@ func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) err
 
 	// create group type ----------------------------------------
 	group := prefix + "group"
-	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.create", group, easyjson.NewJSONObject().GetPtr(), nil)
+	_, err = ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.create", group, easyjson.NewJSONObject().GetPtr(), nil)
 	if err != nil {
 		return err
 	}
@@ -927,7 +927,7 @@ func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) err
 
 	// create NAV ------------------------------------------------
 	nav := prefix + "nav"
-	_, err = ctx.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.create", nav, easyjson.NewJSONObject().GetPtr(), nil)
+	_, err = ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.create", nav, easyjson.NewJSONObject().GetPtr(), nil)
 	if err != nil {
 		return err
 	}
@@ -948,7 +948,7 @@ func initBuilInObjects(ctx *sfplugins.StatefunContextProcessor, txID string) err
 	return nil
 }
 
-func fullClone(ctx *sfplugins.StatefunContextProcessor, txID string) error {
+func fullClone(ctx *sfPlugins.StatefunContextProcessor, txID string) error {
 	prefix := generatePrefix(txID)
 	state := graphState(ctx, BUILT_IN_ROOT)
 
@@ -986,7 +986,7 @@ func fullClone(ctx *sfplugins.StatefunContextProcessor, txID string) error {
 	return nil
 }
 
-func cloneGraphWithTypes(ctx *sfplugins.StatefunContextProcessor, txID string, types map[string]beginTxType) error {
+func cloneGraphWithTypes(ctx *sfPlugins.StatefunContextProcessor, txID string, types map[string]beginTxType) error {
 	if err := initBuilInObjects(ctx, txID); err != nil {
 		return err
 	}

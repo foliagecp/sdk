@@ -10,7 +10,7 @@ import (
 	"github.com/foliagecp/sdk/embedded/graph/crud"
 	"github.com/foliagecp/sdk/statefun"
 	lg "github.com/foliagecp/sdk/statefun/logger"
-	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
+	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
 func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
@@ -21,7 +21,7 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 /*
 Prints to caonsole the content of an object the function being called on along with all its input and output links.
 */
-func LLAPIObjectDebugPrint(executor sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
+func LLAPIObjectDebugPrint(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
 	self := contextProcessor.Self
 
 	objectContext := contextProcessor.GetObjectContext()
