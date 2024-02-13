@@ -7,3 +7,4 @@ __pycahe__/*
 *.code-workspace
 .vscode/
 flink/modules/main-embedded/src/target/
+.VSCodeCounter
