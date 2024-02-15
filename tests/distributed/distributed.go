@@ -11,7 +11,6 @@ import (
 	// Comment out and no not use graphDebug for resolving the cgo conflict between go-graphviz and rogchap (when --ldflags '-extldflags "-Wl,--allow-multiple-definition"' does not help)
 	//graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
 	"github.com/foliagecp/sdk/embedded/graph/jpgql"
-	graphTX "github.com/foliagecp/sdk/embedded/graph/tx"
 
 	statefun "github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/cache"
@@ -32,43 +31,43 @@ var (
 	TriggersTest bool = system.GetEnvMustProceed("TRIGGERS_TEST", true)
 )
 
-func TestFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-	hubDomain := contextProcessor.Domain.HubDomainName()
-	callerDomain := contextProcessor.Domain.GetDomainFromObjectID(contextProcessor.Caller.ID)
-	functionDomain := contextProcessor.Domain.GetDomainFromObjectID(contextProcessor.Self.ID)
-	if contextProcessor.Reply == nil { // Signal came
+func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	hubDomain := ctx.Domain.HubDomainName()
+	callerDomain := ctx.Domain.GetDomainFromObjectID(ctx.Caller.ID)
+	functionDomain := ctx.Domain.GetDomainFromObjectID(ctx.Self.ID)
+	if ctx.Reply == nil { // Signal came
 		lg.Logf(
 			lg.InfoLevel,
 			">>> Signal from caller %s:%s on %s:%s\n",
-			contextProcessor.Caller.Typename,
-			contextProcessor.Caller.ID,
-			contextProcessor.Self.Typename,
-			contextProcessor.Self.ID,
+			ctx.Caller.Typename,
+			ctx.Caller.ID,
+			ctx.Self.Typename,
+			ctx.Self.ID,
 		)
 		if functionDomain == hubDomain { // Function on HUB
-			contextProcessor.Signal(
+			ctx.Signal(
 				sfPlugins.JetstreamGlobalSignal,
-				contextProcessor.Self.Typename,
-				contextProcessor.Domain.CreateObjectIDWithDomain("leaf", contextProcessor.Self.ID+"A"),
-				contextProcessor.Payload,
-				contextProcessor.Options,
+				ctx.Self.Typename,
+				ctx.Domain.CreateObjectIDWithDomainIfndef("leaf", ctx.Self.ID+"A"),
+				ctx.Payload,
+				ctx.Options,
 			)
 		} else { // Function on LEAF
 			if callerDomain == hubDomain { // from HUB
-				contextProcessor.Signal(
+				ctx.Signal(
 					sfPlugins.JetstreamGlobalSignal,
-					contextProcessor.Self.Typename,
-					contextProcessor.Domain.CreateObjectIDWithDomain("leaf", contextProcessor.Self.ID+"B"),
-					contextProcessor.Payload,
-					contextProcessor.Options,
+					ctx.Self.Typename,
+					ctx.Domain.CreateObjectIDWithDomainIfndef("leaf", ctx.Self.ID+"B"),
+					ctx.Payload,
+					ctx.Options,
 				)
 			} else { // from LEAF
-				contextProcessor.Request(
+				ctx.Request(
 					sfPlugins.NatsCoreGlobalRequest,
-					contextProcessor.Self.Typename,
-					contextProcessor.Domain.CreateObjectIDWithDomain(hubDomain, contextProcessor.Self.ID+"C"),
-					contextProcessor.Payload,
-					contextProcessor.Options,
+					ctx.Self.Typename,
+					ctx.Domain.CreateObjectIDWithDomainIfndef(hubDomain, ctx.Self.ID+"C"),
+					ctx.Payload,
+					ctx.Options,
 				)
 			}
 		}
@@ -76,18 +75,18 @@ func TestFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugi
 		lg.Logf(
 			lg.InfoLevel,
 			">>>>>> Request from caller %s:%s on %s:%s\n",
-			contextProcessor.Caller.Typename,
-			contextProcessor.Caller.ID,
-			contextProcessor.Self.Typename,
-			contextProcessor.Self.ID,
+			ctx.Caller.Typename,
+			ctx.Caller.ID,
+			ctx.Self.Typename,
+			ctx.Self.ID,
 		)
 		if functionDomain == hubDomain { // Function on HUB
-			contextProcessor.Request(
+			ctx.Request(
 				sfPlugins.NatsCoreGlobalRequest,
-				contextProcessor.Self.Typename,
-				contextProcessor.Domain.CreateObjectIDWithDomain("leaf", contextProcessor.Self.ID+"D"),
-				contextProcessor.Payload,
-				contextProcessor.Options,
+				ctx.Self.Typename,
+				ctx.Domain.CreateObjectIDWithDomainIfndef("leaf", ctx.Self.ID+"D"),
+				ctx.Payload,
+				ctx.Options,
 			)
 		}
 	}
@@ -96,15 +95,15 @@ func TestFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugi
 
 	var functionContext *easyjson.JSON
 	if MasterFunctionContextIncrement {
-		functionContext = contextProcessor.GetFunctionContext()
+		functionContext = ctx.GetFunctionContext()
 	}
 
-	options := contextProcessor.Options
+	options := ctx.Options
 	increment := int(options.GetByPath("increment").AsNumericDefault(0))
 
 	if MasterFunctionLogs {
-		lg.Logf(lg.DebugLevel, "-------> %s:%s\n", contextProcessor.Self.Typename, contextProcessor.Self.ID)
-		lg.Logln(lg.DebugLevel, "== Payload:", contextProcessor.Payload.ToString())
+		lg.Logf(lg.DebugLevel, "-------> %s:%s\n", ctx.Self.Typename, ctx.Self.ID)
+		lg.Logln(lg.DebugLevel, "== Payload:", ctx.Payload.ToString())
 		lg.Logln(lg.DebugLevel, "== Context:", functionContext.ToString())
 	}
 
@@ -119,15 +118,15 @@ func TestFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugi
 	}
 
 	if MasterFunctionContextIncrement {
-		contextProcessor.SetFunctionContext(functionContext)
+		ctx.SetFunctionContext(functionContext)
 	}
 
-	if contextProcessor.Reply != nil { // Request call is being made
-		contextProcessor.Reply.With(easyjson.NewJSONObjectWithKeyValue("counter", easyjson.NewJSON(incrementValue)).GetPtr())
+	if ctx.Reply != nil { // Request call is being made
+		ctx.Reply.With(easyjson.NewJSONObjectWithKeyValue("counter", easyjson.NewJSON(incrementValue)).GetPtr())
 	}
 
 	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("master_function", "", []string{"id"}); err == nil {
-		gaugeVec.With(prometheus.Labels{"id": contextProcessor.Self.ID}).Set(float64(time.Since(start).Microseconds()))
+		gaugeVec.With(prometheus.Labels{"id": ctx.Self.ID}).Set(float64(time.Since(start).Microseconds()))
 	}*/
 }
 
@@ -135,7 +134,6 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	statefun.NewFunctionType(runtime, "domains.test", TestFunction, *statefun.NewFunctionTypeConfig().SetServiceState(true))
 
 	graphCRUD.RegisterAllFunctionTypes(runtime)
-	graphTX.RegisterAllFunctionTypes(runtime)
 	//graphDebug.RegisterAllFunctionTypes(runtime)
 	jpgql.RegisterAllFunctionTypes(runtime, 30)
 }

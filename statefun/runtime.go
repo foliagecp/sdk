@@ -6,7 +6,6 @@ package statefun
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -14,19 +13,16 @@ import (
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/foliagecp/sdk/embedded/nats/kv"
 	"github.com/foliagecp/sdk/statefun/cache"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
 )
 
 type Runtime struct {
-	config     RuntimeConfig
-	nc         *nats.Conn
-	js         nats.JetStreamContext
-	kv         nats.KeyValue
-	cacheStore *cache.Store
-	Domain     *Domain
+	config RuntimeConfig
+	nc     *nats.Conn
+	js     nats.JetStreamContext
+	Domain *Domain
 
 	registeredFunctionTypes map[string]*FunctionType
 
@@ -56,30 +52,6 @@ func NewRuntime(config RuntimeConfig) (r *Runtime, err error) {
 		return
 	}
 
-	// Create application key value store bucket if does not exist --
-	kvExists := false
-	if kv, err := r.js.KeyValue(config.keyValueStoreBucketName); err == nil {
-		r.kv = kv
-		kvExists = true
-	}
-	if !kvExists {
-		r.kv, err = kv.CreateKeyValue(r.nc, r.js, &nats.KeyValueConfig{
-			Bucket: config.keyValueStoreBucketName,
-		})
-		/*r.kv, err = r.js.CreateKeyValue(&nats.KeyValueConfig{
-			Bucket: config.keyValueStoreBucketName,
-		})*/
-		if err != nil {
-			return
-		}
-		kvExists = true
-	}
-	if !kvExists {
-		err = fmt.Errorf("Nats KV was not inited")
-		return
-	}
-	// --------------------------------------------------------------
-
 	return
 }
 
@@ -105,13 +77,9 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 	}
 	// --------------------------------------------------------------
 
-	if err := r.Domain.start(); err != nil {
+	if err := r.Domain.start(cacheConfig); err != nil {
 		return err
 	}
-
-	lg.Logln(lg.TraceLevel, "Initializing the cache store...")
-	r.cacheStore = cache.NewCacheStore(context.Background(), cacheConfig, r.js, r.kv)
-	lg.Logln(lg.TraceLevel, "Cache store inited!")
 
 	// Functions running in a single instance controller --------------------------------
 	singleInstanceFunctionRevisions := map[string]uint64{}

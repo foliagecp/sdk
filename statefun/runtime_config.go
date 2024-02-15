@@ -5,7 +5,6 @@ package statefun
 const (
 	NatsURL                     = "nats://nats:foliage@nats:4222"
 	RuntimeName                 = "foliage_runtime"
-	KeyValueStoreBucketName     = RuntimeName + "_kv_store"
 	KVMutexLifetimeSec          = 120
 	KVMutexIsOldPollingInterval = 10
 	FunctionTypeIDLifetimeMs    = 5000
@@ -15,7 +14,6 @@ const (
 
 type RuntimeConfig struct {
 	natsURL                        string
-	keyValueStoreBucketName        string
 	kvMutexLifeTimeSec             int
 	kvMutexIsOldPollingIntervalSec int
 	functionTypeIDLifetimeMs       int
@@ -26,7 +24,6 @@ type RuntimeConfig struct {
 func NewRuntimeConfig() *RuntimeConfig {
 	return &RuntimeConfig{
 		natsURL:                        NatsURL,
-		keyValueStoreBucketName:        KeyValueStoreBucketName,
 		kvMutexLifeTimeSec:             KVMutexLifetimeSec,
 		kvMutexIsOldPollingIntervalSec: KVMutexIsOldPollingInterval,
 		functionTypeIDLifetimeMs:       FunctionTypeIDLifetimeMs,
@@ -37,7 +34,7 @@ func NewRuntimeConfig() *RuntimeConfig {
 
 func NewRuntimeConfigSimple(natsURL string, runtimeName string) *RuntimeConfig {
 	ro := NewRuntimeConfig()
-	return ro.SetNatsURL(natsURL).SeKeyValueStoreBucketName("common_kv_store")
+	return ro.SetNatsURL(natsURL)
 }
 
 func (ro *RuntimeConfig) SetHubDomainName(hubDomainName string) *RuntimeConfig {
@@ -47,11 +44,6 @@ func (ro *RuntimeConfig) SetHubDomainName(hubDomainName string) *RuntimeConfig {
 
 func (ro *RuntimeConfig) SetNatsURL(natsURL string) *RuntimeConfig {
 	ro.natsURL = natsURL
-	return ro
-}
-
-func (ro *RuntimeConfig) SeKeyValueStoreBucketName(keyValueStoreBucketName string) *RuntimeConfig {
-	ro.keyValueStoreBucketName = keyValueStoreBucketName
 	return ro
 }
 

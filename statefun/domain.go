@@ -9,6 +9,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"github.com/foliagecp/sdk/embedded/nats/kv"
+	"github.com/foliagecp/sdk/statefun/cache"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/foliagecp/sdk/statefun/system"
 )
@@ -42,6 +44,8 @@ type Domain struct {
 	name          string
 	nc            *nats.Conn
 	js            nats.JetStreamContext
+	kv            nats.KeyValue
+	cache         *cache.Store
 }
 
 func NewDomain(nc *nats.Conn, js nats.JetStreamContext, hubDomainName string) (s *Domain, e error) {
@@ -62,6 +66,28 @@ func NewDomain(nc *nats.Conn, js nats.JetStreamContext, hubDomainName string) (s
 		js:            js,
 	}
 
+	bucketName := fmt.Sprintf("%s_cache_bucket", hubDomainName)
+
+	// Create application key value store bucket if does not exist --
+	kvExists := false
+	if kv, err := js.KeyValue(bucketName); err == nil {
+		domain.kv = kv
+		kvExists = true
+	}
+	if !kvExists {
+		domain.kv, err = kv.CreateKeyValue(nc, js, &nats.KeyValueConfig{
+			Bucket: bucketName,
+		})
+		if err != nil {
+			return
+		}
+		kvExists = true
+	}
+	if !kvExists {
+		return nil, fmt.Errorf("Nats KV was not inited")
+	}
+	// --------------------------------------------------------------
+
 	return domain, nil
 }
 
@@ -71,6 +97,10 @@ func (s *Domain) HubDomainName() string {
 
 func (s *Domain) Name() string {
 	return s.name
+}
+
+func (s *Domain) Cache() *cache.Store {
+	return s.cache
 }
 
 func (s *Domain) GetDomainFromObjectID(objectID string) string {
@@ -95,18 +125,22 @@ func (s *Domain) GetObjectIDWithoutDomain(objectID string) string {
 	return id
 }
 
-func (s *Domain) CreateObjectIDWithDomain(domain string, objectID string) string {
+func (s *Domain) CreateObjectIDWithDomainIfndef(domain string, objectID string) string {
 	if s.GetObjectIDWithoutDomain(objectID) != objectID {
 		return objectID
 	}
 	return domain + ObjectIDDomainSeparator + s.GetObjectIDWithoutDomain(objectID)
 }
 
-func (s *Domain) CreateObjectIDWithThisDomain(objectID string) string {
-	return s.CreateObjectIDWithDomain(s.name, objectID)
+func (s *Domain) CreateObjectIDWithThisDomainIfndef(objectID string) string {
+	return s.CreateObjectIDWithDomainIfndef(s.name, objectID)
 }
 
-func (s *Domain) start() error {
+func (s *Domain) CreateObjectIDWithHubDomainIfndef(objectID string) string {
+	return s.CreateObjectIDWithDomainIfndef(s.hubDomainName, objectID)
+}
+
+func (s *Domain) start(cacheConfig *cache.Config) error {
 	if s.hubDomainName == s.name {
 		if err := s.createHubSignalStream(); err != nil {
 			return err
@@ -124,6 +158,11 @@ func (s *Domain) start() error {
 	if err := s.createEgressRouter(); err != nil {
 		return err
 	}
+
+	lg.Logln(lg.TraceLevel, "Initializing the cache store...")
+	s.cache = cache.NewCacheStore(context.Background(), cacheConfig, s.js, s.kv)
+	lg.Logln(lg.TraceLevel, "Cache store inited!")
+
 	return nil
 }
 

@@ -39,9 +39,9 @@ Algorithm: Sync BFS
 		"depth": uint // optional, default: 256
 	}
 */
-func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-	self := contextProcessor.Self
-	payload := contextProcessor.Payload
+func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	self := ctx.Self
+	payload := ctx.Payload
 
 	graphvizExtension := graphviz.XDOT
 
@@ -118,7 +118,7 @@ func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, contextProcessor *sfPl
 		}
 
 		if verboseGraph {
-			addParents(contextProcessor, graph, nodes, elem)
+			addParents(ctx, graph, nodes, elem)
 		}
 
 		if node.parent != "" && node.lt != "" {
@@ -128,7 +128,7 @@ func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, contextProcessor *sfPl
 		}
 
 		if currentDepth < maxDepth {
-			for _, n := range getChildren(contextProcessor, node.id) {
+			for _, n := range getChildren(ctx, node.id) {
 				if _, ok := nodes[n.id]; !ok {
 					queue.PushBack(n)
 				}
@@ -146,7 +146,7 @@ func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, contextProcessor *sfPl
 
 func getParents(ctx *sfPlugins.StatefunContextProcessor, id string) []node {
 	pattern := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff1Pattern, id, ">")
-	parents := ctx.GlobalCache.GetKeysByPattern(pattern)
+	parents := ctx.Domain.Cache().GetKeysByPattern(pattern)
 
 	nodes := make([]node, 0, len(parents))
 
@@ -167,7 +167,7 @@ func getParents(ctx *sfPlugins.StatefunContextProcessor, id string) []node {
 }
 
 func getChildren(ctx *sfPlugins.StatefunContextProcessor, id string) []node {
-	children := ctx.GlobalCache.GetKeysByPattern(fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff1Pattern, id, ">"))
+	children := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff1Pattern, id, ">"))
 
 	nodes := make([]node, 0, len(children))
 

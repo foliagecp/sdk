@@ -17,7 +17,7 @@ type StatefunExecutorPluginJS struct {
 	copiledScript *v8.UnboundScript
 	buildError    error
 
-	contextProcessor *sfPlugins.StatefunContextProcessor
+	ctx *sfPlugins.StatefunContextProcessor
 }
 
 func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.StatefunExecutor {
@@ -33,7 +33,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
-		v, _ := v8.NewValue(sfejs.vw, sfejs.contextProcessor.Self.Typename)
+		v, _ := v8.NewValue(sfejs.vw, sfejs.ctx.Self.Typename)
 		return v // you can return a value back to the JS caller if required
 	})
 	// () -> string
@@ -44,7 +44,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
-		v, _ := v8.NewValue(sfejs.vw, sfejs.contextProcessor.Self.ID)
+		v, _ := v8.NewValue(sfejs.vw, sfejs.ctx.Self.ID)
 		return v
 	})
 	// () -> string
@@ -55,7 +55,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
-		v, _ := v8.NewValue(sfejs.vw, sfejs.contextProcessor.Caller.Typename)
+		v, _ := v8.NewValue(sfejs.vw, sfejs.ctx.Caller.Typename)
 		return v // you can return a value back to the JS caller if required
 	})
 	// () -> string
@@ -66,7 +66,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
-		v, _ := v8.NewValue(sfejs.vw, sfejs.contextProcessor.Caller.ID)
+		v, _ := v8.NewValue(sfejs.vw, sfejs.ctx.Caller.ID)
 		return v
 	})
 	// () -> string
@@ -77,7 +77,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
-		v, _ := v8.NewValue(sfejs.vw, (*sfejs.contextProcessor.GetFunctionContext()).ToString())
+		v, _ := v8.NewValue(sfejs.vw, (*sfejs.ctx.GetFunctionContext()).ToString())
 		return v
 	})
 	// (string) -> int
@@ -99,7 +99,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 			v, _ := v8.NewValue(sfejs.vw, int32(3))
 			return v
 		}
-		sfejs.contextProcessor.SetFunctionContext(&newContext)
+		sfejs.ctx.SetFunctionContext(&newContext)
 		v, _ := v8.NewValue(sfejs.vw, int32(0))
 		return v
 	})
@@ -115,7 +115,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 			v, _ := v8.NewValue(sfejs.vw, int32(2))
 			return v
 		}
-		if sfejs.contextProcessor.Reply == nil {
+		if sfejs.ctx.Reply == nil {
 			v, _ := v8.NewValue(sfejs.vw, int32(3))
 			return v
 		}
@@ -125,7 +125,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 			v, _ := v8.NewValue(sfejs.vw, int32(4))
 			return v
 		}
-		sfejs.contextProcessor.Reply.With(&requestReplyData)
+		sfejs.ctx.Reply.With(&requestReplyData)
 		v, _ := v8.NewValue(sfejs.vw, int32(0))
 		return v
 	})
@@ -137,7 +137,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
-		v, _ := v8.NewValue(sfejs.vw, (*sfejs.contextProcessor.GetObjectContext()).ToString())
+		v, _ := v8.NewValue(sfejs.vw, (*sfejs.ctx.GetObjectContext()).ToString())
 		return v
 	})
 	// (string) -> int
@@ -159,7 +159,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 			v, _ := v8.NewValue(sfejs.vw, int32(3))
 			return v
 		}
-		sfejs.contextProcessor.SetObjectContext(&newContext)
+		sfejs.ctx.SetObjectContext(&newContext)
 		v, _ := v8.NewValue(sfejs.vw, int32(0))
 		return v
 	})
@@ -171,7 +171,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
-		v, _ := v8.NewValue(sfejs.vw, sfejs.contextProcessor.Payload.ToString())
+		v, _ := v8.NewValue(sfejs.vw, sfejs.ctx.Payload.ToString())
 		return v
 	})
 	// () -> string
@@ -182,7 +182,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
-		v, _ := v8.NewValue(sfejs.vw, sfejs.contextProcessor.Options.ToString())
+		v, _ := v8.NewValue(sfejs.vw, sfejs.ctx.Options.ToString())
 		return v
 	})
 	// (int, string, string, string, string) -> int
@@ -205,7 +205,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 						return v
 					}
 				}
-				system.MsgOnErrorReturn(sfejs.contextProcessor.Signal(
+				system.MsgOnErrorReturn(sfejs.ctx.Signal(
 					sfPlugins.SignalProvider(info.Args()[0].Int32()),
 					info.Args()[1].String(),
 					info.Args()[2].String(),
@@ -242,7 +242,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 						return v
 					}
 				}
-				j, err := sfejs.contextProcessor.Request(
+				j, err := sfejs.ctx.Request(
 					sfPlugins.RequestProvider(info.Args()[0].Int32()),
 					info.Args()[1].String(),
 					info.Args()[2].String(),
@@ -273,7 +273,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 		}
 		if info.Args()[0].IsInt32() && info.Args()[1].IsString() {
 			if j, ok := easyjson.JSONFromString(info.Args()[1].String()); ok {
-				system.MsgOnErrorReturn(sfejs.contextProcessor.Egress(
+				system.MsgOnErrorReturn(sfejs.ctx.Egress(
 					sfPlugins.EgressProvider(info.Args()[0].Int32()),
 					&j,
 				))
@@ -318,8 +318,8 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 	return sfejs
 }
 
-func (sfejs *StatefunExecutorPluginJS) Run(contextProcessor *sfPlugins.StatefunContextProcessor) error {
-	sfejs.contextProcessor = contextProcessor
+func (sfejs *StatefunExecutorPluginJS) Run(ctx *sfPlugins.StatefunContextProcessor) error {
+	sfejs.ctx = ctx
 	_, err := sfejs.copiledScript.Run(sfejs.vmContect)
 	return err
 }

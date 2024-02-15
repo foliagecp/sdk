@@ -5,127 +5,171 @@ import (
 	"strings"
 
 	"github.com/foliagecp/easyjson"
+	"github.com/foliagecp/sdk/embedded/graph/common"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
-func GetObjectTypeTriggersStatefun(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-	result := easyjson.NewJSONObject().GetPtr()
-	result.SetByPath("status", easyjson.NewJSON("failed"))
+/*
+payload: json - required
 
-	typeName := FindObjectType(contextProcessor, contextProcessor.Self.ID)
-	if len(typeName) > 0 {
-		resp2, err2 := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.read", typeName, nil, nil)
-		if err2 == nil {
-			if resp2.PathExists("result") {
-				result.SetByPath("status", easyjson.NewJSON("ok"))
-				typeBody := resp2.GetByPath("result")
-				if typeBody.PathExists("triggers") {
-					result.SetByPath("result", typeBody.GetByPath("triggers"))
-				} else {
-					result.SetByPath("result", easyjson.NewJSONObject())
+	link_type: string - required
+	to_object_type: string - required
+
+options: json - optional
+
+	return_op_stack: bool - optional
+*/
+func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	sosc := common.NewSyncOpStatusController(ctx)
+
+	opStack := getOpStackFromOptions(ctx.Options)
+
+	linkType, ok := ctx.Payload.GetByPath("link_type").AsString()
+	if !ok {
+		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link_type is not defined"))).Reply()
+		return
+	}
+
+	toObjectType, ok := ctx.Payload.GetByPath("to_object_type").AsString()
+	if !ok {
+		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("to_object_type is not defined"))).Reply()
+		return
+	}
+
+	pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, linkType, ">")
+	keys := ctx.Domain.Cache().GetKeysByPattern(pattern)
+	if len(keys) > 0 {
+		for _, v := range keys {
+			split := strings.Split(v, ".")
+			to := split[len(split)-1]
+
+			if findObjectType(ctx, to) == toObjectType {
+				objectLink := easyjson.NewJSONObject()
+				objectLink.SetByPath("to", easyjson.NewJSON(to))
+				objectLink.SetByPath("link_type", easyjson.NewJSON(linkType))
+
+				sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.delete", ctx.Self.ID, &objectLink, ctx.Options)))
+				mergeOpStack(opStack, sosc.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
+				if sosc.GetLastSyncOp().Status == common.SYNC_OP_STATUS_FAILED {
+					sosc.ReplyWithData(resultWithOpStack(opStack).GetPtr())
+					return
 				}
-			} else {
-				result.SetByPath("result", easyjson.NewJSON("invalid type's body"))
 			}
-		} else {
-			result.SetByPath("result", easyjson.NewJSON(err2.Error()))
+		}
+	}
+
+	sosc.Integreate(common.SyncOpOk(resultWithOpStack(opStack))).Reply()
+}
+
+func GetObjectTypeTriggersStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	sosc := common.NewSyncOpStatusController(ctx)
+
+	typeName := findObjectType(ctx, ctx.Self.ID)
+	if len(typeName) > 0 {
+		sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.read", typeName, nil, nil)))
+		if sosc.GetLastSyncOp().Status == common.SYNC_OP_STATUS_OK {
+			sosc.Integreate(common.SyncOpOk(sosc.GetLastSyncOp().Data.GetByPath("body.triggers")))
 		}
 	} else {
-		result.SetByPath("result", easyjson.NewJSON("cannot get object's type"))
+		sosc.Integreate(common.SyncOpFailed("invalid object's typename"))
 	}
 
-	contextProcessor.Reply.With(result)
+	sosc.Reply()
 }
 
-func FindObjectTypeStatefun(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-	result := easyjson.NewJSONObject().GetPtr()
-	result.SetByPath("status", easyjson.NewJSON("failed"))
+func FindObjectTypeStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	sosc := common.NewSyncOpStatusController(ctx)
 
-	pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, contextProcessor.Self.ID, TypeLink, ">")
-	keys := contextProcessor.GlobalCache.GetKeysByPattern(pattern)
+	pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, TYPE_TYPELINK, ">")
+	keys := ctx.Domain.Cache().GetKeysByPattern(pattern)
 	if len(keys) > 0 {
 		split := strings.Split(keys[0], ".")
-		result.SetByPath("status", easyjson.NewJSON("ok"))
-		result.SetByPath("result", easyjson.NewJSON(split[len(split)-1]))
+		t := split[len(split)-1]
+		sosc.Integreate(common.SyncOpOk(easyjson.NewJSONObjectWithKeyValue("type", easyjson.NewJSON(t))))
 	} else {
-		result.SetByPath("result", easyjson.NewJSON("type not found"))
+		sosc.Integreate(common.SyncOpFailed("cannot find object's type"))
 	}
 
-	contextProcessor.Reply.With(result)
+	sosc.Reply()
 }
 
-func FindTypeObjectsStatefun(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-	result := easyjson.NewJSONObject().GetPtr()
-	result.SetByPath("status", easyjson.NewJSON("ok"))
+func FindTypeObjectsStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	sosc := common.NewSyncOpStatusController(ctx)
 
-	pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, contextProcessor.Self.ID, ObjectLink, ">")
-
-	keys := contextProcessor.GlobalCache.GetKeysByPattern(pattern)
+	keys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, OBJECT_TYPELINK, ">"))
 	if len(keys) > 0 {
 		out := make([]string, 0, len(keys))
 		for _, v := range keys {
 			split := strings.Split(v, ".")
 			out = append(out, split[len(split)-1])
 		}
-		result.SetByPath("result", easyjson.JSONFromArray(out))
+		sosc.Integreate(common.SyncOpOk(easyjson.JSONFromArray(out)))
 	} else {
-		result.SetByPath("result", easyjson.NewJSONArray())
+		sosc.Integreate(common.SyncOpOk(easyjson.NewJSONArray()))
 	}
 
-	contextProcessor.Reply.With(result)
+	sosc.Reply()
 }
 
 // ------------------------------------------------------------------------------------------------
 
-func GetObjectsLinkTypeTriggers(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId string) easyjson.JSON {
-	fromTypeName := FindObjectType(ctx, fromObjectId)
-	toTypeName := FindObjectType(ctx, toObjectId)
-	typesLinkBody, err := GetTypesLinkBody(ctx, fromTypeName, toTypeName)
-	if err != nil || !typesLinkBody.PathExists("triggers") {
-		return easyjson.NewJSONObject()
-	}
-	return typesLinkBody.GetByPath("triggers")
-}
-
-func GetObjectTypeTriggers(ctx *sfPlugins.StatefunContextProcessor, objectID string) *easyjson.JSON {
-	resp, err := ctx.Request(sfPlugins.AutoSelect, "functions.cmdb.api.get_object_type_triggers", objectID, nil, nil)
-	if err == nil && resp.GetByPath("status").AsStringDefault("failed") == "ok" {
-		return resp.GetByPath("result").GetPtr()
+func getObjectTypeTriggers(ctx *sfPlugins.StatefunContextProcessor, objectID string) *easyjson.JSON {
+	som := common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.cmdb.api.get_object_type_triggers", objectID, nil, nil))
+	if som.Status == common.SYNC_OP_STATUS_OK {
+		return &som.Data
 	}
 	return easyjson.NewJSONObject().GetPtr()
 }
 
-func FindObjectType(ctx *sfPlugins.StatefunContextProcessor, objectID string) string {
-	resp, err := ctx.Request(sfPlugins.AutoSelect, "functions.cmdb.api.find_object_type", objectID, nil, nil)
-	if err == nil && resp.GetByPath("status").AsStringDefault("failed") == "ok" {
-		return resp.GetByPath("result").AsStringDefault("")
+func findObjectType(ctx *sfPlugins.StatefunContextProcessor, objectID string) string {
+	som := common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.cmdb.api.find_object_type", objectID, nil, nil))
+	if som.Status == common.SYNC_OP_STATUS_OK {
+		return som.Data.GetByPath("type").AsStringDefault("")
 	}
 	return ""
 }
 
-func FindTypeObjects(ctx *sfPlugins.StatefunContextProcessor, objectID string) []string {
-	resp, err := ctx.Request(sfPlugins.AutoSelect, "functions.cmdb.api.find_type_objects", objectID, nil, nil)
-	if err == nil && resp.GetByPath("status").AsStringDefault("failed") == "ok" && resp.GetByPath("status").IsArray() {
-		if arr, ok := resp.GetByPath("status").AsArrayString(); ok {
-			return arr
+func findTypeObjects(ctx *sfPlugins.StatefunContextProcessor, objectID string) ([]string, error) {
+	som := common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.cmdb.api.find_type_objects", objectID, nil, nil))
+	if som.Status == common.SYNC_OP_STATUS_OK {
+		if arr, ok := som.Data.AsArrayString(); ok {
+			return arr, nil
 		}
 	}
-	return []string{}
+	return nil, fmt.Errorf(som.Details)
 }
 
-func GetTypesLinkBody(ctx *sfPlugins.StatefunContextProcessor, from, to string) (*easyjson.JSON, error) {
+func getLinkBody(ctx *sfPlugins.StatefunContextProcessor, from, to, linkType string) (*easyjson.JSON, error) {
 	link := easyjson.NewJSONObject()
-	link.SetByPath("descendant_uuid", easyjson.NewJSON(to))
-	link.SetByPath("link_type", easyjson.NewJSON(TypeLink))
+	link.SetByPath("to", easyjson.NewJSON(to))
+	link.SetByPath("link_type", easyjson.NewJSON(linkType))
 
-	resp, err := ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.read", from, &link, nil)
+	som := common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.read", from, &link, nil))
+	if som.Status == common.SYNC_OP_STATUS_OK {
+		if som.Data.PathExists("body") {
+			return som.Data.GetByPathPtr("body"), nil
+		}
+		return nil, fmt.Errorf("'body' is not find")
+	}
+	return nil, fmt.Errorf(som.Details)
+}
+
+func getReferenceLinkTypeBetweenTwoObjects(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId string) (string, error) {
+	fromType := findObjectType(ctx, fromObjectId)
+	toType := findObjectType(ctx, toObjectId)
+
+	return getObjectsLinkTypeFromTypesLink(ctx, fromType, toType)
+}
+
+func getObjectsLinkTypeFromTypesLink(ctx *sfPlugins.StatefunContextProcessor, fromType, toType string) (string, error) {
+	linkBody, err := getLinkBody(ctx, fromType, toType, TYPE_TYPELINK)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
-	if resp.GetByPath("status").AsStringDefault("failed") != "ok" {
-		return nil, fmt.Errorf(resp.GetByPath("result").AsStringDefault("failed"))
+	linkType, ok := linkBody.GetByPath("link_type").AsString()
+	if !ok {
+		return "", fmt.Errorf("type of a link was not defined in link type")
 	}
-
-	return resp.GetByPath("result").GetPtr(), nil
+	return linkType, nil
 }
