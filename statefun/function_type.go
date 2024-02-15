@@ -60,7 +60,7 @@ func (ft *FunctionType) SetExecutor(alias string, content string, constructor fu
 }
 
 func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
-	id := ft.runtime.Domain.CreateObjectIDWithThisDomain(originId)
+	id := ft.runtime.Domain.CreateObjectIDWithThisDomainIfndef(originId)
 
 	/*// After message was received do typename balance if the one is needed and hasn't been done yet -------
 	if ft.config.balanceNeeded {
@@ -135,7 +135,6 @@ func (ft *FunctionType) idHandlerRoutine(id string, msgChannel chan FunctionType
 	system.GlobalPrometrics.GetRoutinesCounter().Started("functiontype-idHandlerRoutine")
 	defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("functiontype-idHandlerRoutine")
 	typenameIDContextProcessor := sfPlugins.StatefunContextProcessor{
-		GlobalCache:        ft.runtime.cacheStore,
 		GetFunctionContext: func() *easyjson.JSON { return ft.getContext(ft.name + "." + id) },
 		SetFunctionContext: func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
 		GetObjectContext:   func() *easyjson.JSON { return ft.getContext(id) },
@@ -237,7 +236,7 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 		if err != nil {
 			return err
 		}
-		ft.runtime.cacheStore.DeleteValue(lockId, true, -1, "")
+		ft.runtime.Domain.cache.DeleteValue(lockId, true, -1, "")
 		return nil
 	}
 
@@ -315,7 +314,7 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 }
 
 func (ft *FunctionType) getContext(keyValueID string) *easyjson.JSON {
-	if j, err := ft.runtime.cacheStore.GetValueAsJSON(keyValueID); err == nil {
+	if j, err := ft.runtime.Domain.cache.GetValueAsJSON(keyValueID); err == nil {
 		return j
 	}
 	j := easyjson.NewJSONObject()
@@ -324,9 +323,9 @@ func (ft *FunctionType) getContext(keyValueID string) *easyjson.JSON {
 
 func (ft *FunctionType) setContext(keyValueID string, context *easyjson.JSON) {
 	if context == nil {
-		ft.runtime.cacheStore.SetValue(keyValueID, nil, true, -1, "")
+		ft.runtime.Domain.cache.SetValue(keyValueID, nil, true, -1, "")
 	} else {
-		ft.runtime.cacheStore.SetValue(keyValueID, context.ToBytes(), true, -1, "")
+		ft.runtime.Domain.cache.SetValue(keyValueID, context.ToBytes(), true, -1, "")
 	}
 }
 

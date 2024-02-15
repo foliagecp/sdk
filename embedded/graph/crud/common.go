@@ -23,13 +23,17 @@ const (
 )
 
 const (
-	Types   = "types"
-	Objects = "objects"
+	OBJECTS_TYPELINK = "__objects"
+	TYPES_TYPELINK   = "__types"
+	TYPE_TYPELINK    = "__type"
+	OBJECT_TYPELINK  = "__object"
 
-	TypeLink   = "__type"
-	ObjectLink = "__object"
-
-	TypeTag = "TYPE_"
+	BUILT_IN_TYPES   = "types"
+	BUILT_IN_OBJECTS = "objects"
+	BUILT_IN_ROOT    = "root"
+	BUILT_IN_GROUP   = "group"
+	BUILT_IN_NAV     = "nav"
+	GROUP_TYPELINK   = "group"
 )
 
 var (
@@ -39,6 +43,7 @@ var (
 
 func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 	// High-Level API Helpers
+	statefun.NewFunctionType(runtime, "functions.cmdb.api.delete_object_filtered_out_links", DeleteObjectFilteredOutLinksStatefun, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetMaxIdHandlers(-1))
 	statefun.NewFunctionType(runtime, "functions.cmdb.api.get_object_type_triggers", GetObjectTypeTriggersStatefun, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetMaxIdHandlers(-1))
 	statefun.NewFunctionType(runtime, "functions.cmdb.api.find_object_type", FindObjectTypeStatefun, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetMaxIdHandlers(-1))
 	statefun.NewFunctionType(runtime, "functions.cmdb.api.find_type_objects", FindTypeObjectsStatefun, *statefun.NewFunctionTypeConfig().SetServiceState(true).SetMaxIdHandlers(-1))

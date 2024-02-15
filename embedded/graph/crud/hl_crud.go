@@ -1,7 +1,6 @@
 package crud
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
@@ -12,141 +11,124 @@ import (
 
 /*
 	{
-		"prefix": string, optional
 		"body": json
 	}
-
-create types -> type link
 */
-func CreateType(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-	selfID := contextProcessor.Self.ID
-	payload := contextProcessor.Payload
+func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	sosc := common.NewSyncOpStatusController(ctx)
 
-	prefix := payload.GetByPath("prefix").AsStringDefault("")
+	thisType := ctx.Domain.CreateObjectIDWithHubDomainIfndef(ctx.Domain.GetObjectIDWithoutDomain(ctx.Self.ID))
+	typesVertexId := ctx.Domain.CreateObjectIDWithHubDomainIfndef(BUILT_IN_TYPES)
 
-	linkBodyKey := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, prefix+Types, TypeLink, selfID)
-	if _, err := contextProcessor.GlobalCache.GetValue(linkBodyKey); err == nil {
-		replyOk(contextProcessor)
+	sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.create", thisType, ctx.Payload, nil)))
+	if sosc.GetStatus() == common.SYNC_OP_STATUS_INCOMPLETE || sosc.GetStatus() == common.SYNC_OP_STATUS_FAILED {
+		sosc.Reply()
 		return
 	}
 
-	_, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.create", selfID, payload, nil)
-	if err != nil {
-		replyError(contextProcessor, err)
-		return
-	}
-
+	// LINK: types -> <type_name>
 	link := easyjson.NewJSONObject()
-	link.SetByPath("descendant_uuid", easyjson.NewJSON(selfID))
-	link.SetByPath("link_type", easyjson.NewJSON(TypeLink))
-	link.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{TypeTag + selfID}))
+	link.SetByPath("to", easyjson.NewJSON(thisType))
+	link.SetByPath("link_type", easyjson.NewJSON(TYPE_TYPELINK))
+	link.SetByPath("body.name", easyjson.JSONFromArray([]string{thisType}))
 
-	_, err = contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.link.create", prefix+Types, &link, nil)
-	if err != nil {
-		replyError(contextProcessor, err)
-		return
-	}
-
-	replyOk(contextProcessor)
+	sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.create", typesVertexId, &link, nil)))
+	sosc.Reply()
 }
 
 /*
 	{
-		"strategy": string, optional, default: DeepMerge
+		"mode": string, optional, default: DeepMerge
 		"body": json
 	}
 */
-func UpdateType(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-	selfID := contextProcessor.Self.ID
+func UpdateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	sosc := common.NewSyncOpStatusController(ctx)
 
-	payload := contextProcessor.Payload
-
-	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.update", selfID, payload, nil)
-	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
-		return
-	}
-
-	replyOk(contextProcessor)
-}
-
-func DeleteType(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-	replyOk(contextProcessor)
+	sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.update", ctx.Self.ID, ctx.Payload, nil)))
+	sosc.Reply()
 }
 
 /*
-	{
-		"prefix": string, optional,
-		"origin_type": string,
-		"body": json
-	}
+ */
+func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	sosc := common.NewSyncOpStatusController(ctx)
 
-create objects -> object link
+	// Vertice's out links are stored in the same domain with the vertex
+	pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, OBJECT_TYPELINK, ">")
+	outLinkKeys := ctx.Domain.Cache().GetKeysByPattern(pattern)
+	for _, outLinkKey := range outLinkKeys {
+		inLinkKeyTokens := strings.Split(outLinkKey, ".")
+		toObjectID := inLinkKeyTokens[len(inLinkKeyTokens)-1]
 
-create type -> object link
-
-create object -> type link
-
-TODO: Add origin type check
-*/
-func CreateObject(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-	selfID := contextProcessor.Self.ID
-	payload := contextProcessor.Payload
-
-	originType, ok := payload.GetByPath("origin_type").AsString()
-	if !ok {
-		return
-	}
-	originType = contextProcessor.Domain.CreateObjectIDWithThisDomain(originType)
-
-	prefix := payload.GetByPath("prefix").AsStringDefault("")
-
-	linkBodyKey := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, prefix+Objects, ObjectLink, selfID)
-	if _, err := contextProcessor.GlobalCache.GetValue(linkBodyKey); err == nil {
-		replyOk(contextProcessor)
-		return
-	}
-
-	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.create", selfID, payload, &options)
-	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
-		return
-	}
-
-	type _link struct {
-		from, to, lt string
-	}
-
-	needLinks := []_link{
-		{from: prefix + Objects, to: selfID, lt: ObjectLink},
-		{from: selfID, to: prefix + originType, lt: TypeLink},
-		{from: prefix + originType, to: selfID, lt: ObjectLink},
-	}
-
-	for _, l := range needLinks {
-		link := easyjson.NewJSONObject()
-		link.SetByPath("descendant_uuid", easyjson.NewJSON(l.to))
-		link.SetByPath("link_type", easyjson.NewJSON(l.lt))
-		link.SetByPath("link_body", easyjson.NewJSONObject())
-
-		switch l.lt {
-		case TypeLink:
-			link.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{TypeTag + l.to}))
-		}
-
-		r, e := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.link.create", l.from, &link, nil)
-		if e := checkRequestError(r, e); e != nil {
-			replyError(contextProcessor, e)
+		sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.cmdb.api.object.delete", toObjectID, nil, nil)))
+		if sosc.GetLastSyncOp().Status == common.SYNC_OP_STATUS_FAILED {
+			sosc.Reply()
 			return
 		}
 	}
 
-	if result.PathExists("op_stack") {
-		executeTriggersFromLLOpStack(contextProcessor, result.GetByPath("op_stack").GetPtr())
+	sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.delete", ctx.Self.ID, nil, nil)))
+	sosc.Reply()
+}
+
+/*
+	{
+		"origin_type": string,
+		"body": json
+	}
+*/
+func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	sosc := common.NewSyncOpStatusController(ctx)
+
+	originType, ok := ctx.Payload.GetByPath("origin_type").AsString()
+	if !ok {
+		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("origin_type is not defined"))).Reply()
+		return
+	}
+	originType = ctx.Domain.CreateObjectIDWithHubDomainIfndef(ctx.Domain.GetObjectIDWithoutDomain(originType))
+	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
+	sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.create", ctx.Self.ID, ctx.Payload, &options)))
+
+	var opStack *easyjson.JSON
+	if sosc.GetLastSyncOp().Data.PathExists("op_stack") {
+		opStack = sosc.GetLastSyncOp().Data.GetByPathPtr("op_stack")
 	}
 
-	replyOk(contextProcessor)
+	if !(sosc.GetStatus() == common.SYNC_OP_STATUS_INCOMPLETE || sosc.GetStatus() == common.SYNC_OP_STATUS_FAILED) {
+		type _link struct {
+			from, to, lt string
+		}
+
+		needLinks := []_link{
+			{from: ctx.Domain.CreateObjectIDWithHubDomainIfndef(BUILT_IN_OBJECTS), to: ctx.Self.ID, lt: OBJECT_TYPELINK},
+			{from: ctx.Self.ID, to: originType, lt: TYPE_TYPELINK},
+			{from: originType, to: ctx.Self.ID, lt: OBJECT_TYPELINK},
+		}
+
+		for _, l := range needLinks {
+			link := easyjson.NewJSONObject()
+			link.SetByPath("to", easyjson.NewJSON(l.to))
+			link.SetByPath("link_type", easyjson.NewJSON(l.lt))
+			link.SetByPath("body", easyjson.NewJSONObject())
+
+			switch l.lt {
+			case TYPE_TYPELINK:
+				link.SetByPath("body.name", easyjson.NewJSON(l.to))
+			}
+
+			sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.create", l.from, &link, nil)))
+			if sosc.GetStatus() == common.SYNC_OP_STATUS_INCOMPLETE || sosc.GetStatus() == common.SYNC_OP_STATUS_FAILED {
+				break // Operation cannot be completed fully, interrupt where it is now and go to the end
+			}
+		}
+	}
+
+	if opStack != nil {
+		executeTriggersFromLLOpStack(ctx, opStack)
+	}
+
+	sosc.Reply()
 }
 
 /*
@@ -155,229 +137,126 @@ func CreateObject(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.Stat
 		"body": json
 	}
 */
-func UpdateObject(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-	selfID := contextProcessor.Self.ID
-	payload := contextProcessor.Payload
+func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	sosc := common.NewSyncOpStatusController(ctx)
 
 	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.update", selfID, payload, &options)
-	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
-		return
+	sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.update", ctx.Self.ID, ctx.Payload, &options)))
+	if sosc.GetLastSyncOp().Data.PathExists("op_stack") {
+		executeTriggersFromLLOpStack(ctx, sosc.GetLastSyncOp().Data.GetByPathPtr("op_stack"))
 	}
 
-	if result.PathExists("op_stack") {
-		executeTriggersFromLLOpStack(contextProcessor, result.GetByPath("op_stack").GetPtr())
+	sosc.Reply()
+}
+
+/*
+ */
+func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	sosc := common.NewSyncOpStatusController(ctx)
+
+	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
+	sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.delete", ctx.Self.ID, nil, &options)))
+	if sosc.GetLastSyncOp().Data.PathExists("op_stack") {
+		executeTriggersFromLLOpStack(ctx, sosc.GetLastSyncOp().Data.GetByPathPtr("op_stack"))
 	}
 
-	replyOk(contextProcessor)
+	sosc.Reply()
 }
 
 /*
 	{
-		"mode": "vertex" | "cascade", optional, default: vertex
-	}
-*/
-func DeleteObject(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-	selfID := contextProcessor.Self.ID
-	payload := contextProcessor.Payload
-
-	mode := payload.GetByPath("mode").AsStringDefault("vertex")
-	switch mode {
-	case "cascade":
-		visited := map[string]struct{}{
-			selfID: {},
-		}
-		queue := []string{selfID}
-
-		for len(queue) > 0 {
-			elem := queue[0]
-			pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, elem, ">")
-			children := contextProcessor.GlobalCache.GetKeysByPattern(pattern)
-
-			for _, v := range children {
-				split := strings.Split(v, ".")
-				if len(split) == 0 {
-					continue
-				}
-
-				id := split[len(split)-1]
-
-				if _, ok := visited[id]; ok {
-					continue
-				}
-
-				visited[id] = struct{}{}
-				queue = append(queue, id)
-			}
-
-			queue = queue[1:]
-			if len(queue) == 0 {
-				break
-			}
-
-			empty := easyjson.NewJSONObject()
-			options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-			result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.delete", elem, &empty, &options)
-			if err := checkRequestError(result, err); err != nil {
-				replyError(contextProcessor, err)
-				return
-			}
-
-			if result.PathExists("op_stack") {
-				executeTriggersFromLLOpStack(contextProcessor, result.GetByPath("op_stack").GetPtr())
-			}
-		}
-	case "vertex":
-		empty := easyjson.NewJSONObject()
-		options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-		result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.delete", selfID, &empty, &options)
-		if err := checkRequestError(result, err); err != nil {
-			replyError(contextProcessor, err)
-			return
-		}
-
-		if result.PathExists("op_stack") {
-			executeTriggersFromLLOpStack(contextProcessor, result.GetByPath("op_stack").GetPtr())
-		}
-	}
-
-	replyOk(contextProcessor)
-}
-
-/*
-	{
-		"to": string,
+		"to": string
 		"object_link_type": string
 		"body": json
 	}
 
 create type -> type link
 */
-func CreateTypesLink(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-	selfID := contextProcessor.Self.ID
-	payload := contextProcessor.Payload
+func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	sosc := common.NewSyncOpStatusController(ctx)
 
-	objectLinkType, ok := payload.GetByPath("object_link_type").AsString()
+	objectLinkType, ok := ctx.Payload.GetByPath("object_link_type").AsString()
 	if !ok {
+		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("object_link_type is not defined"))).Reply()
 		return
 	}
 
-	to, ok := payload.GetByPath("to").AsString()
-	to = contextProcessor.Domain.CreateObjectIDWithThisDomain(to)
-	if !ok {
-		return
-	}
+	fromType := ctx.Domain.CreateObjectIDWithHubDomainIfndef(ctx.Domain.GetObjectIDWithoutDomain(ctx.Self.ID))
 
-	linkBodyKey := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, selfID, TypeLink, to)
-	if _, err := contextProcessor.GlobalCache.GetValue(linkBodyKey); err == nil {
-		replyOk(contextProcessor)
-		return
-	}
+	toType := ctx.Payload.GetByPath("to").AsStringDefault("")
+	toType = ctx.Domain.CreateObjectIDWithHubDomainIfndef(ctx.Domain.GetObjectIDWithoutDomain(toType))
 
 	link := easyjson.NewJSONObject()
-	link.SetByPath("descendant_uuid", easyjson.NewJSON(to))
-	link.SetByPath("link_type", easyjson.NewJSON(TypeLink))
-	link.SetByPath("link_body.link_type", easyjson.NewJSON(objectLinkType))
-	link.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{TypeTag + to}))
+	link.SetByPath("to", easyjson.NewJSON(toType))
+	link.SetByPath("link_type", easyjson.NewJSON(TYPE_TYPELINK))
+	link.SetByPath("body.link_type", easyjson.NewJSON(objectLinkType))
+	link.SetByPath("body.name", easyjson.JSONFromArray([]string{toType}))
 
-	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.link.create", selfID, &link, nil)
-	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
-		return
-	}
-
-	replyOk(contextProcessor)
+	sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.create", fromType, &link, nil)))
+	sosc.Reply()
 }
 
 /*
 	{
 		"to": string,
-		"object_link_type": string, optional
 		"body": json, optional
 	}
-
-if object_link_type not empty
-  - prepare link_body.link_type = object_link_type
-  - after success updating, find all objects with certain types and change link_type
 */
-func UpdateTypesLink(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-	selfID := contextProcessor.Self.ID
-	payload := contextProcessor.Payload
+func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	sosc := common.NewSyncOpStatusController(ctx)
 
-	to, ok := payload.GetByPath("to").AsString()
-	to = contextProcessor.Domain.CreateObjectIDWithThisDomain(to)
-	if !ok {
-		replyError(contextProcessor, errors.New("to undefined"))
-		return
-	}
+	link := ctx.Payload.Clone()
+	link.SetByPath("link_type", easyjson.NewJSON(TYPE_TYPELINK))
+	sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.update", ctx.Self.ID, &link, nil)))
 
-	objectLinkType := payload.GetByPath("object_link_type").AsStringDefault("")
-	body := payload.GetByPath("body")
-
-	if objectLinkType == "" && !body.IsNonEmptyObject() {
-		replyError(contextProcessor, errors.New("nothing to update"))
-		return
-	}
-
-	updateLinkPayload := easyjson.NewJSONObject()
-	updateLinkPayload.SetByPath("descendant_uuid", easyjson.NewJSON(to))
-	updateLinkPayload.SetByPath("link_type", easyjson.NewJSON(TypeLink))
-	updateLinkPayload.SetByPath("link_body", body)
-	updateLinkPayload.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{TypeTag + to}))
-
-	needUpdateObjectLinkType := objectLinkType != ""
-	currentObjectLinkType := ""
-
-	if needUpdateObjectLinkType {
-		updateLinkPayload.SetByPath("link_body.link_type", easyjson.NewJSON(objectLinkType))
-
-		currentBody, err := GetTypesLinkBody(contextProcessor, selfID, to)
-		if err != nil {
-			replyError(contextProcessor, err)
-			return
-		}
-
-		currentObjectLinkType, _ = currentBody.GetByPath("link_body.link_type").AsString()
-	}
-
-	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.link.update", selfID, &updateLinkPayload, nil)
-	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
-		return
-	}
-
-	// update link type of objects with certain types
-	if needUpdateObjectLinkType {
-		objects := FindTypeObjects(contextProcessor, selfID)
-		for _, objectID := range objects {
-			pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, objectID, currentObjectLinkType, ">")
-			keys := contextProcessor.GlobalCache.GetKeysByPattern(pattern)
-
-			for _, key := range keys {
-				split := strings.Split(key, ".")
-				toObjectID := split[len(split)-1]
-
-				// update link_type
-				updateObjectLinkPayload := easyjson.NewJSONObject()
-				updateObjectLinkPayload.SetByPath("descendant_uuid", easyjson.NewJSON(toObjectID))
-				updateObjectLinkPayload.SetByPath("link_type", easyjson.NewJSON(objectLinkType))
-				updateObjectLinkPayload.SetByPath("link_body", easyjson.NewJSONObject())
-
-				result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.link.update", objectID, &updateObjectLinkPayload, nil)
-				if err := checkRequestError(result, err); err != nil {
-					replyError(contextProcessor, err)
-					return
-				}
-			}
-		}
-	}
-
-	replyOk(contextProcessor)
+	sosc.Reply()
 }
 
-func DeleteTypesLink(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-	replyOk(contextProcessor)
+/*
+	{
+		"to": string
+	}
+*/
+func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	sosc := common.NewSyncOpStatusController(ctx)
+
+	toType, ok := ctx.Payload.GetByPath("to").AsString()
+	if !ok {
+		sosc.Integreate(common.SyncOpFailed("'to' undefined")).Reply()
+		return
+	}
+	toType = ctx.Domain.CreateObjectIDWithHubDomainIfndef(ctx.Domain.GetObjectIDWithoutDomain(toType))
+
+	originLinkType, err := getObjectsLinkTypeFromTypesLink(ctx, ctx.Self.ID, toType)
+	if err != nil {
+		sosc.Integreate(common.SyncOpFailed(err.Error())).Reply()
+		return
+	}
+
+	typeObjects, err := findTypeObjects(ctx, ctx.Self.ID)
+	if err != nil {
+		sosc.Integreate(common.SyncOpFailed(err.Error())).Reply()
+		return
+	}
+
+	// Delete all links with LINK_TYPE leading to an objects of TYPE
+
+	payload := easyjson.NewJSONObjectWithKeyValue("link_type", easyjson.NewJSON(originLinkType))
+	payload.SetByPath("to_object_type", easyjson.NewJSON(toType))
+	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
+	for _, objectId := range typeObjects {
+		sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.create", objectId, &payload, &options)))
+		if sosc.GetLastSyncOp().Data.PathExists("op_stack") {
+			executeTriggersFromLLOpStack(ctx, sosc.GetLastSyncOp().Data.GetByPathPtr("op_stack"))
+		}
+	}
+
+	objectLink := easyjson.NewJSONObject()
+	objectLink.SetByPath("to", easyjson.NewJSON(toType))
+	objectLink.SetByPath("link_type", easyjson.NewJSON(TYPE_TYPELINK))
+	sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.delete", ctx.Self.ID, &objectLink, nil)))
+
+	sosc.Reply()
 }
 
 /*
@@ -388,46 +267,34 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.S
 
 create object -> object link
 */
-func CreateObjectsLink(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-	selfID := contextProcessor.Self.ID
-	payload := contextProcessor.Payload
+func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	sosc := common.NewSyncOpStatusController(ctx)
 
-	objectToID, ok := payload.GetByPath("to").AsString()
-	objectToID = contextProcessor.Domain.CreateObjectIDWithThisDomain(objectToID)
+	objectToID, ok := ctx.Payload.GetByPath("to").AsString()
+	objectToID = ctx.Domain.CreateObjectIDWithThisDomainIfndef(objectToID)
 	if !ok {
-		replyError(contextProcessor, errors.New("to undefined"))
+		sosc.Integreate(common.SyncOpFailed("'to' undefined")).Reply()
 		return
 	}
 
-	linkType, err := getReferenceLinkTypeBetweenTwoObjects(contextProcessor, selfID, objectToID)
+	linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, ctx.Self.ID, objectToID)
 	if err != nil {
-		replyError(contextProcessor, err)
-		return
-	}
-
-	linkBodyKey := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, selfID, linkType, objectToID)
-	if _, err := contextProcessor.GlobalCache.GetValue(linkBodyKey); err == nil {
-		replyOk(contextProcessor)
+		sosc.Integreate(common.SyncOpFailed(err.Error())).Reply()
 		return
 	}
 
 	objectLink := easyjson.NewJSONObject()
-	objectLink.SetByPath("descendant_uuid", easyjson.NewJSON(objectToID))
+	objectLink.SetByPath("to", easyjson.NewJSON(objectToID))
 	objectLink.SetByPath("link_type", easyjson.NewJSON(linkType))
-	objectLink.SetByPath("link_body", payload.GetByPath("body"))
+	objectLink.SetByPath("body", ctx.Payload.GetByPath("body"))
 
 	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.link.create", selfID, &objectLink, &options)
-	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
-		return
+	sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.create", ctx.Self.ID, &objectLink, &options)))
+	if sosc.GetLastSyncOp().Data.PathExists("op_stack") {
+		executeTriggersFromLLOpStack(ctx, sosc.GetLastSyncOp().Data.GetByPathPtr("op_stack"))
 	}
 
-	if result.PathExists("op_stack") {
-		executeTriggersFromLLOpStack(contextProcessor, result.GetByPath("op_stack").GetPtr())
-	}
-
-	replyOk(contextProcessor)
+	sosc.Reply()
 }
 
 /*
@@ -436,39 +303,34 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins
 		"body": json
 	}
 */
-func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-	selfID := contextProcessor.Self.ID
-	payload := contextProcessor.Payload
+func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	sosc := common.NewSyncOpStatusController(ctx)
 
-	objectToID, ok := payload.GetByPath("to").AsString()
-	objectToID = contextProcessor.Domain.CreateObjectIDWithThisDomain(objectToID)
+	objectToID, ok := ctx.Payload.GetByPath("to").AsString()
+	objectToID = ctx.Domain.CreateObjectIDWithThisDomainIfndef(objectToID)
 	if !ok {
+		sosc.Integreate(common.SyncOpFailed("'to' undefined")).Reply()
 		return
 	}
 
-	linkType, err := getReferenceLinkTypeBetweenTwoObjects(contextProcessor, selfID, objectToID)
+	linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, ctx.Self.ID, objectToID)
 	if err != nil {
-		replyError(contextProcessor, err)
+		sosc.Integreate(common.SyncOpFailed(err.Error())).Reply()
 		return
 	}
 
 	objectLink := easyjson.NewJSONObject()
-	objectLink.SetByPath("descendant_uuid", easyjson.NewJSON(objectToID))
+	objectLink.SetByPath("to", easyjson.NewJSON(objectToID))
 	objectLink.SetByPath("link_type", easyjson.NewJSON(linkType))
-	objectLink.SetByPath("link_body", payload.GetByPath("body"))
+	objectLink.SetByPath("body", ctx.Payload.GetByPath("body"))
 
 	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.link.update", selfID, &objectLink, &options)
-	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
-		return
+	sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.update", ctx.Self.ID, &objectLink, &options)))
+	if sosc.GetLastSyncOp().Data.PathExists("op_stack") {
+		executeTriggersFromLLOpStack(ctx, sosc.GetLastSyncOp().Data.GetByPathPtr("op_stack"))
 	}
 
-	if result.PathExists("op_stack") {
-		executeTriggersFromLLOpStack(contextProcessor, result.GetByPath("op_stack").GetPtr())
-	}
-
-	replyOk(contextProcessor)
+	sosc.Reply()
 }
 
 /*
@@ -476,206 +338,31 @@ func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins
 		"to": string,
 	}
 */
-func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-	selfID := contextProcessor.Self.ID
-	payload := contextProcessor.Payload
+func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	sosc := common.NewSyncOpStatusController(ctx)
 
-	objectToID, ok := payload.GetByPath("to").AsString()
-	objectToID = contextProcessor.Domain.CreateObjectIDWithThisDomain(objectToID)
+	objectToID, ok := ctx.Payload.GetByPath("to").AsString()
+	objectToID = ctx.Domain.CreateObjectIDWithThisDomainIfndef(objectToID)
 	if !ok {
+		sosc.Integreate(common.SyncOpFailed("'to' undefined")).Reply()
 		return
 	}
 
-	linkType, err := getReferenceLinkTypeBetweenTwoObjects(contextProcessor, selfID, objectToID)
+	linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, ctx.Self.ID, objectToID)
 	if err != nil {
-		replyError(contextProcessor, err)
+		sosc.Integreate(common.SyncOpFailed(err.Error())).Reply()
 		return
 	}
 
 	objectLink := easyjson.NewJSONObject()
-	objectLink.SetByPath("descendant_uuid", easyjson.NewJSON(objectToID))
+	objectLink.SetByPath("to", easyjson.NewJSON(objectToID))
 	objectLink.SetByPath("link_type", easyjson.NewJSON(linkType))
 
 	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-	result, err := contextProcessor.Request(sfPlugins.AutoSelect, "functions.graph.api.link.delete", selfID, &objectLink, &options)
-	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
-		return
+	sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.delete", ctx.Self.ID, &objectLink, &options)))
+	if sosc.GetLastSyncOp().Data.PathExists("op_stack") {
+		executeTriggersFromLLOpStack(ctx, sosc.GetLastSyncOp().Data.GetByPathPtr("op_stack"))
 	}
 
-	if result.PathExists("op_stack") {
-		executeTriggersFromLLOpStack(contextProcessor, result.GetByPath("op_stack").GetPtr())
-	}
-
-	replyOk(contextProcessor)
-}
-
-func getReferenceLinkTypeBetweenTwoObjects(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId string) (string, error) {
-	fromTypeID := FindObjectType(ctx, fromObjectId)
-	toTypeID := FindObjectType(ctx, toObjectId)
-
-	linkBody, err := GetTypesLinkBody(ctx, fromTypeID, toTypeID)
-	if err != nil {
-		return "", err
-	}
-
-	linkType, ok := linkBody.GetByPath("link_type").AsString()
-	if !ok {
-		return "", fmt.Errorf("type of a link was not defined in link type")
-	}
-	return linkType, nil
-}
-
-func executeTriggersFromLLOpStack(ctx *sfPlugins.StatefunContextProcessor, opStack *easyjson.JSON) {
-	if opStack != nil && opStack.IsArray() {
-		for i := 0; i < opStack.ArraySize(); i++ {
-			opData := opStack.ArrayElement(i)
-			opStr := opData.GetByPath("op").AsStringDefault("")
-			if len(opStr) > 0 {
-				for j := 0; j < 3; j++ {
-					if opStr == llAPIVertexCUDNames[j] {
-						vId := opData.GetByPath("id").AsStringDefault("")
-						if len(vId) > 0 && isVertexAnObject(ctx, vId) {
-							var oldBody *easyjson.JSON = nil
-							if opData.PathExists("old_body") {
-								oldBody = opData.GetByPath("old_body").GetPtr()
-							}
-							var newBody *easyjson.JSON = nil
-							if opData.PathExists("new_body") {
-								newBody = opData.GetByPath("new_body").GetPtr()
-							}
-							executeObjectTriggers(ctx, vId, oldBody, newBody, j)
-						}
-					}
-					if opStr == llAPILinkCUDNames[j] {
-						fromVId := opData.GetByPath("from_id").AsStringDefault("")
-						toVId := opData.GetByPath("to_id").AsStringDefault("")
-						lType := opData.GetByPath("type").AsStringDefault("")
-						if len(lType) > 0 && len(fromVId) > 0 && len(toVId) > 0 && isVertexAnObject(ctx, fromVId) && isVertexAnObject(ctx, toVId) {
-							var oldBody *easyjson.JSON = nil
-							if opData.PathExists("old_body") {
-								oldBody = opData.GetByPath("old_body").GetPtr()
-							}
-							var newBody *easyjson.JSON = nil
-							if opData.PathExists("new_body") {
-								newBody = opData.GetByPath("new_body").GetPtr()
-							}
-							executeLinkTriggers(ctx, fromVId, toVId, lType, oldBody, newBody, j)
-						}
-					}
-				}
-			}
-		}
-	}
-}
-
-func isVertexAnObject(ctx *sfPlugins.StatefunContextProcessor, id string) bool {
-	return len(FindObjectType(ctx, id)) > 0
-}
-
-func executeObjectTriggers(ctx *sfPlugins.StatefunContextProcessor, objectID string, oldObjectBody, newObjectBody *easyjson.JSON, tt int /*0 - create, 1 - update, 2 - delete*/) {
-	triggers := GetObjectTypeTriggers(ctx, objectID)
-	if triggers.IsNonEmptyObject() && tt >= 0 && tt < 3 {
-		elems := []string{"create", "update", "delete"}
-		var functions []string
-		if arr, ok := triggers.GetByPath(elems[tt]).AsArrayString(); ok {
-			functions = arr
-		}
-
-		triggerData := easyjson.NewJSONObject()
-		if oldObjectBody != nil {
-			triggerData.SetByPath("old_body", *oldObjectBody)
-		}
-		if newObjectBody != nil {
-			triggerData.SetByPath("new_body", *newObjectBody)
-		}
-		payload := easyjson.NewJSONObject()
-		payload.SetByPath(fmt.Sprintf("trigger.object.%s", elems[tt]), triggerData)
-
-		for _, f := range functions {
-			ctx.Signal(sfPlugins.JetstreamGlobalSignal, f, objectID, &payload, nil)
-		}
-		// TODO: object deletion leads to object links deletions
-	}
-}
-
-func executeLinkTriggers(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId, linkType string, oldLinkBody, newLinkBody *easyjson.JSON, tt int /*0 - create, 1 - update, 2 - delete*/) {
-	triggers := GetObjectsLinkTypeTriggers(ctx, fromObjectId, toObjectId)
-	if triggers.IsNonEmptyObject() && tt >= 0 && tt < 3 {
-		elems := []string{"create", "update", "delete"}
-		var functions []string
-		if arr, ok := triggers.GetByPath(elems[tt]).AsArrayString(); ok {
-			functions = arr
-		}
-
-		referenceLinkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, fromObjectId, toObjectId)
-		if err != nil || referenceLinkType != linkType {
-			return
-		}
-
-		triggerData := easyjson.NewJSONObject()
-		triggerData.SetByPath("to", easyjson.NewJSON(toObjectId))
-		triggerData.SetByPath("type", easyjson.NewJSON(linkType))
-		if oldLinkBody != nil {
-			triggerData.SetByPath("old_body", *oldLinkBody)
-		}
-		if newLinkBody != nil {
-			triggerData.SetByPath("new_body", *newLinkBody)
-		}
-		payload := easyjson.NewJSONObject()
-		payload.SetByPath(fmt.Sprintf("trigger.link.%s", elems[tt]), triggerData)
-
-		for _, f := range functions {
-			ctx.Signal(sfPlugins.JetstreamGlobalSignal, f, fromObjectId, &payload, nil)
-		}
-	}
-}
-
-/*
-
-func findTypeObjects(ctx *sfPlugins.StatefunContextProcessor, typeID string) []string {
-	pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, typeID, ObjectLink, ">")
-
-	keys := ctx.GlobalCache.GetKeysByPattern(pattern)
-	if len(keys) == 0 {
-		return []string{}
-	}
-
-	out := make([]string, 0, len(keys))
-	for _, v := range keys {
-		split := strings.Split(v, ".")
-		out = append(out, split[len(split)-1])
-	}
-
-	return out
-}
-
-*/
-
-func replyOk(ctx *sfPlugins.StatefunContextProcessor, msg ...string) {
-	reply(ctx, "ok", msg)
-}
-
-func replyError(ctx *sfPlugins.StatefunContextProcessor, err error) {
-	reply(ctx, "failed", err.Error())
-}
-
-func reply(ctx *sfPlugins.StatefunContextProcessor, status string, data any) {
-	qid := common.GetQueryID(ctx)
-	reply := easyjson.NewJSONObject()
-	reply.SetByPath("status", easyjson.NewJSON(status))
-	reply.SetByPath("result", easyjson.NewJSON(data))
-	common.ReplyQueryID(qid, easyjson.NewJSONObjectWithKeyValue("payload", reply).GetPtr(), ctx)
-}
-
-func checkRequestError(result *easyjson.JSON, err error) error {
-	if err != nil {
-		return err
-	}
-
-	if result.GetByPath("status").AsStringDefault("failed") == "failed" {
-		return errors.New(result.GetByPath("result").AsStringDefault("unknown error"))
-	}
-
-	return nil
+	sosc.Reply()
 }

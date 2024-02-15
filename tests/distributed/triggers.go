@@ -159,14 +159,14 @@ func registerTriggers3(runtime *statefun.Runtime) {
 	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoSelect, "functions.cmdb.api.types.link.update", "hub/typea", &payload, nil))
 }
 
-func triggersStatefun1(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-	lg.Logf(lg.DebugLevel, "-------> %s:%s\n", contextProcessor.Self.Typename, contextProcessor.Self.ID)
-	lg.Logln(lg.DebugLevel, "== Payload:", contextProcessor.Payload.ToString())
+func triggersStatefun1(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	lg.Logf(lg.DebugLevel, "-------> %s:%s\n", ctx.Self.Typename, ctx.Self.ID)
+	lg.Logln(lg.DebugLevel, "== Payload:", ctx.Payload.ToString())
 }
 
-func triggersStatefun2(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-	lg.Logf(lg.DebugLevel, "-------> %s:%s\n", contextProcessor.Self.Typename, contextProcessor.Self.ID)
-	lg.Logln(lg.DebugLevel, "== Payload:", contextProcessor.Payload.ToString())
+func triggersStatefun2(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	lg.Logf(lg.DebugLevel, "-------> %s:%s\n", ctx.Self.Typename, ctx.Self.ID)
+	lg.Logln(lg.DebugLevel, "== Payload:", ctx.Payload.ToString())
 }
 
 func registerTriggerFunctions(runtime *statefun.Runtime) {

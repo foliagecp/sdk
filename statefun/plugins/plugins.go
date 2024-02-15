@@ -7,11 +7,10 @@ package plugins
 import (
 	"sync"
 
+	"github.com/foliagecp/sdk/statefun/cache"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 
 	"github.com/foliagecp/easyjson"
-
-	"github.com/foliagecp/sdk/statefun/cache"
 )
 
 type StatefunAddress struct {
@@ -47,14 +46,18 @@ type SyncReply struct {
 type Domain interface {
 	HubDomainName() string
 	Name() string
+	Cache() *cache.Store
 	GetDomainFromObjectID(objectID string) string
 	GetObjectIDWithoutDomain(objectID string) string
-	CreateObjectIDWithDomain(domain string, objectID string) string
-	CreateObjectIDWithThisDomain(objectID string) string
+	// Will not change domain for objectID if exists, for replace guarantee use GetObjectIDWithoutDomain on objectID
+	CreateObjectIDWithDomainIfndef(domain string, objectID string) string
+	// Will not change domain in objectID if exists, for replace guarantee use GetObjectIDWithoutDomain on objectID
+	CreateObjectIDWithThisDomainIfndef(objectID string) string
+	// Will not change domain in objectID if exists, for replace guarantee use GetObjectIDWithoutDomain on objectID
+	CreateObjectIDWithHubDomainIfndef(objectID string) string
 }
 
 type StatefunContextProcessor struct {
-	GlobalCache        *cache.Store
 	GetFunctionContext func() *easyjson.JSON
 	SetFunctionContext func(*easyjson.JSON)
 	GetObjectContext   func() *easyjson.JSON
@@ -74,7 +77,7 @@ type StatefunContextProcessor struct {
 }
 
 type StatefunExecutor interface {
-	Run(contextProcessor *StatefunContextProcessor) error
+	Run(ctx *StatefunContextProcessor) error
 	BuildError() error
 }
 

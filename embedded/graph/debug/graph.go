@@ -8,6 +8,6 @@ import (
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
-func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
+func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	logger.Logln(logger.InfoLevel, "Need to enable CGO")
 }

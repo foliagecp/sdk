@@ -15,7 +15,6 @@ import (
 	// Comment out and no not use graphDebug for resolving the cgo conflict between go-graphviz and rogchap (when --ldflags '-extldflags "-Wl,--allow-multiple-definition"' does not help)
 	graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
 	"github.com/foliagecp/sdk/embedded/graph/jpgql"
-	graphTX "github.com/foliagecp/sdk/embedded/graph/tx"
 	statefun "github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/cache"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
@@ -50,26 +49,26 @@ var (
 	KVMuticesTestWorkers int = system.GetEnvMustProceed("KV_MUTICES_TEST_WORKERS", 4)
 )
 
-func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
+func MasterFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	start := time.Now()
 
 	var functionContext *easyjson.JSON
 	if MasterFunctionContextIncrement {
-		functionContext = contextProcessor.GetFunctionContext()
+		functionContext = ctx.GetFunctionContext()
 	}
 
-	options := contextProcessor.Options
+	options := ctx.Options
 	increment := int(options.GetByPath("increment").AsNumericDefault(0))
 
 	if MasterFunctionLogs {
-		lg.Logf(lg.DebugLevel, "-------> %s:%s\n", contextProcessor.Self.Typename, contextProcessor.Self.ID)
-		lg.Logln(lg.DebugLevel, "== Payload:", contextProcessor.Payload.ToString())
+		lg.Logf(lg.DebugLevel, "-------> %s:%s\n", ctx.Self.Typename, ctx.Self.ID)
+		lg.Logln(lg.DebugLevel, "== Payload:", ctx.Payload.ToString())
 		lg.Logln(lg.DebugLevel, "== Context:", functionContext.ToString())
 	}
 
 	var objectContext *easyjson.JSON
 	if MasterFunctionObjectContextProcess {
-		objectContext = contextProcessor.GetObjectContext()
+		objectContext = ctx.GetObjectContext()
 		if MasterFunctionLogs {
 			lg.Logln(lg.DebugLevel, "== Object context:", objectContext.ToString())
 		}
@@ -80,13 +79,13 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlu
 			if err := executor.BuildError(); err != nil {
 				lg.Logln(lg.ErrorLevel, err)
 			} else {
-				if err := executor.Run(contextProcessor); err != nil {
+				if err := executor.Run(ctx); err != nil {
 					lg.Logln(lg.ErrorLevel, err)
 
 				}
 			}
 		}
-		functionContext = contextProcessor.GetFunctionContext()
+		functionContext = ctx.GetFunctionContext()
 	}
 
 	incrementValue := 0
@@ -100,19 +99,19 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlu
 	}
 
 	if MasterFunctionObjectContextProcess {
-		contextProcessor.SetObjectContext(objectContext)
+		ctx.SetObjectContext(objectContext)
 	}
 
 	if MasterFunctionContextIncrement {
-		contextProcessor.SetFunctionContext(functionContext)
+		ctx.SetFunctionContext(functionContext)
 	}
 
-	if contextProcessor.Reply != nil { // Request call is being made
-		contextProcessor.Reply.With(easyjson.NewJSONObjectWithKeyValue("counter", easyjson.NewJSON(incrementValue)).GetPtr())
+	if ctx.Reply != nil { // Request call is being made
+		ctx.Reply.With(easyjson.NewJSONObjectWithKeyValue("counter", easyjson.NewJSON(incrementValue)).GetPtr())
 	}
 
 	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("master_function", "", []string{"id"}); err == nil {
-		gaugeVec.With(prometheus.Labels{"id": contextProcessor.Self.ID}).Set(float64(time.Since(start).Microseconds()))
+		gaugeVec.With(prometheus.Labels{"id": ctx.Self.ID}).Set(float64(time.Since(start).Microseconds()))
 	}
 }
 
@@ -133,7 +132,6 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	}
 
 	graphCRUD.RegisterAllFunctionTypes(runtime)
-	graphTX.RegisterAllFunctionTypes(runtime)
 	graphDebug.RegisterAllFunctionTypes(runtime)
 	jpgql.RegisterAllFunctionTypes(runtime, 30)
 }

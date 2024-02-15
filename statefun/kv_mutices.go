@@ -26,7 +26,7 @@ var (
 // errorOnLocked - if mutex is already locked, exit with error (do not wait for unlocking)
 func KeyMutexLock(runtime *Runtime, key string, errorOnLocked bool) (uint64, error) {
 	le := lg.GetCustomLogEntry(rt.Caller(1))
-	kv := runtime.kv
+	kv := runtime.Domain.kv
 	mutexResetLock := func(keyMutex string, now int64) (uint64, error) {
 		lockRevisionID, err := kv.Put(keyMutex, system.Int64ToBytes(now))
 		if err == nil {
@@ -130,7 +130,7 @@ func KeyMutexLock(runtime *Runtime, key string, errorOnLocked bool) (uint64, err
 
 func KeyMutexLockUpdate(runtime *Runtime, key string, lockRevisionID uint64) (uint64, error) {
 	le := lg.GetCustomLogEntry(rt.Caller(1))
-	kv := runtime.kv
+	kv := runtime.Domain.kv
 
 	keyMutex := key + ".mutex"
 	entry, err := kv.Get(keyMutex)
@@ -155,7 +155,7 @@ func KeyMutexLockUpdate(runtime *Runtime, key string, lockRevisionID uint64) (ui
 
 func KeyMutexUnlock(runtime *Runtime, key string, lockRevisionID uint64) error {
 	le := lg.GetCustomLogEntry(rt.Caller(1))
-	kv := runtime.kv
+	kv := runtime.Domain.kv
 
 	//keyValueMutexOperationMutex.Lock()
 	//defer keyValueMutexOperationMutex.Unlock()
