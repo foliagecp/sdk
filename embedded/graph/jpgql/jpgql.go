@@ -285,7 +285,7 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 					return
 				}
 				//lg.Logln(processID + ":0:: " + "(" + thisObjectID + ") " + "5")
-				resultObjects := GetObjectIDsFromLinkTypeAndLinkFilterQueryWithAnyDepthStop(ctx.Domain.Cache(), thisObjectID, queryHeadLinkType, queryHeadFilter, anyDepthStop)
+				resultObjects := GetObjectIDsFromLinkNameAndLinkFilterQueryWithAnyDepthStop(ctx.Domain.Cache(), thisObjectID, queryHeadLinkType, queryHeadFilter, anyDepthStop)
 				//lg.Logln("======== RESULT OBJECTS: " + fmt.Sprintln(resultObjects))
 
 				//lg.Logln(processID + ":0:: " + "(" + thisObjectID + ") " + "6")
@@ -306,7 +306,7 @@ func LLAPIQueryJPGQLCallTreeResultAggregation(executor sfPlugins.StatefunExecuto
 					nextCalls := 0
 					for objectID, anyDepthStopped := range resultObjects {
 						nextQuery := queryTail
-						if anyDepthStopped == 1 {
+						if anyDepthStopped == true {
 							nextQuery = anyDepthStop.QueryTail
 						}
 						if len(nextQuery) == 0 { // jpgql_query ended!!!!
@@ -577,13 +577,13 @@ func LLAPIQueryJPGQLDirectCacheResultAggregation(executor sfPlugins.StatefunExec
 			lg.Logf(lg.ErrorLevel, "LLAPIQueryJPGQLDirectCacheResultAggregation: currentQuery is invalid: %s\n", err)
 			return
 		}
-		resultObjects := GetObjectIDsFromLinkTypeAndLinkFilterQueryWithAnyDepthStop(ctx.Domain.Cache(), thisObjectID, queryHeadLinkType, queryHeadFilter, anyDepthStop)
+		resultObjects := GetObjectIDsFromLinkNameAndLinkFilterQueryWithAnyDepthStop(ctx.Domain.Cache(), thisObjectID, queryHeadLinkType, queryHeadFilter, anyDepthStop)
 
 		foundObjects := []string{}
 		if len(resultObjects) > 0 { // There are objects to pass tail query to - store result objects in aggregation array
 			for objectID, anyDepthStopped := range resultObjects {
 				nextQuery := queryTail
-				if anyDepthStopped == 1 {
+				if anyDepthStopped == true {
 					nextQuery = anyDepthStop.QueryTail
 				}
 				if len(nextQuery) == 0 { // jpgql_query ended!!!!
