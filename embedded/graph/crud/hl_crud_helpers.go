@@ -12,7 +12,7 @@ import (
 /*
 payload: json - required
 
-	link_type: string - required
+	type: string - required
 	to_object_type: string - required
 
 options: json - optional
@@ -24,9 +24,9 @@ func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfP
 
 	opStack := getOpStackFromOptions(ctx.Options)
 
-	linkType, ok := ctx.Payload.GetByPath("link_type").AsString()
+	linkType, ok := ctx.Payload.GetByPath("type").AsString()
 	if !ok {
-		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link_type is not defined"))).Reply()
+		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("type is not defined"))).Reply()
 		return
 	}
 
@@ -36,7 +36,7 @@ func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfP
 		return
 	}
 
-	pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, linkType, ">")
+	pattern := fmt.Sprintf(OutLinkTypeKeyPrefPatternNEW+LinkKeySuff2Pattern, ctx.Self.ID, linkType, ">")
 	keys := ctx.Domain.Cache().GetKeysByPattern(pattern)
 	if len(keys) > 0 {
 		for _, v := range keys {
@@ -46,7 +46,7 @@ func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfP
 			if findObjectType(ctx, to) == toObjectType {
 				objectLink := easyjson.NewJSONObject()
 				objectLink.SetByPath("to", easyjson.NewJSON(to))
-				objectLink.SetByPath("link_type", easyjson.NewJSON(linkType))
+				objectLink.SetByPath("type", easyjson.NewJSON(linkType))
 
 				sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.delete", ctx.Self.ID, &objectLink, ctx.Options)))
 				mergeOpStack(opStack, sosc.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
@@ -80,7 +80,7 @@ func GetObjectTypeTriggersStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.
 func FindObjectTypeStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	sosc := common.NewSyncOpStatusController(ctx)
 
-	pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, TYPE_TYPELINK, ">")
+	pattern := fmt.Sprintf(OutLinkTypeKeyPrefPatternNEW+LinkKeySuff2Pattern, ctx.Self.ID, TYPE_TYPELINK, ">")
 	keys := ctx.Domain.Cache().GetKeysByPattern(pattern)
 	if len(keys) > 0 {
 		split := strings.Split(keys[0], ".")
@@ -96,7 +96,7 @@ func FindObjectTypeStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 func FindTypeObjectsStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	sosc := common.NewSyncOpStatusController(ctx)
 
-	keys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, OBJECT_TYPELINK, ">"))
+	keys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkTypeKeyPrefPatternNEW+LinkKeySuff2Pattern, ctx.Self.ID, OBJECT_TYPELINK, ">"))
 	if len(keys) > 0 {
 		out := make([]string, 0, len(keys))
 		for _, v := range keys {
@@ -142,7 +142,7 @@ func findTypeObjects(ctx *sfPlugins.StatefunContextProcessor, objectID string) (
 func getLinkBody(ctx *sfPlugins.StatefunContextProcessor, from, to, linkType string) (*easyjson.JSON, error) {
 	link := easyjson.NewJSONObject()
 	link.SetByPath("to", easyjson.NewJSON(to))
-	link.SetByPath("link_type", easyjson.NewJSON(linkType))
+	link.SetByPath("type", easyjson.NewJSON(linkType))
 
 	som := common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.read", from, &link, nil))
 	if som.Status == common.SYNC_OP_STATUS_OK {
@@ -167,7 +167,7 @@ func getObjectsLinkTypeFromTypesLink(ctx *sfPlugins.StatefunContextProcessor, fr
 		return "", err
 	}
 
-	linkType, ok := linkBody.GetByPath("link_type").AsString()
+	linkType, ok := linkBody.GetByPath("type").AsString()
 	if !ok {
 		return "", fmt.Errorf("type of a link was not defined in link type")
 	}

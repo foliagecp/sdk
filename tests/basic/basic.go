@@ -13,7 +13,7 @@ import (
 	lg "github.com/foliagecp/sdk/statefun/logger"
 
 	// Comment out and no not use graphDebug for resolving the cgo conflict between go-graphviz and rogchap (when --ldflags '-extldflags "-Wl,--allow-multiple-definition"' does not help)
-	graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
+	//graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
 	"github.com/foliagecp/sdk/embedded/graph/jpgql"
 	statefun "github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/cache"
@@ -132,7 +132,7 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	}
 
 	graphCRUD.RegisterAllFunctionTypes(runtime)
-	graphDebug.RegisterAllFunctionTypes(runtime)
+	//graphDebug.RegisterAllFunctionTypes(runtime)
 	jpgql.RegisterAllFunctionTypes(runtime, 30)
 }
 
@@ -165,12 +165,12 @@ func Start() {
 	system.GlobalPrometrics = system.NewPrometrics("", ":9901")
 
 	afterStart := func(runtime *statefun.Runtime) error {
-		if TriggersTest {
+		/*if TriggersTest {
 			RunTriggersTest(runtime)
 		}
 		if RequestReplyTest {
 			RunRequestReplyTest(runtime)
-		}
+		}*/
 		if CreateSimpleGraphTest {
 			CreateTestGraph(runtime)
 		}
@@ -178,14 +178,14 @@ func Start() {
 	}
 
 	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "basic")); err == nil {
-		if KVMuticesTest {
+		/*if KVMuticesTest {
 			KVMuticesSimpleTest(runtime, KVMuticesTestDurationSec, KVMuticesTestWorkers, 2, 1)
-		}
+		}*/
 
 		RegisterFunctionTypes(runtime)
-		if TriggersTest {
+		/*if TriggersTest {
 			registerTriggerFunctions(runtime)
-		}
+		}*/
 		if err := runtime.Start(cache.NewCacheConfig("main_cache"), afterStart); err != nil {
 			lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s\n", err)
 		}
