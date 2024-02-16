@@ -48,7 +48,7 @@ func initTriggersTest(runtime *statefun.Runtime) {
 		IsTransactionOperationOk(runtime.Request(sfPlugins.AutoSelect, "functions.cmdb.tx.type.create", txId, &signalPayload, nil))
 		// ------------------------------------
 		// + T:typea -> T:typeb ---------------
-		signalPayload = easyjson.NewJSONObjectWithKeyValue("object_link_type", easyjson.NewJSON("a2b"))
+		signalPayload = easyjson.NewJSONObjectWithKeyValue("object_type", easyjson.NewJSON("a2b"))
 		signalPayload.SetByPath("from", easyjson.NewJSON("typea"))
 		signalPayload.SetByPath("to", easyjson.NewJSON("typeb"))
 		IsTransactionOperationOk(runtime.Request(sfPlugins.AutoSelect, "functions.cmdb.tx.types.link.create", txId, &signalPayload, nil))

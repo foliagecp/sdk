@@ -28,11 +28,11 @@ func LLAPIObjectDebugPrint(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.S
 	lg.Logf(lg.DebugLevel, "************************* Object's body (id=%s):\n", self.ID)
 	lg.Logln(lg.DebugLevel, objectContext.ToString())
 	lg.Logf(lg.DebugLevel, "************************* In links:\n")
-	for _, key := range ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(crud.InLinkKeyPrefPattern+crud.LinkKeySuff1Pattern, self.ID, ">")) {
+	for _, key := range ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(crud.InLinkKeyPrefPatternNEW+crud.LinkKeySuff1Pattern, self.ID, ">")) {
 		lg.Logln(lg.DebugLevel, key)
 	}
 	lg.Logf(lg.DebugLevel, "************************* Out links:\n")
-	for _, key := range ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.LinkKeySuff1Pattern, self.ID, ">")) {
+	for _, key := range ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(crud.OutLinkBodyKeyPrefPatternNEW+crud.LinkKeySuff1Pattern, self.ID, ">")) {
 		lg.Logln(lg.DebugLevel, key)
 		if j, err := ctx.Domain.Cache().GetValueAsJSON(key); err == nil {
 			lg.Logln(lg.DebugLevel, j.ToString())

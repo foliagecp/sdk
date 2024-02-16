@@ -12,7 +12,6 @@ import (
 
 	"github.com/foliagecp/sdk/embedded/graph/common"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
-	"github.com/foliagecp/sdk/statefun/system"
 )
 
 func getOpStackFromOptions(options *easyjson.JSON) *easyjson.JSON {
@@ -218,7 +217,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	opStack := getOpStackFromOptions(ctx.Options)
 
 	// Delete all out links -------------------------------
-	outLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
+	outLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
 	for _, outLinkKey := range outLinkKeys {
 		inLinkKeyTokens := strings.Split(outLinkKey, ".")
 		toObjectID := inLinkKeyTokens[len(inLinkKeyTokens)-1]
@@ -226,7 +225,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 		deleteLinkPayload := easyjson.NewJSONObject()
 		deleteLinkPayload.SetByPath("to", easyjson.NewJSON(toObjectID))
-		deleteLinkPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
+		deleteLinkPayload.SetByPath("type", easyjson.NewJSON(linkType))
 		sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.delete", ctx.Self.ID, &deleteLinkPayload, ctx.Options)))
 		mergeOpStack(opStack, sosc.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
 		if sosc.GetLastSyncOp().Status == common.SYNC_OP_STATUS_FAILED {
@@ -237,7 +236,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	// ----------------------------------------------------
 
 	// Delete all in links --------------------------------
-	inLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
+	inLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
 	for _, inLinkKey := range inLinkKeys {
 		inLinkKeyTokens := strings.Split(inLinkKey, ".")
 		fromObjectID := inLinkKeyTokens[len(inLinkKeyTokens)-2]
@@ -245,7 +244,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 		deleteLinkPayload := easyjson.NewJSONObject()
 		deleteLinkPayload.SetByPath("to", easyjson.NewJSON(ctx.Self.ID))
-		deleteLinkPayload.SetByPath("link_type", easyjson.NewJSON(linkType))
+		deleteLinkPayload.SetByPath("type", easyjson.NewJSON(linkType))
 		sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.delete", fromObjectID, &deleteLinkPayload, ctx.Options)))
 		mergeOpStack(opStack, sosc.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
 		if sosc.GetLastSyncOp().Status == common.SYNC_OP_STATUS_FAILED {
@@ -256,7 +255,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	// ----------------------------------------------------
 
 	// Delete link name generator -------------------------
-	ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkNameGenKeyPattern, ctx.Self.ID), true, -1, "")
+	ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW, ctx.Self.ID), true, -1, "")
 	// ----------------------------------------------------
 
 	var oldBody *easyjson.JSON = nil
@@ -302,21 +301,21 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 }
 
 /*
-Creates a link of type="link_type" from a vertex with id the funcion being called with to a vartex with id="to".
+Creates a link of type="type" from a vertex with id the funcion being called with to a vartex with id="to".
 
 Request:
 
 	payload: json - required
 		// Initial request from caller:
 		to: string - required // ID for descendant object.
-		link_type: string - required // Type of link leading to descendant.
+		name: string - required // Defines link's name which is unique among all object's output links.
+		type: string - required // Type of link leading to descendant.
+		tags: []string - optional // Defines link tags.
 		body: json - optional // Body for link leading to descendant.
-			name: string - optional // Defines link's name which is unique among all object's output links. Will be generated automatically if not defined or if same named out link already exists.
-			tags: []string - optional // Defines link tags.
 			<key>: <type> - optional // Any additional key and value to be stored in link's body.
 
 		// Self-requests to descendants (RequestReply): // ID can be composite: <object_id>===self_link - for non-blocking execution on the same object
-			in_link_type: string - required // Type of input link to create
+			in_name: string - required // Creating input link's name
 
 	options: json - optional
 		return_op_stack: bool - optional
@@ -341,10 +340,10 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	payload := ctx.Payload
 	opStack := getOpStackFromOptions(ctx.Options)
 
-	if payload.PathExists("in_link_type") {
-		if inLinkType, ok := payload.GetByPath("in_link_type").AsString(); ok && len(inLinkType) > 0 {
+	if payload.PathExists("in_name") {
+		if inLinkName, ok := payload.GetByPath("in_name").AsString(); ok && len(inLinkName) > 0 {
 			if linkFromObjectUUID := ctx.Caller.ID; len(linkFromObjectUUID) > 0 {
-				ctx.Domain.Cache().SetValue(fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff2Pattern, selfId, linkFromObjectUUID, inLinkType), nil, true, -1, "")
+				ctx.Domain.Cache().SetValue(fmt.Sprintf(InLinkKeyPrefPatternNEW+LinkKeySuff2Pattern, selfId, linkFromObjectUUID, inLinkName), nil, true, -1, "")
 				sosc.Integreate(common.SyncOpOk(easyjson.NewJSONNull())).Reply()
 				return
 			} else {
@@ -352,7 +351,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 				return
 			}
 		} else {
-			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("in_link_type is not defined"))).Reply()
+			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("in_name is not defined"))).Reply()
 			return
 		}
 	} else {
@@ -361,14 +360,6 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			linkBody = payload.GetByPath("body")
 		} else {
 			linkBody = easyjson.NewJSONObject()
-		}
-
-		var linkType string
-		if s, ok := payload.GetByPath("link_type").AsString(); ok {
-			linkType = s
-		} else {
-			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link_type is not defined"))).Reply()
-			return
 		}
 
 		var toId string
@@ -380,49 +371,52 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		}
 		toId = ctx.Domain.CreateObjectIDWithThisDomainIfndef(toId)
 
-		_, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, selfId, linkType, toId))
-		if err == nil { // If link already exists
-			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link from=%s, to=%s, link_type=%s already exists", selfId, toId, linkType))).Reply()
+		var linkName string
+		if s, ok := payload.GetByPath("name").AsString(); ok {
+			linkName = s
+		} else {
+			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("name is not defined"))).Reply()
 			return
 		}
 
+		var linkType string
+		if s, ok := payload.GetByPath("type").AsString(); ok {
+			linkType = s
+		} else {
+			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("type is not defined"))).Reply()
+			return
+		}
+
+		// Check if link with this name already exists --------------
+		_, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, selfId, linkName))
+		if err == nil {
+			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link from=%s with name=%s already exists", selfId, linkName))).Reply()
+			return
+		}
+		// ----------------------------------------------------------
+		// Check if link with this type "type" to "to" already exists
+		_, err = ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPatternNEW+LinkKeySuff2Pattern, selfId, linkType, toId))
+		if err == nil {
+			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link from=%s with name=%s to=%s with type=%s already exists", selfId, linkName, toId, linkType))).Reply()
+			return
+		}
+		// -----------------------------------------------------------
+
 		// Create out link on this object -------------------------
-		// Create unique link name ----------
-		linkName, linkNameDefined := linkBody.GetByPath("name").AsString()
-		if len(linkName) == 0 {
-			linkNameDefined = false
-		}
-		sameNamedLinkExists := false
-		if linkNameDefined {
-			if _, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkLinkNamePrefPattern+LinkKeySuff1Pattern, selfId, linkName)); err == nil {
-				sameNamedLinkExists = true
-			}
-		}
-		if !linkNameDefined || sameNamedLinkExists {
-			var namegen int64 = 0
-			if v, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkNameGenKeyPattern, selfId)); err == nil {
-				namegen = system.BytesToInt64(v)
-			}
-			linkName = fmt.Sprintf("name%d", namegen)
-			namegen++
-			ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkNameGenKeyPattern, selfId), system.Int64ToBytes(namegen), true, -1, "")
-			linkBody.SetByPath("name", easyjson.NewJSON(linkName))
-		}
-		// ----------------------------------
-		// Create link name -----------------
-		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkLinkNamePrefPattern+LinkKeySuff1Pattern, selfId, linkName), nil, true, -1, "")
-		// ----------------------------------
-		// Index link name ------------------
-		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, selfId, linkType, toId, "name", linkName), nil, true, -1, "")
+		// Set link target ------------------
+		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, selfId, linkName), []byte(fmt.Sprintf("%s.%s", linkType, toId)), true, -1, "") // Store link body in KV
 		// ----------------------------------
 		// Set link body --------------------
-		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, selfId, linkType, toId), linkBody.ToBytes(), true, -1, "") // Store link body in KV
+		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, selfId, linkName), linkBody.ToBytes(), true, -1, "") // Store link body in KV
 		// ----------------------------------
-		// Store tags -----------------------
-		if linkBody.GetByPath("tags").IsNonEmptyArray() {
-			if linkTags, ok := linkBody.GetByPath("tags").AsArrayString(); ok {
+		// Index link type ------------------
+		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff3Pattern, selfId, linkName, "type", linkType), nil, true, -1, "")
+		// ----------------------------------
+		// Index link tags ------------------
+		if payload.GetByPath("tags").IsNonEmptyArray() {
+			if linkTags, ok := payload.GetByPath("tags").AsArrayString(); ok {
 				for _, linkTag := range linkTags {
-					ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, selfId, linkType, toId, "tag", linkTag), nil, true, -1, "")
+					ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff3Pattern, selfId, linkName, "tag", linkTag), nil, true, -1, "")
 				}
 			}
 		}
@@ -433,7 +427,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 		// Create in link on descendant object --------------------
 		nextCallPayload := easyjson.NewJSONObject()
-		nextCallPayload.SetByPath("in_link_type", easyjson.NewJSON(linkType))
+		nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkType))
 		targetId := toId
 		if toId == ctx.Self.ID {
 			targetId = targetId + "===self_link"
@@ -450,18 +444,17 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 }
 
 /*
-Updates a link of type="link_type" from a vertex with id the funcion being called with to a vertex with id="to".
+Updates a link of type="type" from a vertex with id the funcion being called with to a vertex with id="to".
 
 Request:
 
 	payload: json - required
 		// Initial request from caller:
-		to: string - required // ID for descendant object. If a descandant with the specified uuid does not exist - will be created with empty body.
-		link_type: string - required // Type of link leading to descendant.
+		name: string - required // Defines link's name which is unique among all object's output links.
+		tags: []string - optional // Defines link tags.
+		replace: bool - optional // "false" - default, body and tags will be merged, "true" - body and tags will be replaced,
 		body: json - optional // Body for link leading to descendant.
-			tags: []string - optional // Defines link tags.
 			<key>: <type> - optional // Any additional key and value to be stored in link's body.
-		mode: string - optional // "merge" (default) - deep merge old and new bodies, "replace" - replace old body with the new one, <other> is interpreted as "merge" without any notification
 
 	options: json - optional
 		return_op_stack: bool - optional
@@ -480,22 +473,34 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	opStack := getOpStackFromOptions(ctx.Options)
 
-	var linkType string
-	if s, ok := payload.GetByPath("link_type").AsString(); ok {
-		linkType = s
+	var linkName string
+	if s, ok := payload.GetByPath("name").AsString(); ok {
+		linkName = s
 	} else {
-		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link type is not defined"))).Reply()
+		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("name is not defined"))).Reply()
 		return
 	}
 
-	var toId string
-	if s, ok := payload.GetByPath("to").AsString(); ok {
-		toId = s
-	} else {
-		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("to is not defined"))).Reply()
+	linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
+	if err != nil {
+		sosc.Integreate(common.SyncOpIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 		return
 	}
-	toId = ctx.Domain.CreateObjectIDWithThisDomainIfndef(toId)
+	oldLinkBody, err := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
+	if err != nil {
+		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link from=%s with name=%s", ctx.Self.ID, linkName))).Reply()
+		return
+	}
+
+	linkTargetStr := string(linkTargetBytes)
+	linkTargetTokens := strings.Split(linkTargetStr, ".")
+	if len(linkTargetTokens) != 2 || len(linkTargetTokens[0]) == 0 || len(linkTargetTokens[1]) == 0 {
+		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link from=%s with name=%s, has invalid target: %s", ctx.Self.ID, linkName, linkTargetStr))).Reply()
+	}
+	linkType := linkTargetTokens[0]
+	toId := linkTargetTokens[1]
+
+	var replace bool = payload.GetByPath("mode").AsBoolDefault(false)
 
 	var linkBody easyjson.JSON
 	if payload.GetByPath("body").IsObject() {
@@ -504,99 +509,50 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		linkBody = easyjson.NewJSONObject()
 	}
 
-	fixedOldLinkBody, err := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, linkType, toId))
-	if err != nil {
-		sosc.Integreate(common.SyncOpIdle(fmt.Sprintf("link from=%s, to=%s, link_type=%s does not exist", ctx.Self.ID, toId, linkType))).Reply()
-		return
+	if replace {
+		// Remove all indices -----------------------------
+		indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, linkName, ">"))
+		for _, indexKey := range indexKeys {
+			ctx.Domain.Cache().DeleteValue(indexKey, true, -1, "")
+		}
+		// ------------------------------------------------
+	} else { // merge
+		newBody := oldLinkBody.Clone().GetPtr()
+		newBody.DeepMerge(linkBody)
+		linkBody = *newBody
 	}
 
-	// Delete old indices -----------------------------------------
-	// Link name ------------------------
-	if linkName, ok := fixedOldLinkBody.GetByPath("name").AsString(); ok {
-		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkLinkNamePrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName), true, -1, "")
-		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, ctx.Self.ID, linkType, toId, "name", linkName), true, -1, "")
-	}
+	// Create out link on this object -------------------------
+	// Set link body --------------------
+	ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, ctx.Self.ID, linkName), linkBody.ToBytes(), true, -1, "") // Store link body in KV
 	// ----------------------------------
-	// Link tags ------------------------
-	if fixedOldLinkBody.GetByPath("tags").IsNonEmptyArray() {
-		if linkTags, ok := fixedOldLinkBody.GetByPath("tags").AsArrayString(); ok {
+	// Index link tags ------------------
+	if linkBody.GetByPath("tags").IsNonEmptyArray() {
+		if linkTags, ok := linkBody.GetByPath("tags").AsArrayString(); ok {
 			for _, linkTag := range linkTags {
-				ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, ctx.Self.ID, linkType, toId, "tag", linkTag), true, -1, "")
+				ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff3Pattern, ctx.Self.ID, linkName, "tag", linkTag), nil, true, -1, "")
 			}
 		}
 	}
 	// ----------------------------------
-	// ------------------------------------------------------------
-	// Generate new link body -------------------------------------
-	mode := payload.GetByPath("mode").AsStringDefault("merge")
-	newBody := fixedOldLinkBody
-	switch mode {
-	case "replace":
-		newBody = &linkBody
-	case "merge":
-		fallthrough
-	default:
-		newBody = fixedOldLinkBody.Clone().GetPtr()
-		newBody.DeepMerge(linkBody)
-	}
-	// ------------------------------------------------------------
-	// Create unique link name ------------------------------------
-	linkName, linkNameDefined := newBody.GetByPath("name").AsString()
-	if len(linkName) == 0 {
-		linkNameDefined = false
-	}
-	sameNamedLinkExists := false
-	if linkNameDefined {
-		if _, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkLinkNamePrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName)); err == nil {
-			sameNamedLinkExists = true
-		}
-	}
-	if !linkNameDefined || sameNamedLinkExists {
-		var namegen int64 = 0
-		if v, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkNameGenKeyPattern, ctx.Self.ID)); err == nil {
-			namegen = system.BytesToInt64(v)
-		}
-		linkName = fmt.Sprintf("name%d", namegen)
-		namegen++
-		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkNameGenKeyPattern, ctx.Self.ID), system.Int64ToBytes(namegen), true, -1, "")
-		newBody.SetByPath("name", easyjson.NewJSON(linkName))
-	}
-	// ------------------------------------------------------------
-	// Create link name -------------------------------------------
-	ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkLinkNamePrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName), nil, true, -1, "")
-	// ------------------------------------------------------------
-	// Index link name --------------------------------------------
-	ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, ctx.Self.ID, linkType, toId, "name", linkName), nil, true, -1, "")
-	// ------------------------------------------------------------
-	// Update link body -------------------------------------------
-	ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, linkType, toId), newBody.ToBytes(), true, -1, "") // Store link body in KV
-	// ------------------------------------------------------------
-	// Create new indices -----------------------------------------
-	if newBody.GetByPath("tags").IsNonEmptyArray() {
-		if linkTags, ok := newBody.GetByPath("tags").AsArrayString(); ok {
-			for _, linkTag := range linkTags {
-				ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, ctx.Self.ID, linkType, toId, "tag", linkTag), nil, true, -1, "")
-			}
-		}
-	}
-	// ------------------------------------------------------------
-	addLinkOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, toId, linkType, fixedOldLinkBody, newBody)
+	// --------------------------------------------------------
+
+	addLinkOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, toId, linkType, oldLinkBody, &linkBody)
 
 	sosc.Integreate(common.SyncOpOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
 /*
-Delete a link of type="link_type" from a vertex with id the funcion being called with to a vertex with id="to".
+Delete a link of type="type" from a vertex with id the funcion being called with to a vertex with id="to".
 
 Request:
 
 	payload: json - required
 		// Initial request from caller:
-		to: string - required // ID for descendant object.
-		link_type: string - required // Type of link leading to descendant.
+		name: string - required // Defines link's name which is unique among all object's output links.
 
 		// Self-requests to descendants (RequestReply): // ID can be composite: <object_id>===self_link - for non-blocking execution on the same object
-		in_link_type: string - required // Type of input link to delete
+		in_name: string - required // Deleting input link's name
 
 	options: json - optional
 		return_op_stack: bool - optional
@@ -616,69 +572,53 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	payload := ctx.Payload
 	opStack := getOpStackFromOptions(ctx.Options)
 
-	if payload.PathExists("in_link_type") {
-		if inLinkType, ok := payload.GetByPath("in_link_type").AsString(); ok && len(inLinkType) > 0 {
-			if linkFromObjectUUID := ctx.Caller.ID; len(linkFromObjectUUID) > 0 {
-				ctx.Domain.Cache().DeleteValue(fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff2Pattern, selfId, linkFromObjectUUID, inLinkType), true, -1, "")
-				sosc.Integreate(common.SyncOpOk(easyjson.NewJSONNull())).Reply()
-				return
-			} else {
-				sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("caller id is not defined, no source vertex id"))).Reply()
-				return
-			}
+	if payload.PathExists("in_name") {
+		var linkName string
+		if s, ok := payload.GetByPath("name").AsString(); ok {
+			linkName = s
 		} else {
-			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("in_link_type is not defined"))).Reply()
-			return
-		}
-	} else {
-		var linkType string
-		if s, ok := payload.GetByPath("link_type").AsString(); ok {
-			linkType = s
-		} else {
-			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link type is not defined"))).Reply()
-			return
-		}
-		var toId string
-		if s, ok := payload.GetByPath("to").AsString(); ok {
-			toId = s
-		} else {
-			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("to is not defined"))).Reply()
-			return
-		}
-		toId = ctx.Domain.CreateObjectIDWithThisDomainIfndef(toId)
-
-		lbk := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, selfId, linkType, toId)
-		linkBody, err := ctx.Domain.Cache().GetValueAsJSON(lbk)
-		if err != nil { // If does no exist
-			sosc.Integreate(common.SyncOpIdle(fmt.Sprintf("link from=%s, to=%s, link_type=%s does not exist", selfId, toId, linkType))).Reply()
+			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("name is not defined"))).Reply()
 			return
 		}
 
-		ctx.Domain.Cache().DeleteValue(lbk, true, -1, "")
-
-		if linkBody != nil {
-			// Delete link name -------------------
-			if linkName, ok := linkBody.GetByPath("name").AsString(); ok {
-				ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkLinkNamePrefPattern+LinkKeySuff1Pattern, selfId, linkName), true, -1, "")
-				ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, selfId, linkType, toId, "name", linkName), true, -1, "")
-			}
-			// -----------------------------------
-			// Delete tags -----------------------
-			if linkBody.GetByPath("tags").IsNonEmptyArray() {
-				if linkTags, ok := linkBody.GetByPath("tags").AsArrayString(); ok {
-					for _, linkTag := range linkTags {
-						ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff4Pattern, selfId, linkType, toId, "tag", linkTag), true, -1, "")
-					}
-				}
-			}
-			// ------------------------------------
+		linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
+		if err != nil {
+			sosc.Integreate(common.SyncOpIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
+			return
+		}
+		oldLinkBody, err := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
+		if err != nil {
+			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link body from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
+			return
 		}
 
-		addLinkOpToOpStack(opStack, ctx.Self.Typename, selfId, toId, linkType, linkBody, nil)
+		linkTargetStr := string(linkTargetBytes)
+		linkTargetTokens := strings.Split(linkTargetStr, ".")
+		if len(linkTargetTokens) != 2 || len(linkTargetTokens[0]) == 0 || len(linkTargetTokens[1]) == 0 {
+			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link from=%s with name=%s, has invalid target: %s", ctx.Self.ID, linkName, linkTargetStr))).Reply()
+		}
+		linkType := linkTargetTokens[0]
+		toId := linkTargetTokens[1]
 
-		// Create in link on descendant object --------------------
+		// Remove all indices -----------------------------
+		indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, linkName, ">"))
+		for _, indexKey := range indexKeys {
+			ctx.Domain.Cache().DeleteValue(indexKey, true, -1, "")
+		}
+		// ------------------------------------------------
+
+		// Delete link body -----------------
+		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, selfId, linkName), true, -1, "") // Store link body in KV
+		// ----------------------------------
+		// Delete link target ---------------
+		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, selfId, linkName), true, -1, "") // Store link body in KV
+		// ----------------------------------
+
+		addLinkOpToOpStack(opStack, ctx.Self.Typename, selfId, toId, linkType, oldLinkBody, nil)
+
+		// Delete in link on descendant object --------------------
 		nextCallPayload := easyjson.NewJSONObject()
-		nextCallPayload.SetByPath("in_link_type", easyjson.NewJSON(linkType))
+		nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkType))
 
 		targetId := toId
 		if toId == ctx.Self.ID {
@@ -703,7 +643,7 @@ Request:
 	payload: json - required
 		// Initial request from caller:
 		to: string - required // ID for descendant object. If not defined random UUID will be generated. If a descandant with the specified uuid does not exist - will be created with empty body.
-		link_type: string - required // Type of link leading to descendant. If not defined random UUID will be used.
+		type: string - required // Type of link leading to descendant. If not defined random UUID will be used.
 
 	options: json - optional
 		return_op_stack: bool - optional
@@ -721,28 +661,32 @@ func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 	payload := ctx.Payload
 	opStack := getOpStackFromOptions(ctx.Options)
 
-	var linkType string
-	if s, ok := payload.GetByPath("link_type").AsString(); ok {
-		linkType = s
+	var linkName string
+	if s, ok := payload.GetByPath("name").AsString(); ok {
+		linkName = s
 	} else {
-		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link type is not defined"))).Reply()
+		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("name is not defined"))).Reply()
 		return
 	}
-	var toId string
-	if s, ok := payload.GetByPath("to").AsString(); ok {
-		toId = s
-	} else {
-		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("to is not defined"))).Reply()
-		return
-	}
-	toId = ctx.Domain.CreateObjectIDWithThisDomainIfndef(toId)
 
-	lbk := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, linkType, toId)
-	linkBody, err := ctx.Domain.Cache().GetValueAsJSON(lbk)
-	if err != nil { // If does no exist
-		sosc.Integreate(common.SyncOpIdle(fmt.Sprintf("link from=%s, to=%s, link_type=%s does not exist", ctx.Self.ID, toId, linkType))).Reply()
+	linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
+	if err != nil {
+		sosc.Integreate(common.SyncOpIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 		return
 	}
+	linkBody, err := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
+	if err != nil {
+		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link body from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
+		return
+	}
+
+	linkTargetStr := string(linkTargetBytes)
+	linkTargetTokens := strings.Split(linkTargetStr, ".")
+	if len(linkTargetTokens) != 2 || len(linkTargetTokens[0]) == 0 || len(linkTargetTokens[1]) == 0 {
+		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link from=%s with name=%s, has invalid target: %s", ctx.Self.ID, linkName, linkTargetStr))).Reply()
+	}
+	linkType := linkTargetTokens[0]
+	toId := linkTargetTokens[1]
 
 	addLinkOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, toId, linkType, nil, nil)
 
