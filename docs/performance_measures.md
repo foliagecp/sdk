@@ -45,7 +45,7 @@ Query frequency: 23485Hz
 ### Update object
 
 ```sh
-nats pub --count=100000 -s nats://nats:foliage@nats:4222 functions.graph.api.link.update.root "{\"payload\":{\"query_id\":\"QUERYID\", \"to\":\"a\", \"link_type\": \"type1\", \"body\":{\"tags\":[\"t4\"]}}}
+nats pub --count=100000 -s nats://nats:foliage@nats:4222 functions.graph.api.link.update.root "{\"payload\":{\"query_id\":\"QUERYID\", \"to\":\"a\", \"type\": \"type1\", \"body\":{\"tags\":[\"t4\"]}}}
 ```
 ```
 Total duration: 3152ms
@@ -55,7 +55,7 @@ Query frequency: 31726Hz
 ### Create link from object `root` to object `a`
 
 ```sh
-nats pub --count=100000 -s nats://nats:foliage@nats:4222 functions.graph.api.link.create.root "{\"payload\":{\"query_id\":\"QUERYID\", \"to\":\"a\", \"link_type\": \"type1\", \"body\":{\"tags\":[\"t1\", \"t2\"]}}}"
+nats pub --count=100000 -s nats://nats:foliage@nats:4222 functions.graph.api.link.create.root "{\"payload\":{\"query_id\":\"QUERYID\", \"to\":\"a\", \"type\": \"type1\", \"body\":{\"tags\":[\"t1\", \"t2\"]}}}"
 ```
 ```
 Total duration: 7216ms
@@ -65,7 +65,7 @@ Query frequency: 13858Hz
 ### Update link from object `root` to object `a`
 
 ```sh
-nats pub --count=100000 -s nats://nats:foliage@nats:4222 functions.graph.api.link.update.root "{\"payload\":{\"query_id\":\"QUERYID\", \"to\":\"a\", \"link_type\": \"type1\", \"body\":{\"tags\":[\"t4\"]}}}"
+nats pub --count=100000 -s nats://nats:foliage@nats:4222 functions.graph.api.link.update.root "{\"payload\":{\"query_id\":\"QUERYID\", \"to\":\"a\", \"type\": \"type1\", \"body\":{\"tags\":[\"t4\"]}}}"
 ```
 ```
 Total duration: 3957ms
