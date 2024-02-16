@@ -70,11 +70,19 @@ func mergeOpStack(opStackRecepient *easyjson.JSON, opStackDonor *easyjson.JSON) 
 	return false
 }
 
-func resultWithOpStack(opStack *easyjson.JSON) easyjson.JSON {
-	if opStack == nil {
-		return easyjson.NewJSONNull()
+func resultWithOpStack(existingResult *easyjson.JSON, opStack *easyjson.JSON) easyjson.JSON {
+	if existingResult == nil {
+		if opStack == nil {
+			return easyjson.NewJSONNull()
+		}
+		return easyjson.NewJSONObjectWithKeyValue("op_stack", *opStack)
+	} else {
+		if opStack == nil {
+			return *existingResult
+		}
+		existingResult.SetByPath("op_stack", *opStack)
+		return *existingResult
 	}
-	return easyjson.NewJSONObjectWithKeyValue("op_stack", *opStack)
 }
 
 /*
@@ -119,7 +127,7 @@ func LLAPIVertexCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	ctx.SetObjectContext(&objectBody)
 	addVertexOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, nil, &objectBody)
 
-	sosc.Integreate(common.SyncOpOk(resultWithOpStack(opStack))).Reply()
+	sosc.Integreate(common.SyncOpOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
 /*
@@ -180,7 +188,7 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	addVertexOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, fixedOldBody, newBody)
 
-	sosc.Integreate(common.SyncOpOk(resultWithOpStack(opStack))).Reply()
+	sosc.Integreate(common.SyncOpOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
 /*
@@ -222,7 +230,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.delete", ctx.Self.ID, &deleteLinkPayload, ctx.Options)))
 		mergeOpStack(opStack, sosc.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
 		if sosc.GetLastSyncOp().Status == common.SYNC_OP_STATUS_FAILED {
-			sosc.ReplyWithData(resultWithOpStack(opStack).GetPtr())
+			sosc.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr())
 			return
 		}
 	}
@@ -241,7 +249,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.delete", fromObjectID, &deleteLinkPayload, ctx.Options)))
 		mergeOpStack(opStack, sosc.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
 		if sosc.GetLastSyncOp().Status == common.SYNC_OP_STATUS_FAILED {
-			sosc.ReplyWithData(resultWithOpStack(opStack).GetPtr())
+			sosc.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr())
 			return
 		}
 	}
@@ -258,7 +266,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	ctx.Domain.Cache().DeleteValue(ctx.Self.ID, true, -1, "") // Delete object's body
 	addVertexOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, oldBody, nil)
 
-	sosc.Integreate(common.SyncOpOk(resultWithOpStack(opStack))).Reply()
+	sosc.Integreate(common.SyncOpOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
 /*
@@ -290,9 +298,7 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	body := ctx.GetObjectContext()
 	addVertexOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, nil, nil)
 
-	result := resultWithOpStack(opStack).GetPtr()
-	result.SetByPath("body", *body)
-	sosc.Integreate(common.SyncOpOk(*result)).Reply()
+	sosc.Integreate(common.SyncOpOk(resultWithOpStack(easyjson.NewJSONObjectWithKeyValue("body", *body).GetPtr(), opStack))).Reply()
 }
 
 /*
@@ -434,12 +440,12 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		}
 		sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, ctx.Self.Typename, targetId, &nextCallPayload, nil)))
 		if sosc.GetLastSyncOp().Status == common.SYNC_OP_STATUS_FAILED {
-			sosc.ReplyWithData(resultWithOpStack(opStack).GetPtr())
+			sosc.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr())
 			return
 		}
 		// --------------------------------------------------------
 
-		sosc.Integreate(common.SyncOpOk(resultWithOpStack(opStack))).Reply()
+		sosc.Integreate(common.SyncOpOk(resultWithOpStack(nil, opStack))).Reply()
 	}
 }
 
@@ -576,7 +582,7 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	// ------------------------------------------------------------
 	addLinkOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, toId, linkType, fixedOldLinkBody, newBody)
 
-	sosc.Integreate(common.SyncOpOk(resultWithOpStack(opStack))).Reply()
+	sosc.Integreate(common.SyncOpOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
 /*
@@ -680,12 +686,12 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		}
 		sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, ctx.Self.Typename, targetId, &nextCallPayload, nil)))
 		if sosc.GetLastSyncOp().Status == common.SYNC_OP_STATUS_FAILED {
-			sosc.ReplyWithData(resultWithOpStack(opStack).GetPtr())
+			sosc.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr())
 			return
 		}
 		// --------------------------------------------------------
 
-		sosc.Integreate(common.SyncOpOk(resultWithOpStack(opStack))).Reply()
+		sosc.Integreate(common.SyncOpOk(resultWithOpStack(nil, opStack))).Reply()
 	}
 }
 
@@ -740,7 +746,5 @@ func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 
 	addLinkOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, toId, linkType, nil, nil)
 
-	result := resultWithOpStack(opStack).GetPtr()
-	result.SetByPath("body", *linkBody)
-	sosc.Integreate(common.SyncOpOk(*result)).Reply()
+	sosc.Integreate(common.SyncOpOk(resultWithOpStack(easyjson.NewJSONObjectWithKeyValue("body", *linkBody).GetPtr(), opStack))).Reply()
 }

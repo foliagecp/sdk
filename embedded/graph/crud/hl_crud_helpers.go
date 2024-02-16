@@ -51,14 +51,14 @@ func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfP
 				sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.delete", ctx.Self.ID, &objectLink, ctx.Options)))
 				mergeOpStack(opStack, sosc.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
 				if sosc.GetLastSyncOp().Status == common.SYNC_OP_STATUS_FAILED {
-					sosc.ReplyWithData(resultWithOpStack(opStack).GetPtr())
+					sosc.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr())
 					return
 				}
 			}
 		}
 	}
 
-	sosc.Integreate(common.SyncOpOk(resultWithOpStack(opStack))).Reply()
+	sosc.Integreate(common.SyncOpOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
 func GetObjectTypeTriggersStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {

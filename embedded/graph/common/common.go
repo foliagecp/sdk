@@ -69,7 +69,7 @@ func (sosc *SyncOpStatusController) GetStatus() SyncOpStatus {
 	var status *SyncOpStatus = nil
 	for _, som := range sosc.soms {
 		if status == nil {
-			*status = som.Status
+			status = &som.Status
 		} else {
 			*status = SyncOpStatusMatrix[*status][som.Status]
 		}
@@ -152,12 +152,12 @@ func SyncOpMsgFromJson(reply *easyjson.JSON) SyncOpMsg {
 
 	info := reply.GetByPath("details").AsStringDefault("")
 
-	var data *easyjson.JSON = nil
+	data := easyjson.NewJSONNull()
 	if reply.PathExists("data") {
-		data = reply.GetByPath("data").GetPtr()
+		data = reply.GetByPath("data")
 	}
 
-	return MakeSyncOpMsg(syncOpStatus, info, *data)
+	return MakeSyncOpMsg(syncOpStatus, info, data)
 }
 
 func SyncOpMsgFromSfReply(reply *easyjson.JSON, err error) SyncOpMsg {
