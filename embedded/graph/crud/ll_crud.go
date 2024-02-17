@@ -10,7 +10,7 @@ import (
 
 	"github.com/foliagecp/easyjson"
 
-	"github.com/foliagecp/sdk/embedded/graph/common"
+	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
@@ -105,11 +105,11 @@ Reply:
 		op_stack: json array - optional
 */
 func LLAPIVertexCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	sosc := common.NewSyncOpStatusController(ctx)
+	sosc := sfMediators.NewOpMediator(ctx)
 
 	_, err := ctx.Domain.Cache().GetValue(ctx.Self.ID)
 	if err == nil { // If vertex already exists
-		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("vertex with id=%s already exists", ctx.Self.ID))).Reply()
+		sosc.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s already exists", ctx.Self.ID))).Reply()
 		return
 	}
 
@@ -126,7 +126,7 @@ func LLAPIVertexCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	ctx.SetObjectContext(&objectBody)
 	addVertexOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, nil, &objectBody)
 
-	sosc.Integreate(common.SyncOpOk(resultWithOpStack(nil, opStack))).Reply()
+	sosc.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
 /*
@@ -151,11 +151,11 @@ Reply:
 		op_stack: json array - optional
 */
 func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	sosc := common.NewSyncOpStatusController(ctx)
+	sosc := sfMediators.NewOpMediator(ctx)
 
 	_, err := ctx.Domain.Cache().GetValue(ctx.Self.ID)
 	if err != nil { // If vertex does not exist
-		sosc.Integreate(common.SyncOpIdle(fmt.Sprintf("vertex with id=%s does not exist", ctx.Self.ID))).Reply()
+		sosc.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("vertex with id=%s does not exist", ctx.Self.ID))).Reply()
 		return
 	}
 
@@ -187,7 +187,7 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	addVertexOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, fixedOldBody, newBody)
 
-	sosc.Integreate(common.SyncOpOk(resultWithOpStack(nil, opStack))).Reply()
+	sosc.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
 /*
@@ -206,11 +206,11 @@ Reply:
 		op_stack: json array - optional
 */
 func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	sosc := common.NewSyncOpStatusController(ctx)
+	sosc := sfMediators.NewOpMediator(ctx)
 
 	_, err := ctx.Domain.Cache().GetValue(ctx.Self.ID)
 	if err != nil { // If vertex does not exist
-		sosc.Integreate(common.SyncOpIdle(fmt.Sprintf("vertex with id=%s does not exist", ctx.Self.ID))).Reply()
+		sosc.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("vertex with id=%s does not exist", ctx.Self.ID))).Reply()
 		return
 	}
 
@@ -226,9 +226,9 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		deleteLinkPayload := easyjson.NewJSONObject()
 		deleteLinkPayload.SetByPath("to", easyjson.NewJSON(toObjectID))
 		deleteLinkPayload.SetByPath("type", easyjson.NewJSON(linkType))
-		sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.delete", ctx.Self.ID, &deleteLinkPayload, ctx.Options)))
+		sosc.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.delete", ctx.Self.ID, &deleteLinkPayload, ctx.Options)))
 		mergeOpStack(opStack, sosc.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
-		if sosc.GetLastSyncOp().Status == common.SYNC_OP_STATUS_FAILED {
+		if sosc.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
 			sosc.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr())
 			return
 		}
@@ -245,9 +245,9 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		deleteLinkPayload := easyjson.NewJSONObject()
 		deleteLinkPayload.SetByPath("to", easyjson.NewJSON(ctx.Self.ID))
 		deleteLinkPayload.SetByPath("type", easyjson.NewJSON(linkType))
-		sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.delete", fromObjectID, &deleteLinkPayload, ctx.Options)))
+		sosc.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.delete", fromObjectID, &deleteLinkPayload, ctx.Options)))
 		mergeOpStack(opStack, sosc.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
-		if sosc.GetLastSyncOp().Status == common.SYNC_OP_STATUS_FAILED {
+		if sosc.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
 			sosc.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr())
 			return
 		}
@@ -265,7 +265,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	ctx.Domain.Cache().DeleteValue(ctx.Self.ID, true, -1, "") // Delete object's body
 	addVertexOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, oldBody, nil)
 
-	sosc.Integreate(common.SyncOpOk(resultWithOpStack(nil, opStack))).Reply()
+	sosc.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
 /*
@@ -284,11 +284,11 @@ Reply:
 		op_stack: json array - optional
 */
 func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	sosc := common.NewSyncOpStatusController(ctx)
+	sosc := sfMediators.NewOpMediator(ctx)
 
 	_, err := ctx.Domain.Cache().GetValue(ctx.Self.ID)
 	if err != nil { // If vertex does not exist
-		sosc.Integreate(common.SyncOpIdle(fmt.Sprintf("vertex with id=%s does not exist", ctx.Self.ID))).Reply()
+		sosc.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("vertex with id=%s does not exist", ctx.Self.ID))).Reply()
 		return
 	}
 
@@ -297,7 +297,7 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	body := ctx.GetObjectContext()
 	addVertexOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, nil, nil)
 
-	sosc.Integreate(common.SyncOpOk(resultWithOpStack(easyjson.NewJSONObjectWithKeyValue("body", *body).GetPtr(), opStack))).Reply()
+	sosc.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(easyjson.NewJSONObjectWithKeyValue("body", *body).GetPtr(), opStack))).Reply()
 }
 
 /*
@@ -328,12 +328,12 @@ Reply:
 		op_stack: json array - optional
 */
 func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	sosc := common.NewSyncOpStatusController(ctx)
+	sosc := sfMediators.NewOpMediator(ctx)
 
 	selfId := strings.Split(ctx.Self.ID, "===")[0]
 	_, err := ctx.Domain.Cache().GetValue(selfId)
 	if err != nil { // If vertex does not exist
-		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("vertex with id=%s does not exist", selfId))).Reply()
+		sosc.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s does not exist", selfId))).Reply()
 		return
 	}
 
@@ -344,14 +344,14 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if inLinkName, ok := payload.GetByPath("in_name").AsString(); ok && len(inLinkName) > 0 {
 			if linkFromObjectUUID := ctx.Caller.ID; len(linkFromObjectUUID) > 0 {
 				ctx.Domain.Cache().SetValue(fmt.Sprintf(InLinkKeyPrefPatternNEW+LinkKeySuff2Pattern, selfId, linkFromObjectUUID, inLinkName), nil, true, -1, "")
-				sosc.Integreate(common.SyncOpOk(easyjson.NewJSONNull())).Reply()
+				sosc.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONNull())).Reply()
 				return
 			} else {
-				sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("caller id is not defined, no source vertex id"))).Reply()
+				sosc.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("caller id is not defined, no source vertex id"))).Reply()
 				return
 			}
 		} else {
-			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("in_name is not defined"))).Reply()
+			sosc.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("in_name is not defined"))).Reply()
 			return
 		}
 	} else {
@@ -366,7 +366,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if s, ok := payload.GetByPath("to").AsString(); ok {
 			toId = s
 		} else {
-			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("to is not defined"))).Reply()
+			sosc.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("to is not defined"))).Reply()
 			return
 		}
 		toId = ctx.Domain.CreateObjectIDWithThisDomainIfndef(toId)
@@ -375,7 +375,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if s, ok := payload.GetByPath("name").AsString(); ok {
 			linkName = s
 		} else {
-			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("name is not defined"))).Reply()
+			sosc.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("name is not defined"))).Reply()
 			return
 		}
 
@@ -383,21 +383,21 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if s, ok := payload.GetByPath("type").AsString(); ok {
 			linkType = s
 		} else {
-			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("type is not defined"))).Reply()
+			sosc.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("type is not defined"))).Reply()
 			return
 		}
 
 		// Check if link with this name already exists --------------
 		_, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, selfId, linkName))
 		if err == nil {
-			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link from=%s with name=%s already exists", selfId, linkName))).Reply()
+			sosc.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s already exists", selfId, linkName))).Reply()
 			return
 		}
 		// ----------------------------------------------------------
 		// Check if link with this type "type" to "to" already exists
 		_, err = ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPatternNEW+LinkKeySuff2Pattern, selfId, linkType, toId))
 		if err == nil {
-			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link from=%s with name=%s to=%s with type=%s already exists", selfId, linkName, toId, linkType))).Reply()
+			sosc.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s to=%s with type=%s already exists", selfId, linkName, toId, linkType))).Reply()
 			return
 		}
 		// -----------------------------------------------------------
@@ -432,14 +432,14 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if toId == ctx.Self.ID {
 			targetId = targetId + "===self_link"
 		}
-		sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, ctx.Self.Typename, targetId, &nextCallPayload, nil)))
-		if sosc.GetLastSyncOp().Status == common.SYNC_OP_STATUS_FAILED {
+		sosc.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, ctx.Self.Typename, targetId, &nextCallPayload, nil)))
+		if sosc.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
 			sosc.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr())
 			return
 		}
 		// --------------------------------------------------------
 
-		sosc.Integreate(common.SyncOpOk(resultWithOpStack(nil, opStack))).Reply()
+		sosc.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 	}
 }
 
@@ -467,7 +467,7 @@ Reply:
 		op_stack: json array - optional
 */
 func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	sosc := common.NewSyncOpStatusController(ctx)
+	sosc := sfMediators.NewOpMediator(ctx)
 
 	payload := ctx.Payload
 
@@ -477,25 +477,25 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	if s, ok := payload.GetByPath("name").AsString(); ok {
 		linkName = s
 	} else {
-		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("name is not defined"))).Reply()
+		sosc.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("name is not defined"))).Reply()
 		return
 	}
 
 	linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
 	if err != nil {
-		sosc.Integreate(common.SyncOpIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
+		sosc.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 		return
 	}
 	oldLinkBody, err := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
 	if err != nil {
-		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link from=%s with name=%s", ctx.Self.ID, linkName))).Reply()
+		sosc.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s", ctx.Self.ID, linkName))).Reply()
 		return
 	}
 
 	linkTargetStr := string(linkTargetBytes)
 	linkTargetTokens := strings.Split(linkTargetStr, ".")
 	if len(linkTargetTokens) != 2 || len(linkTargetTokens[0]) == 0 || len(linkTargetTokens[1]) == 0 {
-		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link from=%s with name=%s, has invalid target: %s", ctx.Self.ID, linkName, linkTargetStr))).Reply()
+		sosc.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s, has invalid target: %s", ctx.Self.ID, linkName, linkTargetStr))).Reply()
 	}
 	linkType := linkTargetTokens[0]
 	toId := linkTargetTokens[1]
@@ -527,8 +527,8 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, ctx.Self.ID, linkName), linkBody.ToBytes(), true, -1, "") // Store link body in KV
 	// ----------------------------------
 	// Index link tags ------------------
-	if linkBody.GetByPath("tags").IsNonEmptyArray() {
-		if linkTags, ok := linkBody.GetByPath("tags").AsArrayString(); ok {
+	if payload.GetByPath("tags").IsNonEmptyArray() {
+		if linkTags, ok := payload.GetByPath("tags").AsArrayString(); ok {
 			for _, linkTag := range linkTags {
 				ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff3Pattern, ctx.Self.ID, linkName, "tag", linkTag), nil, true, -1, "")
 			}
@@ -539,7 +539,7 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	addLinkOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, toId, linkType, oldLinkBody, &linkBody)
 
-	sosc.Integreate(common.SyncOpOk(resultWithOpStack(nil, opStack))).Reply()
+	sosc.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
 /*
@@ -565,7 +565,7 @@ Reply:
 		op_stack: json array - optional
 */
 func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	sosc := common.NewSyncOpStatusController(ctx)
+	sosc := sfMediators.NewOpMediator(ctx)
 
 	selfId := strings.Split(ctx.Self.ID, "===")[0]
 
@@ -577,25 +577,25 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if s, ok := payload.GetByPath("name").AsString(); ok {
 			linkName = s
 		} else {
-			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("name is not defined"))).Reply()
+			sosc.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("name is not defined"))).Reply()
 			return
 		}
 
 		linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
 		if err != nil {
-			sosc.Integreate(common.SyncOpIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
+			sosc.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 			return
 		}
 		oldLinkBody, err := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
 		if err != nil {
-			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link body from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
+			sosc.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link body from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 			return
 		}
 
 		linkTargetStr := string(linkTargetBytes)
 		linkTargetTokens := strings.Split(linkTargetStr, ".")
 		if len(linkTargetTokens) != 2 || len(linkTargetTokens[0]) == 0 || len(linkTargetTokens[1]) == 0 {
-			sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link from=%s with name=%s, has invalid target: %s", ctx.Self.ID, linkName, linkTargetStr))).Reply()
+			sosc.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s, has invalid target: %s", ctx.Self.ID, linkName, linkTargetStr))).Reply()
 		}
 		linkType := linkTargetTokens[0]
 		toId := linkTargetTokens[1]
@@ -624,14 +624,14 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if toId == ctx.Self.ID {
 			targetId = targetId + "===self_link"
 		}
-		sosc.Integreate(common.SyncOpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, ctx.Self.Typename, targetId, &nextCallPayload, nil)))
-		if sosc.GetLastSyncOp().Status == common.SYNC_OP_STATUS_FAILED {
+		sosc.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, ctx.Self.Typename, targetId, &nextCallPayload, nil)))
+		if sosc.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
 			sosc.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr())
 			return
 		}
 		// --------------------------------------------------------
 
-		sosc.Integreate(common.SyncOpOk(resultWithOpStack(nil, opStack))).Reply()
+		sosc.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 	}
 }
 
@@ -656,7 +656,7 @@ Reply:
 		op_stack: json array - optional
 */
 func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	sosc := common.NewSyncOpStatusController(ctx)
+	sosc := sfMediators.NewOpMediator(ctx)
 
 	payload := ctx.Payload
 	opStack := getOpStackFromOptions(ctx.Options)
@@ -665,30 +665,30 @@ func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 	if s, ok := payload.GetByPath("name").AsString(); ok {
 		linkName = s
 	} else {
-		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("name is not defined"))).Reply()
+		sosc.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("name is not defined"))).Reply()
 		return
 	}
 
 	linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
 	if err != nil {
-		sosc.Integreate(common.SyncOpIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
+		sosc.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 		return
 	}
 	linkBody, err := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
 	if err != nil {
-		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link body from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
+		sosc.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link body from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 		return
 	}
 
 	linkTargetStr := string(linkTargetBytes)
 	linkTargetTokens := strings.Split(linkTargetStr, ".")
 	if len(linkTargetTokens) != 2 || len(linkTargetTokens[0]) == 0 || len(linkTargetTokens[1]) == 0 {
-		sosc.Integreate(common.SyncOpFailed(fmt.Sprintf("link from=%s with name=%s, has invalid target: %s", ctx.Self.ID, linkName, linkTargetStr))).Reply()
+		sosc.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s, has invalid target: %s", ctx.Self.ID, linkName, linkTargetStr))).Reply()
 	}
 	linkType := linkTargetTokens[0]
 	toId := linkTargetTokens[1]
 
 	addLinkOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, toId, linkType, nil, nil)
 
-	sosc.Integreate(common.SyncOpOk(resultWithOpStack(easyjson.NewJSONObjectWithKeyValue("body", *linkBody).GetPtr(), opStack))).Reply()
+	sosc.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(easyjson.NewJSONObjectWithKeyValue("body", *linkBody).GetPtr(), opStack))).Reply()
 }
