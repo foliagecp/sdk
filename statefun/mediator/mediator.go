@@ -3,6 +3,8 @@ package mediator
 import (
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/foliagecp/easyjson"
 
@@ -20,7 +22,16 @@ const (
 )
 
 const (
-	aggrPackTempl = "__mAggrPack.%s"
+	aggrPackTempl                  = "__mAggrPack.%s"
+	replyStoreGCInterval           = 60
+	replyStoreRecordExpirationSecs = 120
+)
+
+var (
+	// TODO: Store whole context processor instead???
+	replyStore           map[string]SyncReplyPack
+	replyStoreMutex      sync.Mutex
+	replyStoreLastGCTime time.Time
 )
 
 type OpMediator struct {
@@ -28,6 +39,11 @@ type OpMediator struct {
 	opMsgs     []OpMsg
 	mediatorId string
 	opType     OpType
+}
+
+type SyncReplyPack struct {
+	syncReply *sfPlugins.SyncReply
+	created   time.Time
 }
 
 func NewOpMediator(ctx *sfPlugins.StatefunContextProcessor) *OpMediator {
@@ -130,24 +146,57 @@ func (sosc *OpMediator) GetData() easyjson.JSON {
 	return easyjson.NewJSONNull()
 }
 
-func (sosc *OpMediator) releaseAggPackAndGetParentAggregator() (typename string, id string, aggrId string, ok bool) {
+func (sosc *OpMediator) releaseAggPackOnAggregated() (*easyjson.JSON, bool) {
 	if sosc.opType == AggregatedWorkersOp {
 		funcContext := sosc.ctx.GetFunctionContext()
-
 		aggrPackPath := fmt.Sprintf(aggrPackTempl, sosc.mediatorId)
 		if funcContext.PathExists(aggrPackPath) {
 			aggregationPack := funcContext.GetByPath(aggrPackPath)
 			if aggregationPack.IsNonEmptyObject() {
 				funcContext.RemoveByPath(aggrPackPath)
 				sosc.ctx.SetFunctionContext(funcContext)
-
-				typename = funcContext.GetByPath("parentAggregator.typename").AsStringDefault("")
-				id = funcContext.GetByPath("parentAggregator.id").AsStringDefault("")
-				aggrId = funcContext.GetByPath("parentAggregator.aggrid").AsStringDefault("")
-				ok = true
-				return
+				return &aggregationPack, true
 			}
 		}
+	}
+	return nil, false
+}
+
+func (sosc *OpMediator) releaseAggPackAndGetParentReplyAggregator() (syncReply *sfPlugins.SyncReply, ok bool) {
+	if time.Since(replyStoreLastGCTime).Seconds() > replyStoreGCInterval {
+		go func() {
+			replyStoreMutex.Lock()
+			defer replyStoreMutex.Unlock()
+			// replyStore GC ------------------------------------------------------------
+			for srpKey, srp := range replyStore {
+				if time.Since(srp.created).Seconds() > replyStoreRecordExpirationSecs {
+					delete(replyStore, srpKey)
+				}
+			}
+			// --------------------------------------------------------------------------
+		}()
+		replyStoreLastGCTime = time.Now()
+	}
+
+	if aggregationPack, fine := sosc.releaseAggPackOnAggregated(); fine {
+		syncReplyId := aggregationPack.GetByPath("responseContext.replyId").AsStringDefault("")
+		replyStoreMutex.Lock()
+		defer replyStoreMutex.Unlock()
+		if syncReplyPack, ok := replyStore[syncReplyId]; ok {
+			delete(replyStore, syncReplyId)
+			return syncReplyPack.syncReply, true
+		}
+	}
+	return nil, false
+}
+
+func (sosc *OpMediator) releaseAggPackAndGetParentSignalAggregator() (typename string, id string, aggrId string, ok bool) {
+	if aggregationPack, fine := sosc.releaseAggPackOnAggregated(); fine {
+		typename = aggregationPack.GetByPath("responseContext.typename").AsStringDefault("")
+		id = aggregationPack.GetByPath("responseContext.id").AsStringDefault("")
+		aggrId = aggregationPack.GetByPath("responseContext.aggrid").AsStringDefault("")
+		ok = true
+		return
 	}
 	return "", "", "", false
 }
@@ -161,9 +210,13 @@ func (sosc *OpMediator) ReplyWithData(data *easyjson.JSON) error {
 	}
 
 	if sosc.ctx.Reply != nil {
-		sosc.ctx.Reply.With(reply)
+		if syncReply, ok := sosc.releaseAggPackAndGetParentReplyAggregator(); ok {
+			syncReply.With(reply)
+		} else {
+			sosc.ctx.Reply.With(reply)
+		}
 	} else {
-		if paTypename, paId, aggrId, ok := sosc.releaseAggPackAndGetParentAggregator(); ok {
+		if paTypename, paId, aggrId, ok := sosc.releaseAggPackAndGetParentSignalAggregator(); ok {
 			if len(aggrId) > 0 {
 				reply.SetByPath("__mAggregationIdReply", easyjson.NewJSON(aggrId))
 			}
@@ -205,15 +258,25 @@ func (sosc *OpMediator) SignalWithAggregation(provider sfPlugins.SignalProvider,
 	registeredCallbacks++
 	aggregationPack.SetByPath("callbacks", easyjson.NewJSON(registeredCallbacks))
 
-	// If this function in its turn should send singal to parent aggregator -------------
-	if !aggregationPack.PathExists("parentAggregator") {
-		aggregationPack.SetByPath("parentAggregator.typename", easyjson.NewJSON(sosc.ctx.Caller.Typename))
-		aggregationPack.SetByPath("parentAggregator.id", easyjson.NewJSON(sosc.ctx.Caller.ID))
-		if sosc.opType == WorkerIsTaskedByAggregatorOp {
-			aggregationPack.SetByPath("parentAggregator.aggrid", sosc.ctx.Payload.GetByPath("__mAggregationId")) // Store this __mAggregationId for future
+	if !aggregationPack.PathExists("responseContext") {
+		if sosc.ctx.Reply != nil {
+			// If this function in its turn should send sync reply to parent aggregator -
+			aggregationPack.SetByPath("responseContext.replyId", easyjson.NewJSON(sosc.mediatorId))
+			replyStoreMutex.Lock()
+			replyStore[sosc.mediatorId] = SyncReplyPack{sosc.ctx.Reply, time.Now()}
+			replyStoreMutex.Unlock()
+			// --------------------------------------------------------------------------
+		} else {
+			// If this function in its turn should send singal to parent aggregator -----
+			aggregationPack.SetByPath("responseContext.signal.typename", easyjson.NewJSON(sosc.ctx.Caller.Typename))
+			aggregationPack.SetByPath("responseContext.signal.id", easyjson.NewJSON(sosc.ctx.Caller.ID))
+			// --------------------------------------------------------------------------
+			if sosc.opType == WorkerIsTaskedByAggregatorOp {
+				aggregationPack.SetByPath("responseContext.aggrid", sosc.ctx.Payload.GetByPath("__mAggregationId")) // Store this __mAggregationId for future
+			}
 		}
 	}
-	// ----------------------------------------------------------------------------------
+
 	funcContext.SetByPath(aggrPackPath, aggregationPack)
 	// ----------------------------------------------------
 	sosc.ctx.SetFunctionContext(funcContext)
