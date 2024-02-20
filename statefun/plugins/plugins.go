@@ -39,8 +39,9 @@ const (
 )
 
 type SyncReply struct {
-	With          func(*easyjson.JSON)
-	CancelDefault func()
+	With                    func(*easyjson.JSON)
+	CancelDefaultReply      func()
+	OverrideRequestCallback func() *SyncReply
 }
 
 type Domain interface {
