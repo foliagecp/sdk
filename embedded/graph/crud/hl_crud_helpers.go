@@ -20,19 +20,19 @@ options: json - optional
 	return_op_stack: bool - optional
 */
 func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	sosc := sfMediators.NewOpMediator(ctx)
+	om := sfMediators.NewOpMediator(ctx)
 
 	opStack := getOpStackFromOptions(ctx.Options)
 
 	linkType, ok := ctx.Payload.GetByPath("type").AsString()
 	if !ok {
-		sosc.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("type is not defined"))).Reply()
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("type is not defined"))).Reply()
 		return
 	}
 
 	toObjectType, ok := ctx.Payload.GetByPath("to_object_type").AsString()
 	if !ok {
-		sosc.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("to_object_type is not defined"))).Reply()
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("to_object_type is not defined"))).Reply()
 		return
 	}
 
@@ -48,53 +48,53 @@ func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfP
 				objectLink.SetByPath("to", easyjson.NewJSON(to))
 				objectLink.SetByPath("type", easyjson.NewJSON(linkType))
 
-				sosc.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.delete", ctx.Self.ID, &objectLink, ctx.Options)))
-				mergeOpStack(opStack, sosc.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
-				if sosc.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
-					sosc.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr())
+				om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.delete", ctx.Self.ID, &objectLink, ctx.Options)))
+				mergeOpStack(opStack, om.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
+				if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
+					om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr())
 					return
 				}
 			}
 		}
 	}
 
-	sosc.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
+	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
 func GetObjectTypeTriggersStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	sosc := sfMediators.NewOpMediator(ctx)
+	om := sfMediators.NewOpMediator(ctx)
 
 	typeName := findObjectType(ctx, ctx.Self.ID)
 	if len(typeName) > 0 {
-		sosc.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.read", typeName, nil, nil)))
-		if sosc.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_OK {
-			sosc.AggregateOpMsg(sfMediators.OpMsgOk(sosc.GetLastSyncOp().Data.GetByPath("body.triggers")))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.read", typeName, nil, nil)))
+		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_OK {
+			om.AggregateOpMsg(sfMediators.OpMsgOk(om.GetLastSyncOp().Data.GetByPath("body.triggers")))
 		}
 	} else {
-		sosc.AggregateOpMsg(sfMediators.OpMsgFailed("invalid object's typename"))
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("invalid object's typename"))
 	}
 
-	sosc.Reply()
+	om.Reply()
 }
 
 func FindObjectTypeStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	sosc := sfMediators.NewOpMediator(ctx)
+	om := sfMediators.NewOpMediator(ctx)
 
 	pattern := fmt.Sprintf(OutLinkTypeKeyPrefPatternNEW+LinkKeySuff2Pattern, ctx.Self.ID, TYPE_TYPELINK, ">")
 	keys := ctx.Domain.Cache().GetKeysByPattern(pattern)
 	if len(keys) > 0 {
 		split := strings.Split(keys[0], ".")
 		t := split[len(split)-1]
-		sosc.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONObjectWithKeyValue("type", easyjson.NewJSON(t))))
+		om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONObjectWithKeyValue("type", easyjson.NewJSON(t))))
 	} else {
-		sosc.AggregateOpMsg(sfMediators.OpMsgFailed("cannot find object's type"))
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("cannot find object's type"))
 	}
 
-	sosc.Reply()
+	om.Reply()
 }
 
 func FindTypeObjectsStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	sosc := sfMediators.NewOpMediator(ctx)
+	om := sfMediators.NewOpMediator(ctx)
 
 	keys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkTypeKeyPrefPatternNEW+LinkKeySuff2Pattern, ctx.Self.ID, OBJECT_TYPELINK, ">"))
 	if len(keys) > 0 {
@@ -103,12 +103,12 @@ func FindTypeObjectsStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Statef
 			split := strings.Split(v, ".")
 			out = append(out, split[len(split)-1])
 		}
-		sosc.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.JSONFromArray(out)))
+		om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.JSONFromArray(out)))
 	} else {
-		sosc.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONArray()))
+		om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONArray()))
 	}
 
-	sosc.Reply()
+	om.Reply()
 }
 
 // ------------------------------------------------------------------------------------------------
