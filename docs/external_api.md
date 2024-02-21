@@ -30,7 +30,7 @@ if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL,
         runtime,
         "functions.app.api.test",
         apiTest,
-        *statefun.NewFunctionTypeConfig().SetServiceState(true),
+        *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect),
     )
 
     ...
@@ -38,7 +38,7 @@ if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL,
 }
 ```
 
-Setting `SetServiceState(true)` when configuring the foliage function indicates its ability to handle synchronous requests, not just signals.
+Setting `SetAllowedRequestProviders(sfPlugins.AutoRequestSelect)` when configuring the foliage function indicates its ability to handle synchronous requests, not just signals.
 
 ## Invocation and Response Retrieval
 
