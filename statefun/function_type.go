@@ -35,6 +35,10 @@ type FunctionType struct {
 	resourceMutex           sync.Mutex
 }
 
+const (
+	contextExpirationKey = "____ctx_expires_after_ms"
+)
+
 func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHandler, config FunctionTypeConfig) *FunctionType {
 	ft := &FunctionType{
 		runtime:                 runtime,
@@ -135,12 +139,13 @@ func (ft *FunctionType) idHandlerRoutine(id string, msgChannel chan FunctionType
 	system.GlobalPrometrics.GetRoutinesCounter().Started("functiontype-idHandlerRoutine")
 	defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("functiontype-idHandlerRoutine")
 	typenameIDContextProcessor := sfPlugins.StatefunContextProcessor{
-		GetFunctionContext: func() *easyjson.JSON { return ft.getContext(ft.name + "." + id) },
-		SetFunctionContext: func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
-		GetObjectContext:   func() *easyjson.JSON { return ft.getContext(id) },
-		SetObjectContext:   func(context *easyjson.JSON) { ft.setContext(id, context) },
-		Domain:             ft.runtime.Domain,
-		Self:               sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
+		GetFunctionContext:        func() *easyjson.JSON { return ft.getContext(ft.name + "." + id) },
+		SetFunctionContext:        func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
+		SetContextExpirationAfter: func(after time.Duration) { ft.setContextExpirationAfter(ft.name+"."+id, after) },
+		GetObjectContext:          func() *easyjson.JSON { return ft.getContext(id) },
+		SetObjectContext:          func(context *easyjson.JSON) { ft.setContext(id, context) },
+		Domain:                    ft.runtime.Domain,
+		Self:                      sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
 		Signal: func(signalProvider sfPlugins.SignalProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) error {
 			return ft.runtime.signal(signalProvider, ft.name, id, targetTypename, targetID, j, o)
 		},
@@ -289,6 +294,17 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, handlersRunning int) {
 	now := time.Now().UnixNano()
 
+	// Deleting function contexts which are expired ---------
+	for _, funcCtxKey := range ft.runtime.Domain.Cache().GetKeysByPattern(ft.name + ".>") {
+		expirationTime := int64(ft.getContext(funcCtxKey).GetByPath(contextExpirationKey).AsNumericDefault(-1))
+		if expirationTime > 0 {
+			if expirationTime < now {
+				ft.runtime.Domain.Cache().DeleteValue(funcCtxKey, true, -1, "")
+			}
+		}
+	}
+	// ------------------------------------------------------
+
 	ft.idHandlersLastMsgTime.Range(func(key, value interface{}) bool {
 		id := key.(string)
 		lastMsgTime := value.(int64)
@@ -303,8 +319,7 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 			if ft.executor != nil {
 				ft.executor.RemoveForID(id)
 			}
-			// TODO: When to delete  function context??? function's context may be needed later!!!!
-			// cacheStore.DeleteValue(ft.name+"."+id, true, -1, "") // Deleting function context
+
 			garbageCollected++
 			//lg.Logf(">>>>>>>>>>>>>> Garbage collected handler for %s:%s\n", ft.name, id)
 
@@ -335,9 +350,21 @@ func (ft *FunctionType) getContext(keyValueID string) *easyjson.JSON {
 
 func (ft *FunctionType) setContext(keyValueID string, context *easyjson.JSON) {
 	if context == nil {
-		ft.runtime.Domain.cache.SetValue(keyValueID, nil, true, -1, "")
+		ft.runtime.Domain.cache.DeleteValue(keyValueID, true, -1, "")
 	} else {
 		ft.runtime.Domain.cache.SetValue(keyValueID, context.ToBytes(), true, -1, "")
+	}
+}
+
+// Negative duration removes expiration
+func (ft *FunctionType) setContextExpirationAfter(keyValueID string, after time.Duration) {
+	if j, err := ft.runtime.Domain.cache.GetValueAsJSON(keyValueID); err == nil {
+		if after < 0 {
+			j.RemoveByPath(contextExpirationKey)
+		} else {
+			j.SetByPath(contextExpirationKey, easyjson.NewJSON(time.Now().Add(after).UnixNano()))
+		}
+		ft.runtime.Domain.cache.SetValue(keyValueID, j.ToBytes(), true, -1, "")
 	}
 }
 

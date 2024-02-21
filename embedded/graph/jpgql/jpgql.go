@@ -19,13 +19,12 @@ import (
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
-func RegisterAllFunctionTypes(runtime *statefun.Runtime, jpgqlEvaluationTimeoutSec int) {
-	options := easyjson.NewJSONObjectWithKeyValue("eval_timeout_sec", easyjson.NewJSON(jpgqlEvaluationTimeoutSec))
+func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 	statefun.NewFunctionType(
 		runtime,
 		"functions.graph.api.query.jpgql.ctra",
 		JPGQLCallTreeResultAggregation,
-		*statefun.NewFunctionTypeConfig().SetOptions(&options).SetServiceState(true).SetMultipleInstancesAllowance(false).SetMaxIdHandlers(-1),
+		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMultipleInstancesAllowance(false).SetMaxIdHandlers(-1),
 	)
 }
 
@@ -59,15 +58,6 @@ Request:
 */
 
 func JPGQLCallTreeResultAggregation(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	loopPreventIdGenerator := func() string {
-		return system.GetHashStr(ctx.Caller.ID + ctx.Payload.GetByPath("query").AsStringDefault(""))
-	}
-	om, noLoop := sfMediators.NewOpMediatorWithUniquenessControl(ctx, loopPreventIdGenerator)
-	if !noLoop {
-		om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONObject())).Reply()
-		return
-	}
-
 	tokens := strings.Split(ctx.Self.ID, "===")
 	var vId string = tokens[0]
 	var pId string
@@ -75,6 +65,15 @@ func JPGQLCallTreeResultAggregation(_ sfPlugins.StatefunExecutor, ctx *sfPlugins
 		pId = tokens[1]
 	} else {
 		pId = system.GetUniqueStrID()
+	}
+
+	loopPreventIdGenerator := func() string {
+		return system.GetHashStr(ctx.Caller.ID + pId + ctx.Payload.GetByPath("query").AsStringDefault(""))
+	}
+	om, noLoop := sfMediators.NewOpMediatorWithUniquenessControl(ctx, loopPreventIdGenerator)
+	if !noLoop {
+		om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSON(map[string]bool{}))).Reply()
+		return
 	}
 
 	switch om.GetOpType() {

@@ -118,7 +118,7 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefun
 func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	// Create new typename function "functions.tests.basic.master" each stateful instance of which uses go function "MasterFunction"
 	ftOptions := easyjson.NewJSONObjectWithKeyValue("increment", easyjson.NewJSON(MasterFunctionContextIncrementOption))
-	ft := statefun.NewFunctionType(runtime, "functions.tests.basic.master", MasterFunction, *statefun.NewFunctionTypeConfig().SetOptions(&ftOptions).SetServiceState(true))
+	ft := statefun.NewFunctionType(runtime, "functions.tests.basic.master", MasterFunction, *statefun.NewFunctionTypeConfig().SetOptions(&ftOptions).SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
 	// Add TypenameExecutorPlugin which will provide StatefunExecutor for each stateful instance for this typename function (skip this if TypenameExecutorPlugin is not needed)
 
 	if MasterFunctionJSPlugin {
@@ -133,7 +133,7 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 
 	graphCRUD.RegisterAllFunctionTypes(runtime)
 	//graphDebug.RegisterAllFunctionTypes(runtime)
-	jpgql.RegisterAllFunctionTypes(runtime, 30)
+	jpgql.RegisterAllFunctionTypes(runtime)
 }
 
 func RunRequestReplyTest(runtime *statefun.Runtime) {
@@ -171,9 +171,9 @@ func Start() {
 		if RequestReplyTest {
 			RunRequestReplyTest(runtime)
 		}*/
-		if CreateSimpleGraphTest {
+		/*if CreateSimpleGraphTest {
 			CreateTestGraph(runtime)
-		}
+		}*/
 		return nil
 	}
 
@@ -186,7 +186,8 @@ func Start() {
 		/*if TriggersTest {
 			registerTriggerFunctions(runtime)
 		}*/
-		if err := runtime.Start(cache.NewCacheConfig("main_cache"), afterStart); err != nil {
+		runtime.RegisterOnAfterStartFunction(afterStart)
+		if err := runtime.Start(cache.NewCacheConfig("main_cache")); err != nil {
 			lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s\n", err)
 		}
 	} else {

@@ -9,6 +9,7 @@ const (
 	KVMutexIsOldPollingInterval = 10
 	FunctionTypeIDLifetimeMs    = 5000
 	RequestTimeoutSec           = 60
+	GCIntervalSec               = 5
 	HubDomainName               = "hub"
 )
 
@@ -18,6 +19,7 @@ type RuntimeConfig struct {
 	kvMutexIsOldPollingIntervalSec int
 	functionTypeIDLifetimeMs       int
 	requestTimeoutSec              int
+	gcIntervalSec                  int
 	hubDomainName                  string
 }
 
@@ -28,6 +30,7 @@ func NewRuntimeConfig() *RuntimeConfig {
 		kvMutexIsOldPollingIntervalSec: KVMutexIsOldPollingInterval,
 		functionTypeIDLifetimeMs:       FunctionTypeIDLifetimeMs,
 		requestTimeoutSec:              RequestTimeoutSec,
+		gcIntervalSec:                  GCIntervalSec,
 		hubDomainName:                  HubDomainName,
 	}
 }
@@ -64,5 +67,10 @@ func (ro *RuntimeConfig) SetFunctionTypeIDLifetimeMs(functionTypeIDLifetimeMs in
 
 func (ro *RuntimeConfig) SetRequestTimeoutSec(requestTimeoutSec int) *RuntimeConfig {
 	ro.requestTimeoutSec = requestTimeoutSec
+	return ro
+}
+
+func (ro *RuntimeConfig) SetGCIntervalSec(gcIntervalSec int) *RuntimeConfig {
+	ro.gcIntervalSec = gcIntervalSec
 	return ro
 }

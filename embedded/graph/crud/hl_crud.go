@@ -20,7 +20,7 @@ func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	thisType := ctx.Domain.CreateObjectIDWithHubDomainIfndef(ctx.Domain.GetObjectIDWithoutDomain(ctx.Self.ID))
 	typesVertexId := ctx.Domain.CreateObjectIDWithHubDomainIfndef(BUILT_IN_TYPES)
 
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.create", thisType, ctx.Payload, nil)))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", thisType, ctx.Payload, nil)))
 	if om.GetStatus() == sfMediators.SYNC_OP_STATUS_INCOMPLETE || om.GetStatus() == sfMediators.SYNC_OP_STATUS_FAILED {
 		om.Reply()
 		return
@@ -29,24 +29,22 @@ func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	// LINK: types -> <type_name>
 	link := easyjson.NewJSONObject()
 	link.SetByPath("to", easyjson.NewJSON(thisType))
+	link.SetByPath("name", easyjson.NewJSON(thisType))
 	link.SetByPath("type", easyjson.NewJSON(TYPE_TYPELINK))
-	link.SetByPath("body.name", easyjson.JSONFromArray([]string{thisType}))
 
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.create", typesVertexId, &link, nil)))
-	om.Reply()
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", typesVertexId, &link, nil))).Reply()
 }
 
 /*
 	{
-		"mode": string, optional, default: DeepMerge
+		"replace": bool - optional, default: false
 		"body": json
 	}
 */
 func UpdateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
 
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.update", ctx.Self.ID, ctx.Payload, nil)))
-	om.Reply()
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.update", ctx.Self.ID, ctx.Payload, nil))).Reply()
 }
 
 /*
@@ -55,21 +53,20 @@ func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	om := sfMediators.NewOpMediator(ctx)
 
 	// Vertice's out links are stored in the same domain with the vertex
-	pattern := fmt.Sprintf(OutLinkTypeKeyPrefPatternNEW+LinkKeySuff2Pattern, ctx.Self.ID, OBJECT_TYPELINK, ">")
+	pattern := fmt.Sprintf(OutLinkTypeKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, OBJECT_TYPELINK, ">")
 	outLinkKeys := ctx.Domain.Cache().GetKeysByPattern(pattern)
 	for _, outLinkKey := range outLinkKeys {
 		inLinkKeyTokens := strings.Split(outLinkKey, ".")
 		toObjectID := inLinkKeyTokens[len(inLinkKeyTokens)-1]
 
-		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.cmdb.api.object.delete", toObjectID, nil, nil)))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.delete", toObjectID, nil, nil)))
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
 			om.Reply()
 			return
 		}
 	}
 
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.delete", ctx.Self.ID, nil, nil)))
-	om.Reply()
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.delete", ctx.Self.ID, nil, nil))).Reply()
 }
 
 /*
@@ -88,7 +85,7 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	}
 	originType = ctx.Domain.CreateObjectIDWithHubDomainIfndef(ctx.Domain.GetObjectIDWithoutDomain(originType))
 	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.create", ctx.Self.ID, ctx.Payload, &options)))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", ctx.Self.ID, ctx.Payload, &options)))
 
 	var opStack *easyjson.JSON
 	if om.GetLastSyncOp().Data.PathExists("op_stack") {
@@ -97,27 +94,23 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 
 	if !(om.GetStatus() == sfMediators.SYNC_OP_STATUS_INCOMPLETE || om.GetStatus() == sfMediators.SYNC_OP_STATUS_FAILED) {
 		type _link struct {
-			from, to, lt string
+			from, to, name, lt string
 		}
 
 		needLinks := []_link{
-			{from: ctx.Domain.CreateObjectIDWithHubDomainIfndef(BUILT_IN_OBJECTS), to: ctx.Self.ID, lt: OBJECT_TYPELINK},
-			{from: ctx.Self.ID, to: originType, lt: TYPE_TYPELINK},
-			{from: originType, to: ctx.Self.ID, lt: OBJECT_TYPELINK},
+			{from: ctx.Domain.CreateObjectIDWithHubDomainIfndef(BUILT_IN_OBJECTS), to: ctx.Self.ID, name: ctx.Self.ID, lt: OBJECT_TYPELINK},
+			{from: ctx.Self.ID, name: originType, to: originType, lt: TYPE_TYPELINK},
+			{from: originType, name: ctx.Self.ID, to: ctx.Self.ID, lt: OBJECT_TYPELINK},
 		}
 
 		for _, l := range needLinks {
 			link := easyjson.NewJSONObject()
 			link.SetByPath("to", easyjson.NewJSON(l.to))
+			link.SetByPath("name", easyjson.NewJSON(l.name))
 			link.SetByPath("type", easyjson.NewJSON(l.lt))
 			link.SetByPath("body", easyjson.NewJSONObject())
 
-			switch l.lt {
-			case TYPE_TYPELINK:
-				link.SetByPath("body.name", easyjson.NewJSON(l.to))
-			}
-
-			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.create", l.from, &link, nil)))
+			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", l.from, &link, nil)))
 			if om.GetStatus() == sfMediators.SYNC_OP_STATUS_INCOMPLETE || om.GetStatus() == sfMediators.SYNC_OP_STATUS_FAILED {
 				break // Operation cannot be completed fully, interrupt where it is now and go to the end
 			}
@@ -133,7 +126,7 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 
 /*
 	{
-		"mode": string, optional, default: merge
+		"replace": bool - optional, default: false
 		"body": json
 	}
 */
@@ -141,7 +134,7 @@ func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	om := sfMediators.NewOpMediator(ctx)
 
 	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.update", ctx.Self.ID, ctx.Payload, &options)))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.update", ctx.Self.ID, ctx.Payload, &options)))
 	if om.GetLastSyncOp().Data.PathExists("op_stack") {
 		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"))
 	}
@@ -155,7 +148,7 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	om := sfMediators.NewOpMediator(ctx)
 
 	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.vertex.delete", ctx.Self.ID, nil, &options)))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.delete", ctx.Self.ID, nil, &options)))
 	if om.GetLastSyncOp().Data.PathExists("op_stack") {
 		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"))
 	}
@@ -183,17 +176,20 @@ func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	fromType := ctx.Domain.CreateObjectIDWithHubDomainIfndef(ctx.Domain.GetObjectIDWithoutDomain(ctx.Self.ID))
 
-	toType := ctx.Payload.GetByPath("to").AsStringDefault("")
-	toType = ctx.Domain.CreateObjectIDWithHubDomainIfndef(ctx.Domain.GetObjectIDWithoutDomain(toType))
+	toType, ok := ctx.Payload.GetByPath("to").AsString()
+	if !ok {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
+		return
+	}
+	toType = ctx.Domain.CreateObjectIDWithHubDomainIfndef(toType)
 
 	link := easyjson.NewJSONObject()
 	link.SetByPath("to", easyjson.NewJSON(toType))
+	link.SetByPath("name", easyjson.NewJSON(toType))
 	link.SetByPath("type", easyjson.NewJSON(TYPE_TYPELINK))
 	link.SetByPath("body.type", easyjson.NewJSON(objectLinkType))
-	link.SetByPath("body.name", easyjson.JSONFromArray([]string{toType}))
 
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.create", fromType, &link, nil)))
-	om.Reply()
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", fromType, &link, nil))).Reply()
 }
 
 /*
@@ -205,9 +201,17 @@ func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
 
+	toType, ok := ctx.Payload.GetByPath("to").AsString()
+	if !ok {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
+		return
+	}
+	toType = ctx.Domain.CreateObjectIDWithHubDomainIfndef(toType)
+
 	link := ctx.Payload.Clone()
+	link.SetByPath("to", easyjson.NewJSON(toType))
 	link.SetByPath("type", easyjson.NewJSON(TYPE_TYPELINK))
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.update", ctx.Self.ID, &link, nil)))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.update", ctx.Self.ID, &link, nil)))
 
 	om.Reply()
 }
@@ -239,13 +243,11 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		return
 	}
 
-	// Delete all links with type leading to an objects of TYPE
-
-	payload := easyjson.NewJSONObjectWithKeyValue("type", easyjson.NewJSON(originLinkType))
+	payload := easyjson.NewJSONObjectWithKeyValue("link_type", easyjson.NewJSON(originLinkType))
 	payload.SetByPath("to_object_type", easyjson.NewJSON(toType))
 	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
 	for _, objectId := range typeObjects {
-		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.create", objectId, &payload, &options)))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.delete_object_filtered_out_links", objectId, &payload, &options)))
 		if om.GetLastSyncOp().Data.PathExists("op_stack") {
 			executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"))
 		}
@@ -254,7 +256,7 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	objectLink := easyjson.NewJSONObject()
 	objectLink.SetByPath("to", easyjson.NewJSON(toType))
 	objectLink.SetByPath("type", easyjson.NewJSON(TYPE_TYPELINK))
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.delete", ctx.Self.ID, &objectLink, nil)))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", ctx.Self.ID, &objectLink, nil)))
 
 	om.Reply()
 }
@@ -262,6 +264,7 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 /*
 	{
 		"to": string,
+		"name": string,
 		"body": json
 	}
 
@@ -271,9 +274,15 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	om := sfMediators.NewOpMediator(ctx)
 
 	objectToID, ok := ctx.Payload.GetByPath("to").AsString()
-	objectToID = ctx.Domain.CreateObjectIDWithThisDomainIfndef(objectToID)
 	if !ok {
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
+		return
+	}
+	objectToID = ctx.Domain.CreateObjectIDWithThisDomainIfndef(objectToID)
+
+	linkName, ok := ctx.Payload.GetByPath("name").AsString()
+	if !ok {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("'name' undefined")).Reply()
 		return
 	}
 
@@ -285,11 +294,12 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	objectLink := easyjson.NewJSONObject()
 	objectLink.SetByPath("to", easyjson.NewJSON(objectToID))
+	objectLink.SetByPath("name", easyjson.NewJSON(linkName))
 	objectLink.SetByPath("type", easyjson.NewJSON(linkType))
 	objectLink.SetByPath("body", ctx.Payload.GetByPath("body"))
 
 	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.create", ctx.Self.ID, &objectLink, &options)))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", ctx.Self.ID, &objectLink, &options)))
 	if om.GetLastSyncOp().Data.PathExists("op_stack") {
 		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"))
 	}
@@ -307,11 +317,11 @@ func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	om := sfMediators.NewOpMediator(ctx)
 
 	objectToID, ok := ctx.Payload.GetByPath("to").AsString()
-	objectToID = ctx.Domain.CreateObjectIDWithThisDomainIfndef(objectToID)
 	if !ok {
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
+	objectToID = ctx.Domain.CreateObjectIDWithThisDomainIfndef(objectToID)
 
 	linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, ctx.Self.ID, objectToID)
 	if err != nil {
@@ -325,7 +335,7 @@ func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	objectLink.SetByPath("body", ctx.Payload.GetByPath("body"))
 
 	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.update", ctx.Self.ID, &objectLink, &options)))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.update", ctx.Self.ID, &objectLink, &options)))
 	if om.GetLastSyncOp().Data.PathExists("op_stack") {
 		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"))
 	}
@@ -342,11 +352,11 @@ func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	om := sfMediators.NewOpMediator(ctx)
 
 	objectToID, ok := ctx.Payload.GetByPath("to").AsString()
-	objectToID = ctx.Domain.CreateObjectIDWithThisDomainIfndef(objectToID)
 	if !ok {
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
+	objectToID = ctx.Domain.CreateObjectIDWithThisDomainIfndef(objectToID)
 
 	linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, ctx.Self.ID, objectToID)
 	if err != nil {
@@ -359,7 +369,7 @@ func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	objectLink.SetByPath("type", easyjson.NewJSON(linkType))
 
 	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.delete", ctx.Self.ID, &objectLink, &options)))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", ctx.Self.ID, &objectLink, &options)))
 	if om.GetLastSyncOp().Data.PathExists("op_stack") {
 		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"))
 	}

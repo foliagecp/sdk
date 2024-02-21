@@ -16,7 +16,11 @@ import (
 	"github.com/foliagecp/sdk/statefun/cache"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
+
+	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 )
+
+type OnAfterStartFunction func(runtime *Runtime) error
 
 type Runtime struct {
 	config RuntimeConfig
@@ -25,6 +29,7 @@ type Runtime struct {
 	Domain *Domain
 
 	registeredFunctionTypes map[string]*FunctionType
+	onAfterStartFunctions   []OnAfterStartFunction
 
 	gt0  int64 // Global time 0 - time of the very first message receving by any function type
 	glce int64 // Global last call ended - time of last call of last function handling id of any function type
@@ -55,7 +60,13 @@ func NewRuntime(config RuntimeConfig) (r *Runtime, err error) {
 	return
 }
 
-func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Runtime) error) (err error) {
+func (r *Runtime) RegisterOnAfterStartFunction(f OnAfterStartFunction) {
+	if f != nil {
+		r.onAfterStartFunctions = append(r.onAfterStartFunctions, f)
+	}
+}
+
+func (r *Runtime) Start(cacheConfig *cache.Config) (err error) {
 	// Create streams if does not exist ------------------------------
 	/* Each stream contains a single subject (topic).
 	 * Differently named stream with overlapping subjects cannot exist!
@@ -66,13 +77,15 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 	for info := range r.js.StreamsInfo(nats.Context(ctx)) {
 		existingStreams = append(existingStreams, info.Config.Name)
 	}
-	for _, functionType := range r.registeredFunctionTypes {
-		if !slices.Contains(existingStreams, functionType.getStreamName()) {
-			_, err := r.js.AddStream(&nats.StreamConfig{
-				Name:     functionType.getStreamName(),
-				Subjects: []string{functionType.subject},
-			})
-			system.MsgOnErrorReturn(err)
+	for _, ft := range r.registeredFunctionTypes {
+		if ft.config.IsSignalProviderAllowed(sfPlugins.JetstreamGlobalSignal) {
+			if !slices.Contains(existingStreams, ft.getStreamName()) {
+				_, err := r.js.AddStream(&nats.StreamConfig{
+					Name:     ft.getStreamName(),
+					Subjects: []string{ft.subject},
+				})
+				system.MsgOnErrorReturn(err)
+			}
 		}
 	}
 	// --------------------------------------------------------------
@@ -117,8 +130,10 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 			singleInstanceFunctionRevisions[ftName] = revId
 		}
 
-		system.MsgOnErrorReturn(AddSignalSourceJetstreamQueuePushConsumer(ft))
-		if ft.config.serviceActive {
+		if ft.config.IsSignalProviderAllowed(sfPlugins.JetstreamGlobalSignal) {
+			system.MsgOnErrorReturn(AddSignalSourceJetstreamQueuePushConsumer(ft))
+		}
+		if ft.config.IsRequestProviderAllowed(sfPlugins.NatsCoreGlobalRequest) {
 			system.MsgOnErrorReturn(AddRequestSourceNatsCore(ft))
 		}
 	}
@@ -126,13 +141,14 @@ func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Ru
 
 	go singleInstanceFunctionLocksUpdater(singleInstanceFunctionRevisions)
 
-	if onAfterStart != nil {
-		go func() {
+	for _, onAfterStartFunc := range r.onAfterStartFunctions {
+		go func(f OnAfterStartFunction) {
 			system.GlobalPrometrics.GetRoutinesCounter().Started("runtime_onAfterStart")
 			defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("runtime_onAfterStart")
-			system.MsgOnErrorReturn(onAfterStart(r))
-		}()
+			system.MsgOnErrorReturn(f(r))
+		}(onAfterStartFunc)
 	}
+
 	system.MsgOnErrorReturn(r.runGarbageCellector())
 
 	return
@@ -176,7 +192,7 @@ func (r *Runtime) runGarbageCellector() (err error) {
 		}
 		// --------------------------------------------------------------
 
-		time.Sleep(1 * time.Second)
+		time.Sleep(time.Duration(r.config.gcIntervalSec) * time.Second)
 	}
 }
 

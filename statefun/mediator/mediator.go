@@ -22,8 +22,9 @@ const (
 )
 
 const (
-	aggrPackTempl                  = "__mAggrPack.%s"
-	replyStoreGCInterval           = 60
+	aggrPack                       = "__mAggrPack"
+	aggrPackTempl                  = aggrPack + ".%s"
+	gcIntervalSec                  = 60
 	replyStoreRecordExpirationSecs = 120
 )
 
@@ -104,6 +105,7 @@ func NewOpMediatorWithUniquenessControl(ctx *sfPlugins.StatefunContextProcessor,
 			// ------------------------------------------------------
 			funcContext.SetByPath(aggrPackPath, aggregationPack)
 			ctx.SetFunctionContext(funcContext)
+			ctx.SetContextExpirationAfter(time.Duration(gcIntervalSec) * time.Second)
 		}
 	}
 	om = &OpMediator{ctx, opMsgs, mediatorId, opType, meta1}
@@ -168,8 +170,9 @@ func (om *OpMediator) releaseAggPackOnAggregated() *easyjson.JSON {
 	if funcContext.PathExists(aggrPackPath) {
 		aggregationPack := funcContext.GetByPath(aggrPackPath)
 		if aggregationPack.IsNonEmptyObject() {
-			funcContext.RemoveByPath(aggrPackPath)
+			funcContext.SetByPath(aggrPackPath, easyjson.NewJSONObject()) // Do not delete, just make empty - for loops to be detected
 			om.ctx.SetFunctionContext(funcContext)
+			om.ctx.SetContextExpirationAfter(time.Duration(gcIntervalSec) * time.Second)
 			return &aggregationPack
 		}
 	}
@@ -181,7 +184,7 @@ func (om *OpMediator) releaseAggPackAndGetParentReplyAggregator(aggregationPack 
 		return nil, false
 	}
 
-	if time.Since(replyStoreLastGCTime).Seconds() > replyStoreGCInterval {
+	if time.Since(replyStoreLastGCTime).Seconds() > gcIntervalSec {
 		go func() {
 			replyStoreMutex.Lock()
 			defer replyStoreMutex.Unlock()
@@ -279,6 +282,7 @@ func (om *OpMediator) SignalWithAggregation(provider sfPlugins.SignalProvider, t
 	}
 
 	funcContext := om.ctx.GetFunctionContext()
+
 	// Create an aggreagtion pack -------------------------
 	aggrPackPath := fmt.Sprintf(aggrPackTempl, om.mediatorId)
 	aggregationPack := funcContext.GetByPath(aggrPackPath)
@@ -311,6 +315,7 @@ func (om *OpMediator) SignalWithAggregation(provider sfPlugins.SignalProvider, t
 	funcContext.SetByPath(aggrPackPath, aggregationPack)
 	// ----------------------------------------------------
 	om.ctx.SetFunctionContext(funcContext)
+	om.ctx.SetContextExpirationAfter(time.Duration(gcIntervalSec) * time.Second)
 
 	return nil
 }

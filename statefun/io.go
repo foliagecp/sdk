@@ -131,7 +131,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 		return natsCoreGlobalRequest()
 	case sfPlugins.GolangLocalRequest:
 		return goLangLocalRequest()
-	case sfPlugins.AutoSelect:
+	case sfPlugins.AutoRequestSelect:
 		selection := sfPlugins.GolangLocalRequest
 		if r.Domain.GetDomainFromObjectID(callerID) != r.Domain.GetDomainFromObjectID(targetID) {
 			selection = sfPlugins.NatsCoreGlobalRequest
