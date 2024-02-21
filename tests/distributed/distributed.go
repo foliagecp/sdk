@@ -131,11 +131,11 @@ func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 }
 
 func RegisterFunctionTypes(runtime *statefun.Runtime) {
-	statefun.NewFunctionType(runtime, "domains.test", TestFunction, *statefun.NewFunctionTypeConfig().SetServiceState(true))
+	statefun.NewFunctionType(runtime, "domains.test", TestFunction, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
 
 	graphCRUD.RegisterAllFunctionTypes(runtime)
 	//graphDebug.RegisterAllFunctionTypes(runtime)
-	jpgql.RegisterAllFunctionTypes(runtime, 30)
+	jpgql.RegisterAllFunctionTypes(runtime)
 }
 
 func Start() {
@@ -161,7 +161,8 @@ func Start() {
 		if TriggersTest {
 			registerTriggerFunctions(runtime)
 		}
-		if err := runtime.Start(cache.NewCacheConfig("main_cache"), afterStart); err != nil {
+		runtime.RegisterOnAfterStartFunction(afterStart)
+		if err := runtime.Start(cache.NewCacheConfig("main_cache")); err != nil {
 			lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s\n", err)
 		}
 	} else {

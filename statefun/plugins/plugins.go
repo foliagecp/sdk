@@ -6,6 +6,7 @@ package plugins
 
 import (
 	"sync"
+	"time"
 
 	"github.com/foliagecp/sdk/statefun/cache"
 	lg "github.com/foliagecp/sdk/statefun/logger"
@@ -21,15 +22,16 @@ type StatefunAddress struct {
 type SignalProvider int
 
 const (
-	JetstreamGlobalSignal SignalProvider = iota
+	AutoSignalSelect SignalProvider = iota
+	JetstreamGlobalSignal
 )
 
 type RequestProvider int
 
 const (
-	NatsCoreGlobalRequest RequestProvider = iota
+	AutoRequestSelect RequestProvider = iota
+	NatsCoreGlobalRequest
 	GolangLocalRequest
-	AutoSelect
 )
 
 type EgressProvider int
@@ -59,13 +61,14 @@ type Domain interface {
 }
 
 type StatefunContextProcessor struct {
-	GetFunctionContext func() *easyjson.JSON
-	SetFunctionContext func(*easyjson.JSON)
-	GetObjectContext   func() *easyjson.JSON
-	SetObjectContext   func(*easyjson.JSON)
-	ObjectMutexLock    func(errorOnLocked bool) error
-	ObjectMutexUnlock  func() error
-	Domain             Domain
+	GetFunctionContext        func() *easyjson.JSON
+	SetFunctionContext        func(*easyjson.JSON)
+	SetContextExpirationAfter func(time.Duration)
+	GetObjectContext          func() *easyjson.JSON
+	SetObjectContext          func(*easyjson.JSON)
+	ObjectMutexLock           func(errorOnLocked bool) error
+	ObjectMutexUnlock         func() error
+	Domain                    Domain
 	// TODO: DownstreamSignal(<function type>, <links filters>, <payload>, <options>)
 	Signal  func(SignalProvider, string, string, *easyjson.JSON, *easyjson.JSON) error
 	Request func(RequestProvider, string, string, *easyjson.JSON, *easyjson.JSON) (*easyjson.JSON, error)

@@ -145,7 +145,7 @@ func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 }
 
 func getParents(ctx *sfPlugins.StatefunContextProcessor, id string) []node {
-	pattern := fmt.Sprintf(crud.OutLinkTypeKeyPrefPatternNEW+crud.LinkKeySuff1Pattern, id, ">")
+	pattern := fmt.Sprintf(crud.OutLinkTypeKeyPrefPattern+crud.LinkKeySuff1Pattern, id, ">")
 	parents := ctx.Domain.Cache().GetKeysByPattern(pattern)
 
 	nodes := make([]node, 0, len(parents))
@@ -167,7 +167,7 @@ func getParents(ctx *sfPlugins.StatefunContextProcessor, id string) []node {
 }
 
 func getChildren(ctx *sfPlugins.StatefunContextProcessor, id string) []node {
-	children := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(crud.OutLinkTypeKeyPrefPatternNEW+crud.LinkKeySuff1Pattern, id, ">"))
+	children := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(crud.OutLinkTypeKeyPrefPattern+crud.LinkKeySuff1Pattern, id, ">"))
 
 	nodes := make([]node, 0, len(children))
 

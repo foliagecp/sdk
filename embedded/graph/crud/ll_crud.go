@@ -14,76 +14,6 @@ import (
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
-func getOpStackFromOptions(options *easyjson.JSON) *easyjson.JSON {
-	returnOpStack := false
-	if options != nil {
-		returnOpStack = options.GetByPath("return_op_stack").AsBoolDefault(false)
-	}
-	var opStack *easyjson.JSON = nil
-	if returnOpStack {
-		opStack = easyjson.NewJSONArray().GetPtr()
-	}
-	return opStack
-}
-
-func addVertexOpToOpStack(opStack *easyjson.JSON, opName string, vertexId string, oldBody *easyjson.JSON, newBody *easyjson.JSON) bool {
-	if opStack != nil && opStack.IsArray() {
-		op := easyjson.NewJSONObjectWithKeyValue("op", easyjson.NewJSON(opName))
-		op.SetByPath("id", easyjson.NewJSON(vertexId))
-		if oldBody != nil {
-			op.SetByPath("old_body", *oldBody)
-		}
-		if newBody != nil {
-			op.SetByPath("new_body", *newBody)
-		}
-		opStack.AddToArray(op)
-		return true
-	}
-	return false
-}
-
-func addLinkOpToOpStack(opStack *easyjson.JSON, opName string, fromVertexId string, toVertexId string, linkType string, oldBody *easyjson.JSON, newBody *easyjson.JSON) bool {
-	if opStack != nil && opStack.IsArray() {
-		op := easyjson.NewJSONObjectWithKeyValue("op", easyjson.NewJSON(opName))
-		op.SetByPath("from", easyjson.NewJSON(fromVertexId))
-		op.SetByPath("to", easyjson.NewJSON(toVertexId))
-		op.SetByPath("type", easyjson.NewJSON(linkType))
-		if oldBody != nil {
-			op.SetByPath("old_body", *oldBody)
-		}
-		if newBody != nil {
-			op.SetByPath("new_body", *newBody)
-		}
-		opStack.AddToArray(op)
-		return true
-	}
-	return false
-}
-
-func mergeOpStack(opStackRecepient *easyjson.JSON, opStackDonor *easyjson.JSON) bool {
-	if opStackRecepient != nil && opStackRecepient.IsArray() && opStackDonor != nil && opStackDonor.IsArray() {
-		for i := 0; i < opStackDonor.ArraySize(); i++ {
-			opStackRecepient.AddToArray(opStackDonor.ArrayElement(i))
-		}
-	}
-	return false
-}
-
-func resultWithOpStack(existingResult *easyjson.JSON, opStack *easyjson.JSON) easyjson.JSON {
-	if existingResult == nil {
-		if opStack == nil {
-			return easyjson.NewJSONNull()
-		}
-		return easyjson.NewJSONObjectWithKeyValue("op_stack", *opStack)
-	} else {
-		if opStack == nil {
-			return *existingResult
-		}
-		existingResult.SetByPath("op_stack", *opStack)
-		return *existingResult
-	}
-}
-
 /*
 Creates a vertex in the graph with an id the function being called with.
 
@@ -138,7 +68,7 @@ Request:
 		// Initial request from caller:
 		body: json - optional // Body for object to be created with.
 			<key>: <type> - optional // Any additional key and value to be stored in objects's body.
-		mode: string - optional // "merge" (default) - deep merge old and new bodies, "replace" - replace old body with the new one, <other> is interpreted as "merge" without any notification
+		replace: bool - optional // "false" - (default) body and tags will be merged, "true" - body and tags will be replaced
 
 	options: json - optional
 		return_op_stack: bool - optional
@@ -162,30 +92,25 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	payload := ctx.Payload
 	opStack := getOpStackFromOptions(ctx.Options)
 
-	var objectBody easyjson.JSON
+	oldBody := ctx.GetObjectContext()
+
+	var replace bool = payload.GetByPath("replace").AsBoolDefault(false)
+
+	var body easyjson.JSON
 	if payload.GetByPath("body").IsObject() {
-		objectBody = payload.GetByPath("body")
+		body = payload.GetByPath("body")
 	} else {
-		objectBody = easyjson.NewJSONObject()
+		body = easyjson.NewJSONObject()
 	}
 
-	fixedOldBody := ctx.GetObjectContext()
-	newBody := fixedOldBody
-
-	mode := payload.GetByPath("mode").AsStringDefault("merge")
-	switch mode {
-	case "replace":
-		newBody = &objectBody
-		ctx.SetObjectContext(newBody) // Update an object
-	case "merge":
-		fallthrough
-	default:
-		newBody = ctx.GetObjectContext()
-		newBody.DeepMerge(objectBody)
-		ctx.SetObjectContext(newBody) // Update an object
+	if !replace { // merge
+		newBody := oldBody.Clone().GetPtr()
+		newBody.DeepMerge(body)
+		body = *newBody
 	}
+	ctx.SetObjectContext(&body) // Update an object
 
-	addVertexOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, fixedOldBody, newBody)
+	addVertexOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, oldBody, &body)
 
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
@@ -217,16 +142,14 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	opStack := getOpStackFromOptions(ctx.Options)
 
 	// Delete all out links -------------------------------
-	outLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
+	outLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
 	for _, outLinkKey := range outLinkKeys {
 		inLinkKeyTokens := strings.Split(outLinkKey, ".")
-		toObjectID := inLinkKeyTokens[len(inLinkKeyTokens)-1]
-		linkType := inLinkKeyTokens[len(inLinkKeyTokens)-2]
+		linkName := inLinkKeyTokens[len(inLinkKeyTokens)-1]
 
 		deleteLinkPayload := easyjson.NewJSONObject()
-		deleteLinkPayload.SetByPath("to", easyjson.NewJSON(toObjectID))
-		deleteLinkPayload.SetByPath("type", easyjson.NewJSON(linkType))
-		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.delete", ctx.Self.ID, &deleteLinkPayload, ctx.Options)))
+		deleteLinkPayload.SetByPath("name", easyjson.NewJSON(linkName))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", ctx.Self.ID, &deleteLinkPayload, ctx.Options)))
 		mergeOpStack(opStack, om.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
 			om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr())
@@ -236,26 +159,21 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	// ----------------------------------------------------
 
 	// Delete all in links --------------------------------
-	inLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
+	inLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
 	for _, inLinkKey := range inLinkKeys {
 		inLinkKeyTokens := strings.Split(inLinkKey, ".")
 		fromObjectID := inLinkKeyTokens[len(inLinkKeyTokens)-2]
-		linkType := inLinkKeyTokens[len(inLinkKeyTokens)-1]
+		linkName := inLinkKeyTokens[len(inLinkKeyTokens)-1]
 
 		deleteLinkPayload := easyjson.NewJSONObject()
-		deleteLinkPayload.SetByPath("to", easyjson.NewJSON(ctx.Self.ID))
-		deleteLinkPayload.SetByPath("type", easyjson.NewJSON(linkType))
-		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, "functions.graph.api.link.delete", fromObjectID, &deleteLinkPayload, ctx.Options)))
+		deleteLinkPayload.SetByPath("name", easyjson.NewJSON(linkName))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", fromObjectID, &deleteLinkPayload, ctx.Options)))
 		mergeOpStack(opStack, om.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
 			om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr())
 			return
 		}
 	}
-	// ----------------------------------------------------
-
-	// Delete link name generator -------------------------
-	ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW, ctx.Self.ID), true, -1, "")
 	// ----------------------------------------------------
 
 	var oldBody *easyjson.JSON = nil
@@ -343,7 +261,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	if payload.PathExists("in_name") {
 		if inLinkName, ok := payload.GetByPath("in_name").AsString(); ok && len(inLinkName) > 0 {
 			if linkFromObjectUUID := ctx.Caller.ID; len(linkFromObjectUUID) > 0 {
-				ctx.Domain.Cache().SetValue(fmt.Sprintf(InLinkKeyPrefPatternNEW+LinkKeySuff2Pattern, selfId, linkFromObjectUUID, inLinkName), nil, true, -1, "")
+				ctx.Domain.Cache().SetValue(fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff2Pattern, selfId, linkFromObjectUUID, inLinkName), nil, true, -1, "")
 				om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONNull())).Reply()
 				return
 			} else {
@@ -388,14 +306,14 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		}
 
 		// Check if link with this name already exists --------------
-		_, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, selfId, linkName))
+		_, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, selfId, linkName))
 		if err == nil {
 			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s already exists", selfId, linkName))).Reply()
 			return
 		}
 		// ----------------------------------------------------------
 		// Check if link with this type "type" to "to" already exists
-		_, err = ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPatternNEW+LinkKeySuff2Pattern, selfId, linkType, toId))
+		_, err = ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+LinkKeySuff2Pattern, selfId, linkType, toId))
 		if err == nil {
 			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s to=%s with type=%s already exists", selfId, linkName, toId, linkType))).Reply()
 			return
@@ -407,7 +325,10 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, selfId, linkName), []byte(fmt.Sprintf("%s.%s", linkType, toId)), true, -1, "") // Store link body in KV
 		// ----------------------------------
 		// Set link body --------------------
-		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, selfId, linkName), linkBody.ToBytes(), true, -1, "") // Store link body in KV
+		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, selfId, linkName), linkBody.ToBytes(), true, -1, "") // Store link body in KV
+		// ----------------------------------
+		// Set link type --------------------
+		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+LinkKeySuff2Pattern, selfId, linkType, toId), []byte(linkName), true, -1, "") // Store link type
 		// ----------------------------------
 		// Index link type ------------------
 		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff3Pattern, selfId, linkName, "type", linkType), nil, true, -1, "")
@@ -423,16 +344,16 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		// ----------------------------------
 		// --------------------------------------------------------
 
-		addLinkOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, toId, linkType, nil, &linkBody)
+		addLinkOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, toId, linkName, linkType, nil, &linkBody)
 
 		// Create in link on descendant object --------------------
 		nextCallPayload := easyjson.NewJSONObject()
-		nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkType))
+		nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
 		targetId := toId
 		if toId == ctx.Self.ID {
 			targetId = targetId + "===self_link"
 		}
-		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, ctx.Self.Typename, targetId, &nextCallPayload, nil)))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, targetId, &nextCallPayload, nil)))
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
 			om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr())
 			return
@@ -449,10 +370,13 @@ Updates a link of type="type" from a vertex with id the funcion being called wit
 Request:
 
 	payload: json - required
-		// Initial request from caller:
-		name: string - required // Defines link's name which is unique among all object's output links.
+		name: string - required if "to" or "type" is not defined // Defines link's name which is unique among all object's output links.
+
+		to: string - required if "name" is not defined // ID for descendant object.
+		type: string - required if "name" is not defined // Type of link leading to descendant.
+
 		tags: []string - optional // Defines link tags.
-		replace: bool - optional // "false" - default, body and tags will be merged, "true" - body and tags will be replaced,
+		replace: bool - optional // "false" - (default) body and tags will be merged, "true" - body and tags will be replaced
 		body: json - optional // Body for link leading to descendant.
 			<key>: <type> - optional // Any additional key and value to be stored in link's body.
 
@@ -474,10 +398,10 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	opStack := getOpStackFromOptions(ctx.Options)
 
 	var linkName string
-	if s, ok := payload.GetByPath("name").AsString(); ok {
+	if s, ok := getLinkNameFromSpecifiedIdentifier(ctx); ok {
 		linkName = s
 	} else {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("name is not defined"))).Reply()
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link identifier is not defined"))).Reply()
 		return
 	}
 
@@ -486,7 +410,7 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 		return
 	}
-	oldLinkBody, err := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
+	oldLinkBody, err := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
 	if err != nil {
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s", ctx.Self.ID, linkName))).Reply()
 		return
@@ -500,7 +424,7 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	linkType := linkTargetTokens[0]
 	toId := linkTargetTokens[1]
 
-	var replace bool = payload.GetByPath("mode").AsBoolDefault(false)
+	var replace bool = payload.GetByPath("replace").AsBoolDefault(false)
 
 	var linkBody easyjson.JSON
 	if payload.GetByPath("body").IsObject() {
@@ -524,7 +448,7 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	// Create out link on this object -------------------------
 	// Set link body --------------------
-	ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, ctx.Self.ID, linkName), linkBody.ToBytes(), true, -1, "") // Store link body in KV
+	ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName), linkBody.ToBytes(), true, -1, "") // Store link body in KV
 	// ----------------------------------
 	// Index link tags ------------------
 	if payload.GetByPath("tags").IsNonEmptyArray() {
@@ -537,7 +461,7 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	// ----------------------------------
 	// --------------------------------------------------------
 
-	addLinkOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, toId, linkType, oldLinkBody, &linkBody)
+	addLinkOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, toId, linkName, linkType, oldLinkBody, &linkBody)
 
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
@@ -550,6 +474,9 @@ Request:
 	payload: json - required
 		// Initial request from caller:
 		name: string - required // Defines link's name which is unique among all object's output links.
+
+		to: string - required if "name" is not defined // ID for descendant object.
+		type: string - required if "name" is not defined // Type of link leading to descendant.
 
 		// Self-requests to descendants (RequestReply): // ID can be composite: <object_id>===self_link - for non-blocking execution on the same object
 		in_name: string - required // Deleting input link's name
@@ -568,16 +495,30 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	om := sfMediators.NewOpMediator(ctx)
 
 	selfId := strings.Split(ctx.Self.ID, "===")[0]
-
 	payload := ctx.Payload
+
 	opStack := getOpStackFromOptions(ctx.Options)
 
 	if payload.PathExists("in_name") {
+		if inLinkName, ok := payload.GetByPath("in_name").AsString(); ok && len(inLinkName) > 0 {
+			if linkFromObjectUUID := ctx.Caller.ID; len(linkFromObjectUUID) > 0 {
+				ctx.Domain.Cache().DeleteValue(fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff2Pattern, selfId, linkFromObjectUUID, inLinkName), true, -1, "")
+				om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONNull())).Reply()
+				return
+			} else {
+				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("caller id is not defined, no source vertex id"))).Reply()
+				return
+			}
+		} else {
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("in_name is not defined"))).Reply()
+			return
+		}
+	} else {
 		var linkName string
-		if s, ok := payload.GetByPath("name").AsString(); ok {
+		if s, ok := getLinkNameFromSpecifiedIdentifier(ctx); ok {
 			linkName = s
 		} else {
-			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("name is not defined"))).Reply()
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link identifier is not defined"))).Reply()
 			return
 		}
 
@@ -586,7 +527,7 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 			return
 		}
-		oldLinkBody, err := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
+		oldLinkBody, err := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
 		if err != nil {
 			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link body from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 			return
@@ -607,24 +548,27 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		}
 		// ------------------------------------------------
 
+		// Set link type --------------------
+		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+LinkKeySuff2Pattern, selfId, linkType, toId), true, -1, "")
+		// ----------------------------------
 		// Delete link body -----------------
-		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, selfId, linkName), true, -1, "") // Store link body in KV
+		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, selfId, linkName), true, -1, "")
 		// ----------------------------------
 		// Delete link target ---------------
-		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, selfId, linkName), true, -1, "") // Store link body in KV
+		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, selfId, linkName), true, -1, "")
 		// ----------------------------------
 
-		addLinkOpToOpStack(opStack, ctx.Self.Typename, selfId, toId, linkType, oldLinkBody, nil)
+		addLinkOpToOpStack(opStack, ctx.Self.Typename, selfId, toId, linkName, linkType, oldLinkBody, nil)
 
 		// Delete in link on descendant object --------------------
 		nextCallPayload := easyjson.NewJSONObject()
-		nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkType))
+		nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
 
 		targetId := toId
 		if toId == ctx.Self.ID {
 			targetId = targetId + "===self_link"
 		}
-		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoSelect, ctx.Self.Typename, targetId, &nextCallPayload, nil)))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, targetId, &nextCallPayload, nil)))
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
 			om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr())
 			return
@@ -642,8 +586,10 @@ Request:
 
 	payload: json - required
 		// Initial request from caller:
-		to: string - required // ID for descendant object. If not defined random UUID will be generated. If a descandant with the specified uuid does not exist - will be created with empty body.
-		type: string - required // Type of link leading to descendant. If not defined random UUID will be used.
+		name: string - required // Defines link's name which is unique among all object's output links.
+
+		to: string - required if "name" is not defined // ID for descendant object.
+		type: string - required if "name" is not defined // Type of link leading to descendant.
 
 	options: json - optional
 		return_op_stack: bool - optional
@@ -658,14 +604,13 @@ Reply:
 func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
 
-	payload := ctx.Payload
 	opStack := getOpStackFromOptions(ctx.Options)
 
 	var linkName string
-	if s, ok := payload.GetByPath("name").AsString(); ok {
+	if s, ok := getLinkNameFromSpecifiedIdentifier(ctx); ok {
 		linkName = s
 	} else {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("name is not defined"))).Reply()
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link identifier is not defined"))).Reply()
 		return
 	}
 
@@ -674,7 +619,7 @@ func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 		return
 	}
-	linkBody, err := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPatternNEW+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
+	linkBody, err := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
 	if err != nil {
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link body from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 		return
@@ -688,7 +633,7 @@ func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 	linkType := linkTargetTokens[0]
 	toId := linkTargetTokens[1]
 
-	addLinkOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, toId, linkType, nil, nil)
+	addLinkOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, toId, linkName, linkType, nil, nil)
 
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(easyjson.NewJSONObjectWithKeyValue("body", *linkBody).GetPtr(), opStack))).Reply()
 }

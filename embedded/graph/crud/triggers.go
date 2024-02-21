@@ -82,7 +82,7 @@ func executeObjectTriggers(ctx *sfPlugins.StatefunContextProcessor, objectID str
 func getObjectsLinkTypeTriggers(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId string) easyjson.JSON {
 	fromTypeName := findObjectType(ctx, fromObjectId)
 	toTypeName := findObjectType(ctx, toObjectId)
-	typesLinkBody, err := getLinkBody(ctx, fromTypeName, toTypeName, TYPE_TYPELINK)
+	typesLinkBody, err := getLinkBody(ctx, fromTypeName, toTypeName)
 	if err != nil || !typesLinkBody.PathExists("triggers") {
 		return easyjson.NewJSONObject()
 	}
