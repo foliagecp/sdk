@@ -36,25 +36,12 @@ func IsTransactionOperationOk(j *easyjson.JSON, err error) bool {
 }
 
 func initTriggersTest(runtime *statefun.Runtime) {
-	txId := "trt"
-	transactionPayload := easyjson.NewJSONObjectWithKeyValue("clone", easyjson.NewJSON("min"))
-	if IsTransactionOperationOk(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.tx.begin", txId, &transactionPayload, nil)) {
-		// + T:typea --------------------------
-		signalPayload := easyjson.NewJSONObjectWithKeyValue("id", easyjson.NewJSON("typea"))
-		IsTransactionOperationOk(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.tx.type.create", txId, &signalPayload, nil))
-		// ------------------------------------
-		// + T:typeb --------------------------
-		signalPayload = easyjson.NewJSONObjectWithKeyValue("id", easyjson.NewJSON("typeb"))
-		IsTransactionOperationOk(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.tx.type.create", txId, &signalPayload, nil))
-		// ------------------------------------
-		// + T:typea -> T:typeb ---------------
-		signalPayload = easyjson.NewJSONObjectWithKeyValue("object_type", easyjson.NewJSON("a2b"))
-		signalPayload.SetByPath("from", easyjson.NewJSON("typea"))
-		signalPayload.SetByPath("to", easyjson.NewJSON("typeb"))
-		IsTransactionOperationOk(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.tx.types.link.create", txId, &signalPayload, nil))
-		// ------------------------------------
-		IsTransactionOperationOk(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.tx.commit", txId, nil, nil))
-	}
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.create", "typea", nil, nil))
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.create", "typeb", nil, nil))
+
+	v := easyjson.NewJSONObjectWithKeyValue("to", easyjson.NewJSON("typeb"))
+	v.SetByPath("object_type", easyjson.NewJSON("a2b"))
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.types.link.create", "typea", &v, nil))
 }
 
 func TriggersTestIteration(runtime *statefun.Runtime) {
@@ -72,6 +59,10 @@ func TriggersTestIteration(runtime *statefun.Runtime) {
 	payload = easyjson.NewJSONObjectWithKeyValue("to", easyjson.NewJSON("b"))
 	payload.SetByPath("body", easyjson.NewJSONObjectWithKeyValue("ab_state", easyjson.NewJSON("created")))
 	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.objects.link.create", "a", &payload, nil))
+
+	// Delete A
+	payload = easyjson.NewJSONObject()
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.create", "a", &payload, nil))
 
 	// Create A
 	payload = easyjson.NewJSONObjectWithKeyValue("origin_type", easyjson.NewJSON("typea"))
