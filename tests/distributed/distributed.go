@@ -6,6 +6,7 @@ import (
 	"time"
 
 	//"github.com/foliagecp/easyjson"
+	"github.com/foliagecp/easyjson"
 	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
 
 	// Comment out and no not use graphDebug for resolving the cgo conflict between go-graphviz and rogchap (when --ldflags '-extldflags "-Wl,--allow-multiple-definition"' does not help)
@@ -48,7 +49,7 @@ func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 			ctx.Signal(
 				sfPlugins.JetstreamGlobalSignal,
 				ctx.Self.Typename,
-				ctx.Domain.CreateObjectIDWithDomainIfndef("leaf", ctx.Self.ID+"A"),
+				ctx.Domain.CreateObjectIDWithDomain("leaf", ctx.Self.ID+"A", true),
 				ctx.Payload,
 				ctx.Options,
 			)
@@ -57,7 +58,7 @@ func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 				ctx.Signal(
 					sfPlugins.JetstreamGlobalSignal,
 					ctx.Self.Typename,
-					ctx.Domain.CreateObjectIDWithDomainIfndef("leaf", ctx.Self.ID+"B"),
+					ctx.Domain.CreateObjectIDWithDomain("leaf", ctx.Self.ID+"B", true),
 					ctx.Payload,
 					ctx.Options,
 				)
@@ -65,7 +66,7 @@ func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 				ctx.Request(
 					sfPlugins.NatsCoreGlobalRequest,
 					ctx.Self.Typename,
-					ctx.Domain.CreateObjectIDWithDomainIfndef(hubDomain, ctx.Self.ID+"C"),
+					ctx.Domain.CreateObjectIDWithHubDomain(ctx.Self.ID+"C", true),
 					ctx.Payload,
 					ctx.Options,
 				)
@@ -84,50 +85,12 @@ func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 			ctx.Request(
 				sfPlugins.NatsCoreGlobalRequest,
 				ctx.Self.Typename,
-				ctx.Domain.CreateObjectIDWithDomainIfndef("leaf", ctx.Self.ID+"D"),
+				ctx.Domain.CreateObjectIDWithDomain("leaf", ctx.Self.ID+"D", true),
 				ctx.Payload,
 				ctx.Options,
 			)
 		}
 	}
-
-	/*start := time.Now()
-
-	var functionContext *easyjson.JSON
-	if MasterFunctionContextIncrement {
-		functionContext = ctx.GetFunctionContext()
-	}
-
-	options := ctx.Options
-	increment := int(options.GetByPath("increment").AsNumericDefault(0))
-
-	if MasterFunctionLogs {
-		lg.Logf(lg.DebugLevel, "-------> %s:%s\n", ctx.Self.Typename, ctx.Self.ID)
-		lg.Logln(lg.DebugLevel, "== Payload:", ctx.Payload.ToString())
-		lg.Logln(lg.DebugLevel, "== Context:", functionContext.ToString())
-	}
-
-	incrementValue := 0
-	if MasterFunctionContextIncrement {
-		if v, ok := functionContext.GetByPath("counter").AsNumeric(); ok {
-			incrementValue = int(v)
-		}
-		incrementValue += increment
-		functionContext.SetByPath("counter", easyjson.NewJSON(incrementValue))
-		lg.Logf(lg.DebugLevel, "++ Function context's counter value incrementated by %d\n", increment)
-	}
-
-	if MasterFunctionContextIncrement {
-		ctx.SetFunctionContext(functionContext)
-	}
-
-	if ctx.Reply != nil { // Request call is being made
-		ctx.Reply.With(easyjson.NewJSONObjectWithKeyValue("counter", easyjson.NewJSON(incrementValue)).GetPtr())
-	}
-
-	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("master_function", "", []string{"id"}); err == nil {
-		gaugeVec.With(prometheus.Labels{"id": ctx.Self.ID}).Set(float64(time.Since(start).Microseconds()))
-	}*/
 }
 
 func RegisterFunctionTypes(runtime *statefun.Runtime) {
@@ -150,8 +113,8 @@ func Start() {
 			if CreateSimpleGraphTest {
 				CreateTestGraph(runtime)
 			}
-			//time.Sleep(1 * time.Second)
-			//runtime.Signal(sfPlugins.JetstreamGlobalSignal, "domains.test", "foo", easyjson.NewJSONObject().GetPtr(), nil)
+			time.Sleep(1 * time.Second)
+			runtime.Signal(sfPlugins.JetstreamGlobalSignal, "domains.test", "foo", easyjson.NewJSONObject().GetPtr(), nil)
 		}
 		return nil
 	}

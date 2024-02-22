@@ -165,27 +165,27 @@ func Start() {
 	system.GlobalPrometrics = system.NewPrometrics("", ":9901")
 
 	afterStart := func(runtime *statefun.Runtime) error {
-		/*if TriggersTest {
+		if TriggersTest {
 			RunTriggersTest(runtime)
 		}
 		if RequestReplyTest {
 			RunRequestReplyTest(runtime)
-		}*/
-		/*if CreateSimpleGraphTest {
+		}
+		if CreateSimpleGraphTest {
 			CreateTestGraph(runtime)
-		}*/
+		}
 		return nil
 	}
 
 	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "basic")); err == nil {
-		/*if KVMuticesTest {
+		if KVMuticesTest {
 			KVMuticesSimpleTest(runtime, KVMuticesTestDurationSec, KVMuticesTestWorkers, 2, 1)
-		}*/
+		}
 
 		RegisterFunctionTypes(runtime)
-		/*if TriggersTest {
+		if TriggersTest {
 			registerTriggerFunctions(runtime)
-		}*/
+		}
 		runtime.RegisterOnAfterStartFunction(afterStart)
 		if err := runtime.Start(cache.NewCacheConfig("main_cache")); err != nil {
 			lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s\n", err)
