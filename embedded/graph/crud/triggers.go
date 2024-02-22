@@ -11,25 +11,34 @@ func isVertexAnObject(ctx *sfPlugins.StatefunContextProcessor, id string) bool {
 	return len(findObjectType(ctx, id)) > 0
 }
 
-func executeTriggersFromLLOpStack(ctx *sfPlugins.StatefunContextProcessor, opStack *easyjson.JSON) {
+func executeTriggersFromLLOpStack(ctx *sfPlugins.StatefunContextProcessor, opStack *easyjson.JSON, deletedObjectType string) {
 	if opStack != nil && opStack.IsArray() {
 		for i := 0; i < opStack.ArraySize(); i++ {
 			opData := opStack.ArrayElement(i)
 			opStr := opData.GetByPath("op").AsStringDefault("")
 			if len(opStr) > 0 {
-				for j := 0; j < 3; j++ {
+				for j := 0; j < 4; j++ {
 					if opStr == llAPIVertexCUDNames[j] {
 						vId := opData.GetByPath("id").AsStringDefault("")
-						if len(vId) > 0 && isVertexAnObject(ctx, vId) {
-							var oldBody *easyjson.JSON = nil
-							if opData.PathExists("old_body") {
-								oldBody = opData.GetByPath("old_body").GetPtr()
+						if len(vId) > 0 {
+							objectType := ""
+							if j == 2 {
+								objectType = deletedObjectType
+							} else {
+								objectType = findObjectType(ctx, vId)
 							}
-							var newBody *easyjson.JSON = nil
-							if opData.PathExists("new_body") {
-								newBody = opData.GetByPath("new_body").GetPtr()
+							if len(objectType) > 0 {
+								var oldBody *easyjson.JSON = nil
+								if opData.PathExists("old_body") {
+									oldBody = opData.GetByPath("old_body").GetPtr()
+								}
+								var newBody *easyjson.JSON = nil
+								if opData.PathExists("new_body") {
+									newBody = opData.GetByPath("new_body").GetPtr()
+								}
+								executeObjectTriggers(ctx, vId, objectType, oldBody, newBody, j)
 							}
-							executeObjectTriggers(ctx, vId, oldBody, newBody, j)
+
 						}
 					}
 					if opStr == llAPILinkCUDNames[j] {
@@ -54,9 +63,9 @@ func executeTriggersFromLLOpStack(ctx *sfPlugins.StatefunContextProcessor, opSta
 	}
 }
 
-func executeObjectTriggers(ctx *sfPlugins.StatefunContextProcessor, objectID string, oldObjectBody, newObjectBody *easyjson.JSON, tt int /*0 - create, 1 - update, 2 - delete*/) {
-	triggers := getObjectTypeTriggers(ctx, objectID)
-	if triggers.IsNonEmptyObject() && tt >= 0 && tt < 3 {
+func executeObjectTriggers(ctx *sfPlugins.StatefunContextProcessor, objectID string, objectType string, oldObjectBody, newObjectBody *easyjson.JSON, tt int /*0 - create, 1 - update, 2 - delete, 3 - read*/) {
+	triggers := getTypeTriggers(ctx, objectType)
+	if triggers.IsNonEmptyObject() && tt >= 0 && tt < 4 {
 		elems := []string{"create", "update", "delete"}
 		var functions []string
 		if arr, ok := triggers.GetByPath(elems[tt]).AsArrayString(); ok {
