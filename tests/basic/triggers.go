@@ -62,7 +62,7 @@ func TriggersTestIteration(runtime *statefun.Runtime) {
 
 	// Delete A
 	payload = easyjson.NewJSONObject()
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.create", "a", &payload, nil))
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.delete", "a", &payload, nil))
 
 	// Create A
 	payload = easyjson.NewJSONObjectWithKeyValue("origin_type", easyjson.NewJSON("typea"))
