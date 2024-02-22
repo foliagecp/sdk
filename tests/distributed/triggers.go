@@ -36,35 +36,22 @@ func IsTransactionOperationOk(j *easyjson.JSON, err error) bool {
 }
 
 func initTriggersTest(runtime *statefun.Runtime) {
-	txId := "trt"
-	transactionPayload := easyjson.NewJSONObjectWithKeyValue("clone", easyjson.NewJSON("min"))
-	if IsTransactionOperationOk(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.tx.begin", txId, &transactionPayload, nil)) {
-		// + T:typea --------------------------
-		signalPayload := easyjson.NewJSONObjectWithKeyValue("id", easyjson.NewJSON("hub/typea"))
-		IsTransactionOperationOk(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.tx.type.create", txId, &signalPayload, nil))
-		// ------------------------------------
-		// + T:typeb --------------------------
-		signalPayload = easyjson.NewJSONObjectWithKeyValue("id", easyjson.NewJSON("leaf/typeb"))
-		IsTransactionOperationOk(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.tx.type.create", txId, &signalPayload, nil))
-		// ------------------------------------
-		// + T:typea -> T:typeb ---------------
-		signalPayload = easyjson.NewJSONObjectWithKeyValue("object_type", easyjson.NewJSON("a2b"))
-		signalPayload.SetByPath("from", easyjson.NewJSON("hub/typea"))
-		signalPayload.SetByPath("to", easyjson.NewJSON("leaf/typeb"))
-		IsTransactionOperationOk(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.tx.types.link.create", txId, &signalPayload, nil))
-		// ------------------------------------
-		IsTransactionOperationOk(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.tx.commit", txId, nil, nil))
-	}
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.create", "typea", nil, nil))
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.create", "typeb", nil, nil))
+
+	v := easyjson.NewJSONObjectWithKeyValue("to", easyjson.NewJSON("typeb"))
+	v.SetByPath("object_type", easyjson.NewJSON("a2b"))
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.types.link.create", "typea", &v, nil))
 }
 
 func TriggersTestIteration(runtime *statefun.Runtime) {
 	// Create A
-	payload := easyjson.NewJSONObjectWithKeyValue("origin_type", easyjson.NewJSON("hub/typea"))
+	payload := easyjson.NewJSONObjectWithKeyValue("origin_type", easyjson.NewJSON("typea"))
 	payload.SetByPath("body", easyjson.NewJSONObjectWithKeyValue("a_state", easyjson.NewJSON("created")))
 	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.create", "hub/a", &payload, nil))
 
 	// Create B
-	payload = easyjson.NewJSONObjectWithKeyValue("origin_type", easyjson.NewJSON("leaf/typeb"))
+	payload = easyjson.NewJSONObjectWithKeyValue("origin_type", easyjson.NewJSON("typeb"))
 	payload.SetByPath("body", easyjson.NewJSONObjectWithKeyValue("b_state", easyjson.NewJSON("created")))
 	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.create", "leaf/b", &payload, nil))
 
@@ -73,8 +60,12 @@ func TriggersTestIteration(runtime *statefun.Runtime) {
 	payload.SetByPath("body", easyjson.NewJSONObjectWithKeyValue("ab_state", easyjson.NewJSON("created")))
 	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.objects.link.create", "hub/a", &payload, nil))
 
+	// Delete A
+	payload = easyjson.NewJSONObject()
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.delete", "hub/a", &payload, nil))
+
 	// Create A
-	payload = easyjson.NewJSONObjectWithKeyValue("origin_type", easyjson.NewJSON("hub/typea"))
+	payload = easyjson.NewJSONObjectWithKeyValue("origin_type", easyjson.NewJSON("typea"))
 	payload.SetByPath("body", easyjson.NewJSONObjectWithKeyValue("a_state", easyjson.NewJSON("recreated")))
 	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.create", "hub/a", &payload, nil))
 
@@ -108,34 +99,34 @@ func TriggersTestIteration(runtime *statefun.Runtime) {
 func registerTriggers1(runtime *statefun.Runtime) {
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("body.triggers.create", easyjson.JSONFromArray([]string{triggersTestStatefun1}))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.update", "hub/typea", &payload, nil))
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.update", "typea", &payload, nil))
 
 	payload = easyjson.NewJSONObject()
 	payload.SetByPath("body.triggers.update", easyjson.JSONFromArray([]string{triggersTestStatefun1}))
 	payload.SetByPath("body.triggers.delete", easyjson.JSONFromArray([]string{triggersTestStatefun1}))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.update", "leaf/typeb", &payload, nil))
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.update", "typeb", &payload, nil))
 
 	payload = easyjson.NewJSONObject()
-	payload.SetByPath("to", easyjson.NewJSON("leaf/typeb"))
+	payload.SetByPath("to", easyjson.NewJSON("typeb"))
 	payload.SetByPath("body.triggers.update", easyjson.JSONFromArray([]string{triggersTestStatefun1}))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.types.link.update", "hub/typea", &payload, nil))
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.types.link.update", "typea", &payload, nil))
 }
 
 func registerTriggers2(runtime *statefun.Runtime) {
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("body.triggers.update", easyjson.JSONFromArray([]string{triggersTestStatefun1}))
 	payload.SetByPath("body.triggers.delete", easyjson.JSONFromArray([]string{triggersTestStatefun1}))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.update", "hub/typea", &payload, nil))
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.update", "typea", &payload, nil))
 
 	payload = easyjson.NewJSONObject()
 	payload.SetByPath("body.triggers.create", easyjson.JSONFromArray([]string{triggersTestStatefun1}))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.update", "leaf/typeb", &payload, nil))
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.update", "typeb", &payload, nil))
 
 	payload = easyjson.NewJSONObject()
-	payload.SetByPath("to", easyjson.NewJSON("leaf/typeb"))
+	payload.SetByPath("to", easyjson.NewJSON("typeb"))
 	payload.SetByPath("body.triggers.create", easyjson.JSONFromArray([]string{triggersTestStatefun1}))
 	payload.SetByPath("body.triggers.delete", easyjson.JSONFromArray([]string{triggersTestStatefun1}))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.types.link.update", "hub/typea", &payload, nil))
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.types.link.update", "typea", &payload, nil))
 }
 
 func registerTriggers3(runtime *statefun.Runtime) {
@@ -143,20 +134,20 @@ func registerTriggers3(runtime *statefun.Runtime) {
 	payload.SetByPath("body.triggers.create", easyjson.JSONFromArray([]string{triggersTestStatefun2}))
 	payload.SetByPath("body.triggers.update", easyjson.JSONFromArray([]string{triggersTestStatefun2}))
 	payload.SetByPath("body.triggers.delete", easyjson.JSONFromArray([]string{triggersTestStatefun2}))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.update", "hub/typea", &payload, nil))
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.update", "typea", &payload, nil))
 
 	payload = easyjson.NewJSONObject()
 	payload.SetByPath("body.triggers.create", easyjson.JSONFromArray([]string{triggersTestStatefun2}))
 	payload.SetByPath("body.triggers.update", easyjson.JSONFromArray([]string{triggersTestStatefun2}))
 	payload.SetByPath("body.triggers.delete", easyjson.JSONFromArray([]string{triggersTestStatefun2}))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.update", "leaf/typeb", &payload, nil))
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.update", "typeb", &payload, nil))
 
 	payload = easyjson.NewJSONObject()
-	payload.SetByPath("to", easyjson.NewJSON("leaf/typeb"))
+	payload.SetByPath("to", easyjson.NewJSON("typeb"))
 	payload.SetByPath("body.triggers.create", easyjson.JSONFromArray([]string{triggersTestStatefun2}))
 	payload.SetByPath("body.triggers.update", easyjson.JSONFromArray([]string{triggersTestStatefun2}))
 	payload.SetByPath("body.triggers.delete", easyjson.JSONFromArray([]string{triggersTestStatefun2}))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.types.link.update", "hub/typea", &payload, nil))
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.types.link.update", "typea", &payload, nil))
 }
 
 func triggersStatefun1(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
