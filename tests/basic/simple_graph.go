@@ -12,7 +12,7 @@ import (
 func CreateTestGraph(runtime *statefun.Runtime) {
 	lg.Logln(lg.DebugLevel, ">>> Test started: simple graph creation")
 
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", "root", easyjson.NewJSONObject().GetPtr(), nil))
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", "rt", easyjson.NewJSONObject().GetPtr(), nil))
 	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", "a", easyjson.NewJSONObject().GetPtr(), nil))
 	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", "b", easyjson.NewJSONObject().GetPtr(), nil))
 	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", "c", easyjson.NewJSONObject().GetPtr(), nil))
@@ -29,28 +29,28 @@ func CreateTestGraph(runtime *statefun.Runtime) {
 	v.SetByPath("type", easyjson.NewJSON("type1"))
 	v.SetByPath("tags", easyjson.JSONFromArray([]string{"t1", "t2"}))
 	v.SetByPath("name", easyjson.NewJSON("2a"))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", "root", &v, nil))
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", "rt", &v, nil))
 
 	v = easyjson.NewJSONObject()
 	v.SetByPath("to", easyjson.NewJSON("a"))
 	v.SetByPath("type", easyjson.NewJSON("type2"))
 	v.SetByPath("tags", easyjson.JSONFromArray([]string{"t2", "t4"}))
 	v.SetByPath("name", easyjson.NewJSON("2a"))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", "root", &v, nil))
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", "rt", &v, nil))
 
 	v = easyjson.NewJSONObject()
 	v.SetByPath("to", easyjson.NewJSON("b"))
 	v.SetByPath("type", easyjson.NewJSON("type2"))
 	v.SetByPath("tags", easyjson.JSONFromArray([]string{"t2"}))
 	v.SetByPath("name", easyjson.NewJSON("2b"))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", "root", &v, nil))
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", "rt", &v, nil))
 
 	v = easyjson.NewJSONObject()
 	v.SetByPath("to", easyjson.NewJSON("c"))
 	v.SetByPath("type", easyjson.NewJSON("type1"))
 	v.SetByPath("tags", easyjson.NewJSONObject())
 	v.SetByPath("name", easyjson.NewJSON("2c"))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", "root", &v, nil))
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", "rt", &v, nil))
 
 	v = easyjson.NewJSONObject()
 	v.SetByPath("to", easyjson.NewJSON("e"))
