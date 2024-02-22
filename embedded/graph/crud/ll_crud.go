@@ -14,6 +14,10 @@ import (
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
+const (
+	noLinkIdentifierMsg = "link identifier is not defined, or link does not exist"
+)
+
 /*
 Creates a vertex in the graph with an id the function being called with.
 
@@ -401,7 +405,7 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	if s, ok := getLinkNameFromSpecifiedIdentifier(ctx); ok {
 		linkName = s
 	} else {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link identifier is not defined"))).Reply()
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf(noLinkIdentifierMsg))).Reply()
 		return
 	}
 
@@ -518,7 +522,7 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if s, ok := getLinkNameFromSpecifiedIdentifier(ctx); ok {
 			linkName = s
 		} else {
-			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link identifier is not defined"))).Reply()
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf(noLinkIdentifierMsg))).Reply()
 			return
 		}
 
@@ -610,7 +614,7 @@ func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 	if s, ok := getLinkNameFromSpecifiedIdentifier(ctx); ok {
 		linkName = s
 	} else {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link identifier is not defined"))).Reply()
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf(noLinkIdentifierMsg))).Reply()
 		return
 	}
 
