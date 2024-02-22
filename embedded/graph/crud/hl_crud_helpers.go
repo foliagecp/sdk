@@ -183,13 +183,13 @@ func cmdbSchemaPrepare(runtime *statefun.Runtime) error {
 	v := easyjson.NewJSONObject()
 	v.SetByPath("to", easyjson.NewJSON(BUILT_IN_TYPES))
 	v.SetByPath("type", easyjson.NewJSON(TYPES_TYPELINK))
-	v.SetByPath("name", easyjson.NewJSON(runtime.Domain.CreateObjectIDWithHubDomainIfndef(BUILT_IN_TYPES)))
+	v.SetByPath("name", easyjson.NewJSON(runtime.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false)))
 	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", BUILT_IN_ROOT, &v, nil))
 
 	v = easyjson.NewJSONObject()
 	v.SetByPath("to", easyjson.NewJSON(BUILT_IN_OBJECTS))
 	v.SetByPath("type", easyjson.NewJSON(OBJECTS_TYPELINK))
-	v.SetByPath("name", easyjson.NewJSON(runtime.Domain.CreateObjectIDWithHubDomainIfndef(BUILT_IN_OBJECTS)))
+	v.SetByPath("name", easyjson.NewJSON(runtime.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false)))
 	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", BUILT_IN_ROOT, &v, nil))
 	// ----------------------------------------------------
 

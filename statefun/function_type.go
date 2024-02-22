@@ -64,27 +64,7 @@ func (ft *FunctionType) SetExecutor(alias string, content string, constructor fu
 }
 
 func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
-	id := ft.runtime.Domain.CreateObjectIDWithThisDomainIfndef(originId)
-
-	/*// After message was received do typename balance if the one is needed and hasn't been done yet -------
-	if ft.config.balanceNeeded {
-		if !ft.config.balanced {
-			var err error
-			ft.typenameLockRevisionID, err = FunctionTypeMutexLock(ft, true)
-			if err != nil {
-				lg.Logf(lg.WarnLevel, "function with type %s has received a message, but this typename was already locked! Skipping message...\n", ft.name)
-				// Preventing from rapidly calling this function over and over again if no function
-				// in other runtime that can handle this message and kv mutex is already dead
-				time.Sleep(time.Duration(ft.config.msgAckWaitMs/2) * time.Millisecond) // Sleep duration must be guarantee less than msgAckWaitMs, otherwise may miss doing Nak (via RefusalCallback) in time
-				if msg.RefusalCallback != nil {
-					msg.RefusalCallback()
-				}
-				return
-			}
-			ft.config.balanced = true
-		}
-	}
-	// ----------------------------------------------------------------------------------------------------*/
+	id := ft.runtime.Domain.CreateObjectIDWithThisDomain(originId, false)
 
 	ft.idKeyMutex.Lock(id)
 	// Send msg to type id handler ------------------------------------------------------
@@ -171,19 +151,6 @@ func (ft *FunctionType) idHandlerRoutine(id string, msgChannel chan FunctionType
 }
 
 func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameIDContextProcessor *sfPlugins.StatefunContextProcessor) {
-	/*var lockRevisionID uint64 = 0
-
-	if !ft.config.balanceNeeded { // Use context mutex lock if function type is not typename balanced
-		var err error
-		lockRevisionID, err = ContextMutexLock(ft, id, false)
-		if err != nil {
-			if msg.RefusalCallback != nil {
-				msg.RefusalCallback()
-			}
-			return
-		}
-	}*/
-
 	msgRequestCallback := msg.RequestCallback
 	replyDataChannel := make(chan *easyjson.JSON, 1)
 	if msgRequestCallback != nil {
@@ -285,9 +252,6 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 		msgRequestCallback(replyData)
 	}
 
-	/*if !ft.config.balanceNeeded { // Use context mutex lock if function type is not typename balanced
-		system.MsgOnErrorReturn(ContextMutexUnlock(ft, id, lockRevisionID))
-	}*/
 	atomic.StoreInt64(&ft.runtime.glce, time.Now().UnixNano())
 }
 
@@ -331,10 +295,6 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 	})
 	if garbageCollected > 0 && handlersRunning == 0 {
 		lg.Logf(lg.TraceLevel, ">>>>>>>>>>>>>> Garbage collected for typename %s - no id handlers left\n", ft.name)
-		/*if ft.config.balanced {
-			ft.config.balanced = false
-			system.MsgOnErrorReturn(FunctionTypeMutexUnlock(ft, ft.typenameLockRevisionID))
-		}*/
 	}
 
 	return
