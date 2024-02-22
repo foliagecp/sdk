@@ -34,7 +34,6 @@ var (
 func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 	// High-Level API Helpers
 	statefun.NewFunctionType(runtime, "functions.cmdb.api.delete_object_filtered_out_links", DeleteObjectFilteredOutLinksStatefun, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetAllowedSignalProviders().SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.get_object_type_triggers", GetObjectTypeTriggersStatefun, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetAllowedSignalProviders().SetMaxIdHandlers(-1))
 	statefun.NewFunctionType(runtime, "functions.cmdb.api.find_object_type", FindObjectTypeStatefun, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetAllowedSignalProviders().SetMaxIdHandlers(-1))
 	statefun.NewFunctionType(runtime, "functions.cmdb.api.find_type_objects", FindTypeObjectsStatefun, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetAllowedSignalProviders().SetMaxIdHandlers(-1))
 
