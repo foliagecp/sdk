@@ -264,7 +264,7 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 /*
 	{
 		"to": string,
-		"name": string,
+		"name": string, // optional, "to" will be used if not defined
 		"body": json
 	}
 
@@ -282,8 +282,7 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	linkName, ok := ctx.Payload.GetByPath("name").AsString()
 	if !ok {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed("'name' undefined")).Reply()
-		return
+		linkName = objectToID
 	}
 
 	linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, ctx.Self.ID, objectToID)
