@@ -78,22 +78,6 @@ func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfP
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
-func GetObjectTypeTriggersStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	om := sfMediators.NewOpMediator(ctx)
-
-	typeName := findObjectType(ctx, ctx.Self.ID)
-	if len(typeName) > 0 {
-		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", typeName, nil, nil)))
-		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_OK {
-			om.AggregateOpMsg(sfMediators.OpMsgOk(om.GetLastSyncOp().Data.GetByPath("body.triggers")))
-		}
-	} else {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed("invalid object's typename"))
-	}
-
-	om.Reply()
-}
-
 func FindObjectTypeStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -130,10 +114,10 @@ func FindTypeObjectsStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Statef
 
 // ------------------------------------------------------------------------------------------------
 
-func getObjectTypeTriggers(ctx *sfPlugins.StatefunContextProcessor, objectID string) *easyjson.JSON {
-	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.get_object_type_triggers", objectID, nil, nil))
+func getTypeTriggers(ctx *sfPlugins.StatefunContextProcessor, typeName string) *easyjson.JSON {
+	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", typeName, nil, nil))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
-		return &som.Data
+		return som.Data.GetByPath("body.triggers").GetPtr()
 	}
 	return easyjson.NewJSONObject().GetPtr()
 }
