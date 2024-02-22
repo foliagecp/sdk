@@ -52,12 +52,9 @@ type Domain interface {
 	Cache() *cache.Store
 	GetDomainFromObjectID(objectID string) string
 	GetObjectIDWithoutDomain(objectID string) string
-	// Will not change domain for objectID if exists, for replace guarantee use GetObjectIDWithoutDomain on objectID
-	CreateObjectIDWithDomainIfndef(domain string, objectID string) string
-	// Will not change domain in objectID if exists, for replace guarantee use GetObjectIDWithoutDomain on objectID
-	CreateObjectIDWithThisDomainIfndef(objectID string) string
-	// Will not change domain in objectID if exists, for replace guarantee use GetObjectIDWithoutDomain on objectID
-	CreateObjectIDWithHubDomainIfndef(objectID string) string
+	CreateObjectIDWithDomain(domain string, objectID string, domainReplace bool) string
+	CreateObjectIDWithThisDomain(objectID string, domainReplace bool) string
+	CreateObjectIDWithHubDomain(objectID string, domainReplace bool) string
 }
 
 type StatefunContextProcessor struct {

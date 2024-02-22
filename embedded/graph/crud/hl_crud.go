@@ -17,8 +17,8 @@ import (
 func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
 
-	thisType := ctx.Domain.CreateObjectIDWithHubDomainIfndef(ctx.Domain.GetObjectIDWithoutDomain(ctx.Self.ID))
-	typesVertexId := ctx.Domain.CreateObjectIDWithHubDomainIfndef(BUILT_IN_TYPES)
+	thisType := ctx.Domain.CreateObjectIDWithHubDomain(ctx.Self.ID, true)
+	typesVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false)
 
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", thisType, ctx.Payload, nil)))
 	if om.GetStatus() == sfMediators.SYNC_OP_STATUS_INCOMPLETE || om.GetStatus() == sfMediators.SYNC_OP_STATUS_FAILED {
@@ -83,7 +83,7 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("origin_type is not defined"))).Reply()
 		return
 	}
-	originType = ctx.Domain.CreateObjectIDWithHubDomainIfndef(ctx.Domain.GetObjectIDWithoutDomain(originType))
+	originType = ctx.Domain.CreateObjectIDWithHubDomain(originType, true)
 	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", ctx.Self.ID, ctx.Payload, &options)))
 
@@ -98,7 +98,7 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 		}
 
 		needLinks := []_link{
-			{from: ctx.Domain.CreateObjectIDWithHubDomainIfndef(BUILT_IN_OBJECTS), to: ctx.Self.ID, name: ctx.Self.ID, lt: OBJECT_TYPELINK},
+			{from: ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false), to: ctx.Self.ID, name: ctx.Self.ID, lt: OBJECT_TYPELINK},
 			{from: ctx.Self.ID, name: originType, to: originType, lt: TYPE_TYPELINK},
 			{from: originType, name: ctx.Self.ID, to: ctx.Self.ID, lt: OBJECT_TYPELINK},
 		}
@@ -176,14 +176,14 @@ func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		return
 	}
 
-	fromType := ctx.Domain.CreateObjectIDWithHubDomainIfndef(ctx.Domain.GetObjectIDWithoutDomain(ctx.Self.ID))
+	fromType := ctx.Domain.CreateObjectIDWithHubDomain(ctx.Self.ID, true)
 
 	toType, ok := ctx.Payload.GetByPath("to").AsString()
 	if !ok {
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
-	toType = ctx.Domain.CreateObjectIDWithHubDomainIfndef(toType)
+	toType = ctx.Domain.CreateObjectIDWithHubDomain(toType, false)
 
 	link := easyjson.NewJSONObject()
 	link.SetByPath("to", easyjson.NewJSON(toType))
@@ -208,7 +208,7 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
-	toType = ctx.Domain.CreateObjectIDWithHubDomainIfndef(toType)
+	toType = ctx.Domain.CreateObjectIDWithHubDomain(toType, false)
 
 	link := ctx.Payload.Clone()
 	link.SetByPath("to", easyjson.NewJSON(toType))
@@ -231,7 +231,7 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
-	toType = ctx.Domain.CreateObjectIDWithHubDomainIfndef(ctx.Domain.GetObjectIDWithoutDomain(toType))
+	toType = ctx.Domain.CreateObjectIDWithHubDomain(toType, true)
 
 	originLinkType, err := getObjectsLinkTypeFromTypesLink(ctx, ctx.Self.ID, toType)
 	if err != nil {
@@ -280,7 +280,7 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
-	objectToID = ctx.Domain.CreateObjectIDWithThisDomainIfndef(objectToID)
+	objectToID = ctx.Domain.CreateObjectIDWithThisDomain(objectToID, false)
 
 	linkName, ok := ctx.Payload.GetByPath("name").AsString()
 	if !ok {
@@ -322,7 +322,7 @@ func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
-	objectToID = ctx.Domain.CreateObjectIDWithThisDomainIfndef(objectToID)
+	objectToID = ctx.Domain.CreateObjectIDWithThisDomain(objectToID, false)
 
 	linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, ctx.Self.ID, objectToID)
 	if err != nil {
@@ -357,7 +357,7 @@ func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
-	objectToID = ctx.Domain.CreateObjectIDWithThisDomainIfndef(objectToID)
+	objectToID = ctx.Domain.CreateObjectIDWithThisDomain(objectToID, false)
 
 	linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, ctx.Self.ID, objectToID)
 	if err != nil {

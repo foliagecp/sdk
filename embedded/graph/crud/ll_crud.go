@@ -291,7 +291,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("to is not defined"))).Reply()
 			return
 		}
-		toId = ctx.Domain.CreateObjectIDWithThisDomainIfndef(toId)
+		toId = ctx.Domain.CreateObjectIDWithThisDomain(toId, false)
 
 		var linkName string
 		if s, ok := payload.GetByPath("name").AsString(); ok {

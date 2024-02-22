@@ -125,19 +125,20 @@ func (s *Domain) GetObjectIDWithoutDomain(objectID string) string {
 	return id
 }
 
-func (s *Domain) CreateObjectIDWithDomainIfndef(domain string, objectID string) string {
-	if s.GetObjectIDWithoutDomain(objectID) != objectID {
-		return objectID
+func (s *Domain) CreateObjectIDWithDomain(domain string, objectID string, domainReplace bool) (dmObjectID string) {
+	dmObjectID = objectID
+	if domainReplace || s.GetObjectIDWithoutDomain(objectID) == objectID {
+		dmObjectID = domain + ObjectIDDomainSeparator + s.GetObjectIDWithoutDomain(objectID)
 	}
-	return domain + ObjectIDDomainSeparator + s.GetObjectIDWithoutDomain(objectID)
+	return
 }
 
-func (s *Domain) CreateObjectIDWithThisDomainIfndef(objectID string) string {
-	return s.CreateObjectIDWithDomainIfndef(s.name, objectID)
+func (s *Domain) CreateObjectIDWithThisDomain(objectID string, domainReplace bool) string {
+	return s.CreateObjectIDWithDomain(s.name, objectID, domainReplace)
 }
 
-func (s *Domain) CreateObjectIDWithHubDomainIfndef(objectID string) string {
-	return s.CreateObjectIDWithDomainIfndef(s.hubDomainName, objectID)
+func (s *Domain) CreateObjectIDWithHubDomain(objectID string, domainReplace bool) string {
+	return s.CreateObjectIDWithDomain(s.hubDomainName, objectID, domainReplace)
 }
 
 func (s *Domain) start(cacheConfig *cache.Config) error {
