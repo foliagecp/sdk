@@ -1,5 +1,7 @@
 // Copyright 2023 NJWS Inc.
 
+//go:build cgo
+
 package js
 
 import (
