@@ -288,13 +288,13 @@ func (s *Domain) createRouter(sourceStreamName string, subject string, tsc targe
 				pubAck, err := s.js.Publish(targetSubject, msg.Data)
 				if err == nil {
 					lg.Logf(lg.TraceLevel, "Routed (from_domain=%s) %s:%s -> (to_domain=%s) %s:%s\n", s.name, sourceStreamName, msg.Subject, pubAck.Domain, pubAck.Stream, targetSubject)
-					msg.Ack()
+					system.MsgOnErrorReturn(msg.Ack())
 					return
 				} else {
 					lg.Logf(lg.ErrorLevel, "Domain (domain=%s) router with sourceStreamName=%s cannot republish message: %s\n", s.name, sourceStreamName, err)
 				}
 			}
-			msg.Nak()
+			system.MsgOnErrorReturn(msg.Nak())
 		},
 		nats.Bind(sourceStreamName, consumerName),
 		nats.ManualAck(),

@@ -50,9 +50,7 @@ func (s KeyMutex) Lock(key interface{}) {
 	if mm != &m {
 		mm.Unlock()
 		s.Lock(key)
-		return
 	}
-	return
 }
 
 func CreateDimSizeChannel[T interface{}](maxBufferElements int, onBufferOverflow func()) (in chan T, out chan T) {

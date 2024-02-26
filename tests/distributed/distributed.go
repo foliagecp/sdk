@@ -44,30 +44,30 @@ func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 			ctx.Self.ID,
 		)
 		if functionDomain == hubDomain { // Function on HUB
-			ctx.Signal(
+			system.MsgOnErrorReturn(ctx.Signal(
 				sfPlugins.JetstreamGlobalSignal,
 				ctx.Self.Typename,
 				ctx.Domain.CreateObjectIDWithDomain("leaf", ctx.Self.ID+"A", true),
 				ctx.Payload,
 				ctx.Options,
-			)
+			))
 		} else { // Function on LEAF
 			if callerDomain == hubDomain { // from HUB
-				ctx.Signal(
+				system.MsgOnErrorReturn(ctx.Signal(
 					sfPlugins.JetstreamGlobalSignal,
 					ctx.Self.Typename,
 					ctx.Domain.CreateObjectIDWithDomain("leaf", ctx.Self.ID+"B", true),
 					ctx.Payload,
 					ctx.Options,
-				)
+				))
 			} else { // from LEAF
-				ctx.Request(
+				system.MsgOnErrorReturn(ctx.Request(
 					sfPlugins.NatsCoreGlobalRequest,
 					ctx.Self.Typename,
 					ctx.Domain.CreateObjectIDWithHubDomain(ctx.Self.ID+"C", true),
 					ctx.Payload,
 					ctx.Options,
-				)
+				))
 			}
 		}
 	} else { // Request came
@@ -80,13 +80,13 @@ func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 			ctx.Self.ID,
 		)
 		if functionDomain == hubDomain { // Function on HUB
-			ctx.Request(
+			system.MsgOnErrorReturn(ctx.Request(
 				sfPlugins.NatsCoreGlobalRequest,
 				ctx.Self.Typename,
 				ctx.Domain.CreateObjectIDWithDomain("leaf", ctx.Self.ID+"D", true),
 				ctx.Payload,
 				ctx.Options,
-			)
+			))
 		}
 	}
 }
@@ -112,7 +112,7 @@ func Start() {
 				CreateTestGraph(runtime)
 			}
 			time.Sleep(1 * time.Second)
-			runtime.Signal(sfPlugins.JetstreamGlobalSignal, "domains.test", "foo", easyjson.NewJSONObject().GetPtr(), nil)
+			system.MsgOnErrorReturn(runtime.Signal(sfPlugins.JetstreamGlobalSignal, "domains.test", "foo", easyjson.NewJSONObject().GetPtr(), nil))
 		}
 		return nil
 	}

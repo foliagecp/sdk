@@ -154,7 +154,7 @@ func (r *Runtime) Start(cacheConfig *cache.Config) (err error) {
 				system.MsgOnErrorReturn(f(r))
 			}(onAfterStartFuncWithMode.f)
 		} else {
-			onAfterStartFuncWithMode.f(r)
+			system.MsgOnErrorReturn(onAfterStartFuncWithMode.f(r))
 		}
 	}
 

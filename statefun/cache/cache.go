@@ -328,7 +328,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 									//lg.Logf("---CACHE_KV TF DELETE: %s, %d, %d\n", key, kvRecordTime, appendFlag)
 
 									//system.MsgOnErrorReturn(kv.Delete(entry.Key()))
-									customNatsKv.DeleteKeyValueValue(cs.js, cs.kv, entry.Key())
+									system.MsgOnErrorReturn(customNatsKv.DeleteKeyValueValue(cs.js, cs.kv, entry.Key()))
 
 									//cs.rootValue.purgeReady
 									//if csv := cs.getLastKeyCacheStoreValue(key); csv != nil {
@@ -338,7 +338,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 							} else if kvRecordTime == cacheRecordTime { // KV confirmes update
 								if appendFlag == 0 {
 									//system.MsgOnErrorReturn(kv.Delete(entry.Key()))
-									customNatsKv.DeleteKeyValueValue(cs.js, cs.kv, entry.Key())
+									system.MsgOnErrorReturn(customNatsKv.DeleteKeyValueValue(cs.js, cs.kv, entry.Key()))
 								}
 								if csv := cs.getLastKeyCacheStoreValue(key); csv != nil {
 									csv.Lock("storeUpdatesHandler")

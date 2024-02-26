@@ -43,13 +43,13 @@ func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfP
 
 	linkType, ok := ctx.Payload.GetByPath("link_type").AsString()
 	if !ok {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("type is not defined"))).Reply()
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("type is not defined")).Reply()
 		return
 	}
 
 	toObjectType, ok := ctx.Payload.GetByPath("to_object_type").AsString()
 	if !ok {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("to_object_type is not defined"))).Reply()
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("to_object_type is not defined")).Reply()
 		return
 	}
 
@@ -68,7 +68,7 @@ func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfP
 				om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", ctx.Self.ID, &objectLink, ctx.Options)))
 				mergeOpStack(opStack, om.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
 				if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
-					om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr())
+					system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
 					return
 				}
 			}

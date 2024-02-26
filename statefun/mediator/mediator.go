@@ -267,7 +267,7 @@ func (om *OpMediator) ReplyWithData(data *easyjson.JSON) error {
 }
 
 func (om *OpMediator) Reply() {
-	om.ReplyWithData(nil)
+	system.MsgOnErrorReturn(om.ReplyWithData(nil))
 }
 
 func (om *OpMediator) SignalWithAggregation(provider sfPlugins.SignalProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) error {

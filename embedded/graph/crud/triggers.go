@@ -5,6 +5,7 @@ import (
 
 	"github.com/foliagecp/easyjson"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
+	"github.com/foliagecp/sdk/statefun/system"
 )
 
 func isVertexAnObject(ctx *sfPlugins.StatefunContextProcessor, id string) bool {
@@ -83,7 +84,7 @@ func executeObjectTriggers(ctx *sfPlugins.StatefunContextProcessor, objectID str
 		payload.SetByPath(fmt.Sprintf("trigger.object.%s", elems[tt]), triggerData)
 
 		for _, f := range functions {
-			ctx.Signal(sfPlugins.JetstreamGlobalSignal, f, objectID, &payload, nil)
+			system.MsgOnErrorReturn(ctx.Signal(sfPlugins.JetstreamGlobalSignal, f, objectID, &payload, nil))
 		}
 	}
 }
@@ -125,7 +126,7 @@ func executeLinkTriggers(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, 
 		payload.SetByPath(fmt.Sprintf("trigger.link.%s", elems[tt]), triggerData)
 
 		for _, f := range functions {
-			ctx.Signal(sfPlugins.JetstreamGlobalSignal, f, fromObjectId, &payload, nil)
+			system.MsgOnErrorReturn(ctx.Signal(sfPlugins.JetstreamGlobalSignal, f, fromObjectId, &payload, nil))
 		}
 	}
 }
