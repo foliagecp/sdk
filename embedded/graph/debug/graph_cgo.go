@@ -3,28 +3,35 @@
 // Foliage graph store debug package.
 // Provides debug stateful functions for the graph store
 
-//go:build cgo && !darwin
+//go:build (cgo && !darwin) || graph_debug
 
 package debug
 
 import (
-	"container/list"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
-	"math"
 	"path/filepath"
-	"strings"
 
-	"github.com/foliagecp/sdk/embedded/graph/crud"
+	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/statefun/logger"
+	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/goccy/go-graphviz"
 	"github.com/goccy/go-graphviz/cgraph"
 )
 
-type node struct {
-	parent string // parent id
-	id     string
-	lt     string // link type
+type gdNode struct {
+	id    string
+	depth int
+}
+
+type gdEdge struct {
+	from string   // parent vertex id
+	name string   // link name
+	to   string   // child vertex id
+	tp   string   // link type
+	tags []string // link tags
 }
 
 /*
@@ -34,7 +41,6 @@ Algorithm: Sync BFS
 
 	Payload: {
 		"ext": "dot" | "png" | "svg" // optional, default: "dot"
-		"verbose": true | false // optional, default: false
 		"depth": uint // optional, default: 256
 	}
 */
@@ -56,8 +62,7 @@ func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 		}
 	}
 
-	verboseGraph := payload.GetByPath("verbose").AsBoolDefault(true)
-	maxDepth := uint(payload.GetByPath("depth").AsNumericDefault(math.MaxUint8))
+	maxDepth := int(payload.GetByPath("depth").AsNumericDefault(-1))
 
 	gviz := graphviz.New()
 	graph, err := gviz.Graph()
@@ -72,64 +77,69 @@ func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 	}()
 
 	graph = graph.SetSize(500, 500)
+	graph.SetRankSeparator(5)
 
-	if verboseGraph {
-		graph.SetRankSeparator(5)
-	}
+	domainColors := map[string]string{}
 
 	nodes := make(map[string]*cgraph.Node)
+	queue := []gdNode{}
+	queue = append(queue, gdNode{self.ID, 0})
 
-	root := node{
-		id: self.ID,
+	randomHex := func(n int) (string, error) {
+		bytes := make([]byte, n)
+		if _, err := rand.Read(bytes); err != nil {
+			return "", err
+		}
+		return hex.EncodeToString(bytes), nil
 	}
 
-	queue := list.New()
-	queue.PushBack(root)
-	queue.PushBack(nil)
-
-	currentDepth := uint(0)
-	for queue.Len() > 0 {
-		e := queue.Front()
-		node, ok := e.Value.(node)
-
-		queue.Remove(e)
-
+	createGraphDotNodeIfNotExists := func(nodeId string) (*cgraph.Node, error) {
+		dm := ctx.Domain.GetDomainFromObjectID(nodeId)
+		color, ok := domainColors[dm]
 		if !ok {
-			currentDepth++
-			queue.PushBack(nil)
-
-			if queue.Front().Value == nil {
-				break
+			c, err := randomHex(3)
+			if err == nil {
+				color = c
+			} else {
+				color = "ffffff"
 			}
+			domainColors[dm] = color
+		}
 
+		e, exists := nodes[nodeId]
+		if !exists {
+			newElem, err := createNode(graph, nodeId, color)
+			if err == nil {
+				nodes[nodeId] = newElem
+			}
+			return newElem, err
+		}
+		return e, nil
+	}
+
+	for len(queue) > 0 {
+		node := queue[0]
+		queue = queue[1:]
+
+		thisElem, err := createGraphDotNodeIfNotExists(node.id)
+		if err != nil {
+			continue
+		}
+		if maxDepth >= 0 && node.depth >= maxDepth {
 			continue
 		}
 
-		elem, exists := nodes[node.id]
-		if !exists {
-			newElem, err := createNode(graph, node.id)
-			if err != nil {
-				continue
+		for _, edge := range getEdges(ctx, node.id) {
+			if _, ok := nodes[edge.to]; !ok {
+				queue = append(queue, gdNode{edge.to, node.depth + 1})
 			}
-
-			nodes[node.id] = newElem
-			elem = newElem
-		}
-
-		if verboseGraph {
-			addParents(ctx, graph, nodes, elem)
-		}
-
-		if node.parent != "" && node.lt != "" {
-			if _, err := createEdge(graph, node.lt, nodes[node.parent], elem); err != nil {
-				continue
+			if _, ok := nodes[edge.from]; !ok {
+				queue = append(queue, gdNode{edge.from, node.depth + 1})
 			}
-		}
-
-		if currentDepth < maxDepth {
-			for _, n := range getChildren(ctx, node.id) {
-				if _, ok := nodes[n.id]; !ok {
-					queue.PushBack(n)
+			if node.id == edge.from {
+				toElem, err := createGraphDotNodeIfNotExists(edge.to)
+				if err == nil {
+					createEdge(graph, edge, thisElem, toElem)
 				}
 			}
 		}
@@ -143,50 +153,93 @@ func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 	}
 }
 
-func getParents(ctx *sfPlugins.StatefunContextProcessor, id string) []node {
-	pattern := fmt.Sprintf(crud.OutLinkTypeKeyPrefPattern+crud.LinkKeySuff1Pattern, id, ">")
-	parents := ctx.Domain.Cache().GetKeysByPattern(pattern)
+func getEdges(ctx *sfPlugins.StatefunContextProcessor, id string) []gdEdge {
+	var outLinkNames []string
+	var inLinks *easyjson.JSON
 
-	nodes := make([]node, 0, len(parents))
-
-	for _, v := range parents {
-		split := strings.Split(v, ".")
-		if len(split) == 0 {
-			continue
+	payload := easyjson.NewJSONObjectWithKeyValue("details", easyjson.NewJSON(true))
+	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", id, &payload, nil))
+	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
+		if arr, ok := som.Data.GetByPath("links.out.names").AsArrayString(); ok {
+			outLinkNames = arr
 		}
-
-		nodes = append(nodes, node{
-			parent: id,
-			id:     split[len(split)-2],
-			lt:     split[len(split)-1],
-		})
+		inLinks = som.Data.GetByPath("links.in").GetPtr()
+	}
+	if outLinkNames == nil {
+		outLinkNames = []string{}
+	}
+	if inLinks == nil {
+		inLinks = easyjson.NewJSONArray().GetPtr()
 	}
 
-	return nodes
-}
+	edges := []gdEdge{}
 
-func getChildren(ctx *sfPlugins.StatefunContextProcessor, id string) []node {
-	children := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(crud.OutLinkTypeKeyPrefPattern+crud.LinkKeySuff1Pattern, id, ">"))
+	for _, outLinkName := range outLinkNames {
+		lt := ""
+		to := ""
+		var tags []string
 
-	nodes := make([]node, 0, len(children))
-
-	for _, v := range children {
-		split := strings.Split(v, ".")
-		if len(split) == 0 {
-			continue
+		payload := easyjson.NewJSONObjectWithKeyValue("details", easyjson.NewJSON(true))
+		payload.SetByPath("name", easyjson.NewJSON(outLinkName))
+		som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", id, &payload, nil))
+		if som.Status == sfMediators.SYNC_OP_STATUS_OK {
+			lt = som.Data.GetByPath("type").AsStringDefault(lt)
+			to = som.Data.GetByPath("to").AsStringDefault(to)
+			if arr, ok := som.Data.GetByPath("tags").AsArrayString(); ok {
+				tags = arr
+			}
+		}
+		if tags == nil {
+			tags = []string{}
 		}
 
-		nodes = append(nodes, node{
-			parent: id,
-			id:     split[len(split)-1],
-			lt:     split[len(split)-2],
-		})
+		if len(id) > 0 && len(outLinkName) > 0 && len(to) > 0 && len(lt) > 0 {
+			edges = append(edges, gdEdge{
+				from: id,
+				name: outLinkName,
+				to:   to,
+				tp:   lt,
+				tags: tags,
+			})
+		}
 	}
 
-	return nodes
+	for i := 0; i < inLinks.ArraySize(); i++ {
+		inLink := inLinks.ArrayElement(i)
+		from := inLink.GetByPath("from").AsStringDefault("")
+		linkName := inLink.GetByPath("name").AsStringDefault("")
+
+		lt := ""
+		var tags []string
+
+		payload := easyjson.NewJSONObjectWithKeyValue("details", easyjson.NewJSON(true))
+		payload.SetByPath("name", easyjson.NewJSON(linkName))
+		som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", from, &payload, nil))
+		if som.Status == sfMediators.SYNC_OP_STATUS_OK {
+			lt = som.Data.GetByPath("type").AsStringDefault(lt)
+			if arr, ok := som.Data.GetByPath("tags").AsArrayString(); ok {
+				tags = arr
+			}
+		}
+		if tags == nil {
+			tags = []string{}
+		}
+
+		if len(from) > 0 && len(linkName) > 0 && len(id) > 0 && len(lt) > 0 {
+			edges = append(edges, gdEdge{
+				from: from,
+				name: linkName,
+				to:   id,
+				tp:   lt,
+				tags: tags,
+			})
+		}
+	}
+
+	return edges
 }
 
-func createNode(graph *cgraph.Graph, name string) (*cgraph.Node, error) {
+func createNode(graph *cgraph.Graph, name string, colorStr string) (*cgraph.Node, error) {
 	node, err := graph.CreateNode(name)
 	if err != nil {
 		return nil, err
@@ -196,39 +249,20 @@ func createNode(graph *cgraph.Graph, name string) (*cgraph.Node, error) {
 	node.SetArea(1)
 	node.SetShape(cgraph.BoxShape)
 	node.SetFontSize(24)
+	node.SetColor(fmt.Sprintf("#%s", colorStr))
+	node.SetStyle(cgraph.FilledNodeStyle)
 
 	return node, nil
 }
 
-func createEdge(graph *cgraph.Graph, name string, start, end *cgraph.Node) (*cgraph.Edge, error) {
-	edge, err := graph.CreateEdge(name, start, end)
+func createEdge(graph *cgraph.Graph, e gdEdge, start, end *cgraph.Node) (*cgraph.Edge, error) {
+	edge, err := graph.CreateEdge(e.name, start, end)
 	if err != nil {
 		return nil, err
 	}
 
-	edge.SetLabel(name)
+	edge.SetLabel(fmt.Sprintf("%s\ntype:%s\ntags:%v", e.name, e.tp, e.tags))
 	edge.SetFontSize(18)
 
 	return edge, nil
-}
-
-func addParents(ctx *sfPlugins.StatefunContextProcessor, g *cgraph.Graph, allNodes map[string]*cgraph.Node, root *cgraph.Node) {
-	rootID := root.Name()
-
-	for _, parentNode := range getParents(ctx, rootID) {
-		parent, exists := allNodes[parentNode.id]
-		if !exists {
-			newElem, err := createNode(g, parentNode.id)
-			if err != nil {
-				continue
-			}
-
-			allNodes[parentNode.id] = newElem
-			parent = newElem
-		}
-
-		if _, err := createEdge(g, parentNode.lt, parent, root); err != nil {
-			continue
-		}
-	}
 }
