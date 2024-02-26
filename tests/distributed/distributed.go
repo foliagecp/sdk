@@ -8,7 +8,6 @@ import (
 	"github.com/foliagecp/easyjson"
 	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
 
-	// Comment out and no not use graphDebug for resolving the cgo conflict between go-graphviz and rogchap (when --ldflags '-extldflags "-Wl,--allow-multiple-definition"' does not help)
 	graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
 	"github.com/foliagecp/sdk/embedded/graph/jpgql"
 
