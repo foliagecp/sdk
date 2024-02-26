@@ -66,6 +66,6 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 	statefun.NewFunctionType(runtime, llAPILinkCUDNames[3], LLAPILinkRead, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
 
 	if runtime.Domain.Name() == runtime.Domain.HubDomainName() {
-		runtime.RegisterOnAfterStartFunction(cmdbSchemaPrepare)
+		runtime.RegisterOnAfterStartFunction(cmdbSchemaPrepare, false)
 	}
 }
