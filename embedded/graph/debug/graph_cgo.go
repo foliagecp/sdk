@@ -3,8 +3,7 @@
 // Foliage graph store debug package.
 // Provides debug stateful functions for the graph store
 
-//go:build cgo
-// +build cgo
+//go:build cgo && !darwin
 
 package debug
 
