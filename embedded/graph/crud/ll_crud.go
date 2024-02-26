@@ -199,7 +199,7 @@ Reads and returns vertice's body.
 Request:
 
 	payload: json - optional
-		detailed: bool - optional // "false" - (default) only body will be returned, "true" - body and links info will be returned
+		details: bool - optional // "false" - (default) only body will be returned, "true" - body and links info will be returned
 
 	options: json - optional
 		op_stack: bool - optional
@@ -215,9 +215,8 @@ Reply:
 				out: json
 					names: json string array
 				in: json string array
-					{from: string // from vertex id
-					name: string}, // link name
-					{}
+					{from: string, name: string}, // from vertex id; link name
+					...
 			op_stack: json array - optional
 */
 func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
@@ -233,7 +232,7 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	result := easyjson.NewJSONObjectWithKeyValue("body", *ctx.GetObjectContext())
 
-	if ctx.Payload.GetByPath("detailed").AsBoolDefault(false) {
+	if ctx.Payload.GetByPath("details").AsBoolDefault(false) {
 		outLinkNames := []string{}
 		outLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
 		for _, outLinkKey := range outLinkKeys {
@@ -640,7 +639,7 @@ Request:
 		to: string - required if "name" is not defined // ID for descendant object.
 		type: string - required if "name" is not defined // Type of link leading to descendant.
 
-		detailed: bool - optional // "false" - (default) only body will be returned, "true" - body and info will be returned
+		details: bool - optional // "false" - (default) only body will be returned, "true" - body and info will be returned
 
 	options: json - optional
 		op_stack: bool - optional
@@ -654,6 +653,7 @@ Reply:
 			body: json // link's body
 			name: string - optional // link's name
 			type: string - optional // link's type
+			tags: string array - optional // link's tags
 			from: string - optional // link goes out from vertex id
 			to: string - optional // link goes into vertex id
 			op_stack: json array - optional
@@ -692,7 +692,7 @@ func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 	linkType := linkTargetTokens[0]
 	toId := linkTargetTokens[1]
 
-	if ctx.Payload.GetByPath("detailed").AsBoolDefault(false) {
+	if ctx.Payload.GetByPath("details").AsBoolDefault(false) {
 		result.SetByPath("name", easyjson.NewJSON(linkName))
 		result.SetByPath("type", easyjson.NewJSON(linkType))
 		result.SetByPath("from", easyjson.NewJSON(ctx.Self.ID))
