@@ -29,14 +29,15 @@ Request:
 			<key>: <type> - optional // Any additional key and value to be stored in objects's body.
 
 	options: json - optional
-		return_op_stack: bool - optional
+		op_stack: bool - optional
 
 Reply:
 
 	payload: json
 		status: string
-		result: any
-		op_stack: json array - optional
+		details: string
+		data: json
+			op_stack: json array - optional
 */
 func LLAPIVertexCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
@@ -75,14 +76,15 @@ Request:
 		replace: bool - optional // "false" - (default) body and tags will be merged, "true" - body and tags will be replaced
 
 	options: json - optional
-		return_op_stack: bool - optional
+		op_stack: bool - optional
 
 Reply:
 
 	payload: json
 		status: string
-		result: any
-		op_stack: json array - optional
+		details: string
+		data: json
+			op_stack: json array - optional
 */
 func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
@@ -125,14 +127,15 @@ Deletes a vartex with an id the function being called with from the graph and de
 Request:
 
 	options: json - optional
-		return_op_stack: bool - optional
+		op_stack: bool - optional
 
 Reply:
 
 	payload: json
 		status: string
-		result: any
-		op_stack: json array - optional
+		details: string
+		data: json
+			op_stack: json array - optional
 */
 func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
@@ -195,15 +198,27 @@ Reads and returns vertice's body.
 
 Request:
 
+	payload: json - optional
+		detailed: bool - optional // "false" - (default) only body will be returned, "true" - body and links info will be returned
+
 	options: json - optional
-		return_op_stack: bool - optional
+		op_stack: bool - optional
 
 Reply:
 
 	payload: json
 		status: string
-		result: json // Body for object.
-		op_stack: json array - optional
+		details: string
+		data: json
+			body: json // Vertice's body
+			links: json - optional // Vertice's links
+				out: json
+					names: json string array
+				in: json string array
+					{from: string // from vertex id
+					name: string}, // link name
+					{}
+			op_stack: json array - optional
 */
 func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
@@ -216,10 +231,34 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	opStack := getOpStackFromOptions(ctx.Options)
 
-	body := ctx.GetObjectContext()
+	result := easyjson.NewJSONObjectWithKeyValue("body", *ctx.GetObjectContext())
+
+	if ctx.Payload.GetByPath("detailed").AsBoolDefault(false) {
+		outLinkNames := []string{}
+		outLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
+		for _, outLinkKey := range outLinkKeys {
+			linkKeyTokens := strings.Split(outLinkKey, ".")
+			linkName := linkKeyTokens[len(linkKeyTokens)-1]
+			outLinkNames = append(outLinkNames, linkName)
+		}
+		result.SetByPath("links.out.names", easyjson.JSONFromArray(outLinkNames))
+
+		inLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
+		inLinks := easyjson.NewJSONArray()
+		for _, inLinkKey := range inLinkKeys {
+			linkKeyTokens := strings.Split(inLinkKey, ".")
+			linkName := linkKeyTokens[len(linkKeyTokens)-1]
+			linkFromVId := linkKeyTokens[len(linkKeyTokens)-2]
+			inLinkJson := easyjson.NewJSONObjectWithKeyValue("from", easyjson.NewJSON(linkFromVId))
+			inLinkJson.SetByPath("name", easyjson.NewJSON(linkName))
+			inLinks.AddToArray(inLinkJson)
+		}
+		result.SetByPath("links.in", inLinks)
+	}
+
 	addVertexOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, nil, nil)
 
-	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(easyjson.NewJSONObjectWithKeyValue("body", *body).GetPtr(), opStack))).Reply()
+	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(result.GetPtr(), opStack))).Reply()
 }
 
 /*
@@ -240,14 +279,15 @@ Request:
 			in_name: string - required // Creating input link's name
 
 	options: json - optional
-		return_op_stack: bool - optional
+		op_stack: bool - optional
 
 Reply:
 
 	payload: json
 		status: string
-		result: any
-		op_stack: json array - optional
+		details: string
+		data: json
+			op_stack: json array - optional
 */
 func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
@@ -385,14 +425,15 @@ Request:
 			<key>: <type> - optional // Any additional key and value to be stored in link's body.
 
 	options: json - optional
-		return_op_stack: bool - optional
+		op_stack: bool - optional
 
 Reply:
 
 	payload: json
 		status: string
-		result: any
-		op_stack: json array - optional
+		details: string
+		data: json
+			op_stack: json array - optional
 */
 func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
@@ -454,6 +495,9 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	// Set link body --------------------
 	ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName), linkBody.ToBytes(), true, -1, "") // Store link body in KV
 	// ----------------------------------
+	// Index link type ------------------
+	ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff3Pattern, ctx.Self.ID, linkName, "type", linkType), nil, true, -1, "")
+	// ----------------------------------
 	// Index link tags ------------------
 	if payload.GetByPath("tags").IsNonEmptyArray() {
 		if linkTags, ok := payload.GetByPath("tags").AsArrayString(); ok {
@@ -486,14 +530,15 @@ Request:
 		in_name: string - required // Deleting input link's name
 
 	options: json - optional
-		return_op_stack: bool - optional
+		op_stack: bool - optional
 
 Reply:
 
 	payload: json
 		status: string
-		result: any
-		op_stack: json array - optional
+		details: string
+		data: json
+			op_stack: json array - optional
 */
 func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
@@ -595,15 +640,23 @@ Request:
 		to: string - required if "name" is not defined // ID for descendant object.
 		type: string - required if "name" is not defined // Type of link leading to descendant.
 
+		detailed: bool - optional // "false" - (default) only body will be returned, "true" - body and info will be returned
+
 	options: json - optional
-		return_op_stack: bool - optional
+		op_stack: bool - optional
 
 Reply:
 
 	payload: json
 		status: string
-		result: json // Body for link.
-		op_stack: json array - optional
+		details: string
+		data: json
+			body: json // link's body
+			name: string - optional // link's name
+			type: string - optional // link's type
+			from: string - optional // link goes out from vertex id
+			to: string - optional // link goes into vertex id
+			op_stack: json array - optional
 */
 func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
@@ -629,6 +682,8 @@ func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 		return
 	}
 
+	result := easyjson.NewJSONObjectWithKeyValue("body", *linkBody)
+
 	linkTargetStr := string(linkTargetBytes)
 	linkTargetTokens := strings.Split(linkTargetStr, ".")
 	if len(linkTargetTokens) != 2 || len(linkTargetTokens[0]) == 0 || len(linkTargetTokens[1]) == 0 {
@@ -637,7 +692,22 @@ func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 	linkType := linkTargetTokens[0]
 	toId := linkTargetTokens[1]
 
+	if ctx.Payload.GetByPath("detailed").AsBoolDefault(false) {
+		result.SetByPath("name", easyjson.NewJSON(linkName))
+		result.SetByPath("type", easyjson.NewJSON(linkType))
+		result.SetByPath("from", easyjson.NewJSON(ctx.Self.ID))
+		result.SetByPath("to", easyjson.NewJSON(toId))
+
+		tags := []string{}
+		tagKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff3Pattern, ctx.Self.ID, linkName, "tag", ">"))
+		for _, tagKey := range tagKeys {
+			tagKeyTokens := strings.Split(tagKey, ".")
+			tags = append(tags, tagKeyTokens[len(tagKeyTokens)-1])
+		}
+		result.SetByPath("tags", easyjson.JSONFromArray(tags))
+	}
+
 	addLinkOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, toId, linkName, linkType, nil, nil)
 
-	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(easyjson.NewJSONObjectWithKeyValue("body", *linkBody).GetPtr(), opStack))).Reply()
+	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(result.GetPtr(), opStack))).Reply()
 }
