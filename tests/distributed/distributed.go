@@ -5,12 +5,11 @@ package main
 import (
 	"time"
 
-	//"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/easyjson"
 	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
 
 	// Comment out and no not use graphDebug for resolving the cgo conflict between go-graphviz and rogchap (when --ldflags '-extldflags "-Wl,--allow-multiple-definition"' does not help)
-	//graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
+	graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
 	"github.com/foliagecp/sdk/embedded/graph/jpgql"
 
 	statefun "github.com/foliagecp/sdk/statefun"
@@ -97,7 +96,7 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	statefun.NewFunctionType(runtime, "domains.test", TestFunction, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
 
 	graphCRUD.RegisterAllFunctionTypes(runtime)
-	//graphDebug.RegisterAllFunctionTypes(runtime)
+	graphDebug.RegisterAllFunctionTypes(runtime)
 	jpgql.RegisterAllFunctionTypes(runtime)
 }
 
