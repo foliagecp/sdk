@@ -185,7 +185,7 @@ func Start() {
 		if TriggersTest {
 			registerTriggerFunctions(runtime)
 		}
-		runtime.RegisterOnAfterStartFunction(afterStart)
+		runtime.RegisterOnAfterStartFunction(afterStart, true)
 		if err := runtime.Start(cache.NewCacheConfig("main_cache")); err != nil {
 			lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s\n", err)
 		}

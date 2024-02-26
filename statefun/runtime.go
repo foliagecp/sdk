@@ -22,14 +22,19 @@ import (
 
 type OnAfterStartFunction func(runtime *Runtime) error
 
+type onAfterStartFunctionWithMode struct {
+	f     OnAfterStartFunction
+	async bool
+}
+
 type Runtime struct {
 	config RuntimeConfig
 	nc     *nats.Conn
 	js     nats.JetStreamContext
 	Domain *Domain
 
-	registeredFunctionTypes map[string]*FunctionType
-	onAfterStartFunctions   []OnAfterStartFunction
+	registeredFunctionTypes       map[string]*FunctionType
+	onAfterStartFunctionsWithMode []onAfterStartFunctionWithMode
 
 	gt0  int64 // Global time 0 - time of the very first message receving by any function type
 	glce int64 // Global last call ended - time of last call of last function handling id of any function type
@@ -60,9 +65,9 @@ func NewRuntime(config RuntimeConfig) (r *Runtime, err error) {
 	return
 }
 
-func (r *Runtime) RegisterOnAfterStartFunction(f OnAfterStartFunction) {
+func (r *Runtime) RegisterOnAfterStartFunction(f OnAfterStartFunction, async bool) {
 	if f != nil {
-		r.onAfterStartFunctions = append(r.onAfterStartFunctions, f)
+		r.onAfterStartFunctionsWithMode = append(r.onAfterStartFunctionsWithMode, onAfterStartFunctionWithMode{f, async})
 	}
 }
 
@@ -141,12 +146,16 @@ func (r *Runtime) Start(cacheConfig *cache.Config) (err error) {
 
 	go singleInstanceFunctionLocksUpdater(singleInstanceFunctionRevisions)
 
-	for _, onAfterStartFunc := range r.onAfterStartFunctions {
-		go func(f OnAfterStartFunction) {
-			system.GlobalPrometrics.GetRoutinesCounter().Started("runtime_onAfterStart")
-			defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("runtime_onAfterStart")
-			system.MsgOnErrorReturn(f(r))
-		}(onAfterStartFunc)
+	for _, onAfterStartFuncWithMode := range r.onAfterStartFunctionsWithMode {
+		if onAfterStartFuncWithMode.async {
+			go func(f OnAfterStartFunction) {
+				system.GlobalPrometrics.GetRoutinesCounter().Started("runtime_onAfterStart")
+				defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("runtime_onAfterStart")
+				system.MsgOnErrorReturn(f(r))
+			}(onAfterStartFuncWithMode.f)
+		} else {
+			onAfterStartFuncWithMode.f(r)
+		}
 	}
 
 	system.MsgOnErrorReturn(r.runGarbageCellector())
