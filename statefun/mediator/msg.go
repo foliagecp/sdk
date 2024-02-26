@@ -48,7 +48,7 @@ func OpMsgOk(data easyjson.JSON) OpMsg {
 }
 
 func OpMsgIdle(details string) OpMsg {
-	return MakeOpMsg(SYNC_OP_STATUS_OK, details, "", easyjson.NewJSONNull())
+	return MakeOpMsg(SYNC_OP_STATUS_IDLE, details, "", easyjson.NewJSONNull())
 }
 
 func OpMsgIncomplete(details string) OpMsg {
