@@ -34,7 +34,7 @@ payload: json - required
 
 options: json - optional
 
-	return_op_stack: bool - optional
+	op_stack: bool - optional
 */
 func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)

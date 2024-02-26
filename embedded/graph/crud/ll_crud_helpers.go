@@ -10,7 +10,7 @@ import (
 func getOpStackFromOptions(options *easyjson.JSON) *easyjson.JSON {
 	returnOpStack := false
 	if options != nil {
-		returnOpStack = options.GetByPath("return_op_stack").AsBoolDefault(false)
+		returnOpStack = options.GetByPath("op_stack").AsBoolDefault(false)
 	}
 	var opStack *easyjson.JSON = nil
 	if returnOpStack {
