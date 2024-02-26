@@ -1,5 +1,7 @@
 
 
+//go:build cgo
+
 package js
 
 import (
