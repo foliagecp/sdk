@@ -29,7 +29,6 @@ type FunctionType struct {
 	idKeyMutex              system.KeyMutex
 	idHandlersChannel       sync.Map
 	idHandlersLastMsgTime   sync.Map
-	typenameLockRevisionID  uint64
 	executor                *sfPlugins.TypenameExecutorPlugin
 	instancesControlChannel chan struct{}
 	resourceMutex           sync.Mutex

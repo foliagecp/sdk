@@ -12,6 +12,7 @@ import (
 
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
+	"github.com/foliagecp/sdk/statefun/system"
 )
 
 const (
@@ -159,7 +160,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", ctx.Self.ID, &deleteLinkPayload, ctx.Options)))
 		mergeOpStack(opStack, om.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
-			om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr())
+			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
 			return
 		}
 	}
@@ -177,7 +178,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", fromObjectID, &deleteLinkPayload, ctx.Options)))
 		mergeOpStack(opStack, om.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
-			om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr())
+			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
 			return
 		}
 	}
@@ -308,11 +309,11 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 				om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONNull())).Reply()
 				return
 			} else {
-				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("caller id is not defined, no source vertex id"))).Reply()
+				om.AggregateOpMsg(sfMediators.OpMsgFailed("caller id is not defined, no source vertex id")).Reply()
 				return
 			}
 		} else {
-			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("in_name is not defined"))).Reply()
+			om.AggregateOpMsg(sfMediators.OpMsgFailed("in_name is not defined")).Reply()
 			return
 		}
 	} else {
@@ -327,7 +328,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if s, ok := payload.GetByPath("to").AsString(); ok {
 			toId = s
 		} else {
-			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("to is not defined"))).Reply()
+			om.AggregateOpMsg(sfMediators.OpMsgFailed("to is not defined")).Reply()
 			return
 		}
 		toId = ctx.Domain.CreateObjectIDWithThisDomain(toId, false)
@@ -336,7 +337,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if s, ok := payload.GetByPath("name").AsString(); ok {
 			linkName = s
 		} else {
-			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("name is not defined"))).Reply()
+			om.AggregateOpMsg(sfMediators.OpMsgFailed("name is not defined")).Reply()
 			return
 		}
 
@@ -344,7 +345,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if s, ok := payload.GetByPath("type").AsString(); ok {
 			linkType = s
 		} else {
-			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("type is not defined"))).Reply()
+			om.AggregateOpMsg(sfMediators.OpMsgFailed("type is not defined")).Reply()
 			return
 		}
 
@@ -398,7 +399,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		}
 		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, targetId, &nextCallPayload, nil)))
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
-			om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr())
+			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
 			return
 		}
 		// --------------------------------------------------------
@@ -445,7 +446,7 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	if s, ok := getLinkNameFromSpecifiedIdentifier(ctx); ok {
 		linkName = s
 	} else {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf(noLinkIdentifierMsg))).Reply()
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(noLinkIdentifierMsg)).Reply()
 		return
 	}
 
@@ -554,11 +555,11 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 				om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONNull())).Reply()
 				return
 			} else {
-				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("caller id is not defined, no source vertex id"))).Reply()
+				om.AggregateOpMsg(sfMediators.OpMsgFailed("caller id is not defined, no source vertex id")).Reply()
 				return
 			}
 		} else {
-			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("in_name is not defined"))).Reply()
+			om.AggregateOpMsg(sfMediators.OpMsgFailed("in_name is not defined")).Reply()
 			return
 		}
 	} else {
@@ -566,7 +567,7 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if s, ok := getLinkNameFromSpecifiedIdentifier(ctx); ok {
 			linkName = s
 		} else {
-			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf(noLinkIdentifierMsg))).Reply()
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(noLinkIdentifierMsg)).Reply()
 			return
 		}
 
@@ -618,7 +619,7 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		}
 		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, targetId, &nextCallPayload, nil)))
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
-			om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr())
+			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
 			return
 		}
 		// --------------------------------------------------------
@@ -667,7 +668,7 @@ func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 	if s, ok := getLinkNameFromSpecifiedIdentifier(ctx); ok {
 		linkName = s
 	} else {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf(noLinkIdentifierMsg))).Reply()
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(noLinkIdentifierMsg)).Reply()
 		return
 	}
 

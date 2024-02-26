@@ -22,7 +22,6 @@ type FunctionTypeConfig struct {
 	msgChannelSize           int
 	msgAckChannelSize        int
 	balanceNeeded            bool
-	balanced                 bool
 	mutexLifeTimeSec         int
 	options                  *easyjson.JSON
 	multipleInstancesAllowed bool

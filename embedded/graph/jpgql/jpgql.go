@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"strings"
 
-	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/foliagecp/sdk/statefun/mediator"
 	"github.com/foliagecp/sdk/statefun/system"
 
@@ -34,17 +33,6 @@ func getQueryFromPayload(ctx *sfPlugins.StatefunContextProcessor) (string, error
 		return "", fmt.Errorf("Error LLAPIQueryJPGQLCallTreeResultAggregation: \"query\" must be a string with len>0")
 	}
 	return jpQuery, nil
-}
-
-func isJPGQLRootRequest(ctx *sfPlugins.StatefunContextProcessor) bool {
-	c := strings.Count(ctx.Self.ID, "===")
-	if c > 0 {
-		if c > 1 {
-			lg.Logf(lg.ErrorLevel, "jpgql: id for descendants must be composite according to the following format: <object_id>===<process_id>, buf have: %s\n", ctx.Self.ID)
-		}
-		return true
-	}
-	return false
 }
 
 /*
@@ -78,7 +66,7 @@ func JPGQLCallTreeResultAggregation(_ sfPlugins.StatefunExecutor, ctx *sfPlugins
 
 	switch om.GetOpType() {
 	case mediator.MereOp: // Initial call of jpgql
-		om.SignalWithAggregation(sfPlugins.JetstreamGlobalSignal, ctx.Self.Typename, vId+"==="+pId, ctx.Payload, ctx.Options)
+		system.MsgOnErrorReturn(om.SignalWithAggregation(sfPlugins.JetstreamGlobalSignal, ctx.Self.Typename, vId+"==="+pId, ctx.Payload, ctx.Options))
 	case mediator.WorkerIsTaskedByAggregatorOp:
 		currentObjectLinksQuery, err := getQueryFromPayload(ctx)
 		if err != nil {
@@ -100,7 +88,7 @@ func JPGQLCallTreeResultAggregation(_ sfPlugins.StatefunExecutor, ctx *sfPlugins
 			workersToAggregateFrom := 0
 			for objectID, anyDepthStopped := range resultObjects {
 				nextQuery := queryTail
-				if anyDepthStopped == true {
+				if anyDepthStopped {
 					nextQuery = anyDepthStop.QueryTail
 				}
 				if len(nextQuery) == 0 { // query ended!!!!
@@ -130,6 +118,6 @@ func JPGQLCallTreeResultAggregation(_ sfPlugins.StatefunExecutor, ctx *sfPlugins
 			}
 		}
 		immediateAggregationResult := easyjson.NewJSON(aggregatedResult)
-		om.ReplyWithData(immediateAggregationResult.GetPtr())
+		system.MsgOnErrorReturn(om.ReplyWithData(immediateAggregationResult.GetPtr()))
 	}
 }

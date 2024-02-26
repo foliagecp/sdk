@@ -80,7 +80,7 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 
 	originType, ok := ctx.Payload.GetByPath("origin_type").AsString()
 	if !ok {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("origin_type is not defined"))).Reply()
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("origin_type is not defined")).Reply()
 		return
 	}
 	originType = ctx.Domain.CreateObjectIDWithHubDomain(originType, true)
@@ -172,7 +172,7 @@ func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	objectLinkType, ok := ctx.Payload.GetByPath("object_type").AsString()
 	if !ok {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("object_type is not defined"))).Reply()
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("object_type is not defined")).Reply()
 		return
 	}
 
