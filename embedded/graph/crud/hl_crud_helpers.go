@@ -81,6 +81,13 @@ func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfP
 func FindObjectTypeStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
 
+	typesPattern := fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false), ctx.Self.ID)
+	if _, err := ctx.Domain.Cache().GetValue(typesPattern); err == nil {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("requested id is a type"))
+		om.Reply()
+		return
+	}
+
 	pattern := fmt.Sprintf(OutLinkTypeKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, TYPE_TYPELINK, ">")
 	keys := ctx.Domain.Cache().GetKeysByPattern(pattern)
 	if len(keys) > 0 {
