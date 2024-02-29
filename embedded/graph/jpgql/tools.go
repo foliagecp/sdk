@@ -15,7 +15,7 @@ import (
 
 const QueryResultTopic = "functions.graph.query"
 
-var jsonPathPartsExtractRegexp *regexp.Regexp = regexp.MustCompile(`\.[*a-zA-Z0-9_-]*(\[\]|\[([^[]+]*|.*?\[.*?\].*?)\]|("(?:.|[\n])+))?`)
+var jsonPathPartsExtractRegexp *regexp.Regexp = regexp.MustCompile(`\.[*a-zA-Z0-9/_-]*(\[\]|\[([^[]+]*|.*?\[.*?\].*?)\]|("(?:.|[\n])+))?`)
 var filterParseLanguage = gval.NewLanguage(gval.Base(), gval.PropositionalLogic(),
 	gval.InfixOperator("||", func(a, b interface{}) (interface{}, error) {
 		filterA := a.(*FilterData)
