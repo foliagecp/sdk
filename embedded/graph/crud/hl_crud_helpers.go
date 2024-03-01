@@ -26,6 +26,16 @@ const (
 	BUILT_IN_OBJECT_NAV = "nav"
 )
 
+func typeOperationRedirectedToHub(ctx *sfPlugins.StatefunContextProcessor) bool {
+	if ctx.Domain.Name() != ctx.Domain.HubDomainName() {
+		om := sfMediators.NewOpMediator(ctx)
+		idOnHub := ctx.Domain.CreateObjectIDWithHubDomain(ctx.Self.ID, true)
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, idOnHub, ctx.Payload, ctx.Options))).Reply()
+		return true
+	}
+	return false
+}
+
 /*
 payload: json - required
 
