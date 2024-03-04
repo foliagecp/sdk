@@ -291,7 +291,7 @@ func (s *Domain) createRouter(sourceStreamName string, subject string, tsc targe
 					system.MsgOnErrorReturn(msg.Ack())
 					return
 				} else {
-					lg.Logf(lg.ErrorLevel, "Domain (domain=%s) router with sourceStreamName=%s cannot republish message: %s\n", s.name, sourceStreamName, err)
+					lg.Logf(lg.ErrorLevel, "Domain (domain=%s) router with sourceStreamName=%s cannot republish message to subject %s: %s\n", s.name, sourceStreamName, targetSubject, err)
 				}
 			}
 			system.MsgOnErrorReturn(msg.Nak())
