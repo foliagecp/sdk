@@ -107,6 +107,8 @@ func JPGQLCallTreeResultAggregation(_ sfPlugins.StatefunExecutor, ctx *sfPlugins
 			if workersToAggregateFrom == 0 {
 				om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSON(objectsToReturnAsAResult))).Reply()
 				return
+			} else {
+				om.AddIntermediateResult(ctx, easyjson.NewJSON(objectsToReturnAsAResult).GetPtr())
 			}
 		}
 	case mediator.AggregatorRepliedByWorkerOp:
