@@ -333,8 +333,10 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 /*
 	{
-		"to": string,
+		"to": string
 		"body": json
+		"tags": []string
+		"replace": bool
 	}
 */
 func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
@@ -357,6 +359,12 @@ func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	objectLink.SetByPath("to", easyjson.NewJSON(objectToID))
 	objectLink.SetByPath("type", easyjson.NewJSON(linkType))
 	objectLink.SetByPath("body", ctx.Payload.GetByPath("body"))
+	if ctx.Payload.PathExists("tags") {
+		objectLink.SetByPath("tags", ctx.Payload.GetByPath("tags"))
+	}
+	if ctx.Payload.PathExists("replace") {
+		objectLink.SetByPath("replace", ctx.Payload.GetByPath("replace"))
+	}
 
 	options := easyjson.NewJSONObjectWithKeyValue("op_stack", easyjson.NewJSON(true))
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.update", ctx.Self.ID, &objectLink, &options)))
