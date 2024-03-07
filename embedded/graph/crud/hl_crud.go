@@ -287,6 +287,7 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		"to": string,
 		"name": string, // optional, "to" will be used if not defined
 		"body": json
+		"tags": []string
 	}
 
 create object -> object link
@@ -317,6 +318,9 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	objectLink.SetByPath("name", easyjson.NewJSON(linkName))
 	objectLink.SetByPath("type", easyjson.NewJSON(linkType))
 	objectLink.SetByPath("body", ctx.Payload.GetByPath("body"))
+	if ctx.Payload.PathExists("tags") {
+		objectLink.SetByPath("tags", ctx.Payload.GetByPath("tags"))
+	}
 
 	options := easyjson.NewJSONObjectWithKeyValue("op_stack", easyjson.NewJSON(true))
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", ctx.Self.ID, &objectLink, &options)))
