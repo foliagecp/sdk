@@ -3,22 +3,20 @@
 // Foliage graph store debug package.
 // Provides debug stateful functions for the graph store
 
-//go:build (cgo && !darwin) || graph_debug
-
 package debug
 
 import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"path/filepath"
+	"os"
+	"strings"
 
+	"github.com/emicklei/dot"
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/statefun/logger"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
-	"github.com/goccy/go-graphviz"
-	"github.com/goccy/go-graphviz/cgraph"
 )
 
 type gdNode struct {
@@ -40,50 +38,57 @@ Print Graph from certain id using Graphviz
 Algorithm: Sync BFS
 
 	Payload: {
-		"ext": "dot" | "png" | "svg" // optional, default: "dot"
-		"depth": uint // optional, default: 256
+		"depth": uint // optional, default: -1
 	}
 */
 func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	self := ctx.Self
 	payload := ctx.Payload
 
-	graphvizExtension := graphviz.XDOT
+	maxDepth := int(payload.GetByPath("depth").AsNumericDefault(-1))
 
-	if payload.PathExists("ext") {
-		ext := payload.GetByPath("ext").AsStringDefault("")
-		switch ext {
-		case "dot":
-			graphvizExtension = graphviz.XDOT
-		case "png":
-			graphvizExtension = graphviz.PNG
-		case "svg":
-			graphvizExtension = graphviz.SVG
+	nodes := map[string]struct{}{}
+	uniqueEdges := map[string]struct{}{}
+	queue := []gdNode{}
+	queue = append(queue, gdNode{self.ID, 0})
+
+	edges := []gdEdge{}
+
+	for len(queue) > 0 {
+		node := queue[0]
+		queue = queue[1:]
+
+		if _, exists := nodes[node.id]; exists {
+			continue
+		}
+		nodes[node.id] = struct{}{}
+		if maxDepth >= 0 && node.depth >= maxDepth {
+			continue
+		}
+
+		for _, edge := range getEdges(ctx, node.id) {
+			if _, ok := nodes[edge.to]; !ok {
+				queue = append(queue, gdNode{edge.to, node.depth + 1}) // Forward link itrospection
+			}
+			if _, ok := nodes[edge.from]; !ok {
+				queue = append(queue, gdNode{edge.from, node.depth + 1}) // Inward link introspection
+			}
+			if edge.from == node.id {
+				if _, ok := uniqueEdges[edge.from+edge.name]; !ok {
+					uniqueEdges[edge.from+edge.name] = struct{}{}
+					edges = append(edges, edge)
+				}
+			}
 		}
 	}
 
-	maxDepth := int(payload.GetByPath("depth").AsNumericDefault(-1))
+	go createGraphViz(ctx.Self.ID, ctx.Domain, nodes, edges)
+}
 
-	gviz := graphviz.New()
-	graph, err := gviz.Graph()
-	if err != nil {
-		logger.Logln(logger.WarnLevel, err)
-		return
-	}
-
-	defer func() {
-		_ = gviz.Close()
-		_ = graph.Close()
-	}()
-
-	graph = graph.SetSize(500, 500)
-	graph.SetRankSeparator(5)
+func createGraphViz(sourceVertex string, domain sfPlugins.Domain, nodes map[string]struct{}, edges []gdEdge) {
+	dotGraph := dot.NewGraph(dot.Directed)
 
 	domainColors := map[string]string{}
-
-	nodes := make(map[string]*cgraph.Node)
-	queue := []gdNode{}
-	queue = append(queue, gdNode{self.ID, 0})
 
 	randomHex := func(n int) (string, error) {
 		bytes := make([]byte, n)
@@ -93,8 +98,8 @@ func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 		return hex.EncodeToString(bytes), nil
 	}
 
-	createGraphDotNodeIfNotExists := func(nodeId string) (*cgraph.Node, error) {
-		dm := ctx.Domain.GetDomainFromObjectID(nodeId)
+	createGraphDotNode := func(nodeId string) (*dot.Node, error) {
+		dm := domain.GetDomainFromObjectID(nodeId)
 		color, ok := domainColors[dm]
 		if !ok {
 			c, err := randomHex(3)
@@ -106,50 +111,31 @@ func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 			domainColors[dm] = color
 		}
 
-		e, exists := nodes[nodeId]
-		if !exists {
-			newElem, err := createNode(graph, nodeId, color)
-			if err == nil {
-				nodes[nodeId] = newElem
-			}
-			return newElem, err
-		}
-		return e, nil
+		return createNode(dotGraph, nodeId, color)
 	}
 
-	for len(queue) > 0 {
-		node := queue[0]
-		queue = queue[1:]
-
-		thisElem, err := createGraphDotNodeIfNotExists(node.id)
+	dotNodes := map[string]*dot.Node{}
+	for nodeId, _ := range nodes {
+		dotNode, err := createGraphDotNode(nodeId)
 		if err != nil {
 			continue
 		}
-		if maxDepth >= 0 && node.depth >= maxDepth {
-			continue
-		}
+		dotNodes[nodeId] = dotNode
+	}
 
-		for _, edge := range getEdges(ctx, node.id) {
-			if _, ok := nodes[edge.to]; !ok {
-				queue = append(queue, gdNode{edge.to, node.depth + 1})
-			}
-			if _, ok := nodes[edge.from]; !ok {
-				queue = append(queue, gdNode{edge.from, node.depth + 1})
-			}
-			if node.id == edge.from {
-				toElem, err := createGraphDotNodeIfNotExists(edge.to)
-				if err == nil {
-					createEdge(graph, edge, thisElem, toElem)
-				}
-			}
+	for _, edge := range edges {
+		fromNode, fromOK := dotNodes[edge.from]
+		toNode, toOK := dotNodes[edge.to]
+		if fromOK && toOK {
+			createEdge(dotGraph, edge, fromNode, toNode)
 		}
 	}
 
-	outputPath := filepath.Join("graph." + string(graphvizExtension))
-
-	if err := gviz.RenderFilename(graph, graphvizExtension, outputPath); err != nil {
-		logger.Logln(logger.WarnLevel, err)
-		return
+	vtx := strings.ReplaceAll(sourceVertex, "/", "-")
+	outputPath := fmt.Sprintf("graph_%s.dot", vtx)
+	err := os.WriteFile(outputPath, []byte(dotGraph.String()), 0644)
+	if err != nil {
+		logger.Logln(logger.ErrorLevel, err)
 	}
 }
 
@@ -239,30 +225,16 @@ func getEdges(ctx *sfPlugins.StatefunContextProcessor, id string) []gdEdge {
 	return edges
 }
 
-func createNode(graph *cgraph.Graph, name string, colorStr string) (*cgraph.Node, error) {
-	node, err := graph.CreateNode(name)
-	if err != nil {
-		return nil, err
-	}
+func createNode(dotGraph *dot.Graph, name string, colorStr string) (*dot.Node, error) {
+	node := dotGraph.Node(name).Box()
+	node.Attr("color", fmt.Sprintf("#%s", colorStr))
 
-	node.SetHeight(1)
-	node.SetArea(1)
-	node.SetShape(cgraph.BoxShape)
-	node.SetFontSize(24)
-	node.SetColor(fmt.Sprintf("#%s", colorStr))
-	node.SetStyle(cgraph.FilledNodeStyle)
-
-	return node, nil
+	return &node, nil
 }
 
-func createEdge(graph *cgraph.Graph, e gdEdge, start, end *cgraph.Node) (*cgraph.Edge, error) {
-	edge, err := graph.CreateEdge(e.name, start, end)
-	if err != nil {
-		return nil, err
-	}
+func createEdge(dotGraph *dot.Graph, e gdEdge, start, end *dot.Node) (*dot.Edge, error) {
+	edgeLabel := fmt.Sprintf("%s\ntype:%s\ntags:%v", e.name, e.tp, e.tags)
+	edge := dotGraph.Edge(*start, *end, edgeLabel)
 
-	edge.SetLabel(fmt.Sprintf("%s\ntype:%s\ntags:%v", e.name, e.tp, e.tags))
-	edge.SetFontSize(18)
-
-	return edge, nil
+	return &edge, nil
 }
