@@ -31,7 +31,7 @@ services:
       context: ../..
       dockerfile: tests/basic/Dockerfile
     volumes:
-      - ./js:/foliage/js
+      - .:/foliage
 
   nats-exporter:
     image: natsio/prometheus-nats-exporter:latest
