@@ -1,4 +1,4 @@
-//go:build !(cgo && !graph_debug)
+//go:build !cgo
 
 package js
 

@@ -1,6 +1,6 @@
 // Copyright 2023 NJWS Inc.
 
-//go:build cgo && !graph_debug
+//go:build cgo
 
 package js
 
