@@ -115,7 +115,7 @@ func createGraphViz(sourceVertex string, domain sfPlugins.Domain, nodes map[stri
 	}
 
 	dotNodes := map[string]*dot.Node{}
-	for nodeId, _ := range nodes {
+	for nodeId := range nodes {
 		dotNode, err := createGraphDotNode(nodeId)
 		if err != nil {
 			continue
@@ -127,7 +127,9 @@ func createGraphViz(sourceVertex string, domain sfPlugins.Domain, nodes map[stri
 		fromNode, fromOK := dotNodes[edge.from]
 		toNode, toOK := dotNodes[edge.to]
 		if fromOK && toOK {
-			createEdge(dotGraph, edge, fromNode, toNode)
+			if _, err := createEdge(dotGraph, edge, fromNode, toNode); err != nil {
+				logger.Logf(logger.ErrorLevel, "in dot file cannot create link from %s to %s: %s\n", edge.from, edge.to, err.Error())
+			}
 		}
 	}
 
