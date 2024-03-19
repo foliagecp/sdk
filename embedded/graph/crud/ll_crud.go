@@ -26,7 +26,7 @@ Request:
 
 	payload: json - optional
 		// Initial request from caller:
-		body: json - optional // Body for object to be created with.
+		body: json - optional // Body for vertex to be created with.
 			<key>: <type> - optional // Any additional key and value to be stored in objects's body.
 
 	options: json - optional
@@ -71,9 +71,9 @@ Updates a vertex in the graph with an id the function being called with. Merges 
 Request:
 
 	payload: json - optional
-		// Initial request from caller:
-		body: json - optional // Body for object to be created with.
-			<key>: <type> - optional // Any additional key and value to be stored in objects's body.
+		body: json - optional // Body for vertex to be created with.
+			<key>: <type> - optional // Any additional key and value to be stored in vertex's body.
+		upsert: bool // "false" - (default), "true" - will create vertex if does not exist
 		replace: bool - optional // "false" - (default) body and tags will be merged, "true" - body and tags will be replaced
 
 	options: json - optional
@@ -90,13 +90,19 @@ Reply:
 func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
 
+	payload := ctx.Payload
+	upsert := payload.GetByPath("upsert").AsBoolDefault(false)
+
 	_, err := ctx.Domain.Cache().GetValue(ctx.Self.ID)
 	if err != nil { // If vertex does not exist
-		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("vertex with id=%s does not exist", ctx.Self.ID))).Reply()
+		if upsert {
+			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, llAPIVertexCUDNames[0], ctx.Self.ID, ctx.Payload, ctx.Options))).Reply()
+		} else {
+			om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("vertex with id=%s does not exist", ctx.Self.ID))).Reply()
+		}
 		return
 	}
 
-	payload := ctx.Payload
 	opStack := getOpStackFromOptions(ctx.Options)
 
 	oldBody := ctx.GetObjectContext()
@@ -115,7 +121,7 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		newBody.DeepMerge(body)
 		body = *newBody
 	}
-	ctx.SetObjectContext(&body) // Update an object
+	ctx.SetObjectContext(&body) // Update an vertex
 
 	addVertexOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, oldBody, &body)
 
@@ -188,7 +194,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	if opStack != nil {
 		oldBody = ctx.GetObjectContext()
 	}
-	ctx.Domain.Cache().DeleteValue(ctx.Self.ID, true, -1, "") // Delete object's body
+	ctx.Domain.Cache().DeleteValue(ctx.Self.ID, true, -1, "") // Delete vertex's body
 	addVertexOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, oldBody, nil)
 
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
@@ -268,14 +274,14 @@ Request:
 
 	payload: json - required
 		// Initial request from caller:
-		to: string - required // ID for descendant object.
-		name: string - required // Defines link's name which is unique among all object's output links.
+		to: string - required // ID for descendant vertex.
+		name: string - required // Defines link's name which is unique among all vertex's output links.
 		type: string - required // Type of link leading to descendant.
 		tags: []string - optional // Defines link tags.
 		body: json - optional // Body for link leading to descendant.
 			<key>: <type> - optional // Any additional key and value to be stored in link's body.
 
-		// Self-requests to descendants (RequestReply): // ID can be composite: <object_id>===self_link - for non-blocking execution on the same object
+		// Self-requests to descendants (RequestReply): // ID can be composite: <object_id>===self_link - for non-blocking execution on the same vertex
 			in_name: string - required // Creating input link's name
 
 	options: json - optional
@@ -364,7 +370,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		}
 		// -----------------------------------------------------------
 
-		// Create out link on this object -------------------------
+		// Create out link on this vertex -------------------------
 		// Set link target ------------------
 		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, selfId, linkName), []byte(fmt.Sprintf("%s.%s", linkType, toId)), true, -1, "") // Store link body in KV
 		// ----------------------------------
@@ -390,7 +396,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 		addLinkOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, toId, linkName, linkType, nil, &linkBody)
 
-		// Create in link on descendant object --------------------
+		// Create in link on descendant vertex --------------------
 		nextCallPayload := easyjson.NewJSONObject()
 		nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
 		targetId := toId
@@ -409,17 +415,30 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 }
 
 /*
+// Initial request from caller:
+to: string - required // ID for descendant vertex.
+name: string - required // Defines link's name which is unique among all vertex's output links.
+type: string - required // Type of link leading to descendant.
+tags: []string - optional // Defines link tags.
+body: json - optional // Body for link leading to descendant.
+	<key>: <type> - optional // Any additional key and value to be stored in link's body.
+
+// Self-requests to descendants (RequestReply): // ID can be composite: <object_id>===self_link - for non-blocking execution on the same vertex
+	in_name: string - required // Creating input link's name*/
+
+/*
 Updates a link of type="type" from a vertex with id the funcion being called with to a vertex with id="to".
 
 Request:
 
 	payload: json - required
-		name: string - required if "to" or "type" is not defined // Defines link's name which is unique among all object's output links.
+		name: string - required if "to" or "type" is not defined. required is "upsert" is set to "true" // Defines link's name which is unique among all vertex's output links.
 
-		to: string - required if "name" is not defined // ID for descendant object.
-		type: string - required if "name" is not defined // Type of link leading to descendant.
+		to: string - required if "name" is not defined. required is "upsert" is set to "true" // ID for descendant vertex.
+		type: string - required if "name" is not defined. required is "upsert" is set to "true" // Type of link leading to descendant.
 
 		tags: []string - optional // Defines link tags.
+		upsert: bool // "false" - (default), "true" - will create link if does not exist
 		replace: bool - optional // "false" - (default) body and tags will be merged, "true" - body and tags will be replaced
 		body: json - optional // Body for link leading to descendant.
 			<key>: <type> - optional // Any additional key and value to be stored in link's body.
@@ -450,9 +469,15 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		return
 	}
 
+	upsert := payload.GetByPath("upsert").AsBoolDefault(false)
+
 	linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
-	if err != nil {
-		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
+	if err != nil { // Link does not exist
+		if upsert {
+			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, llAPILinkCUDNames[0], ctx.Self.ID, ctx.Payload, ctx.Options))).Reply()
+		} else {
+			om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
+		}
 		return
 	}
 	oldLinkBody, err := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
@@ -491,7 +516,7 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		linkBody = *newBody
 	}
 
-	// Create out link on this object -------------------------
+	// Create out link on this vertex -------------------------
 	// Set link body --------------------
 	ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName), linkBody.ToBytes(), true, -1, "") // Store link body in KV
 	// ----------------------------------
@@ -521,12 +546,12 @@ Request:
 
 	payload: json - required
 		// Initial request from caller:
-		name: string - required // Defines link's name which is unique among all object's output links.
+		name: string - required // Defines link's name which is unique among all vertex's output links.
 
-		to: string - required if "name" is not defined // ID for descendant object.
+		to: string - required if "name" is not defined // ID for descendant vertex.
 		type: string - required if "name" is not defined // Type of link leading to descendant.
 
-		// Self-requests to descendants (RequestReply): // ID can be composite: <object_id>===self_link - for non-blocking execution on the same object
+		// Self-requests to descendants (RequestReply): // ID can be composite: <object_id>===self_link - for non-blocking execution on the same vertex
 		in_name: string - required // Deleting input link's name
 
 	options: json - optional
@@ -609,7 +634,7 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 		addLinkOpToOpStack(opStack, ctx.Self.Typename, selfId, toId, linkName, linkType, oldLinkBody, nil)
 
-		// Delete in link on descendant object --------------------
+		// Delete in link on descendant vertex --------------------
 		nextCallPayload := easyjson.NewJSONObject()
 		nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
 
@@ -635,9 +660,9 @@ Request:
 
 	payload: json - required
 		// Initial request from caller:
-		name: string - required // Defines link's name which is unique among all object's output links.
+		name: string - required // Defines link's name which is unique among all vertex's output links.
 
-		to: string - required if "name" is not defined // ID for descendant object.
+		to: string - required if "name" is not defined // ID for descendant vertex.
 		type: string - required if "name" is not defined // Type of link leading to descendant.
 
 		details: bool - optional // "false" - (default) only body will be returned, "true" - body and info will be returned
