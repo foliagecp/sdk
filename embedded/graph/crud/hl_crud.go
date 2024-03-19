@@ -38,6 +38,7 @@ func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 
 /*
 	{
+		"upsert": bool - optional, default: false
 		"replace": bool - optional, default: false
 		"body": json
 	}
@@ -135,6 +136,7 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 
 /*
 	{
+		"upsert": bool - optional, default: false
 		"replace": bool - optional, default: false
 		"body": json
 	}
@@ -208,7 +210,11 @@ func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 /*
 	{
 		"to": string,
+		"name": string, // not needed, required if "upsert" is true
 		"body": json, optional
+		"tags": []string
+		"upsert": bool
+		"replace": bool
 	}
 */
 func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
@@ -228,6 +234,18 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	link := ctx.Payload.Clone()
 	link.SetByPath("to", easyjson.NewJSON(toType))
 	link.SetByPath("type", easyjson.NewJSON(TYPE_TYPELINK))
+	if ctx.Payload.PathExists("tags") {
+		link.SetByPath("tags", ctx.Payload.GetByPath("tags"))
+	}
+	if ctx.Payload.PathExists("name") {
+		link.SetByPath("name", ctx.Payload.GetByPath("name"))
+	}
+	if ctx.Payload.PathExists("upsert") {
+		link.SetByPath("upsert", ctx.Payload.GetByPath("upsert"))
+	}
+	if ctx.Payload.PathExists("replace") {
+		link.SetByPath("replace", ctx.Payload.GetByPath("replace"))
+	}
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.update", ctx.Self.ID, &link, nil)))
 
 	om.Reply()
@@ -334,8 +352,10 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 /*
 	{
 		"to": string
+		"name": string, // not needed, required if "upsert" is true
 		"body": json
 		"tags": []string
+		"upsert": bool
 		"replace": bool
 	}
 */
@@ -361,6 +381,12 @@ func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	objectLink.SetByPath("body", ctx.Payload.GetByPath("body"))
 	if ctx.Payload.PathExists("tags") {
 		objectLink.SetByPath("tags", ctx.Payload.GetByPath("tags"))
+	}
+	if ctx.Payload.PathExists("name") {
+		objectLink.SetByPath("name", ctx.Payload.GetByPath("name"))
+	}
+	if ctx.Payload.PathExists("upsert") {
+		objectLink.SetByPath("upsert", ctx.Payload.GetByPath("upsert"))
 	}
 	if ctx.Payload.PathExists("replace") {
 		objectLink.SetByPath("replace", ctx.Payload.GetByPath("replace"))
