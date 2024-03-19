@@ -95,7 +95,7 @@ func (r *Runtime) Start(cacheConfig *cache.Config) (err error) {
 	}
 	// --------------------------------------------------------------
 
-	if err := r.Domain.start(cacheConfig); err != nil {
+	if err := r.Domain.start(cacheConfig, r.config.handlesDomainRouters); err != nil {
 		return err
 	}
 

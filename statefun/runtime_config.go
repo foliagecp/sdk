@@ -11,6 +11,7 @@ const (
 	RequestTimeoutSec           = 60
 	GCIntervalSec               = 5
 	HubDomainName               = "hub"
+	HandlesDomainRouters        = true
 )
 
 type RuntimeConfig struct {
@@ -21,6 +22,7 @@ type RuntimeConfig struct {
 	requestTimeoutSec              int
 	gcIntervalSec                  int
 	hubDomainName                  string
+	handlesDomainRouters           bool
 }
 
 func NewRuntimeConfig() *RuntimeConfig {
@@ -32,6 +34,7 @@ func NewRuntimeConfig() *RuntimeConfig {
 		requestTimeoutSec:              RequestTimeoutSec,
 		gcIntervalSec:                  GCIntervalSec,
 		hubDomainName:                  HubDomainName,
+		handlesDomainRouters:           HandlesDomainRouters,
 	}
 }
 
@@ -72,5 +75,10 @@ func (ro *RuntimeConfig) SetRequestTimeoutSec(requestTimeoutSec int) *RuntimeCon
 
 func (ro *RuntimeConfig) SetGCIntervalSec(gcIntervalSec int) *RuntimeConfig {
 	ro.gcIntervalSec = gcIntervalSec
+	return ro
+}
+
+func (ro *RuntimeConfig) SetDomainRoutersHandling(handlesDomainRouters bool) *RuntimeConfig {
+	ro.handlesDomainRouters = handlesDomainRouters
 	return ro
 }
