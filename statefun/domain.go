@@ -141,23 +141,25 @@ func (s *Domain) CreateObjectIDWithHubDomain(objectID string, domainReplace bool
 	return s.CreateObjectIDWithDomain(s.hubDomainName, objectID, domainReplace)
 }
 
-func (s *Domain) start(cacheConfig *cache.Config) error {
-	if s.hubDomainName == s.name {
-		if err := s.createHubSignalStream(); err != nil {
+func (s *Domain) start(cacheConfig *cache.Config, createDomainRouters bool) error {
+	if createDomainRouters {
+		if s.hubDomainName == s.name {
+			if err := s.createHubSignalStream(); err != nil {
+				return err
+			}
+		}
+		if err := s.createIngresSignalStream(); err != nil {
 			return err
 		}
-	}
-	if err := s.createIngresSignalStream(); err != nil {
-		return err
-	}
-	if err := s.createEgressSignalStream(); err != nil {
-		return err
-	}
-	if err := s.createIngressRouter(); err != nil {
-		return err
-	}
-	if err := s.createEgressRouter(); err != nil {
-		return err
+		if err := s.createEgressSignalStream(); err != nil {
+			return err
+		}
+		if err := s.createIngressRouter(); err != nil {
+			return err
+		}
+		if err := s.createEgressRouter(); err != nil {
+			return err
+		}
 	}
 
 	lg.Logln(lg.TraceLevel, "Initializing the cache store...")
