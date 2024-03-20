@@ -50,6 +50,18 @@ func UpdateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 
 	om := sfMediators.NewOpMediator(ctx)
 
+	// Handle upsert request ------------------------------
+	upsert := ctx.Payload.GetByPath("upsert").AsBoolDefault(false)
+	if upsert {
+		ctx.Payload.RemoveByPath("upsert")
+		som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", ctx.Self.ID, nil, nil))
+		if som.Status != sfMediators.SYNC_OP_STATUS_OK { // Type does not exist
+			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.create", ctx.Self.ID, ctx.Payload, ctx.Options))).Reply()
+			return
+		}
+	}
+	// ----------------------------------------------------
+
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.update", ctx.Self.ID, ctx.Payload, nil))).Reply()
 }
 
@@ -81,7 +93,7 @@ func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 
 /*
 	{
-		"origin_type": string,
+		"origin_type": string
 		"body": json
 	}
 */
@@ -136,6 +148,7 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 
 /*
 	{
+		"origin_type": string, not requred! required only if "upsert"==true
 		"upsert": bool - optional, default: false
 		"replace": bool - optional, default: false
 		"body": json
@@ -143,6 +156,21 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 */
 func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
+
+	// Handle upsert request ------------------------------
+	upsert := ctx.Payload.GetByPath("upsert").AsBoolDefault(false)
+	if upsert {
+		ctx.Payload.RemoveByPath("upsert")
+		if findObjectType(ctx, ctx.Self.ID) == "" { // Object does not exist
+			if ctx.Payload.GetByPath("origin_type").IsString() {
+				om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.create", ctx.Self.ID, ctx.Payload, ctx.Options))).Reply()
+			} else {
+				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("object with id=%s does exist, upsert=true but origin_type is not specified", ctx.Self.ID))).Reply()
+			}
+			return
+		}
+	}
+	// ----------------------------------------------------
 
 	options := easyjson.NewJSONObjectWithKeyValue("op_stack", easyjson.NewJSON(true))
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.update", ctx.Self.ID, ctx.Payload, &options)))
