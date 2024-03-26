@@ -115,34 +115,34 @@ func (gc GraphSyncClient) VerticesLinkUpdateByToAndType(from, to, linkType strin
 	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.link.update", from, &payload, nil)))
 }
 
-func (cc CMDBSyncClient) VerticesLinkDelete(from, linkName string) error {
+func (gc GraphSyncClient) VerticesLinkDelete(from, linkName string) error {
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("name", easyjson.NewJSON(linkName))
 
-	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(cc.request(sfp.AutoRequestSelect, "functions.graph.api.link.delete", from, &payload, nil)))
+	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.link.delete", from, &payload, nil)))
 }
 
-func (cc CMDBSyncClient) VerticesLinkDeleteByToAndType(from, to, linkType string) error {
+func (gc GraphSyncClient) VerticesLinkDeleteByToAndType(from, to, linkType string) error {
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("to", easyjson.NewJSON(to))
 	payload.SetByPath("type", easyjson.NewJSON(linkType))
 
-	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(cc.request(sfp.AutoRequestSelect, "functions.graph.api.link.delete", from, &payload, nil)))
+	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.link.delete", from, &payload, nil)))
 }
 
-func (cc CMDBSyncClient) VerticesLinkRead(from, linkName string) (easyjson.JSON, error) {
+func (gc GraphSyncClient) VerticesLinkRead(from, linkName string) (easyjson.JSON, error) {
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("name", easyjson.NewJSON(linkName))
 
-	om := sfMediators.OpMsgFromSfReply(cc.request(sfp.AutoRequestSelect, "functions.graph.api.link.read", from, &payload, nil))
+	om := sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.link.read", from, &payload, nil))
 	return om.Data, OpErrorFromOpMsg(om)
 }
 
-func (cc CMDBSyncClient) VerticesLinkReadByToAndType(from, to, linkType string) (easyjson.JSON, error) {
+func (gc GraphSyncClient) VerticesLinkReadByToAndType(from, to, linkType string) (easyjson.JSON, error) {
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("to", easyjson.NewJSON(to))
 	payload.SetByPath("type", easyjson.NewJSON(linkType))
 
-	om := sfMediators.OpMsgFromSfReply(cc.request(sfp.AutoRequestSelect, "functions.graph.api.link.read", from, &payload, nil))
+	om := sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.link.read", from, &payload, nil))
 	return om.Data, OpErrorFromOpMsg(om)
 }
