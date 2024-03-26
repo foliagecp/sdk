@@ -36,6 +36,10 @@ const (
 
 type EgressProvider int
 
+type SFSignalFunc func(SignalProvider, string, string, *easyjson.JSON, *easyjson.JSON) error
+type SFRequestFunc func(RequestProvider, string, string, *easyjson.JSON, *easyjson.JSON) (*easyjson.JSON, error)
+type SFEgressFunc func(EgressProvider, *easyjson.JSON) error
+
 const (
 	NatsCoreEgress EgressProvider = iota
 )
@@ -67,9 +71,9 @@ type StatefunContextProcessor struct {
 	ObjectMutexUnlock         func() error
 	Domain                    Domain
 	// TODO: DownstreamSignal(<function type>, <links filters>, <payload>, <options>)
-	Signal  func(SignalProvider, string, string, *easyjson.JSON, *easyjson.JSON) error
-	Request func(RequestProvider, string, string, *easyjson.JSON, *easyjson.JSON) (*easyjson.JSON, error)
-	Egress  func(EgressProvider, *easyjson.JSON) error
+	Signal  SFSignalFunc
+	Request SFRequestFunc
+	Egress  SFEgressFunc
 	Self    StatefunAddress
 	Caller  StatefunAddress
 	Payload *easyjson.JSON
