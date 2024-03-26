@@ -41,9 +41,9 @@ func buildNatsData(callerTypename string, callerID string, payload *easyjson.JSO
 	return data.ToBytes()
 }
 
-func getRequestFunc(nc *nats.Conn, NatsRequestTimeoutSec int) sfp.SFRequestFunc {
+func getRequestFunc(nc *nats.Conn, NatsRequestTimeoutSec int, HubDomainName string) sfp.SFRequestFunc {
 	return func(r sfp.RequestProvider, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) (*easyjson.JSON, error) {
-		targetDomain := ""
+		targetDomain := HubDomainName
 		tokens := strings.Split(targetID, sf.ObjectIDDomainSeparator)
 		if len(tokens) == 2 {
 			targetDomain = tokens[0]
