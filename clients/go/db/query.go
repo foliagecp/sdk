@@ -13,13 +13,13 @@ type QuerySyncClient struct {
 	request sfp.SFRequestFunc
 }
 
-func NewQuerySyncClient(NatsURL string, NatsRequestTimeout int) (QuerySyncClient, error) {
+func NewQuerySyncClient(NatsURL string, NatsRequestTimeoutSec int) (QuerySyncClient, error) {
 	var err error
 	nc, err := nats.Connect(NatsURL)
 	if err != nil {
 		return QuerySyncClient{}, err
 	}
-	request := getRequestFunc(nc, NatsRequestTimeout)
+	request := getRequestFunc(nc, NatsRequestTimeoutSec)
 	return NewQuerySyncClientFromRequestFunction(request)
 }
 

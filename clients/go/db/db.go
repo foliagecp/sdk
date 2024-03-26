@@ -13,13 +13,13 @@ type DBSyncClient struct {
 	Query QuerySyncClient
 }
 
-func NewDBSyncClient(NatsURL string, NatsRequestTimeout int) (DBSyncClient, error) {
+func NewDBSyncClient(NatsURL string, NatsRequestTimeoutSec int) (DBSyncClient, error) {
 	var err error
 	nc, err := nats.Connect(NatsURL)
 	if err != nil {
 		return DBSyncClient{}, err
 	}
-	request := getRequestFunc(nc, NatsRequestTimeout)
+	request := getRequestFunc(nc, NatsRequestTimeoutSec)
 	return NewDBSyncClientFromRequestFunction(request)
 }
 
