@@ -48,7 +48,7 @@ type Domain struct {
 	cache         *cache.Store
 }
 
-func NewDomain(nc *nats.Conn, js nats.JetStreamContext, hubDomainName string) (s *Domain, e error) {
+func NewDomain(nc *nats.Conn, js nats.JetStreamContext, hubDomainName string) (dm *Domain, e error) {
 	accInfo, err := js.AccountInfo()
 	if err != nil {
 		return nil, err
@@ -66,45 +66,23 @@ func NewDomain(nc *nats.Conn, js nats.JetStreamContext, hubDomainName string) (s
 		js:            js,
 	}
 
-	bucketName := fmt.Sprintf("%s_cache_bucket", hubDomainName)
-
-	// Create application key value store bucket if does not exist --
-	kvExists := false
-	if kv, err := js.KeyValue(bucketName); err == nil {
-		domain.kv = kv
-		kvExists = true
-	}
-	if !kvExists {
-		domain.kv, err = kv.CreateKeyValue(nc, js, &nats.KeyValueConfig{
-			Bucket: bucketName,
-		})
-		if err != nil {
-			return
-		}
-		kvExists = true
-	}
-	if !kvExists {
-		return nil, fmt.Errorf("Nats KV was not inited")
-	}
-	// --------------------------------------------------------------
-
 	return domain, nil
 }
 
-func (s *Domain) HubDomainName() string {
-	return s.hubDomainName
+func (dm *Domain) HubDomainName() string {
+	return dm.hubDomainName
 }
 
-func (s *Domain) Name() string {
-	return s.name
+func (dm *Domain) Name() string {
+	return dm.name
 }
 
-func (s *Domain) Cache() *cache.Store {
-	return s.cache
+func (dm *Domain) Cache() *cache.Store {
+	return dm.cache
 }
 
-func (s *Domain) GetDomainFromObjectID(objectID string) string {
-	domain := s.name
+func (dm *Domain) GetDomainFromObjectID(objectID string) string {
+	domain := dm.name
 	if tokens := strings.Split(objectID, ObjectIDDomainSeparator); len(tokens) > 1 {
 		if len(tokens) > 2 {
 			lg.Logf(lg.WarnLevel, "GetDomainFromObjectID detected objectID=%s with multiple domains", objectID)
@@ -114,7 +92,7 @@ func (s *Domain) GetDomainFromObjectID(objectID string) string {
 	return domain
 }
 
-func (s *Domain) GetObjectIDWithoutDomain(objectID string) string {
+func (dm *Domain) GetObjectIDWithoutDomain(objectID string) string {
 	id := objectID
 	if tokens := strings.Split(objectID, ObjectIDDomainSeparator); len(tokens) > 1 {
 		if len(tokens) > 2 {
@@ -125,58 +103,81 @@ func (s *Domain) GetObjectIDWithoutDomain(objectID string) string {
 	return id
 }
 
-func (s *Domain) CreateObjectIDWithDomain(domain string, objectID string, domainReplace bool) (dmObjectID string) {
+func (dm *Domain) CreateObjectIDWithDomain(domain string, objectID string, domainReplace bool) (dmObjectID string) {
 	dmObjectID = objectID
-	if domainReplace || s.GetObjectIDWithoutDomain(objectID) == objectID {
-		dmObjectID = domain + ObjectIDDomainSeparator + s.GetObjectIDWithoutDomain(objectID)
+	if domainReplace || dm.GetObjectIDWithoutDomain(objectID) == objectID {
+		dmObjectID = domain + ObjectIDDomainSeparator + dm.GetObjectIDWithoutDomain(objectID)
 	}
 	return
 }
 
-func (s *Domain) CreateObjectIDWithThisDomain(objectID string, domainReplace bool) string {
-	return s.CreateObjectIDWithDomain(s.name, objectID, domainReplace)
+func (dm *Domain) CreateObjectIDWithThisDomain(objectID string, domainReplace bool) string {
+	return dm.CreateObjectIDWithDomain(dm.name, objectID, domainReplace)
 }
 
-func (s *Domain) CreateObjectIDWithHubDomain(objectID string, domainReplace bool) string {
-	return s.CreateObjectIDWithDomain(s.hubDomainName, objectID, domainReplace)
+func (dm *Domain) CreateObjectIDWithHubDomain(objectID string, domainReplace bool) string {
+	return dm.CreateObjectIDWithDomain(dm.hubDomainName, objectID, domainReplace)
 }
 
-func (s *Domain) start(cacheConfig *cache.Config, createDomainRouters bool) error {
+func (dm *Domain) start(cacheConfig *cache.Config, createDomainRouters bool) error {
+	bucketName := fmt.Sprintf("%s_%s_cache_bucket", dm.name, cacheConfig.GetId())
+
+	// Create application key value store bucket if does not exist --
+	kvExists := false
+	if kv, err := dm.js.KeyValue(bucketName); err == nil {
+		dm.kv = kv
+		kvExists = true
+	}
+	if !kvExists {
+		var err error
+		dm.kv, err = kv.CreateKeyValue(dm.nc, dm.js, &nats.KeyValueConfig{
+			Bucket: bucketName,
+		})
+		if err != nil {
+			return err
+		}
+		kvExists = true
+	}
+	if !kvExists {
+		return fmt.Errorf("Nats KV was not inited")
+	}
+	// --------------------------------------------------------------
+
 	if createDomainRouters {
-		if s.hubDomainName == s.name {
-			if err := s.createHubSignalStream(); err != nil {
+		if dm.hubDomainName == dm.name {
+			if err := dm.createHubSignalStream(); err != nil {
 				return err
 			}
 		}
-		if err := s.createIngresSignalStream(); err != nil {
+		if err := dm.createIngresSignalStream(); err != nil {
 			return err
 		}
-		if err := s.createEgressSignalStream(); err != nil {
+		if err := dm.createEgressSignalStream(); err != nil {
 			return err
 		}
-		if err := s.createIngressRouter(); err != nil {
+		if err := dm.createIngressRouter(); err != nil {
 			return err
 		}
-		if err := s.createEgressRouter(); err != nil {
+		if err := dm.createEgressRouter(); err != nil {
 			return err
 		}
 	}
 
 	lg.Logln(lg.TraceLevel, "Initializing the cache store...")
-	s.cache = cache.NewCacheStore(context.Background(), cacheConfig, s.js, s.kv)
+	dm.cache = cache.NewCacheStore(context.Background(), cacheConfig, dm.js, dm.kv)
 	lg.Logln(lg.TraceLevel, "Cache store inited!")
 
 	return nil
 }
 
-func (s *Domain) createIngressRouter() error {
+func (dm *Domain) createIngressRouter() error {
 	targetSubjectCalculator := func(msg *nats.Msg) (string, error) {
-		return fmt.Sprintf(DomainIngressSubjectsTmpl, s.name, msg.Subject), nil
+		return fmt.Sprintf(DomainIngressSubjectsTmpl, dm.name, msg.Subject), nil
 	}
-	return s.createRouter(domainIngressStreamName, fmt.Sprintf(FromGlobalSignalTmpl, s.name, ">"), targetSubjectCalculator)
+	return dm.createRouter(domainIngressStreamName, fmt.Sprintf(FromGlobalSignalTmpl, dm.name, ">"), targetSubjectCalculator)
 }
 
-func (s *Domain) createEgressRouter() error {
+func (dm *Domain) createEgressRouter() error {
 	targetSubjectCalculator := func(msg *nats.Msg) (string, error) {
 		tokens := strings.Split(msg.Subject, ".")
 		if len(tokens) < 5 { // $SE.<domain_name>.signal.<signal_domain_name>.<function_name>
@@ -191,31 +192,31 @@ func (s *Domain) createEgressRouter() error {
 		}
 		return targetSubject, nil
 	}
-	return s.createRouter(domainEgressStreamName, fmt.Sprintf(DomainEgressSubjectsTmpl, s.name, ">"), targetSubjectCalculator)
+	return dm.createRouter(domainEgressStreamName, fmt.Sprintf(DomainEgressSubjectsTmpl, dm.name, ">"), targetSubjectCalculator)
 }
 
-func (s *Domain) createHubSignalStream() error {
+func (dm *Domain) createHubSignalStream() error {
 	sc := &nats.StreamConfig{
 		Name:     hubEventStreamName,
 		Subjects: []string{SignalPrefix + ".>"},
 	}
-	return s.createStreamIfNotExists(sc)
+	return dm.createStreamIfNotExists(sc)
 }
 
-func (s *Domain) createIngresSignalStream() error {
+func (dm *Domain) createIngresSignalStream() error {
 	var ss *nats.StreamSource
-	if s.hubDomainName == s.name {
+	if dm.hubDomainName == dm.name {
 		ss = &nats.StreamSource{
 			Name:          hubEventStreamName,
-			FilterSubject: fmt.Sprintf(FromGlobalSignalTmpl, s.name, ">"),
+			FilterSubject: fmt.Sprintf(FromGlobalSignalTmpl, dm.name, ">"),
 		}
 	} else {
 		ext := &nats.ExternalStream{
-			APIPrefix: fmt.Sprintf(streamPrefix, s.hubDomainName),
+			APIPrefix: fmt.Sprintf(streamPrefix, dm.hubDomainName),
 		}
 		ss = &nats.StreamSource{
 			Name:          hubEventStreamName,
-			FilterSubject: fmt.Sprintf(FromGlobalSignalTmpl, s.name, ">"),
+			FilterSubject: fmt.Sprintf(FromGlobalSignalTmpl, dm.name, ">"),
 			External:      ext,
 		}
 	}
@@ -223,18 +224,18 @@ func (s *Domain) createIngresSignalStream() error {
 		Name:    domainIngressStreamName,
 		Sources: []*nats.StreamSource{ss},
 	}
-	return s.createStreamIfNotExists(sc)
+	return dm.createStreamIfNotExists(sc)
 }
 
-func (s *Domain) createEgressSignalStream() error {
+func (dm *Domain) createEgressSignalStream() error {
 	sc := &nats.StreamConfig{
 		Name:     domainEgressStreamName,
-		Subjects: []string{fmt.Sprintf(DomainEgressSubjectsTmpl, s.name, ">")},
+		Subjects: []string{fmt.Sprintf(DomainEgressSubjectsTmpl, dm.name, ">")},
 	}
-	return s.createStreamIfNotExists(sc)
+	return dm.createStreamIfNotExists(sc)
 }
 
-func (s *Domain) createStreamIfNotExists(sc *nats.StreamConfig) error {
+func (dm *Domain) createStreamIfNotExists(sc *nats.StreamConfig) error {
 	// Create streams if does not exist ------------------------------
 	/* Each stream contains a single subject (topic).
 	 * Differently named stream with overlapping subjects cannot exist!
@@ -242,31 +243,31 @@ func (s *Domain) createStreamIfNotExists(sc *nats.StreamConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var existingStreams []string
-	for info := range s.js.StreamsInfo(nats.Context(ctx)) {
+	for info := range dm.js.StreamsInfo(nats.Context(ctx)) {
 		existingStreams = append(existingStreams, info.Config.Name)
 	}
 	if !slices.Contains(existingStreams, sc.Name) {
-		_, err := s.js.AddStream(sc)
+		_, err := dm.js.AddStream(sc)
 		return err
 	}
 	return nil
 	// --------------------------------------------------------------
 }
 
-func (s *Domain) createRouter(sourceStreamName string, subject string, tsc targetSubjectCalculator) error {
-	consumerName := sourceStreamName + "-" + s.name + "-consumer"
+func (dm *Domain) createRouter(sourceStreamName string, subject string, tsc targetSubjectCalculator) error {
+	consumerName := sourceStreamName + "-" + dm.name + "-consumer"
 	consumerGroup := consumerName + "-group"
-	lg.Logf(lg.TraceLevel, "Handling domain (domain=%s) router for sourceStreamName=%s\n", s.name, sourceStreamName)
+	lg.Logf(lg.TraceLevel, "Handling domain (domain=%s) router for sourceStreamName=%s\n", dm.name, sourceStreamName)
 
 	// Create stream consumer if does not exist ---------------------
 	consumerExists := false
-	for info := range s.js.Consumers(sourceStreamName, nats.MaxWait(10*time.Second)) {
+	for info := range dm.js.Consumers(sourceStreamName, nats.MaxWait(10*time.Second)) {
 		if info.Name == consumerName {
 			consumerExists = true
 		}
 	}
 	if !consumerExists {
-		_, err := s.js.AddConsumer(sourceStreamName, &nats.ConsumerConfig{
+		_, err := dm.js.AddConsumer(sourceStreamName, &nats.ConsumerConfig{
 			Name:           consumerName,
 			Durable:        consumerName,
 			DeliverSubject: consumerName,
@@ -280,20 +281,20 @@ func (s *Domain) createRouter(sourceStreamName string, subject string, tsc targe
 	}
 	// --------------------------------------------------------------
 
-	_, err := s.js.QueueSubscribe(
+	_, err := dm.js.QueueSubscribe(
 		subject,
 		consumerGroup,
 		func(msg *nats.Msg) {
 			targetSubject, err := tsc(msg)
-			//lg.Logf(lg.TraceLevel, "Routing (from_domain=%s) %s:%s -> %s\n", s.name, sourceStreamName, msg.Subject, targetSubject)
+			//lg.Logf(lg.TraceLevel, "Routing (from_domain=%s) %s:%s -> %s\n", dm.name, sourceStreamName, msg.Subject, targetSubject)
 			if err == nil {
-				pubAck, err := s.js.Publish(targetSubject, msg.Data)
+				pubAck, err := dm.js.Publish(targetSubject, msg.Data)
 				if err == nil {
-					lg.Logf(lg.TraceLevel, "Routed (from_domain=%s) %s:%s -> (to_domain=%s) %s:%s\n", s.name, sourceStreamName, msg.Subject, pubAck.Domain, pubAck.Stream, targetSubject)
+					lg.Logf(lg.TraceLevel, "Routed (from_domain=%s) %s:%s -> (to_domain=%s) %s:%s\n", dm.name, sourceStreamName, msg.Subject, pubAck.Domain, pubAck.Stream, targetSubject)
 					system.MsgOnErrorReturn(msg.Ack())
 					return
 				} else {
-					lg.Logf(lg.ErrorLevel, "Domain (domain=%s) router with sourceStreamName=%s cannot republish message to subject %s: %s\n", s.name, sourceStreamName, targetSubject, err)
+					lg.Logf(lg.ErrorLevel, "Domain (domain=%s) router with sourceStreamName=%s cannot republish message to subject %s: %s\n", dm.name, sourceStreamName, targetSubject, err)
 				}
 			}
 			system.MsgOnErrorReturn(msg.Nak())
@@ -302,7 +303,7 @@ func (s *Domain) createRouter(sourceStreamName string, subject string, tsc targe
 		nats.ManualAck(),
 	)
 	if err != nil {
-		lg.Logf(lg.ErrorLevel, "Invalid subscription for domain (domain=%s) router with sourceStreamName=%s: %s\n", s.name, sourceStreamName, err)
+		lg.Logf(lg.ErrorLevel, "Invalid subscription for domain (domain=%s) router with sourceStreamName=%s: %s\n", dm.name, sourceStreamName, err)
 		return err
 	}
 	return nil

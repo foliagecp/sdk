@@ -24,17 +24,21 @@ func NewCacheConfig(id string) *Config {
 	}
 }
 
-func (ro *Config) SetKVStorePrefix(kvStorePrefix string) *Config {
-	ro.kvStorePrefix = kvStorePrefix
-	return ro
+func (cc *Config) GetId() string {
+	return cc.id
 }
 
-func (ro *Config) SetLRUSize(lruSize int) *Config {
-	ro.lruSize = lruSize
-	return ro
+func (cc *Config) SetKVStorePrefix(kvStorePrefix string) *Config {
+	cc.kvStorePrefix = kvStorePrefix
+	return cc
 }
 
-func (ro *Config) SetLevelSubscriptionNotificationsBufferMaxSize(levelSubscriptionNotificationsBufferMaxSize int) *Config {
-	ro.levelSubscriptionNotificationsBufferMaxSize = levelSubscriptionNotificationsBufferMaxSize
-	return ro
+func (cc *Config) SetLRUSize(lruSize int) *Config {
+	cc.lruSize = lruSize
+	return cc
+}
+
+func (cc *Config) SetLevelSubscriptionNotificationsBufferMaxSize(levelSubscriptionNotificationsBufferMaxSize int) *Config {
+	cc.levelSubscriptionNotificationsBufferMaxSize = levelSubscriptionNotificationsBufferMaxSize
+	return cc
 }

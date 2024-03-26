@@ -3,8 +3,8 @@
 package statefun
 
 const (
+	RuntimeName                 = "runtime"
 	NatsURL                     = "nats://nats:foliage@nats:4222"
-	RuntimeName                 = "foliage_runtime"
 	KVMutexLifetimeSec          = 120
 	KVMutexIsOldPollingInterval = 10
 	FunctionTypeIDLifetimeMs    = 5000
@@ -15,6 +15,7 @@ const (
 )
 
 type RuntimeConfig struct {
+	name                           string
 	natsURL                        string
 	kvMutexLifeTimeSec             int
 	kvMutexIsOldPollingIntervalSec int
@@ -27,6 +28,7 @@ type RuntimeConfig struct {
 
 func NewRuntimeConfig() *RuntimeConfig {
 	return &RuntimeConfig{
+		name:                           RuntimeName,
 		natsURL:                        NatsURL,
 		kvMutexLifeTimeSec:             KVMutexLifetimeSec,
 		kvMutexIsOldPollingIntervalSec: KVMutexIsOldPollingInterval,
