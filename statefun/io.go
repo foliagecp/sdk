@@ -62,6 +62,9 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 	switch signalProvider {
 	case sfPlugins.JetstreamGlobalSignal:
 		return jetstreamGlobalSignal()
+	case sfPlugins.AutoSignalSelect:
+		selection := sfPlugins.JetstreamGlobalSignal
+		return r.signal(selection, callerTypename, callerID, targetTypename, targetID, payload, options)
 	default:
 		return fmt.Errorf("unknown signal provider: %d", signalProvider)
 	}
