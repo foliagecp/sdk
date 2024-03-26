@@ -14,7 +14,7 @@ import (
 const (
 	OBJECTS_TYPELINK = "__objects"
 	TYPES_TYPELINK   = "__types"
-	TYPE_TYPELINK    = "__type"
+	TO_TYPELINK      = "__type"
 	OBJECT_TYPELINK  = "__object"
 
 	GROUP_TYPELINK = "group"
@@ -88,47 +88,6 @@ func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfP
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
-func FindObjectTypeStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	om := sfMediators.NewOpMediator(ctx)
-
-	typesPattern := fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false), ctx.Self.ID)
-	if _, err := ctx.Domain.Cache().GetValue(typesPattern); err == nil {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed("requested id is a type"))
-		om.Reply()
-		return
-	}
-
-	pattern := fmt.Sprintf(OutLinkTypeKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, TYPE_TYPELINK, ">")
-	keys := ctx.Domain.Cache().GetKeysByPattern(pattern)
-	if len(keys) > 0 {
-		split := strings.Split(keys[0], ".")
-		t := split[len(split)-1]
-		om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONObjectWithKeyValue("type", easyjson.NewJSON(t))))
-	} else {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed("cannot find object's type"))
-	}
-
-	om.Reply()
-}
-
-func FindTypeObjectsStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	om := sfMediators.NewOpMediator(ctx)
-
-	keys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkTypeKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, OBJECT_TYPELINK, ">"))
-	if len(keys) > 0 {
-		out := make([]string, 0, len(keys))
-		for _, v := range keys {
-			split := strings.Split(v, ".")
-			out = append(out, split[len(split)-1])
-		}
-		om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.JSONFromArray(out)))
-	} else {
-		om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONArray()))
-	}
-
-	om.Reply()
-}
-
 // ------------------------------------------------------------------------------------------------
 
 func getTypeTriggers(ctx *sfPlugins.StatefunContextProcessor, typeName string) *easyjson.JSON {
@@ -140,17 +99,17 @@ func getTypeTriggers(ctx *sfPlugins.StatefunContextProcessor, typeName string) *
 }
 
 func findObjectType(ctx *sfPlugins.StatefunContextProcessor, objectID string) string {
-	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.find_object_type", objectID, nil, nil))
+	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", objectID, nil, nil))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
 		return som.Data.GetByPath("type").AsStringDefault("")
 	}
 	return ""
 }
 
-func findTypeObjects(ctx *sfPlugins.StatefunContextProcessor, objectID string) ([]string, error) {
-	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.find_type_objects", objectID, nil, nil))
+func findTypeObjects(ctx *sfPlugins.StatefunContextProcessor, typeName string) ([]string, error) {
+	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.read", typeName, nil, nil))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
-		if arr, ok := som.Data.AsArrayString(); ok {
+		if arr, ok := som.Data.GetByPath("object_ids").AsArrayString(); ok {
 			return arr, nil
 		}
 	}
@@ -171,11 +130,17 @@ func getLinkBody(ctx *sfPlugins.StatefunContextProcessor, from, linkName string)
 	return nil, fmt.Errorf(som.Details)
 }
 
-func getReferenceLinkTypeBetweenTwoObjects(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId string) (string, error) {
+func getReferenceLinkTypeBetweenTwoObjects(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId string) (string, string, string, error) {
 	fromType := findObjectType(ctx, fromObjectId)
+	if len(fromType) == 0 {
+		return "", "", "", fmt.Errorf("from object has no type")
+	}
 	toType := findObjectType(ctx, toObjectId)
-
-	return getObjectsLinkTypeFromTypesLink(ctx, fromType, toType)
+	if len(toType) == 0 {
+		return "", "", "", fmt.Errorf("to object has no type")
+	}
+	s, e := getObjectsLinkTypeFromTypesLink(ctx, fromType, toType)
+	return fromType, toType, s, e
 }
 
 func getObjectsLinkTypeFromTypesLink(ctx *sfPlugins.StatefunContextProcessor, fromType, toType string) (string, error) {

@@ -96,7 +96,7 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	_, err := ctx.Domain.Cache().GetValue(ctx.Self.ID)
 	if err != nil { // If vertex does not exist
 		if upsert {
-			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, llAPIVertexCUDNames[0], ctx.Self.ID, ctx.Payload, ctx.Options))).Reply()
+			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", ctx.Self.ID, ctx.Payload, ctx.Options))).Reply()
 		} else {
 			om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("vertex with id=%s does not exist", ctx.Self.ID))).Reply()
 		}
@@ -221,6 +221,8 @@ Reply:
 			links: json - optional // Vertice's links
 				out: json
 					names: json string array
+					types: json string array
+					ids: json string array
 				in: json string array
 					{from: string, name: string}, // from vertex id; link name
 					...
@@ -241,13 +243,32 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	if ctx.Payload.GetByPath("details").AsBoolDefault(false) {
 		outLinkNames := []string{}
+		outLinkTypes := []string{}
+		outLinkIds := []string{}
 		outLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
 		for _, outLinkKey := range outLinkKeys {
 			linkKeyTokens := strings.Split(outLinkKey, ".")
 			linkName := linkKeyTokens[len(linkKeyTokens)-1]
 			outLinkNames = append(outLinkNames, linkName)
+
+			linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
+			brokenTarget := true
+			if err == nil {
+				tokens := strings.Split(string(linkTargetBytes), ".")
+				if len(tokens) == 2 {
+					brokenTarget = false
+					outLinkTypes = append(outLinkTypes, tokens[0])
+					outLinkIds = append(outLinkIds, tokens[1])
+				}
+			}
+			if brokenTarget {
+				outLinkTypes = append(outLinkTypes, "")
+				outLinkIds = append(outLinkIds, "")
+			}
 		}
 		result.SetByPath("links.out.names", easyjson.JSONFromArray(outLinkNames))
+		result.SetByPath("links.out.types", easyjson.JSONFromArray(outLinkTypes))
+		result.SetByPath("links.out.ids", easyjson.JSONFromArray(outLinkIds))
 
 		inLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
 		inLinks := easyjson.NewJSONArray()
@@ -474,7 +495,7 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
 	if err != nil { // Link does not exist
 		if upsert {
-			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, llAPILinkCUDNames[0], ctx.Self.ID, ctx.Payload, ctx.Options))).Reply()
+			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", ctx.Self.ID, ctx.Payload, ctx.Options))).Reply()
 		} else {
 			om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 		}
