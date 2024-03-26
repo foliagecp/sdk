@@ -9,6 +9,7 @@ import (
 	"github.com/foliagecp/easyjson"
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/foliagecp/sdk/clients/go/db"
 	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 
@@ -46,6 +47,8 @@ var (
 	KVMuticesTestDurationSec int = system.GetEnvMustProceed("KV_MUTICES_TEST_DURATION_SEC", 10)
 	// KVMuticesTestWorkers - key/value mutices workers to apply in the test
 	KVMuticesTestWorkers int = system.GetEnvMustProceed("KV_MUTICES_TEST_WORKERS", 4)
+
+	dbClient db.DBSyncClient
 )
 
 func MasterFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
@@ -164,6 +167,12 @@ func Start() {
 	system.GlobalPrometrics = system.NewPrometrics("", ":9901")
 
 	afterStart := func(runtime *statefun.Runtime) error {
+		dbc, err := db.NewDBSyncClientFromRequestFunction(runtime.Request)
+		if err != nil {
+			return err
+		}
+		dbClient = dbc
+
 		if TriggersTest {
 			RunTriggersTest(runtime)
 		}

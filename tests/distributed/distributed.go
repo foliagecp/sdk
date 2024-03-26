@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/foliagecp/easyjson"
+	"github.com/foliagecp/sdk/clients/go/db"
 	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
 
 	graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
@@ -28,6 +29,8 @@ var (
 	CreateSimpleGraphTest bool = system.GetEnvMustProceed("CREATE_SIMPLE_GRAPH_TEST", true)
 	// TriggersTest - test the Foliage cmdb crud triggers
 	TriggersTest bool = system.GetEnvMustProceed("TRIGGERS_TEST", true)
+
+	dbClient db.DBSyncClient
 )
 
 func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
@@ -103,6 +106,12 @@ func Start() {
 	system.GlobalPrometrics = system.NewPrometrics("", ":"+PrometricsServerPort)
 
 	afterStart := func(runtime *statefun.Runtime) error {
+		dbc, err := db.NewDBSyncClientFromRequestFunction(runtime.Request)
+		if err != nil {
+			return err
+		}
+		dbClient = dbc
+
 		if runtime.Domain.Name() == runtime.Domain.HubDomainName() {
 			time.Sleep(5 * time.Second) // Wait for everything to bring up
 			if TriggersTest {
