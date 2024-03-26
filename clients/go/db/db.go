@@ -8,19 +8,19 @@ import (
 )
 
 type DBSyncClient struct {
-	graph GraphSyncClient
-	cmdb  CMDBSyncClient
-	query QuerySyncClient
+	Graph GraphSyncClient
+	CMDB  CMDBSyncClient
+	Query QuerySyncClient
 }
 
-func NewDBClient(NatsURL string, NatsRequestTimeout int) (DBSyncClient, error) {
+func NewDBSyncClient(NatsURL string, NatsRequestTimeout int) (DBSyncClient, error) {
 	var err error
 	nc, err := nats.Connect(NatsURL)
 	if err != nil {
 		return DBSyncClient{}, err
 	}
 	request := getRequestFunc(nc, NatsRequestTimeout)
-	return NewDBClientFromRequestFunction(request)
+	return NewDBSyncClientFromRequestFunction(request)
 }
 
 /*
@@ -28,7 +28,7 @@ ctx.Request
 // or
 runtime.Request
 */
-func NewDBClientFromRequestFunction(request sfp.SFRequestFunc) (DBSyncClient, error) {
+func NewDBSyncClientFromRequestFunction(request sfp.SFRequestFunc) (DBSyncClient, error) {
 	if request == nil {
 		return DBSyncClient{}, fmt.Errorf("request must not be nil")
 	}
@@ -45,8 +45,8 @@ func NewDBClientFromRequestFunction(request sfp.SFRequestFunc) (DBSyncClient, er
 		return DBSyncClient{}, err
 	}
 	return DBSyncClient{
-		graph: graph,
-		cmdb:  cmdb,
-		query: query,
+		Graph: graph,
+		CMDB:  cmdb,
+		Query: query,
 	}, nil
 }

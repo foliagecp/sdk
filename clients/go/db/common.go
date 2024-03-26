@@ -7,6 +7,7 @@ import (
 
 	"github.com/foliagecp/easyjson"
 	sf "github.com/foliagecp/sdk/statefun"
+	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfp "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/nats-io/nats.go"
 )
@@ -18,6 +19,13 @@ type OpError struct {
 
 func (oe *OpError) Error() string {
 	return fmt.Sprintf("%d: %s", oe.StatusCode, oe.Details)
+}
+
+func OpErrorFromOpMsg(om sfMediators.OpMsg) error {
+	if om.Status == sfMediators.SYNC_OP_STATUS_OK {
+		return nil
+	}
+	return &OpError{om.Status, om.Details}
 }
 
 func buildNatsData(callerTypename string, callerID string, payload *easyjson.JSON, options *easyjson.JSON) []byte {

@@ -41,5 +41,5 @@ func (qc QuerySyncClient) JPGQLCtraQuery(id, query string) ([]string, error) {
 
 	om := sfMediators.OpMsgFromSfReply(qc.request(sfp.AutoRequestSelect, "functions.graph.api.query.jpgql.ctra", id, &payload, nil))
 
-	return om.Data.ObjectKeys(), &OpError{om.Status, om.Details}
+	return om.Data.ObjectKeys(), OpErrorFromOpMsg(om)
 }
