@@ -22,13 +22,13 @@ type CMDBSyncClient struct {
 	request sfp.SFRequestFunc
 }
 
-func NewCMDBSyncClient(NatsURL string, NatsRequestTimeoutSec int) (CMDBSyncClient, error) {
+func NewCMDBSyncClient(NatsURL string, NatsRequestTimeoutSec int, HubDomainName string) (CMDBSyncClient, error) {
 	var err error
 	nc, err := nats.Connect(NatsURL)
 	if err != nil {
 		return CMDBSyncClient{}, err
 	}
-	request := getRequestFunc(nc, NatsRequestTimeoutSec)
+	request := getRequestFunc(nc, NatsRequestTimeoutSec, HubDomainName)
 	return NewCMDBSyncClientFromRequestFunction(request)
 }
 
