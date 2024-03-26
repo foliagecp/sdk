@@ -13,9 +13,9 @@ type TriggerType = string
 
 const (
 	CreateTrigger TriggerType = "create"
-	UpdateTrigger             = "update"
-	DeleteTrigger             = "delete"
-	ReadTrigger               = "read"
+	UpdateTrigger TriggerType = "update"
+	DeleteTrigger TriggerType = "delete"
+	ReadTrigger   TriggerType = "read"
 )
 
 type CMDBSyncClient struct {
@@ -282,7 +282,7 @@ func (cmdb CMDBSyncClient) TypesLinkCreate(from, to, objectLinkType string, tags
 	if len(body) > 0 {
 		payload.SetByPath("body", body[0])
 	}
-	if tags != nil && len(tags) > 0 {
+	if len(tags) > 0 {
 		payload.SetByPath("tags", easyjson.JSONFromArray(tags))
 	}
 	payload.SetByPath("object_type", easyjson.NewJSON(objectLinkType))
@@ -297,7 +297,7 @@ func (cmdb CMDBSyncClient) TypesLinkUpdate(from, to string, tags []string, body 
 	}
 	payload.SetByPath("to", easyjson.NewJSON(to))
 	payload.SetByPath("body", body)
-	if tags != nil && len(tags) > 0 {
+	if len(tags) > 0 {
 		payload.SetByPath("tags", easyjson.JSONFromArray(tags))
 	}
 	payload.SetByPath("replace", easyjson.NewJSON(replace))
@@ -328,7 +328,7 @@ func (cmdb CMDBSyncClient) ObjectsLinkCreate(from, to, name string, tags []strin
 	if len(body) > 0 {
 		payload.SetByPath("body", body[0])
 	}
-	if tags != nil && len(tags) > 0 {
+	if len(tags) > 0 {
 		payload.SetByPath("tags", easyjson.JSONFromArray(tags))
 	}
 
@@ -343,7 +343,7 @@ func (cmdb CMDBSyncClient) ObjectsLinkUpdate(from, to string, tags []string, bod
 	}
 	payload.SetByPath("to", easyjson.NewJSON(to))
 	payload.SetByPath("body", body)
-	if tags != nil && len(tags) > 0 {
+	if len(tags) > 0 {
 		payload.SetByPath("tags", easyjson.JSONFromArray(tags))
 	}
 	payload.SetByPath("replace", easyjson.NewJSON(replace))
