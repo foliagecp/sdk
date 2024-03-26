@@ -9,6 +9,9 @@ import (
 )
 
 func executeTriggersFromLLOpStack(ctx *sfPlugins.StatefunContextProcessor, opStack *easyjson.JSON, deletedObjectId, deletedObjectType string) {
+	llAPIVertexCUDNames := []string{"functions.graph.api.vertex.create", "functions.graph.api.vertex.update", "functions.graph.api.vertex.delete", "functions.graph.api.vertex.read"}
+	llAPILinkCUDNames := []string{"functions.graph.api.link.create", "functions.graph.api.link.update", "functions.graph.api.link.delete", "functions.graph.api.link.read"}
+
 	if opStack != nil && opStack.IsArray() {
 		for i := 0; i < opStack.ArraySize(); i++ {
 			opData := opStack.ArrayElement(i)

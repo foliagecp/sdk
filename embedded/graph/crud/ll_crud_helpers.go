@@ -83,6 +83,7 @@ func getLinkNameFromSpecifiedIdentifier(ctx *sfPlugins.StatefunContextProcessor)
 		return linkName, true
 	} else {
 		if toVertexId, ok := ctx.Payload.GetByPath("to").AsString(); ok {
+			toVertexId = ctx.Domain.CreateObjectIDWithThisDomain(toVertexId, false)
 			if lt, ok := ctx.Payload.GetByPath("type").AsString(); ok {
 				linkNameBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, lt, toVertexId))
 				if err == nil {
