@@ -255,7 +255,7 @@ func (cmdb CMDBSyncClient) ObjectCreate(objectID, originType string, body ...eas
 func (cmdb CMDBSyncClient) ObjectUpdate(objectID string, body easyjson.JSON, replace bool, originType4Upsert ...string) error {
 	payload := easyjson.NewJSONObject()
 	if len(originType4Upsert) > 0 {
-		payload.SetByPath("usert", easyjson.NewJSON(true))
+		payload.SetByPath("upsert", easyjson.NewJSON(true))
 		payload.SetByPath("origin_type", easyjson.NewJSON(originType4Upsert[0]))
 	}
 	payload.SetByPath("replace", easyjson.NewJSON(replace))
