@@ -252,7 +252,7 @@ func (cmdb CMDBSyncClient) ObjectCreate(objectID, originType string, body ...eas
 	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.object.create", objectID, &payload, nil)))
 }
 
-func (cmdb CMDBSyncClient) ObjectUdate(objectID string, body easyjson.JSON, replace bool, originType4Upsert ...string) error {
+func (cmdb CMDBSyncClient) ObjectUpdate(objectID string, body easyjson.JSON, replace bool, originType4Upsert ...string) error {
 	payload := easyjson.NewJSONObject()
 	if len(originType4Upsert) > 0 {
 		payload.SetByPath("usert", easyjson.NewJSON(true))

@@ -64,7 +64,7 @@ func (gc GraphSyncClient) VertexRead(id string, details ...bool) (easyjson.JSON,
 	if len(details) > 0 {
 		payload.SetByPath("details", easyjson.NewJSON(details[0]))
 	}
-	om := sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.vertex.delete", id, &payload, nil))
+	om := sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.vertex.read", id, &payload, nil))
 	return om.Data, OpErrorFromOpMsg(om)
 }
 
