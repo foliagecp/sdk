@@ -59,8 +59,12 @@ func (gc GraphSyncClient) VertexDelete(id string) error {
 	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.vertex.delete", id, nil, nil)))
 }
 
-func (gc GraphSyncClient) VertexRead(id string) (easyjson.JSON, error) {
-	om := sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.vertex.delete", id, nil, nil))
+func (gc GraphSyncClient) VertexRead(id string, details ...bool) (easyjson.JSON, error) {
+	payload := easyjson.NewJSONObject()
+	if len(details) > 0 {
+		payload.SetByPath("details", easyjson.NewJSON(details[0]))
+	}
+	om := sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.vertex.delete", id, &payload, nil))
 	return om.Data, OpErrorFromOpMsg(om)
 }
 
@@ -130,18 +134,24 @@ func (gc GraphSyncClient) VerticesLinkDeleteByToAndType(from, to, linkType strin
 	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.link.delete", from, &payload, nil)))
 }
 
-func (gc GraphSyncClient) VerticesLinkRead(from, linkName string) (easyjson.JSON, error) {
+func (gc GraphSyncClient) VerticesLinkRead(from, linkName string, details ...bool) (easyjson.JSON, error) {
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("name", easyjson.NewJSON(linkName))
+	if len(details) > 0 {
+		payload.SetByPath("details", easyjson.NewJSON(details[0]))
+	}
 
 	om := sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.link.read", from, &payload, nil))
 	return om.Data, OpErrorFromOpMsg(om)
 }
 
-func (gc GraphSyncClient) VerticesLinkReadByToAndType(from, to, linkType string) (easyjson.JSON, error) {
+func (gc GraphSyncClient) VerticesLinkReadByToAndType(from, to, linkType string, details ...bool) (easyjson.JSON, error) {
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("to", easyjson.NewJSON(to))
 	payload.SetByPath("type", easyjson.NewJSON(linkType))
+	if len(details) > 0 {
+		payload.SetByPath("details", easyjson.NewJSON(details[0]))
+	}
 
 	om := sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.link.read", from, &payload, nil))
 	return om.Data, OpErrorFromOpMsg(om)
