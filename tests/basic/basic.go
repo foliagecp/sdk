@@ -167,6 +167,10 @@ func Start() {
 	system.GlobalPrometrics = system.NewPrometrics("", ":9901")
 
 	afterStart := func(runtime *statefun.Runtime) error {
+		if KVMuticesTest {
+			KVMuticesSimpleTest(runtime, KVMuticesTestDurationSec, KVMuticesTestWorkers, 2, 1)
+		}
+
 		dbc, err := db.NewDBSyncClientFromRequestFunction(runtime.Request)
 		if err != nil {
 			return err
@@ -186,10 +190,6 @@ func Start() {
 	}
 
 	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "basic")); err == nil {
-		if KVMuticesTest {
-			KVMuticesSimpleTest(runtime, KVMuticesTestDurationSec, KVMuticesTestWorkers, 2, 1)
-		}
-
 		RegisterFunctionTypes(runtime)
 		if TriggersTest {
 			registerTriggerFunctions(runtime)
