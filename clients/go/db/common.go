@@ -18,11 +18,11 @@ type OpError struct {
 }
 
 func (oe *OpError) Error() string {
-	return fmt.Sprintf("%d: %s", oe.StatusCode, oe.Details)
+	return fmt.Sprintf("db_client operation failed with status %d: %s", oe.StatusCode, oe.Details)
 }
 
 func OpErrorFromOpMsg(om sfMediators.OpMsg) error {
-	if om.Status == sfMediators.SYNC_OP_STATUS_OK {
+	if om.Status == sfMediators.SYNC_OP_STATUS_OK || om.Status == sfMediators.SYNC_OP_STATUS_IDLE {
 		return nil
 	}
 	return &OpError{om.Status, om.Details}
