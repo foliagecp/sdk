@@ -23,7 +23,7 @@ func replyWithoutOpStack(om *sfMediators.OpMediator, data ...easyjson.JSON) {
 		res = easyjson.NewJSONNull()
 	}
 	reply := sfMediators.MakeOpMsg(om.GetStatus(), om.GetDetails(), "", res).ToJson()
-	om.ReplyWithData(reply)
+	system.MsgOnErrorReturn(om.ReplyWithData(reply))
 }
 
 /*
@@ -130,7 +130,8 @@ func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProces
 		}
 	}
 	if !vertexIsType {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s is not a type", ctx.Self.ID))).ReplyWithData(easyjson.NewJSONObject().GetPtr())
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s is not a type", ctx.Self.ID)))
+		system.MsgOnErrorReturn(om.ReplyWithData(easyjson.NewJSONObject().GetPtr()))
 		return
 	}
 
@@ -285,7 +286,8 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 		}
 	}
 	if !vertexIsObject {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s is not an object", ctx.Self.ID))).ReplyWithData(easyjson.NewJSONObject().GetPtr())
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s is not an object", ctx.Self.ID)))
+		system.MsgOnErrorReturn(om.ReplyWithData(easyjson.NewJSONObject().GetPtr()))
 		return
 	}
 
@@ -302,7 +304,8 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 		}
 	}
 	if len(objectType) == 0 {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("objects with id=%s has no type", ctx.Self.ID))).ReplyWithData(easyjson.NewJSONObject().GetPtr())
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("objects with id=%s has no type", ctx.Self.ID)))
+		system.MsgOnErrorReturn(om.ReplyWithData(easyjson.NewJSONObject().GetPtr()))
 		return
 	}
 
@@ -647,5 +650,5 @@ func ReadObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	result.SetByPath("to_type", easyjson.NewJSON(toObjectType))
 
 	replyWithoutOpStack(om)
-	om.ReplyWithData(&result)
+	system.MsgOnErrorReturn(om.ReplyWithData(&result))
 }

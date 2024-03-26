@@ -73,7 +73,7 @@ func (gc GraphSyncClient) VerticesLinkCreate(from, to, linkName, linkType string
 	if len(body) > 0 {
 		payload.SetByPath("body", body[0])
 	}
-	if tags != nil && len(tags) > 0 {
+	if len(tags) > 0 {
 		payload.SetByPath("tags", easyjson.JSONFromArray(tags))
 	}
 
@@ -84,7 +84,7 @@ func (gc GraphSyncClient) VerticesLinkUpdate(from, linkName string, tags []strin
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("name", easyjson.NewJSON(linkName))
 	payload.SetByPath("body", body)
-	if tags != nil && len(tags) > 0 {
+	if len(tags) > 0 {
 		payload.SetByPath("tags", easyjson.JSONFromArray(tags))
 	}
 	if len(toAndType4Upsert) == 2 {
@@ -104,7 +104,7 @@ func (gc GraphSyncClient) VerticesLinkUpdateByToAndType(from, to, linkType strin
 	payload.SetByPath("type", easyjson.NewJSON(linkType))
 
 	payload.SetByPath("body", body)
-	if tags != nil && len(tags) > 0 {
+	if len(tags) > 0 {
 		payload.SetByPath("tags", easyjson.JSONFromArray(tags))
 	}
 	if len(name4Upsert) > 0 {
