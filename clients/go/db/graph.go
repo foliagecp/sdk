@@ -13,13 +13,13 @@ type GraphSyncClient struct {
 	request sfp.SFRequestFunc
 }
 
-func NewGraphSyncClient(NatsURL string, NatsRequestTimeout int) (GraphSyncClient, error) {
+func NewGraphSyncClient(NatsURL string, NatsRequestTimeoutSec int) (GraphSyncClient, error) {
 	var err error
 	nc, err := nats.Connect(NatsURL)
 	if err != nil {
 		return GraphSyncClient{}, err
 	}
-	request := getRequestFunc(nc, NatsRequestTimeout)
+	request := getRequestFunc(nc, NatsRequestTimeoutSec)
 	return NewGraphSyncClientFromRequestFunction(request)
 }
 
