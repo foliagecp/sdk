@@ -49,7 +49,7 @@ func TriggersTestIteration(runtime *statefun.Runtime) {
 	system.MsgOnErrorReturn(dbClient.CMDB.ObjectDelete("a"))
 	system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("a", "typea", easyjson.NewJSONObjectWithKeyValue("a_state", easyjson.NewJSON("recreated"))))
 	system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkCreate("a", "b", "2b", nil, easyjson.NewJSONObjectWithKeyValue("ab_state", easyjson.NewJSON("recreated"))))
-	system.MsgOnErrorReturn(dbClient.CMDB.ObjectUdate("b", easyjson.NewJSONObjectWithKeyValue("b_state", easyjson.NewJSON("updated")), true))
+	system.MsgOnErrorReturn(dbClient.CMDB.ObjectUpdate("b", easyjson.NewJSONObjectWithKeyValue("b_state", easyjson.NewJSON("updated")), true))
 	system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkUpdate("a", "b", nil, easyjson.NewJSONObjectWithKeyValue("ab_state", easyjson.NewJSON("updated")), true))
 	system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkDelete("a", "b"))
 	system.MsgOnErrorReturn(dbClient.CMDB.ObjectDelete("b"))
