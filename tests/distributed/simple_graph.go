@@ -1,119 +1,38 @@
 package main
 
 import (
-	"github.com/foliagecp/easyjson"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 
 	"github.com/foliagecp/sdk/statefun"
-	"github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 )
 
 func CreateTestGraph(runtime *statefun.Runtime) {
 	lg.Logln(lg.DebugLevel, ">>> Test started: simple graph creation")
 
-	system.MsgOnErrorReturn(runtime.Request(plugins.AutoRequestSelect, "functions.graph.api.vertex.create", "hub/rt", easyjson.NewJSONObject().GetPtr(), nil))
-	system.MsgOnErrorReturn(runtime.Request(plugins.AutoRequestSelect, "functions.graph.api.vertex.create", "hub/a", easyjson.NewJSONObject().GetPtr(), nil))
-	system.MsgOnErrorReturn(runtime.Request(plugins.AutoRequestSelect, "functions.graph.api.vertex.create", "hub/b", easyjson.NewJSONObject().GetPtr(), nil))
-	system.MsgOnErrorReturn(runtime.Request(plugins.AutoRequestSelect, "functions.graph.api.vertex.create", "hub/c", easyjson.NewJSONObject().GetPtr(), nil))
-	system.MsgOnErrorReturn(runtime.Request(plugins.AutoRequestSelect, "functions.graph.api.vertex.create", "leaf/d", easyjson.NewJSONObject().GetPtr(), nil))
-	system.MsgOnErrorReturn(runtime.Request(plugins.AutoRequestSelect, "functions.graph.api.vertex.create", "leaf/e", easyjson.NewJSONObject().GetPtr(), nil))
-	system.MsgOnErrorReturn(runtime.Request(plugins.AutoRequestSelect, "functions.graph.api.vertex.create", "leaf/f", easyjson.NewJSONObject().GetPtr(), nil))
-	system.MsgOnErrorReturn(runtime.Request(plugins.AutoRequestSelect, "functions.graph.api.vertex.create", "leaf/g", easyjson.NewJSONObject().GetPtr(), nil))
-	system.MsgOnErrorReturn(runtime.Request(plugins.AutoRequestSelect, "functions.graph.api.vertex.create", "leaf/h", easyjson.NewJSONObject().GetPtr(), nil))
+	system.MsgOnErrorReturn(dbClient.Graph.VertexCreate("hub/rt"))
+	system.MsgOnErrorReturn(dbClient.Graph.VertexCreate("hub/a"))
+	system.MsgOnErrorReturn(dbClient.Graph.VertexCreate("hub/b"))
+	system.MsgOnErrorReturn(dbClient.Graph.VertexCreate("hub/c"))
+	system.MsgOnErrorReturn(dbClient.Graph.VertexCreate("leaf/d"))
+	system.MsgOnErrorReturn(dbClient.Graph.VertexCreate("leaf/e"))
+	system.MsgOnErrorReturn(dbClient.Graph.VertexCreate("leaf/f"))
+	system.MsgOnErrorReturn(dbClient.Graph.VertexCreate("leaf/g"))
+	system.MsgOnErrorReturn(dbClient.Graph.VertexCreate("leaf/h"))
 
-	var v easyjson.JSON
-
-	v = easyjson.NewJSONObject()
-	v.SetByPath("to", easyjson.NewJSON("hub/a"))
-	v.SetByPath("type", easyjson.NewJSON("type1"))
-	v.SetByPath("tags", easyjson.JSONFromArray([]string{"t1", "t2"}))
-	v.SetByPath("name", easyjson.NewJSON("2a"))
-	system.MsgOnErrorReturn(runtime.Request(plugins.AutoRequestSelect, "functions.graph.api.link.create", "hub/rt", &v, nil))
-
-	v = easyjson.NewJSONObject()
-	v.SetByPath("to", easyjson.NewJSON("hub/a"))
-	v.SetByPath("type", easyjson.NewJSON("type2"))
-	v.SetByPath("tags", easyjson.JSONFromArray([]string{"t2", "t4"}))
-	v.SetByPath("name", easyjson.NewJSON("2a"))
-	system.MsgOnErrorReturn(runtime.Request(plugins.AutoRequestSelect, "functions.graph.api.link.create", "hub/rt", &v, nil))
-
-	v = easyjson.NewJSONObject()
-	v.SetByPath("to", easyjson.NewJSON("hub/b"))
-	v.SetByPath("type", easyjson.NewJSON("type2"))
-	v.SetByPath("tags", easyjson.JSONFromArray([]string{"t2"}))
-	v.SetByPath("name", easyjson.NewJSON("2b"))
-	system.MsgOnErrorReturn(runtime.Request(plugins.AutoRequestSelect, "functions.graph.api.link.create", "hub/rt", &v, nil))
-
-	v = easyjson.NewJSONObject()
-	v.SetByPath("to", easyjson.NewJSON("hub/c"))
-	v.SetByPath("type", easyjson.NewJSON("type1"))
-	v.SetByPath("tags", easyjson.NewJSONObject())
-	v.SetByPath("name", easyjson.NewJSON("2c"))
-	system.MsgOnErrorReturn(runtime.Request(plugins.AutoRequestSelect, "functions.graph.api.link.create", "hub/rt", &v, nil))
-
-	v = easyjson.NewJSONObject()
-	v.SetByPath("to", easyjson.NewJSON("leaf/e"))
-	v.SetByPath("type", easyjson.NewJSON("type3"))
-	v.SetByPath("tags", easyjson.JSONFromArray([]string{"t3"}))
-	v.SetByPath("name", easyjson.NewJSON("2e"))
-	system.MsgOnErrorReturn(runtime.Request(plugins.AutoRequestSelect, "functions.graph.api.link.create", "hub/a", &v, nil))
-
-	v = easyjson.NewJSONObject()
-	v.SetByPath("to", easyjson.NewJSON("leaf/e"))
-	v.SetByPath("type", easyjson.NewJSON("type4"))
-	v.SetByPath("tags", easyjson.JSONFromArray([]string{"t1", "t2", "t3"}))
-	v.SetByPath("name", easyjson.NewJSON("2e"))
-	system.MsgOnErrorReturn(runtime.Request(plugins.AutoRequestSelect, "functions.graph.api.link.create", "hub/b", &v, nil))
-
-	v = easyjson.NewJSONObject()
-	v.SetByPath("to", easyjson.NewJSON("leaf/d"))
-	v.SetByPath("type", easyjson.NewJSON("type3"))
-	v.SetByPath("tags", easyjson.JSONFromArray([]string{"t1"}))
-	v.SetByPath("name", easyjson.NewJSON("2d"))
-	system.MsgOnErrorReturn(runtime.Request(plugins.AutoRequestSelect, "functions.graph.api.link.create", "hub/c", &v, nil))
-
-	v = easyjson.NewJSONObject()
-	v.SetByPath("to", easyjson.NewJSON("hub/b"))
-	v.SetByPath("type", easyjson.NewJSON("type1"))
-	v.SetByPath("tags", easyjson.JSONFromArray([]string{"t1", "t3"}))
-	v.SetByPath("name", easyjson.NewJSON("2b"))
-	system.MsgOnErrorReturn(runtime.Request(plugins.AutoRequestSelect, "functions.graph.api.link.create", "leaf/d", &v, nil))
-
-	v = easyjson.NewJSONObject()
-	v.SetByPath("to", easyjson.NewJSON("hub/b"))
-	v.SetByPath("type", easyjson.NewJSON("type2"))
-	v.SetByPath("tags", easyjson.JSONFromArray([]string{"t4"}))
-	v.SetByPath("name", easyjson.NewJSON("2b"))
-	system.MsgOnErrorReturn(runtime.Request(plugins.AutoRequestSelect, "functions.graph.api.link.create", "leaf/e", &v, nil))
-
-	v = easyjson.NewJSONObject()
-	v.SetByPath("to", easyjson.NewJSON("leaf/f"))
-	v.SetByPath("type", easyjson.NewJSON("type1"))
-	v.SetByPath("tags", easyjson.JSONFromArray([]string{"t1", "t4"}))
-	v.SetByPath("name", easyjson.NewJSON("2f"))
-	system.MsgOnErrorReturn(runtime.Request(plugins.AutoRequestSelect, "functions.graph.api.link.create", "leaf/e", &v, nil))
-
-	v = easyjson.NewJSONObject()
-	v.SetByPath("to", easyjson.NewJSON("leaf/g"))
-	v.SetByPath("type", easyjson.NewJSON("type5"))
-	v.SetByPath("tags", easyjson.JSONFromArray([]string{"t1", "t2", "t3", "t4"}))
-	v.SetByPath("name", easyjson.NewJSON("2g"))
-	system.MsgOnErrorReturn(runtime.Request(plugins.AutoRequestSelect, "functions.graph.api.link.create", "leaf/f", &v, nil))
-
-	v = easyjson.NewJSONObject()
-	v.SetByPath("to", easyjson.NewJSON("leaf/d"))
-	v.SetByPath("type", easyjson.NewJSON("type2"))
-	v.SetByPath("tags", easyjson.JSONFromArray([]string{"t5"}))
-	v.SetByPath("name", easyjson.NewJSON("2d"))
-	system.MsgOnErrorReturn(runtime.Request(plugins.AutoRequestSelect, "functions.graph.api.link.create", "leaf/g", &v, nil))
-
-	v = easyjson.NewJSONObject()
-	v.SetByPath("to", easyjson.NewJSON("leaf/h"))
-	v.SetByPath("type", easyjson.NewJSON("type2"))
-	v.SetByPath("tags", easyjson.JSONFromArray([]string{}))
-	v.SetByPath("name", easyjson.NewJSON("2h"))
-	system.MsgOnErrorReturn(runtime.Request(plugins.AutoRequestSelect, "functions.graph.api.link.create", "leaf/g", &v, nil))
+	system.MsgOnErrorReturn(dbClient.Graph.VerticesLinkCreate("hub/rt", "hub/a", "2a", "type1", []string{"t1", "t2"}))
+	system.MsgOnErrorReturn(dbClient.Graph.VerticesLinkCreate("hub/rt", "hub/a", "name0", "type2", []string{"t2", "t4"}))
+	system.MsgOnErrorReturn(dbClient.Graph.VerticesLinkCreate("hub/rt", "hub/b", "2b", "type2", []string{"t2"}))
+	system.MsgOnErrorReturn(dbClient.Graph.VerticesLinkCreate("hub/rt", "hub/c", "2c", "type1", nil))
+	system.MsgOnErrorReturn(dbClient.Graph.VerticesLinkCreate("hub/a", "leaf/e", "2e", "type3", nil))
+	system.MsgOnErrorReturn(dbClient.Graph.VerticesLinkCreate("hub/b", "leaf/e", "2e", "type4", []string{"t1", "t2", "t3"}))
+	system.MsgOnErrorReturn(dbClient.Graph.VerticesLinkCreate("hub/c", "leaf/d", "2d", "type3", []string{"t1"}))
+	system.MsgOnErrorReturn(dbClient.Graph.VerticesLinkCreate("leaf/d", "hub/b", "2b", "type1", []string{"t1", "t3"}))
+	system.MsgOnErrorReturn(dbClient.Graph.VerticesLinkCreate("leaf/e", "hub/b", "2b", "type2", []string{"t4"}))
+	system.MsgOnErrorReturn(dbClient.Graph.VerticesLinkCreate("leaf/e", "leaf/f", "2f", "type1", []string{"t1", "t4"}))
+	system.MsgOnErrorReturn(dbClient.Graph.VerticesLinkCreate("leaf/f", "leaf/g", "2g", "type5", []string{"t1", "t2", "t3", "t4"}))
+	system.MsgOnErrorReturn(dbClient.Graph.VerticesLinkCreate("leaf/g", "leaf/d", "2d", "type2", []string{"t5"}))
+	system.MsgOnErrorReturn(dbClient.Graph.VerticesLinkCreate("leaf/g", "leaf/h", "2h", "type2", nil))
 
 	lg.Logln(lg.DebugLevel, "<<< Test ended: simple graph creation")
 }
