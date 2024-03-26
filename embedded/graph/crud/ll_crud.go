@@ -289,7 +289,7 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 }
 
 /*
-Creates a link of type="type" from a vertex with id the funcion being called with to a vartex with id="to".
+Creates a link.
 
 Request:
 
@@ -436,27 +436,15 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 }
 
 /*
-// Initial request from caller:
-to: string - required // ID for descendant vertex.
-name: string - required // Defines link's name which is unique among all vertex's output links.
-type: string - required // Type of link leading to descendant.
-tags: []string - optional // Defines link tags.
-body: json - optional // Body for link leading to descendant.
-	<key>: <type> - optional // Any additional key and value to be stored in link's body.
-
-// Self-requests to descendants (RequestReply): // ID can be composite: <object_id>===self_link - for non-blocking execution on the same vertex
-	in_name: string - required // Creating input link's name*/
-
-/*
-Updates a link of type="type" from a vertex with id the funcion being called with to a vertex with id="to".
+Updates a link.
 
 Request:
 
 	payload: json - required
-		name: string - required if "to" or "type" is not defined. required is "upsert" is set to "true" // Defines link's name which is unique among all vertex's output links.
+		name: string - required if "to" or "type" is not defined. required if "upsert" is set to "true" // Defines link's name which is unique among all vertex's output links.
 
-		to: string - required if "name" is not defined. required is "upsert" is set to "true" // ID for descendant vertex.
-		type: string - required if "name" is not defined. required is "upsert" is set to "true" // Type of link leading to descendant.
+		to: string - required if "name" is not defined. required if "upsert" is set to "true" // ID for descendant vertex.
+		type: string - required if "name" is not defined. required if "upsert" is set to "true" // Type of link leading to descendant.
 
 		tags: []string - optional // Defines link tags.
 		upsert: bool // "false" - (default), "true" - will create link if does not exist
@@ -561,7 +549,7 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 }
 
 /*
-Delete a link of type="type" from a vertex with id the funcion being called with to a vertex with id="to".
+Delete a link.
 
 Request:
 
