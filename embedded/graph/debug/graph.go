@@ -9,8 +9,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"os"
-	"strings"
 
 	"github.com/emicklei/dot"
 	"github.com/foliagecp/easyjson"
@@ -82,10 +80,14 @@ func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 		}
 	}
 
-	go createGraphViz(ctx.Self.ID, ctx.Domain, nodes, edges)
+	om := sfMediators.NewOpMediator(ctx)
+
+	dotData := createGraphViz(ctx.Self.ID, ctx.Domain, nodes, edges)
+	reply := easyjson.NewJSONObjectWithKeyValue("dot_file", easyjson.NewJSON(dotData))
+	om.AggregateOpMsg(sfMediators.OpMsgOk(reply)).Reply()
 }
 
-func createGraphViz(sourceVertex string, domain sfPlugins.Domain, nodes map[string]struct{}, edges []gdEdge) {
+func createGraphViz(sourceVertex string, domain sfPlugins.Domain, nodes map[string]struct{}, edges []gdEdge) string {
 	dotGraph := dot.NewGraph(dot.Directed)
 
 	domainColors := map[string]string{}
@@ -133,12 +135,7 @@ func createGraphViz(sourceVertex string, domain sfPlugins.Domain, nodes map[stri
 		}
 	}
 
-	vtx := strings.ReplaceAll(sourceVertex, "/", "-")
-	outputPath := fmt.Sprintf("graph_%s.dot", vtx)
-	err := os.WriteFile(outputPath, []byte(dotGraph.String()), 0644)
-	if err != nil {
-		logger.Logln(logger.ErrorLevel, err)
-	}
+	return dotGraph.String()
 }
 
 func getEdges(ctx *sfPlugins.StatefunContextProcessor, id string) []gdEdge {
