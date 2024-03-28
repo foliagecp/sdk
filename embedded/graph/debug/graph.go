@@ -60,16 +60,15 @@ func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 			continue
 		}
 		nodes[node.id] = struct{}{}
-		if maxDepth >= 0 && node.depth >= maxDepth {
-			continue
-		}
 
 		for _, edge := range getEdges(ctx, node.id) {
-			if _, ok := nodes[edge.to]; !ok {
-				queue = append(queue, gdNode{edge.to, node.depth + 1}) // Forward link itrospection
-			}
-			if _, ok := nodes[edge.from]; !ok {
-				queue = append(queue, gdNode{edge.from, node.depth + 1}) // Inward link introspection
+			if maxDepth < 0 || node.depth < maxDepth {
+				if _, ok := nodes[edge.to]; !ok {
+					queue = append(queue, gdNode{edge.to, node.depth + 1}) // Forward link itrospection
+				}
+				if _, ok := nodes[edge.from]; !ok {
+					queue = append(queue, gdNode{edge.from, node.depth + 1}) // Inward link introspection
+				}
 			}
 			if edge.from == node.id {
 				if _, ok := uniqueEdges[edge.from+edge.name]; !ok {
