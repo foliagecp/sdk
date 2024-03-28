@@ -8,9 +8,10 @@ import (
 )
 
 type DBSyncClient struct {
-	Graph GraphSyncClient
-	CMDB  CMDBSyncClient
-	Query QuerySyncClient
+	Request sfp.SFRequestFunc
+	Graph   GraphSyncClient
+	CMDB    CMDBSyncClient
+	Query   QuerySyncClient
 }
 
 func NewDBSyncClient(NatsURL string, NatsRequestTimeoutSec int, HubDomainName string) (DBSyncClient, error) {
@@ -45,8 +46,9 @@ func NewDBSyncClientFromRequestFunction(request sfp.SFRequestFunc) (DBSyncClient
 		return DBSyncClient{}, err
 	}
 	return DBSyncClient{
-		Graph: graph,
-		CMDB:  cmdb,
-		Query: query,
+		Request: request,
+		Graph:   graph,
+		CMDB:    cmdb,
+		Query:   query,
 	}, nil
 }
