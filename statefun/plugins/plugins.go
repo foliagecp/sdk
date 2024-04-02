@@ -67,8 +67,8 @@ type StatefunContextProcessor struct {
 	SetContextExpirationAfter func(time.Duration)
 	GetObjectContext          func() *easyjson.JSON
 	SetObjectContext          func(*easyjson.JSON)
-	ObjectMutexLock           func(errorOnLocked bool) error
-	ObjectMutexUnlock         func() error
+	ObjectMutexLock           func(objectId string, errorOnLocked bool) error
+	ObjectMutexUnlock         func(objectId string) error
 	Domain                    Domain
 	// TODO: DownstreamSignal(<function type>, <links filters>, <payload>, <options>)
 	Signal  SFSignalFunc

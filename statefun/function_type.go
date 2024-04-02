@@ -194,8 +194,8 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 	}
 	typenameIDContextProcessor.Caller = *msg.Caller
 
-	typenameIDContextProcessor.ObjectMutexLock = func(errorOnLocked bool) error {
-		lockId := fmt.Sprintf("%s-lock", id)
+	typenameIDContextProcessor.ObjectMutexLock = func(objectId string, errorOnLocked bool) error {
+		lockId := fmt.Sprintf("%s-lock", objectId)
 		revId, err := KeyMutexLock(ft.runtime, lockId, errorOnLocked)
 		if err == nil {
 			objCtx := ft.getContext(lockId)
@@ -205,8 +205,8 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 		}
 		return err
 	}
-	typenameIDContextProcessor.ObjectMutexUnlock = func() error {
-		lockId := fmt.Sprintf("%s-lock", id)
+	typenameIDContextProcessor.ObjectMutexUnlock = func(objectId string) error {
+		lockId := fmt.Sprintf("%s-lock", objectId)
 
 		objCtx := ft.getContext(lockId)
 		v, ok := objCtx.GetByPath("__lock_rev_id").AsNumeric()
