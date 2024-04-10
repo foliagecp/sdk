@@ -288,6 +288,8 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(result.GetPtr(), opStack))).Reply()
 }
 
+// TODO: valid link name format test via regexp is needed!
+
 /*
 Creates a link.
 
