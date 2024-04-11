@@ -6,6 +6,7 @@ package crud
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/foliagecp/easyjson"
@@ -17,6 +18,10 @@ import (
 
 const (
 	noLinkIdentifierMsg = "link identifier is not defined, or link does not exist"
+)
+
+var (
+	validLinkName = regexp.MustCompile(`\A[a-zA-Z0-9_-]+\z`)
 )
 
 /*
@@ -288,8 +293,6 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(result.GetPtr(), opStack))).Reply()
 }
 
-// TODO: valid link name format test via regexp is needed!
-
 /*
 Creates a link.
 
@@ -365,6 +368,10 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		var linkName string
 		if s, ok := payload.GetByPath("name").AsString(); ok {
 			linkName = s
+			if !validLinkName.MatchString(linkName) {
+				om.AggregateOpMsg(sfMediators.OpMsgFailed("invalid link name")).Reply()
+				return
+			}
 		} else {
 			om.AggregateOpMsg(sfMediators.OpMsgFailed("name is not defined")).Reply()
 			return
@@ -477,6 +484,10 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		linkName = s
 	} else {
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(noLinkIdentifierMsg)).Reply()
+		return
+	}
+	if !validLinkName.MatchString(linkName) {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("invalid link name")).Reply()
 		return
 	}
 
@@ -606,6 +617,10 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			om.AggregateOpMsg(sfMediators.OpMsgFailed(noLinkIdentifierMsg)).Reply()
 			return
 		}
+		if !validLinkName.MatchString(linkName) {
+			om.AggregateOpMsg(sfMediators.OpMsgFailed("invalid link name")).Reply()
+			return
+		}
 
 		linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
 		if err != nil {
@@ -705,6 +720,10 @@ func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 		linkName = s
 	} else {
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(noLinkIdentifierMsg)).Reply()
+		return
+	}
+	if !validLinkName.MatchString(linkName) {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("invalid link name")).Reply()
 		return
 	}
 
