@@ -21,7 +21,7 @@ const (
 )
 
 var (
-	validLinkName = regexp.MustCompile(`\A[a-zA-Z0-9_-]+\z`)
+	validLinkName = regexp.MustCompile(`\A[a-zA-Z0-9\/_-]+\z`)
 )
 
 /*
