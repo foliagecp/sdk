@@ -35,6 +35,9 @@ func getQueryFromPayload(ctx *sfPlugins.StatefunContextProcessor) (string, error
 	return jpQuery, nil
 }
 
+// TODO: Objects can be deleted and created while graph is being traversed by JPGQL, need to do something about it
+// seems that an infinite loop can appear
+
 /*
 Uses JPGQL call-tree result aggregation algorithm to find objects
 
