@@ -7,6 +7,7 @@ package jpgql
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/foliagecp/sdk/statefun/mediator"
 	"github.com/foliagecp/sdk/statefun/system"
@@ -46,6 +47,10 @@ Request:
 	payload: json - required
 		// Initial request from caller
 		query: string - required // Json path query
+
+	options: json - optional
+		query_timeout_sec: int - optional // default = 5
+		started_nano: int64 // set by system from initial moment, will be overwritted if received
 */
 
 func JPGQLCallTreeResultAggregation(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
@@ -56,6 +61,13 @@ func JPGQLCallTreeResultAggregation(_ sfPlugins.StatefunExecutor, ctx *sfPlugins
 		pId = tokens[1]
 	} else {
 		pId = system.GetUniqueStrID()
+	}
+
+	if startedNano := int64(ctx.Options.GetByPath("started_nano").AsNumericDefault(-1)); startedNano > 0 {
+		queryTimeoutSec := int64(ctx.Options.GetByPath("query_timeout_sec").AsNumericDefault(10))
+		if time.Now().UnixNano()-startedNano > queryTimeoutSec*int64(time.Second) {
+			return // query execution timeout has been reached
+		}
 	}
 
 	loopPreventIdGenerator := func() string {
@@ -69,7 +81,9 @@ func JPGQLCallTreeResultAggregation(_ sfPlugins.StatefunExecutor, ctx *sfPlugins
 
 	switch om.GetOpType() {
 	case mediator.MereOp: // Initial call of jpgql
-		system.MsgOnErrorReturn(om.SignalWithAggregation(sfPlugins.JetstreamGlobalSignal, ctx.Self.Typename, vId+"==="+pId, ctx.Payload, ctx.Options))
+		newOptions := ctx.Options
+		newOptions.SetByPath("started_nano", easyjson.NewJSON(time.Now().UnixNano()))
+		system.MsgOnErrorReturn(om.SignalWithAggregation(sfPlugins.JetstreamGlobalSignal, ctx.Self.Typename, vId+"==="+pId, ctx.Payload, newOptions))
 	case mediator.WorkerIsTaskedByAggregatorOp:
 		currentObjectLinksQuery, err := getQueryFromPayload(ctx)
 		if err != nil {
@@ -99,7 +113,7 @@ func JPGQLCallTreeResultAggregation(_ sfPlugins.StatefunExecutor, ctx *sfPlugins
 				} else {
 					workerPayload := easyjson.NewJSONObject()
 					workerPayload.SetByPath("query", easyjson.NewJSON(nextQuery))
-					err := om.SignalWithAggregation(sfPlugins.JetstreamGlobalSignal, ctx.Self.Typename, objectID+"==="+pId, &workerPayload, nil)
+					err := om.SignalWithAggregation(sfPlugins.JetstreamGlobalSignal, ctx.Self.Typename, objectID+"==="+pId, &workerPayload, ctx.Options)
 					if err != nil {
 						om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
 						return
