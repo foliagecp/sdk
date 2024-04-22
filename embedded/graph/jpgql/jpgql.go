@@ -49,7 +49,7 @@ Request:
 		query: string - required // Json path query
 
 	options: json - optional
-		query_timeout_sec: int - optional // default = 5
+		query_timeout_sec: int - optional // default = 10
 		started_nano: int64 // set by system from initial moment, will be overwritted if received
 */
 
