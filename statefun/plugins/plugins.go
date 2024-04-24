@@ -38,7 +38,7 @@ type EgressProvider int
 
 type SFSignalFunc func(SignalProvider, string, string, *easyjson.JSON, *easyjson.JSON) error
 type SFRequestFunc func(RequestProvider, string, string, *easyjson.JSON, *easyjson.JSON) (*easyjson.JSON, error)
-type SFEgressFunc func(EgressProvider, *easyjson.JSON) error
+type SFEgressFunc func(EgressProvider, *easyjson.JSON, ...string) error
 
 const (
 	NatsCoreEgress EgressProvider = iota
