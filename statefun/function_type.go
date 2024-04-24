@@ -131,8 +131,12 @@ func (ft *FunctionType) idHandlerRoutine(id string, msgChannel chan FunctionType
 		Request: func(requestProvider sfPlugins.RequestProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) (*easyjson.JSON, error) {
 			return ft.runtime.request(requestProvider, ft.name, id, targetTypename, targetID, j, o)
 		},
-		Egress: func(egressProvider sfPlugins.EgressProvider, j *easyjson.JSON) error {
-			return ft.runtime.egress(egressProvider, ft.name, id, j)
+		Egress: func(egressProvider sfPlugins.EgressProvider, j *easyjson.JSON, customId ...string) error {
+			egressId := id
+			if len(customId) > 0 {
+				egressId = customId[0]
+			}
+			return ft.runtime.egress(egressProvider, ft.name, egressId, j)
 		},
 		// To be assigned later:
 		// Call: ...
