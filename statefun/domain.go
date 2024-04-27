@@ -295,6 +295,11 @@ func (dm *Domain) createRouter(sourceStreamName string, subject string, tsc targ
 					return
 				} else {
 					lg.Logf(lg.ErrorLevel, "Domain (domain=%s) router with sourceStreamName=%s cannot republish message to subject %s: %s\n", dm.name, sourceStreamName, targetSubject, err)
+					_, err := dm.js.Publish(msg.Subject, msg.Data)
+					if err == nil {
+						system.MsgOnErrorReturn(msg.Ack())
+						return
+					}
 				}
 			}
 			system.MsgOnErrorReturn(msg.Nak())
