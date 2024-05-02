@@ -50,10 +50,10 @@ Any links of depth=1 that contain tag `tag1`:
 `.*[tags('tag1')]`
 
 Link typed as `type1` at depth=1 that contain both tags `tag1` and `tag2`:  
-`.a[tags('tag1', 'tag2')]`
+`.*[type('type1') && tags('tag1', 'tag2')]`
 
 Link typed as `type1` at depth=1 that contain both tags `tag1` and `tag2` at depth=2 followed by link with name `name1`:  
-`.a[tags('tag1', 'tag2')].name1`
+`.*[type('type1') && tags('tag1', 'tag2')].name1`
 
 Full address of a vertex via names `name1` and `name2` and `name3`:  
 `.name1.name2.name3`
@@ -65,7 +65,7 @@ Routes which goes through link typed as `type1` at depth=1 and through any link 
 `.*[type('type1')]..*[tags('tag1', "tag2")]`
 
 Routes which goes through links typed as `type1` at depth=4:  
-`.*.*.*.a`
+`.*.*.*.type('type1')`
 
 > When using `nats pub` double quotes aroung a tag must be screened right due to the nested quotes. Either use single quotes `'tag'` or triple backslash screening `\\\"tag\\\"`.
 > 
