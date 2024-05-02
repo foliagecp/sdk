@@ -32,9 +32,9 @@ The JPGQL syntax follows this pattern:
 3. Link types valid characters: `a-zA-Z_-`
 
 ## Predefined filter functions
-### name(name:string)
+### type(type_name:string)
 
-Each out link of a vertex has its own unique name. Desired link should be named as defined.
+Each out link of a vertex has its type. Desired link type should be named as defined.
 
 ### tags(tag1:string, tag2:string, ...)
 
@@ -53,16 +53,16 @@ Link typed as `type1` at depth=1 that contain both tags `tag1` and `tag2`:
 `.a[tags('tag1', 'tag2')]`
 
 Link typed as `type1` at depth=1 that contain both tags `tag1` and `tag2` at depth=2 followed by link with name `name1`:  
-`.a[tags('tag1', 'tag2')].*[name('name1')]`
+`.a[tags('tag1', 'tag2')].name1`
 
 Full address of a vertex via names `name1` and `name2` and `name3`:  
-`.*[name('name1')].*[name('name2')].*[name('name3')]`
+`.name1.name2.name3`
 
 Links at any depth that contain both tags `tag1` and `tag2`:  
 `..*[tags("tag1", "tag2")]`
 
 Routes which goes through link typed as `type1` at depth=1 and through any link with tags `tag1` and `tag2` any deeper:  
-`.type1..*[tags('tag1', "tag2")]`
+`.*[type('type1')]..*[tags('tag1', "tag2")]`
 
 Routes which goes through links typed as `type1` at depth=4:  
 `.*.*.*.a`
@@ -91,7 +91,7 @@ Small test graph shown on a picture below is created automatically on start in t
 1. From the `root` at any depth find all objects preceded by link with the type `type5`  
 
 ```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"query\":\"..type5\"}}"
+nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"query\":\"..*[type('type5')]\"}}"
 ```
 ```json
 {"result":{"g":true},"status":"ok"}
@@ -118,7 +118,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.query.jp
 4. Find all `root`'s descendants through links of type `type1` and from them get as the result all descendants through links of type `type3`
 
 ```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"query\":\".type1.type3\"}}"
+nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"query\":\".*[type('type1')].*[type('type3')]\"}}"
 ```
 ```json
 {"result":{"d":true,"e":true},"status":"ok"}
@@ -136,7 +136,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.query.jp
 6. Find all `root`'s descendants through links of type `type1` then get all their descendants and from them as the result get all objects preceded by link which contains either tag `t1` or `t4`
 
 ```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"query\":\".type1.*.*[tags('t1') || tags('t4')]\"}}"
+nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.query.jpgql.ctra.root "{\"payload\":{\"query_id\":\"QUERYID\", \"query\":\".*[type('type1')].*.*[tags('t1') || tags('t4')]\"}}"
 ```
 ```json
 {"result":{"b":true,"f":true},"status":"ok"}
@@ -145,7 +145,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.query.jp
 1. Access vertex `e` through one of it's names from `root` vertex: `2c`, `2d`, `2b`, `2e`:
 
 ```sh
-nats request -s nats://nats:foliage@nats:4222 service.functions.graph.api.query.jpgql.ctra.root "{\"payload\":{\"query\":\".*[name('2c')].*[name('2d')].*[name('2b')].*[name('2e')]\"}}"
+nats request -s nats://nats:foliage@nats:4222 service.functions.graph.api.query.jpgql.ctra.root "{\"payload\":{\"query\":\".2c.2d.2b.2e\"}}"
 ```
 ```json
 {"result":{"e":true},"status":"ok"}
