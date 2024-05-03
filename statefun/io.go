@@ -51,10 +51,18 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 			system.GlobalPrometrics.GetRoutinesCounter().Started("ingress-jetstreamGlobalSignal-gofunc")
 			defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("ingress-jetstreamGlobalSignal-gofunc")
 
-			system.MsgOnErrorReturn(r.nc.Publish(
-				fmt.Sprintf(DomainEgressSubjectsTmpl, r.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, r.Domain.GetDomainFromObjectID(targetID), targetTypename, targetID)),
-				buildNatsData(r.Domain.name, callerTypename, callerID, payload, options),
-			))
+			// If publishing signal to the same domain
+			if r.Domain.name == r.Domain.GetDomainFromObjectID(targetID) {
+				system.MsgOnErrorReturn(r.nc.Publish( // Publish directly into function's topic bypassing egress router
+					fmt.Sprintf(DomainIngressSubjectsTmpl, r.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, r.Domain.name, targetTypename, targetID)),
+					buildNatsData(r.Domain.name, callerTypename, callerID, payload, options),
+				))
+			} else { // Publish into egress router
+				system.MsgOnErrorReturn(r.nc.Publish(
+					fmt.Sprintf(DomainEgressSubjectsTmpl, r.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, r.Domain.GetDomainFromObjectID(targetID), targetTypename, targetID)),
+					buildNatsData(r.Domain.name, callerTypename, callerID, payload, options),
+				))
+			}
 		}()
 		return nil
 	}
