@@ -155,10 +155,10 @@ func (dm *Domain) start(cacheConfig *cache.Config, createDomainRouters bool) err
 		if err := dm.createEgressSignalStream(); err != nil {
 			return err
 		}
-		if err := dm.createIngressRouter(); err != nil {
+		if err := dm.createIngressRouter(10); err != nil {
 			return err
 		}
-		if err := dm.createEgressRouter(); err != nil {
+		if err := dm.createEgressRouter(10); err != nil {
 			return err
 		}
 	}
@@ -170,14 +170,14 @@ func (dm *Domain) start(cacheConfig *cache.Config, createDomainRouters bool) err
 	return nil
 }
 
-func (dm *Domain) createIngressRouter() error {
+func (dm *Domain) createIngressRouter(maxWorkers int) error {
 	targetSubjectCalculator := func(msg *nats.Msg) (string, error) {
 		return fmt.Sprintf(DomainIngressSubjectsTmpl, dm.name, msg.Subject), nil
 	}
-	return dm.createRouter(domainIngressStreamName, fmt.Sprintf(FromGlobalSignalTmpl, dm.name, ">"), targetSubjectCalculator)
+	return dm.createRouter(domainIngressStreamName, fmt.Sprintf(FromGlobalSignalTmpl, dm.name, ">"), targetSubjectCalculator, maxWorkers)
 }
 
-func (dm *Domain) createEgressRouter() error {
+func (dm *Domain) createEgressRouter(maxWorkers int) error {
 	targetSubjectCalculator := func(msg *nats.Msg) (string, error) {
 		tokens := strings.Split(msg.Subject, ".")
 		if len(tokens) < 5 { // $SE.<domain_name>.signal.<signal_domain_name>.<function_name>
@@ -192,7 +192,7 @@ func (dm *Domain) createEgressRouter() error {
 		}
 		return targetSubject, nil
 	}
-	return dm.createRouter(domainEgressStreamName, fmt.Sprintf(DomainEgressSubjectsTmpl, dm.name, ">"), targetSubjectCalculator)
+	return dm.createRouter(domainEgressStreamName, fmt.Sprintf(DomainEgressSubjectsTmpl, dm.name, ">"), targetSubjectCalculator, maxWorkers)
 }
 
 func (dm *Domain) createHubSignalStream() error {
@@ -254,7 +254,7 @@ func (dm *Domain) createStreamIfNotExists(sc *nats.StreamConfig) error {
 	// --------------------------------------------------------------
 }
 
-func (dm *Domain) createRouter(sourceStreamName string, subject string, tsc targetSubjectCalculator) error {
+func (dm *Domain) createRouter(sourceStreamName string, subject string, tsc targetSubjectCalculator, maxWorkers int) error {
 	consumerName := sourceStreamName + "-" + dm.name + "-consumer"
 	consumerGroup := consumerName + "-group"
 	lg.Logf(lg.TraceLevel, "Handling domain (domain=%s) router for sourceStreamName=%s\n", dm.name, sourceStreamName)
@@ -281,28 +281,37 @@ func (dm *Domain) createRouter(sourceStreamName string, subject string, tsc targ
 	}
 	// --------------------------------------------------------------
 
+	routingLogic := func(msg *nats.Msg, routinesController chan struct{}) {
+		routinesController <- struct{}{}
+		defer func() { <-routinesController }()
+
+		targetSubject, err := tsc(msg)
+		//lg.Logf(lg.TraceLevel, "Routing (from_domain=%s) %s:%s -> %s\n", dm.name, sourceStreamName, msg.Subject, targetSubject)
+		if err == nil {
+			pubAck, err := dm.js.Publish(targetSubject, msg.Data)
+			if err == nil {
+				lg.Logf(lg.TraceLevel, "Routed (from_domain=%s) %s:%s -> (to_domain=%s) %s:%s\n", dm.name, sourceStreamName, msg.Subject, pubAck.Domain, pubAck.Stream, targetSubject)
+				system.MsgOnErrorReturn(msg.Ack())
+				return
+			} else {
+				lg.Logf(lg.ErrorLevel, "Domain (domain=%s) router with sourceStreamName=%s cannot republish message to subject %s: %s\n", dm.name, sourceStreamName, targetSubject, err)
+				_, err := dm.js.Publish(msg.Subject, msg.Data)
+				if err == nil {
+					system.MsgOnErrorReturn(msg.Ack())
+					return
+				}
+			}
+		}
+		system.MsgOnErrorReturn(msg.Nak())
+	}
+
+	routinesController := make(chan struct{}, maxWorkers)
+
 	_, err := dm.js.QueueSubscribe(
 		subject,
 		consumerGroup,
 		func(msg *nats.Msg) {
-			targetSubject, err := tsc(msg)
-			//lg.Logf(lg.TraceLevel, "Routing (from_domain=%s) %s:%s -> %s\n", dm.name, sourceStreamName, msg.Subject, targetSubject)
-			if err == nil {
-				pubAck, err := dm.js.Publish(targetSubject, msg.Data)
-				if err == nil {
-					lg.Logf(lg.TraceLevel, "Routed (from_domain=%s) %s:%s -> (to_domain=%s) %s:%s\n", dm.name, sourceStreamName, msg.Subject, pubAck.Domain, pubAck.Stream, targetSubject)
-					system.MsgOnErrorReturn(msg.Ack())
-					return
-				} else {
-					lg.Logf(lg.ErrorLevel, "Domain (domain=%s) router with sourceStreamName=%s cannot republish message to subject %s: %s\n", dm.name, sourceStreamName, targetSubject, err)
-					_, err := dm.js.Publish(msg.Subject, msg.Data)
-					if err == nil {
-						system.MsgOnErrorReturn(msg.Ack())
-						return
-					}
-				}
-			}
-			system.MsgOnErrorReturn(msg.Nak())
+			go routingLogic(msg, routinesController)
 		},
 		nats.Bind(sourceStreamName, consumerName),
 		nats.ManualAck(),
