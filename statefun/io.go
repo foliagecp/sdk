@@ -115,7 +115,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 			}
 
 			functionMsg.RequestCallback = func(data *easyjson.JSON) {
-				resultJSONChannel <- data
+				resultJSONChannel <- data.Clone().GetPtr() // Clone().GetPtr() prevents data to contain custom Golang types
 			}
 			functionMsg.RefusalCallback = func() {
 				close(resultJSONChannel)
