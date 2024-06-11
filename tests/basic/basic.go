@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/foliagecp/sdk/clients/go/db"
 	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
+	"github.com/foliagecp/sdk/embedded/graph/graphql"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 
 	graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
@@ -186,6 +188,13 @@ func Start() {
 		if CreateSimpleGraphTest {
 			CreateTestGraph(runtime)
 		}
+
+		dbClient.CMDB.ObjectCreate("test1", "typea", easyjson.NewJSONObjectWithKeyValue("hello", easyjson.NewJSON("world")))
+		dbClient.CMDB.ObjectCreate("test2", "typeb", easyjson.NewJSONObjectWithKeyValue("foo", easyjson.NewJSON("bar")))
+		dbClient.CMDB.ObjectCreate("test3", "typeb", easyjson.NewJSONObjectWithKeyValue("field", easyjson.NewJSON("data")))
+
+		fmt.Println("Starting GraphQL")
+		graphql.StartGraphqlServer("8080", &dbClient)
 		return nil
 	}
 

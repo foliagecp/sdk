@@ -1,0 +1,11 @@
+scalar JSON
+
+type Object {
+  id: ID!
+  type: String!
+  requestFields: JSON
+}
+
+type Query {
+  searchObjects(query: String!, requestFields: [String!]!): [Object!]
+}
