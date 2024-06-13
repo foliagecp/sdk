@@ -66,6 +66,7 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	id := ft.runtime.Domain.CreateObjectIDWithThisDomain(originId, false)
 
 	ft.idKeyMutex.Lock(id)
+	// TODO:  defer ft.idKeyMutex.Unlock(id) ?
 	// Send msg to type id handler ------------------------------------------------------
 	var msgChannel chan FunctionTypeMsg
 
@@ -77,6 +78,7 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 			select {
 			case ft.instancesControlChannel <- struct{}{}:
 			default: // Limit is reached
+				// TODO: what about idKeyMutex is locked???
 				msg.RefusalCallback()
 				return
 			}
