@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/foliagecp/sdk/statefun/logger"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -29,6 +30,7 @@ type FunctionType struct {
 	idKeyMutex              system.KeyMutex
 	idHandlersChannel       sync.Map
 	idHandlersLastMsgTime   sync.Map
+	idRunningStatus         sync.Map
 	executor                *sfPlugins.TypenameExecutorPlugin
 	instancesControlChannel chan struct{}
 	resourceMutex           sync.Mutex
@@ -66,7 +68,8 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	id := ft.runtime.Domain.CreateObjectIDWithThisDomain(originId, false)
 
 	ft.idKeyMutex.Lock(id)
-	// TODO:  defer ft.idKeyMutex.Unlock(id) ?
+	defer ft.idKeyMutex.Unlock(id)
+
 	// Send msg to type id handler ------------------------------------------------------
 	var msgChannel chan FunctionTypeMsg
 
@@ -78,7 +81,6 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 			select {
 			case ft.instancesControlChannel <- struct{}{}:
 			default: // Limit is reached
-				// TODO: what about idKeyMutex is locked???
 				msg.RefusalCallback()
 				return
 			}
@@ -113,7 +115,6 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 		}
 	}
 	// ----------------------------------------------------------------------------------
-	ft.idKeyMutex.Unlock(id)
 }
 
 func (ft *FunctionType) idHandlerRoutine(id string, msgChannel chan FunctionTypeMsg) {
@@ -156,6 +157,9 @@ func (ft *FunctionType) idHandlerRoutine(id string, msgChannel chan FunctionType
 }
 
 func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameIDContextProcessor *sfPlugins.StatefunContextProcessor) {
+	ft.idRunningStatus.Store(id, true)
+	defer ft.idRunningStatus.Store(id, false)
+
 	msgRequestCallback := msg.RequestCallback
 	replyDataChannel := make(chan *easyjson.JSON, 1)
 	if msgRequestCallback != nil {
@@ -277,7 +281,18 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 	ft.idHandlersLastMsgTime.Range(func(key, value interface{}) bool {
 		id := key.(string)
 		lastMsgTime := value.(int64)
+
 		if lastMsgTime+int64(typenameIDLifetimeMs)*int64(time.Millisecond) < now {
+			if v, ok := ft.idRunningStatus.Load(id); ok {
+				running, boolFine := v.(bool)
+				if !boolFine {
+					logger.Logf(logger.ErrorLevel, "Function type GC failed to get idRunningStatus in bool format ftName=%s for id=%s\n", ft.name, id)
+				}
+				if running {
+					return true
+				}
+			}
+
 			ft.idKeyMutex.Lock(id)
 
 			v, _ := ft.idHandlersChannel.Load(id)
@@ -285,6 +300,7 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 			close(msgChannel)
 			ft.idHandlersChannel.Delete(id)
 			ft.idHandlersLastMsgTime.Delete(id)
+			ft.idRunningStatus.Delete(id)
 			if ft.executor != nil {
 				ft.executor.RemoveForID(id)
 			}
