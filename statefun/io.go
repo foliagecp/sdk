@@ -6,6 +6,7 @@ import (
 
 	"github.com/foliagecp/easyjson"
 
+	"github.com/foliagecp/sdk/statefun/logger"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 )
@@ -45,6 +46,39 @@ func (r *Runtime) egress(egressProvider sfPlugins.EgressProvider, callerTypename
 	}
 }
 
+/* return
+* 0 - ok
+* 1 - domain differs
+* 2 - function is not registered
+* 3 - function does not support this communication type
+ */
+func (r *Runtime) functionTypeIsReadyForGoLangCommunication(targetFunctionTypeName string, isRequest bool, targetID string) int {
+	var targetFT *FunctionType
+	if r.Domain.GetDomainFromObjectID(targetID) == r.Domain.name {
+		if ft, ok := r.registeredFunctionTypes[targetFunctionTypeName]; ok {
+			targetFT = ft
+		} else {
+			return 2
+		}
+	} else {
+		return 1
+	}
+	supportsCommunicationType := false
+	if isRequest {
+		if targetFT.config.IsRequestProviderAllowed(sfPlugins.GolangLocalRequest) {
+			supportsCommunicationType = true
+		}
+	} else {
+		if targetFT.config.IsSignalProviderAllowed(sfPlugins.GolangLocalSignal) {
+			supportsCommunicationType = true
+		}
+	}
+	if !supportsCommunicationType {
+		return 3
+	}
+	return 0
+}
+
 func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) error {
 	jetstreamGlobalSignal := func() error {
 		go func() {
@@ -66,12 +100,90 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 		}()
 		return nil
 	}
+	goLangLocalSignal := func() error {
+		switch r.functionTypeIsReadyForGoLangCommunication(targetTypename, false, targetID) {
+		case 0:
+			func() {
+				targetFT, _ := r.registeredFunctionTypes[targetTypename]
+
+				// Do not send original data, prevents same data concurrent access from different functions
+				var payloadCopy *easyjson.JSON = nil
+				var optionsCopy *easyjson.JSON = nil
+				if payload != nil {
+					payloadCopy = payload.Clone().GetPtr()
+				}
+				if options != nil {
+					optionsCopy = options.Clone().GetPtr()
+				}
+				// ----------------------------------------------------------------------------------------
+				functionMsg := FunctionTypeMsg{
+					Caller:  &sfPlugins.StatefunAddress{Typename: callerTypename, ID: callerID},
+					Payload: payloadCopy,
+					Options: optionsCopy,
+				}
+
+				ackChannel := make(chan struct{})
+				nackChannel := make(chan struct{})
+
+				functionMsg.AckCallback = func(ack bool) {
+					go func() {
+						if ack {
+							ackChannel <- struct{}{}
+						} else {
+							functionMsg.RefusalCallback()
+						}
+					}()
+				}
+				functionMsg.RefusalCallback = func() {
+					go func() {
+						logger.Logf(logger.WarnLevel, "goLangLocalSignal: receiver typename=%s called on id=%s refused from msg, for safety reasons msg is being redirected to NATS Jetstream\n", targetTypename, targetID)
+						system.MsgOnErrorReturn(r.signal(sfPlugins.JetstreamGlobalSignal, callerTypename, callerID, targetTypename, targetID, payload, options))
+						nackChannel <- struct{}{}
+					}()
+				}
+
+				targetFT.sendMsg(targetID, functionMsg)
+
+				select {
+				case _, ok := <-ackChannel:
+					if !ok {
+						logger.Logln(logger.ErrorLevel, "goLangLocalSignal: ackChannel was unexpectedly closed")
+					}
+					// if ok - whether signal is delivered
+				case _, ok := <-nackChannel:
+					if !ok {
+						logger.Logln(logger.ErrorLevel, "goLangLocalSignal: nackChannel was unexpectedly closed")
+					}
+					// if ok - whether signal is redirected to NATS Jetstream due to nack command
+				case <-time.After(time.Duration(targetFT.config.msgAckWaitMs) * time.Millisecond):
+					logger.Logf(logger.WarnLevel, "goLangLocalSignal: receiver typename=%s called on id=%s did not ack msg in time, for safety reasons msg is being redirected to NATS Jetstream\n", targetTypename, targetID)
+					system.MsgOnErrorReturn(r.signal(sfPlugins.JetstreamGlobalSignal, callerTypename, callerID, targetTypename, targetID, payload, options))
+				}
+			}()
+			return nil
+		case 1:
+			return fmt.Errorf("goLangLocalSignal: cannot request function with the typename %s via golang, domain differs: %s(runtime) != %s(id)\n", callerTypename, r.Domain.name, r.Domain.GetDomainFromObjectID(targetID))
+		case 2:
+			return fmt.Errorf("goLangLocalSignal: cannot request function with the typename %s via golang, not registered", callerTypename)
+		case 3:
+			fallthrough
+		default:
+			logger.Logf(logger.WarnLevel, "goLangLocalSignal: receiver typename=%s does not support golang signals, for safety reasons msg is being redirected to NATS Jetstream\n", targetTypename)
+			system.MsgOnErrorReturn(r.signal(sfPlugins.JetstreamGlobalSignal, callerTypename, callerID, targetTypename, targetID, payload, options))
+			return nil
+		}
+	}
 
 	switch signalProvider {
 	case sfPlugins.JetstreamGlobalSignal:
 		return jetstreamGlobalSignal()
+	case sfPlugins.GolangLocalSignal:
+		return goLangLocalSignal()
 	case sfPlugins.AutoSignalSelect:
 		selection := sfPlugins.JetstreamGlobalSignal
+		if r.functionTypeIsReadyForGoLangCommunication(targetTypename, false, targetID) == 0 {
+			selection = sfPlugins.GolangLocalSignal
+		}
 		return r.signal(selection, callerTypename, callerID, targetTypename, targetID, payload, options)
 	default:
 		return fmt.Errorf("unknown signal provider: %d", signalProvider)
@@ -93,9 +205,10 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 		}
 		return nil, err
 	}
-
 	goLangLocalRequest := func() (*easyjson.JSON, error) {
-		if targetFT, ok := r.registeredFunctionTypes[targetTypename]; ok {
+		switch r.functionTypeIsReadyForGoLangCommunication(targetTypename, true, targetID) {
+		case 0:
+			targetFT, _ := r.registeredFunctionTypes[targetTypename]
 			resultJSONChannel := make(chan *easyjson.JSON)
 
 			// Do not send original data, prevents same data concurrent access from different functions
@@ -128,12 +241,18 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 				if ok {
 					return resultJSON, nil
 				}
-				return nil, fmt.Errorf("target function with typename \"%s\" with id \"%s\" resufes to handle request", targetTypename, targetID)
+				return nil, fmt.Errorf("goLangLocalRequest: target function with typename \"%s\" with id \"%s\" resufes to handle request", targetTypename, targetID)
 			case <-time.After(time.Duration(r.config.requestTimeoutSec) * time.Second):
-				return nil, fmt.Errorf("timeout occured while requesting function typename \"%s\" with id \"%s\"", targetTypename, targetID)
+				return nil, fmt.Errorf("goLangLocalRequest: timeout occured while requesting function typename \"%s\" with id \"%s\"", targetTypename, targetID)
 			}
-		} else {
-			return nil, fmt.Errorf("callFunctionGolangSync cannot request function with the typename %s, not registered", callerTypename)
+		case 1:
+			return nil, fmt.Errorf("goLangLocalRequest: cannot request function with the typename %s via golang, domain differs: %s(runtime) != %s(id)\n", callerTypename, r.Domain.name, r.Domain.GetDomainFromObjectID(targetID))
+		case 2:
+			return nil, fmt.Errorf("goLangLocalRequest: cannot request function with the typename %s via golang, not registered", callerTypename)
+		case 3:
+			fallthrough
+		default:
+			return nil, fmt.Errorf("goLangLocalRequest: function with the typename %s does not support request-reply via golang", callerTypename)
 		}
 	}
 
@@ -144,7 +263,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 		return goLangLocalRequest()
 	case sfPlugins.AutoRequestSelect:
 		selection := sfPlugins.NatsCoreGlobalRequest
-		if _, ok := r.registeredFunctionTypes[targetTypename]; ok {
+		if r.functionTypeIsReadyForGoLangCommunication(targetTypename, true, targetID) == 0 {
 			selection = sfPlugins.GolangLocalRequest
 		}
 		return r.request(selection, callerTypename, callerID, targetTypename, targetID, payload, options)
