@@ -24,6 +24,7 @@ type SignalProvider int
 const (
 	AutoSignalSelect SignalProvider = iota
 	JetstreamGlobalSignal
+	GolangLocalSignal
 )
 
 type RequestProvider int
