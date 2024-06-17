@@ -126,20 +126,16 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 				nackChannel := make(chan struct{})
 
 				functionMsg.AckCallback = func(ack bool) {
-					go func() {
-						if ack {
-							ackChannel <- struct{}{}
-						} else {
-							functionMsg.RefusalCallback()
-						}
-					}()
+					if ack {
+						ackChannel <- struct{}{}
+					} else {
+						functionMsg.RefusalCallback()
+					}
 				}
 				functionMsg.RefusalCallback = func() {
-					go func() {
-						logger.Logf(logger.WarnLevel, "goLangLocalSignal: receiver typename=%s called on id=%s refused from msg, for safety reasons msg is being redirected to NATS Jetstream\n", targetTypename, targetID)
-						system.MsgOnErrorReturn(r.signal(sfPlugins.JetstreamGlobalSignal, callerTypename, callerID, targetTypename, targetID, payload, options))
-						nackChannel <- struct{}{}
-					}()
+					logger.Logf(logger.WarnLevel, "goLangLocalSignal: receiver typename=%s called on id=%s refused from msg, for safety reasons msg is being redirected to NATS Jetstream\n", targetTypename, targetID)
+					system.MsgOnErrorReturn(r.signal(sfPlugins.JetstreamGlobalSignal, callerTypename, callerID, targetTypename, targetID, payload, options))
+					nackChannel <- struct{}{}
 				}
 
 				targetFT.sendMsg(targetID, functionMsg)
