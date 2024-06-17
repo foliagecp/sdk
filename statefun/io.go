@@ -100,6 +100,7 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 		}()
 		return nil
 	}
+	// TODO: This implementation is weak, cause we always should wait one functions ends its execution before next can start
 	goLangLocalSignal := func() error {
 		switch r.functionTypeIsReadyForGoLangCommunication(targetTypename, false, targetID) {
 		case 0:
@@ -176,11 +177,12 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 	case sfPlugins.GolangLocalSignal:
 		return goLangLocalSignal()
 	case sfPlugins.AutoSignalSelect:
-		selection := sfPlugins.JetstreamGlobalSignal
+		return jetstreamGlobalSignal() // TODO: Find a way to fix weak solution of the goLangLocalSignal
+		/*selection := sfPlugins.JetstreamGlobalSignal
 		if r.functionTypeIsReadyForGoLangCommunication(targetTypename, false, targetID) == 0 {
 			selection = sfPlugins.GolangLocalSignal
 		}
-		return r.signal(selection, callerTypename, callerID, targetTypename, targetID, payload, options)
+		return r.signal(selection, callerTypename, callerID, targetTypename, targetID, payload, options)*/
 	default:
 		return fmt.Errorf("unknown signal provider: %d", signalProvider)
 	}
