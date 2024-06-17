@@ -182,7 +182,7 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 		opStack = om.GetLastSyncOp().Data.GetByPathPtr("op_stack")
 	}
 
-	if !(om.GetStatus() == sfMediators.SYNC_OP_STATUS_INCOMPLETE || om.GetStatus() == sfMediators.SYNC_OP_STATUS_FAILED) {
+	if !(om.GetStatus() == sfMediators.SYNC_OP_STATUS_INCOMPLETE) {
 		type _link struct {
 			from, to, name, lt string
 		}
@@ -201,7 +201,7 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 			link.SetByPath("body", easyjson.NewJSONObject())
 
 			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", l.from, &link, nil)))
-			if om.GetStatus() == sfMediators.SYNC_OP_STATUS_INCOMPLETE || om.GetStatus() == sfMediators.SYNC_OP_STATUS_FAILED {
+			if om.GetStatus() == sfMediators.SYNC_OP_STATUS_INCOMPLETE {
 				break // Operation cannot be completed fully, interrupt where it is now and go to the end
 			}
 		}
@@ -277,20 +277,6 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), "", "")
 	}
 
-	vertexIsObject := false
-	objectsVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false)
-	for i := 0; i < m.Data.GetByPath("links.in").ArraySize(); i++ {
-		fromId := m.Data.GetByPath("links.in").ArrayElement(i).GetByPath("from").AsStringDefault("")
-		if fromId == objectsVertexId {
-			vertexIsObject = true
-		}
-	}
-	if !vertexIsObject {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s is not an object", ctx.Self.ID)))
-		system.MsgOnErrorReturn(om.ReplyWithData(easyjson.NewJSONObject().GetPtr()))
-		return
-	}
-
 	objectType := ""
 	toObjects := []string{}
 	for i := 0; i < m.Data.GetByPath("links.out.names").ArraySize(); i++ {
@@ -305,6 +291,29 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	}
 	if len(objectType) == 0 {
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("objects with id=%s has no type", ctx.Self.ID)))
+		system.MsgOnErrorReturn(om.ReplyWithData(easyjson.NewJSONObject().GetPtr()))
+		return
+	}
+
+	vertexIsObject := false
+	typeBidirectionalLink := false
+	objectsVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false)
+	for i := 0; i < m.Data.GetByPath("links.in").ArraySize(); i++ {
+		fromId := m.Data.GetByPath("links.in").ArrayElement(i).GetByPath("from").AsStringDefault("")
+		if fromId == objectsVertexId {
+			vertexIsObject = true
+		}
+		if fromId == objectType {
+			typeBidirectionalLink = true
+		}
+	}
+	if !vertexIsObject {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s is not an object, not connected to objects topology", ctx.Self.ID)))
+		system.MsgOnErrorReturn(om.ReplyWithData(easyjson.NewJSONObject().GetPtr()))
+		return
+	}
+	if !typeBidirectionalLink {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s is not an object, link from type is broken", ctx.Self.ID)))
 		system.MsgOnErrorReturn(om.ReplyWithData(easyjson.NewJSONObject().GetPtr()))
 		return
 	}
