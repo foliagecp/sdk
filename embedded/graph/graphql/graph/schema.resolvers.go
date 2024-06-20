@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/embedded/graph/crud"
 	"github.com/foliagecp/sdk/embedded/graph/graphql/extra"
 	"github.com/foliagecp/sdk/embedded/graph/graphql/graph/model"
@@ -33,7 +34,7 @@ func (r *queryResolver) SearchObjects(ctx context.Context, query string, request
 					for _, k := range body.ObjectKeys() {
 						f := body.GetByPath(k)
 						if f.IsString() {
-							if strings.Contains(strings.ToLower(f.AsStringDefault("")), query) {
+							if strings.Contains(strings.ToLower(f.AsStringDefault("")), strings.ToLower(query)) {
 								objectSatisfiesSearch = true
 								break
 							}
@@ -44,6 +45,8 @@ func (r *queryResolver) SearchObjects(ctx context.Context, query string, request
 						for _, f := range requestFields {
 							if body.PathExists(f) {
 								resObject.RequestFields[f] = body.GetByPath(f)
+							} else {
+								resObject.RequestFields[f] = easyjson.NewJSONObject()
 							}
 						}
 						result = append(result, &resObject)
