@@ -86,9 +86,9 @@ func (r *Runtime) Start(cacheConfig *cache.Config) (err error) {
 		if ft.config.IsSignalProviderAllowed(sfPlugins.JetstreamGlobalSignal) {
 			if !slices.Contains(existingStreams, ft.getStreamName()) {
 				_, err := r.js.AddStream(&nats.StreamConfig{
-					Name:              ft.getStreamName(),
-					Subjects:          []string{ft.subject},
-					MaxMsgsPerSubject: 1,
+					Name:      ft.getStreamName(),
+					Subjects:  []string{ft.subject},
+					Retention: nats.InterestPolicy,
 				})
 				system.MsgOnErrorReturn(err)
 			}
