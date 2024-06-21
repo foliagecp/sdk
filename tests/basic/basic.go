@@ -13,6 +13,7 @@ import (
 	"github.com/foliagecp/sdk/clients/go/db"
 	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
 	"github.com/foliagecp/sdk/embedded/graph/graphql"
+	"github.com/foliagecp/sdk/embedded/graph/search"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 
 	graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
@@ -138,6 +139,7 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	graphCRUD.RegisterAllFunctionTypes(runtime)
 	graphDebug.RegisterAllFunctionTypes(runtime)
 	jpgql.RegisterAllFunctionTypes(runtime)
+	search.RegisterAllFunctionTypes(runtime)
 }
 
 func RunRequestReplyTest(runtime *statefun.Runtime) {
