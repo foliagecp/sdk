@@ -24,11 +24,25 @@ func (r *queryResolver) SearchObjects(ctx context.Context, query string, request
 		if err != nil {
 			return result, err
 		}
+
+		typeSearchFields := map[string][]string{}
+
 		for _, objId := range objectIds {
 			data, err := DBC.CMDB.ObjectRead(objId)
 			if err == nil {
 				otype := data.GetByPath("type").AsStringDefault("")
 				if len(otype) > 0 {
+					if _, ok := typeSearchFields[otype]; !ok {
+						fieldsList := []string{}
+						data, err := DBC.CMDB.TypeRead(otype)
+						if err == nil {
+							if fl, ok := data.GetByPath("body.search_fields").AsArrayString(); ok {
+								fieldsList = fl
+							}
+						}
+						typeSearchFields[otype] = fieldsList
+					}
+
 					body := data.GetByPath("body")
 					objectSatisfiesSearch := false
 					for _, k := range body.ObjectKeys() {
