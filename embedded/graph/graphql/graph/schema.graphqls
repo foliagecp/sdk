@@ -7,5 +7,5 @@ type Object {
 }
 
 type Query {
-  searchObjects(query: String!, requestFields: [String!]!): [Object!]
+  searchObjects(query: String!, objectTypes: [String!], requestFields: [String!]): [Object!]
 }

@@ -54,12 +54,12 @@ type ComplexityRoot struct {
 	}
 
 	Query struct {
-		SearchObjects func(childComplexity int, query string, requestFields []string) int
+		SearchObjects func(childComplexity int, query string, objectTypes []string, requestFields []string) int
 	}
 }
 
 type QueryResolver interface {
-	SearchObjects(ctx context.Context, query string, requestFields []string) ([]*model.Object, error)
+	SearchObjects(ctx context.Context, query string, objectTypes []string, requestFields []string) ([]*model.Object, error)
 }
 
 type executableSchema struct {
@@ -112,7 +112,7 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 			return 0, false
 		}
 
-		return e.complexity.Query.SearchObjects(childComplexity, args["query"].(string), args["requestFields"].([]string)), true
+		return e.complexity.Query.SearchObjects(childComplexity, args["query"].(string), args["objectTypes"].([]string), args["requestFields"].([]string)), true
 
 	}
 	return 0, false
@@ -250,14 +250,23 @@ func (ec *executionContext) field_Query_searchObjects_args(ctx context.Context, 
 	}
 	args["query"] = arg0
 	var arg1 []string
-	if tmp, ok := rawArgs["requestFields"]; ok {
-		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("requestFields"))
-		arg1, err = ec.unmarshalNString2ᚕstringᚄ(ctx, tmp)
+	if tmp, ok := rawArgs["objectTypes"]; ok {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("objectTypes"))
+		arg1, err = ec.unmarshalOString2ᚕstringᚄ(ctx, tmp)
 		if err != nil {
 			return nil, err
 		}
 	}
-	args["requestFields"] = arg1
+	args["objectTypes"] = arg1
+	var arg2 []string
+	if tmp, ok := rawArgs["requestFields"]; ok {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("requestFields"))
+		arg2, err = ec.unmarshalOString2ᚕstringᚄ(ctx, tmp)
+		if err != nil {
+			return nil, err
+		}
+	}
+	args["requestFields"] = arg2
 	return args, nil
 }
 
@@ -442,7 +451,7 @@ func (ec *executionContext) _Query_searchObjects(ctx context.Context, field grap
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Query().SearchObjects(rctx, fc.Args["query"].(string), fc.Args["requestFields"].([]string))
+		return ec.resolvers.Query().SearchObjects(rctx, fc.Args["query"].(string), fc.Args["objectTypes"].([]string), fc.Args["requestFields"].([]string))
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -2894,38 +2903,6 @@ func (ec *executionContext) marshalNString2string(ctx context.Context, sel ast.S
 	return res
 }
 
-func (ec *executionContext) unmarshalNString2ᚕstringᚄ(ctx context.Context, v interface{}) ([]string, error) {
-	var vSlice []interface{}
-	if v != nil {
-		vSlice = graphql.CoerceList(v)
-	}
-	var err error
-	res := make([]string, len(vSlice))
-	for i := range vSlice {
-		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalNString2string(ctx, vSlice[i])
-		if err != nil {
-			return nil, err
-		}
-	}
-	return res, nil
-}
-
-func (ec *executionContext) marshalNString2ᚕstringᚄ(ctx context.Context, sel ast.SelectionSet, v []string) graphql.Marshaler {
-	ret := make(graphql.Array, len(v))
-	for i := range v {
-		ret[i] = ec.marshalNString2string(ctx, sel, v[i])
-	}
-
-	for _, e := range ret {
-		if e == graphql.Null {
-			return graphql.Null
-		}
-	}
-
-	return ret
-}
-
 func (ec *executionContext) marshalN__Directive2githubᚗcomᚋ99designsᚋgqlgenᚋgraphqlᚋintrospectionᚐDirective(ctx context.Context, sel ast.SelectionSet, v introspection.Directive) graphql.Marshaler {
 	return ec.___Directive(ctx, sel, &v)
 }
@@ -3258,6 +3235,44 @@ func (ec *executionContext) marshalOObject2ᚕᚖgithubᚗcomᚋfoliagecpᚋsdk�
 
 	}
 	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) unmarshalOString2ᚕstringᚄ(ctx context.Context, v interface{}) ([]string, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []interface{}
+	if v != nil {
+		vSlice = graphql.CoerceList(v)
+	}
+	var err error
+	res := make([]string, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNString2string(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) marshalOString2ᚕstringᚄ(ctx context.Context, sel ast.SelectionSet, v []string) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	ret := make(graphql.Array, len(v))
+	for i := range v {
+		ret[i] = ec.marshalNString2string(ctx, sel, v[i])
+	}
 
 	for _, e := range ret {
 		if e == graphql.Null {
