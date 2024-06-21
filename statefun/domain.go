@@ -197,9 +197,9 @@ func (dm *Domain) createEgressRouter() error {
 
 func (dm *Domain) createHubSignalStream() error {
 	sc := &nats.StreamConfig{
-		Name:              hubEventStreamName,
-		Subjects:          []string{SignalPrefix + ".>"},
-		MaxMsgsPerSubject: 1,
+		Name:      hubEventStreamName,
+		Subjects:  []string{SignalPrefix + ".>"},
+		Retention: nats.InterestPolicy,
 	}
 	return dm.createStreamIfNotExists(sc)
 }
@@ -222,18 +222,18 @@ func (dm *Domain) createIngresSignalStream() error {
 		}
 	}
 	sc := &nats.StreamConfig{
-		Name:              domainIngressStreamName,
-		Sources:           []*nats.StreamSource{ss},
-		MaxMsgsPerSubject: 1,
+		Name:      domainIngressStreamName,
+		Sources:   []*nats.StreamSource{ss},
+		Retention: nats.InterestPolicy,
 	}
 	return dm.createStreamIfNotExists(sc)
 }
 
 func (dm *Domain) createEgressSignalStream() error {
 	sc := &nats.StreamConfig{
-		Name:              domainEgressStreamName,
-		Subjects:          []string{fmt.Sprintf(DomainEgressSubjectsTmpl, dm.name, ">")},
-		MaxMsgsPerSubject: 1,
+		Name:      domainEgressStreamName,
+		Subjects:  []string{fmt.Sprintf(DomainEgressSubjectsTmpl, dm.name, ">")},
+		Retention: nats.InterestPolicy,
 	}
 	return dm.createStreamIfNotExists(sc)
 }
