@@ -7,71 +7,46 @@ package graph
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/foliagecp/easyjson"
-	"github.com/foliagecp/sdk/embedded/graph/crud"
 	"github.com/foliagecp/sdk/embedded/graph/graphql/extra"
 	"github.com/foliagecp/sdk/embedded/graph/graphql/graph/model"
+	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
+	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
 // SearchObjects is the resolver for the searchObjects field.
-func (r *queryResolver) SearchObjects(ctx context.Context, query string, requestFields []string) ([]*model.Object, error) {
+func (r *queryResolver) SearchObjects(ctx context.Context, query string, objectTypes []string, requestFields []string) ([]*model.Object, error) {
 	result := []*model.Object{}
 
 	if DBC != nil {
-		objectIds, err := DBC.Query.JPGQLCtraQuery(crud.BUILT_IN_OBJECTS, fmt.Sprintf(".*[type('%s')]", crud.OBJECT_TYPELINK))
-		if err != nil {
-			return result, err
+		payload := easyjson.NewJSONObjectWithKeyValue("query", easyjson.NewJSON(query))
+		payload.SetByPath("object_type_filter", easyjson.JSONFromArray(objectTypes))
+		msg := sfMediators.OpMsgFromSfReply(DBC.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.search.objects.fvpm", "root", &payload, nil))
+
+		if msg.Status != sfMediators.SYNC_OP_STATUS_OK {
+			return result, fmt.Errorf("error requesting foliage search function, status %d: %s", msg.Status, msg.Details)
 		}
 
-		typeSearchFields := map[string][]string{}
+		for _, objectId := range msg.Data.ObjectKeys() {
+			objectData := msg.Data.GetByPath(objectId)
+			otype := objectData.GetByPath("type").AsStringDefault("")
+			body := objectData.GetByPath("body")
 
-		for _, objId := range objectIds {
-			data, err := DBC.CMDB.ObjectRead(objId)
-			if err == nil {
-				otype := data.GetByPath("type").AsStringDefault("")
-				if len(otype) > 0 {
-					if _, ok := typeSearchFields[otype]; !ok {
-						fieldsList := []string{}
-						data, err := DBC.CMDB.TypeRead(otype)
-						if err == nil {
-							if fl, ok := data.GetByPath("body.search_fields").AsArrayString(); ok {
-								fieldsList = fl
-							}
-						}
-						typeSearchFields[otype] = fieldsList
-					}
-
-					body := data.GetByPath("body")
-					objectSatisfiesSearch := false
-					for _, k := range body.ObjectKeys() {
-						f := body.GetByPath(k)
-						if f.IsString() {
-							if strings.Contains(strings.ToLower(f.AsStringDefault("")), strings.ToLower(query)) {
-								objectSatisfiesSearch = true
-								break
-							}
-						}
-					}
-					if objectSatisfiesSearch {
-						resObject := model.Object{ID: objId, Type: otype, RequestFields: extra.JSON{}}
-						for _, f := range requestFields {
-							if body.PathExists(f) {
-								resObject.RequestFields[f] = body.GetByPath(f)
-							} else {
-								resObject.RequestFields[f] = easyjson.NewJSONObject()
-							}
-						}
-						result = append(result, &resObject)
-					}
+			resObject := model.Object{ID: objectId, Type: otype, RequestFields: extra.JSON{}}
+			for _, f := range requestFields {
+				v := body.GetByPath(f)
+				if body.PathExists(f) && (v.IsString() || v.IsBool() || v.IsNumeric()) {
+					resObject.RequestFields[f] = body.GetByPath(f).Value
+				} else {
+					resObject.RequestFields[f] = nil
 				}
-
 			}
+			result = append(result, &resObject)
 		}
+		return result, nil
 	}
-
-	return result, nil
+	return result, fmt.Errorf("core's api client is invalid")
 }
 
 // Query returns QueryResolver implementation.
