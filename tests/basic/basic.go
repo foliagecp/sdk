@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 
 	"github.com/foliagecp/sdk/clients/go/db"
 	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
+	"github.com/foliagecp/sdk/embedded/graph/graphql"
+	"github.com/foliagecp/sdk/embedded/graph/search"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 
 	graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
@@ -136,6 +139,7 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	graphCRUD.RegisterAllFunctionTypes(runtime)
 	graphDebug.RegisterAllFunctionTypes(runtime)
 	jpgql.RegisterAllFunctionTypes(runtime)
+	search.RegisterAllFunctionTypes(runtime)
 }
 
 func RunRequestReplyTest(runtime *statefun.Runtime) {
@@ -186,6 +190,25 @@ func Start() {
 		if CreateSimpleGraphTest {
 			CreateTestGraph(runtime)
 		}
+
+		body := easyjson.NewJSONObjectWithKeyValue("search_fields", easyjson.JSONFromArray([]string{"f1.f11", "f2"}))
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeUpdate("typea", body, false))
+
+		body = easyjson.NewJSONObjectWithKeyValue("search_fields", easyjson.JSONFromArray([]string{"f1", "f2"}))
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeUpdate("typeb", body, false))
+
+		// Test data for search -----------------------------------------------
+		b := easyjson.NewJSONObjectWithKeyValue("f2", easyjson.NewJSON(true))
+		b.SetByPath("f1.f11", easyjson.NewJSON(123.13))
+		dbClient.CMDB.ObjectCreate("test1", "typea", b)
+		dbClient.CMDB.ObjectCreate("test2", "typea", easyjson.NewJSONObjectWithKeyValue("f2", easyjson.NewJSON("bar")))
+		b = easyjson.NewJSONObjectWithKeyValue("f1", easyjson.NewJSON("data1"))
+		b.SetByPath("f2", easyjson.NewJSON(119))
+		dbClient.CMDB.ObjectCreate("test3", "typeb", b)
+		// --------------------------------------------------------------------
+
+		fmt.Println("Starting GraphQL")
+		graphql.StartGraphqlServer("8080", &dbClient)
 		return nil
 	}
 
