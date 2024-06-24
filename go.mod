@@ -1,6 +1,6 @@
 module github.com/foliagecp/sdk
 
-go 1.19
+go 1.21.1
 
 require (
 	github.com/99designs/gqlgen v0.17.48
