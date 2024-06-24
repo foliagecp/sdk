@@ -68,6 +68,7 @@ func FieldValuePartialMatch(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 	}
 
 	resultObjects := easyjson.NewJSONObject()
+	commonFields := map[string]struct{}{}
 
 	objectIds, err := dbc.Query.JPGQLCtraQuery(crud.BUILT_IN_OBJECTS, fmt.Sprintf(".*[type('%s')]", crud.OBJECT_TYPELINK))
 	if err != nil {
@@ -111,6 +112,7 @@ func FieldValuePartialMatch(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 						v := body.GetByPath(field)
 						fieldValue := fmt.Sprintf("%v", v.Value)
 						if strings.Contains(strings.ToLower(fieldValue), strings.ToLower(searchQuery)) {
+							commonFields[field] = struct{}{}
 							objectSatisfiesSearch = true
 							break
 						}
@@ -123,5 +125,13 @@ func FieldValuePartialMatch(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 		}
 	}
 
-	om.AggregateOpMsg(sfMediators.OpMsgOk(resultObjects)).Reply()
+	result := easyjson.NewJSONObject()
+	commonFieldsArray := []string{}
+	for k := range commonFields {
+		commonFieldsArray = append(commonFieldsArray, k)
+	}
+	result.SetByPath("match.objects", resultObjects)
+	result.SetByPath("match.fields", easyjson.JSONFromArray(commonFieldsArray))
+
+	om.AggregateOpMsg(sfMediators.OpMsgOk(result)).Reply()
 }
