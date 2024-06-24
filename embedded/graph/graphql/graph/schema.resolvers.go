@@ -30,11 +30,9 @@ func (r *queryResolver) SearchObjects(ctx context.Context, query string, objectT
 
 		matchObjects := msg.Data.GetByPath("match.objects")
 		if len(requestFields) == 0 {
-			matchFields := []string{}
 			if a, ok := msg.Data.GetByPath("match.fields").AsArrayString(); ok {
-				matchFields = a
+				requestFields = a
 			}
-			requestFields = matchFields
 		}
 
 		for _, objectId := range matchObjects.ObjectKeys() {
