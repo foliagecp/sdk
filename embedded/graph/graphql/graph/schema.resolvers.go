@@ -28,8 +28,17 @@ func (r *queryResolver) SearchObjects(ctx context.Context, query string, objectT
 			return result, fmt.Errorf("error requesting foliage search function, status %d: %s", msg.Status, msg.Details)
 		}
 
-		for _, objectId := range msg.Data.ObjectKeys() {
-			objectData := msg.Data.GetByPath(objectId)
+		matchObjects := msg.Data.GetByPath("match.objects")
+		if len(requestFields) == 0 {
+			matchFields := []string{}
+			if a, ok := msg.Data.GetByPath("match.fields").AsArrayString(); ok {
+				matchFields = a
+			}
+			requestFields = matchFields
+		}
+
+		for _, objectId := range matchObjects.ObjectKeys() {
+			objectData := matchObjects.GetByPath(objectId)
 			otype := objectData.GetByPath("type").AsStringDefault("")
 			body := objectData.GetByPath("body")
 
