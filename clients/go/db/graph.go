@@ -91,12 +91,14 @@ func (gc GraphSyncClient) VerticesLinkUpdate(from, linkName string, tags []strin
 	if len(tags) > 0 {
 		payload.SetByPath("tags", easyjson.JSONFromArray(tags))
 	}
-	if len(toAndType4Upsert) == 2 {
-		payload.SetByPath("upsert", easyjson.NewJSON(true))
-		payload.SetByPath("to", easyjson.NewJSON(toAndType4Upsert[0]))
-		payload.SetByPath("type", easyjson.NewJSON(toAndType4Upsert[1]))
-	} else {
-		return fmt.Errorf("toAndType4Upsert must consist of 2 string values: \"to\" and \"type\"")
+	if len(toAndType4Upsert) > 0 {
+		if len(toAndType4Upsert) == 2 {
+			payload.SetByPath("upsert", easyjson.NewJSON(true))
+			payload.SetByPath("to", easyjson.NewJSON(toAndType4Upsert[0]))
+			payload.SetByPath("type", easyjson.NewJSON(toAndType4Upsert[1]))
+		} else {
+			return fmt.Errorf("toAndType4Upsert must consist of 2 string values: \"to\" and \"type\"")
+		}
 	}
 
 	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.link.update", from, &payload, nil)))
