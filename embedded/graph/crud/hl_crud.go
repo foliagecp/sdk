@@ -10,7 +10,7 @@ import (
 	"github.com/foliagecp/sdk/statefun/system"
 )
 
-func replyWithoutOpStack(om *sfMediators.OpMediator, data ...easyjson.JSON) {
+func replyWithoutOpStack(om *sfMediators.OpMediator, ctx *sfPlugins.StatefunContextProcessor, data ...easyjson.JSON) {
 	var res easyjson.JSON
 	if len(data) > 0 {
 		res = data[0]
@@ -18,12 +18,18 @@ func replyWithoutOpStack(om *sfMediators.OpMediator, data ...easyjson.JSON) {
 	} else {
 		res = om.GetData()
 	}
-	res.RemoveByPath("op_stack")
+
+	returnOpStack := false
+	if ctx.Options != nil {
+		returnOpStack = ctx.Options.GetByPath("op_stack").AsBoolDefault(false)
+	}
+	if !returnOpStack {
+		res.RemoveByPath("op_stack")
+	}
 	if !res.IsNonEmptyObject() {
 		res = easyjson.NewJSONNull()
 	}
-	reply := sfMediators.MakeOpMsg(om.GetStatus(), om.GetDetails(), "", res).ToJson()
-	system.MsgOnErrorReturn(om.ReplyWithData(reply))
+	system.MsgOnErrorReturn(om.ReplyWithData(&res))
 }
 
 /*
@@ -177,9 +183,10 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	options := easyjson.NewJSONObjectWithKeyValue("op_stack", easyjson.NewJSON(true))
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", ctx.Self.ID, ctx.Payload, &options)))
 
+	targetReply := om.GetLastSyncOp().Data
 	var opStack *easyjson.JSON
-	if om.GetLastSyncOp().Data.PathExists("op_stack") {
-		opStack = om.GetLastSyncOp().Data.GetByPathPtr("op_stack")
+	if targetReply.PathExists("op_stack") {
+		opStack = targetReply.GetByPathPtr("op_stack")
 	}
 
 	if !(om.GetStatus() == sfMediators.SYNC_OP_STATUS_INCOMPLETE) {
@@ -211,7 +218,7 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 		executeTriggersFromLLOpStack(ctx, opStack, "", "")
 	}
 
-	replyWithoutOpStack(om)
+	replyWithoutOpStack(om, ctx, targetReply)
 }
 
 /*
@@ -231,7 +238,8 @@ func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 		ctx.Payload.RemoveByPath("upsert")
 		if findObjectType(ctx, ctx.Self.ID) == "" { // Object does not exist
 			if ctx.Payload.GetByPath("origin_type").IsString() {
-				om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.create", ctx.Self.ID, ctx.Payload, ctx.Options))).Reply()
+				om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.create", ctx.Self.ID, ctx.Payload, ctx.Options)))
+				replyWithoutOpStack(om, ctx)
 			} else {
 				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("object with id=%s does exist, upsert=true but origin_type is not specified", ctx.Self.ID))).Reply()
 			}
@@ -246,7 +254,7 @@ func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), "", "")
 	}
 
-	replyWithoutOpStack(om)
+	replyWithoutOpStack(om, ctx)
 }
 
 /*
@@ -262,7 +270,7 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), ctx.Self.ID, objectType)
 	}
 
-	replyWithoutOpStack(om)
+	replyWithoutOpStack(om, ctx)
 }
 
 /*
@@ -511,7 +519,7 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	linkName, ok := ctx.Payload.GetByPath("name").AsString()
 	if !ok {
-		linkName = objectToID
+		linkName = ctx.Domain.GetObjectIDWithoutDomain(objectToID)
 	}
 
 	_, _, linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, ctx.Self.ID, objectToID)
@@ -535,7 +543,7 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), "", "")
 	}
 
-	replyWithoutOpStack(om)
+	replyWithoutOpStack(om, ctx)
 }
 
 /*
@@ -587,7 +595,7 @@ func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), "", "")
 	}
 
-	replyWithoutOpStack(om)
+	replyWithoutOpStack(om, ctx)
 }
 
 /*
@@ -621,7 +629,7 @@ func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), "", "")
 	}
 
-	replyWithoutOpStack(om)
+	replyWithoutOpStack(om, ctx)
 }
 
 /*
@@ -658,6 +666,6 @@ func ReadObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	result.SetByPath("from_type", easyjson.NewJSON(fromObjectType))
 	result.SetByPath("to_type", easyjson.NewJSON(toObjectType))
 
-	replyWithoutOpStack(om)
+	replyWithoutOpStack(om, ctx)
 	system.MsgOnErrorReturn(om.ReplyWithData(&result))
 }
