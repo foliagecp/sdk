@@ -395,7 +395,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		// Check if link with this type "type" to "to" already exists
 		_, err = ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+LinkKeySuff2Pattern, selfId, linkType, toId))
 		if err == nil {
-			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s to=%s with type=%s already exists", selfId, linkName, toId, linkType))).Reply()
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s to=%s with type=%s already exists, two vertices can have a link with this type and direction only once", selfId, linkName, toId, linkType))).Reply()
 			return
 		}
 		// -----------------------------------------------------------
