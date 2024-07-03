@@ -519,7 +519,7 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	linkName, ok := ctx.Payload.GetByPath("name").AsString()
 	if !ok {
-		linkName = ctx.Domain.GetObjectIDWithoutDomain(objectToID)
+		linkName = objectToID
 	}
 
 	_, _, linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, ctx.Self.ID, objectToID)
