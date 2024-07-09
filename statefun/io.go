@@ -92,6 +92,7 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 					buildNatsData(r.Domain.name, callerTypename, callerID, payload, options),
 				))
 			} else { // Publish into egress router
+				// TODO: If domain is for leaf-hub – leave as ts is, else signal to different NATS
 				system.MsgOnErrorReturn(r.nc.Publish(
 					fmt.Sprintf(DomainEgressSubjectsTmpl, r.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, r.Domain.GetDomainFromObjectID(targetID), targetTypename, targetID)),
 					buildNatsData(r.Domain.name, callerTypename, callerID, payload, options),
@@ -190,6 +191,7 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 
 func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) (*easyjson.JSON, error) {
 	natsCoreGlobalRequest := func() (*easyjson.JSON, error) {
+		// TODO: If domain is for leaf-hub – leave as ts is, else request to different NATS
 		resp, err := r.nc.Request(
 			fmt.Sprintf("request.%s.%s.%s", r.Domain.GetDomainFromObjectID(targetID), targetTypename, targetID),
 			buildNatsData(r.Domain.name, callerTypename, callerID, payload, options),
