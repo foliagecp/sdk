@@ -84,7 +84,8 @@ func exportToGraphMLString(nodes []Node, edges []Edge) (string, error) {
 }
 
 type Element struct {
-	XMLName xml.Name
+	XMLName xml.Name  `xml:"v"`
+	Key     string    `xml:"key,attr"`
 	Type    string    `xml:"type,attr,omitempty"`
 	Content string    `xml:",chardata"`
 	Items   []Element `xml:",any"`
@@ -96,7 +97,7 @@ func ConvertToXML(name string, value interface{}) []Element {
 	}
 	switch v := value.(type) {
 	case map[string]interface{}:
-		element := Element{XMLName: xml.Name{Local: name}}
+		element := Element{Key: name}
 		for key, val := range v {
 			childElements := ConvertToXML(key, val)
 			element.Items = append(element.Items, childElements...)
@@ -110,13 +111,13 @@ func ConvertToXML(name string, value interface{}) []Element {
 		}
 		return elements
 	case string:
-		return []Element{{XMLName: xml.Name{Local: name}, Type: "string", Content: v}}
+		return []Element{{Key: name, Type: "string", Content: v}}
 	case float64:
-		return []Element{{XMLName: xml.Name{Local: name}, Type: "number", Content: fmt.Sprintf("%v", v)}}
+		return []Element{{Key: name, Type: "number", Content: fmt.Sprintf("%v", v)}}
 	case bool:
-		return []Element{{XMLName: xml.Name{Local: name}, Type: "boolean", Content: fmt.Sprintf("%v", v)}}
+		return []Element{{Key: name, Type: "boolean", Content: fmt.Sprintf("%v", v)}}
 	default:
-		return []Element{{XMLName: xml.Name{Local: name}, Type: "unknown", Content: fmt.Sprintf("%v", v)}}
+		return []Element{{Key: name, Type: "unknown", Content: fmt.Sprintf("%v", v)}}
 	}
 }
 
