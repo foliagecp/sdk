@@ -58,16 +58,7 @@ type AttributeCharData struct {
 	Data    interface{} `xml:",chardata"`
 }
 
-var (
-	predefinedAttributesTypes = []Key{
-		{Id: "d0", For: "all", AttrName: "body", AttrType: "string"},
-		{Id: "d1", For: "edge", AttrName: "name", AttrType: "string"},
-		{Id: "d2", For: "edge", AttrName: "type", AttrType: "string"},
-		{Id: "d3", For: "edge", AttrName: "tag", AttrType: "string"},
-	}
-)
-
-func exportToGraphMLString(nodes []Node, edges []Edge) (string, error) {
+func exportToGraphMLString(nodes []Node, edges []Edge, predefinedAttributesTypes []Key) (string, error) {
 	graphml := GraphML{
 		Xmlns: "http://graphml.graphdrawing.org/xmlns",
 		Keys:  predefinedAttributesTypes,
@@ -188,7 +179,17 @@ func createGraphML(sourceVertex string, domain sfPlugins.Domain, nodes map[strin
 		}
 		outEdges = append(outEdges, outEdge)
 	}
-	s, err := exportToGraphMLString(outNodes, outEdges)
+	bodyType := "string"
+	if json2xml {
+		bodyType = "xml"
+	}
+	predefinedAttributesTypes := []Key{
+		{Id: "d0", For: "all", AttrName: "body", AttrType: bodyType},
+		{Id: "d1", For: "edge", AttrName: "name", AttrType: "string"},
+		{Id: "d2", For: "edge", AttrName: "type", AttrType: "string"},
+		{Id: "d3", For: "edge", AttrName: "tag", AttrType: "string"},
+	}
+	s, err := exportToGraphMLString(outNodes, outEdges, predefinedAttributesTypes)
 	if err != nil {
 		logger.Logf(logger.ErrorLevel, "createGraphML error: %s\n", err.Error())
 	}
