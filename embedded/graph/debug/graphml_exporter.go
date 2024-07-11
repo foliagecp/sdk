@@ -3,6 +3,7 @@ package debug
 import (
 	"encoding/xml"
 	"fmt"
+	"sort"
 
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/statefun/logger"
@@ -129,9 +130,15 @@ func ConvertToXML(name string, value interface{}) []Element {
 
 func createGraphML(sourceVertex string, domain sfPlugins.Domain, nodes map[string]*easyjson.JSON, edges []gEdge, json2xml bool) string {
 	outNodes := []Node{}
-	for id, body := range nodes {
+	nodeIds := make([]string, 0, len(nodes))
+	for nodeId := range nodes {
+		nodeIds = append(nodeIds, nodeId)
+	}
+	sort.Strings(nodeIds)
+	for _, nodeId := range nodeIds {
+		body := nodes[nodeId]
 		outNode := Node{
-			Id:         id,
+			Id:         nodeId,
 			Attributes: []interface{}{},
 		}
 		if body.IsNonEmptyObject() {
@@ -145,8 +152,20 @@ func createGraphML(sourceVertex string, domain sfPlugins.Domain, nodes map[strin
 		}
 		outNodes = append(outNodes, outNode)
 	}
+
+	edgesMap := map[string]int{}
+	for edgeNum, edge := range edges {
+		edgesMap[edge.from+"."+edge.to] = edgeNum
+	}
+	edgeIds := make([]string, 0, len(edgesMap))
+	for edgeId := range edgesMap {
+		edgeIds = append(edgeIds, edgeId)
+	}
+	sort.Strings(edgeIds)
+
 	outEdges := []Edge{}
-	for _, edge := range edges {
+	for _, edgeId := range edgeIds {
+		edge := edges[edgesMap[edgeId]]
 		outEdge := Edge{
 			Source: edge.from,
 			Target: edge.to,
