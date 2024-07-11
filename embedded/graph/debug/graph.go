@@ -86,7 +86,7 @@ func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 	format := payload.GetByPath("format").AsStringDefault("dot")
 	switch format {
 	case "graphml":
-		fileData = createGraphML(ctx.Self.ID, ctx.Domain, nodes, edges)
+		fileData = createGraphML(ctx.Self.ID, ctx.Domain, nodes, edges, payload.GetByPath("json2xml").AsBoolDefault(false))
 	case "dot":
 		fileData = createGraphViz(ctx.Self.ID, ctx.Domain, nodes, edges)
 	default:
