@@ -58,7 +58,25 @@ type AttributeCharData struct {
 	Data    interface{} `xml:",chardata"`
 }
 
-func exportToGraphMLString(nodes []Node, edges []Edge, predefinedAttributesTypes []Key) (string, error) {
+const (
+	BODY_JSON_ATTR_ID        = "bdj"
+	BODY_XML_ATTR_ID         = "bdx"
+	LINK_NAME_STRING_ATTR_ID = "nms"
+	LINK_TYPE_STRING_ATTR_ID = "tps"
+	LINK_TAG_STRING_ATTR_ID  = "tgs"
+)
+
+var (
+	predefinedAttributesTypes = []Key{
+		{Id: BODY_JSON_ATTR_ID, For: "all", AttrName: "body", AttrType: "string"},
+		{Id: BODY_XML_ATTR_ID, For: "all", AttrName: "body", AttrType: "xml"},
+		{Id: LINK_NAME_STRING_ATTR_ID, For: "edge", AttrName: "name", AttrType: "string"},
+		{Id: LINK_TYPE_STRING_ATTR_ID, For: "edge", AttrName: "type", AttrType: "string"},
+		{Id: LINK_TAG_STRING_ATTR_ID, For: "edge", AttrName: "tag", AttrType: "string"},
+	}
+)
+
+func exportToGraphMLString(nodes []Node, edges []Edge) (string, error) {
 	graphml := GraphML{
 		Xmlns: "http://graphml.graphdrawing.org/xmlns",
 		Keys:  predefinedAttributesTypes,
@@ -135,10 +153,10 @@ func createGraphML(sourceVertex string, domain sfPlugins.Domain, nodes map[strin
 		if body.IsNonEmptyObject() {
 			if json2xml {
 				if b, ok := body.AsObject(); ok {
-					outNode.Attributes = append(outNode.Attributes, AttributeInnerXML{Key: "d0", Data: ConvertToXML("body", b)})
+					outNode.Attributes = append(outNode.Attributes, AttributeInnerXML{Key: BODY_XML_ATTR_ID, Data: ConvertToXML("body", b)})
 				}
 			} else {
-				outNode.Attributes = append(outNode.Attributes, AttributeCharData{Key: "d0", Data: body.ToString()})
+				outNode.Attributes = append(outNode.Attributes, AttributeCharData{Key: BODY_JSON_ATTR_ID, Data: body.ToString()})
 			}
 		}
 		outNodes = append(outNodes, outNode)
@@ -161,35 +179,25 @@ func createGraphML(sourceVertex string, domain sfPlugins.Domain, nodes map[strin
 			Source: edge.from,
 			Target: edge.to,
 			Attributes: []interface{}{
-				AttributeInnerXML{Key: "d1", Data: edge.name},
-				AttributeInnerXML{Key: "d2", Data: edge.tp},
+				AttributeInnerXML{Key: LINK_NAME_STRING_ATTR_ID, Data: edge.name},
+				AttributeInnerXML{Key: LINK_TYPE_STRING_ATTR_ID, Data: edge.tp},
 			},
 		}
 		if edge.body.IsNonEmptyObject() {
 			if json2xml {
 				if b, ok := edge.body.AsObject(); ok {
-					outEdge.Attributes = append(outEdge.Attributes, AttributeInnerXML{Key: "d0", Data: ConvertToXML("body", b)})
+					outEdge.Attributes = append(outEdge.Attributes, AttributeInnerXML{Key: BODY_XML_ATTR_ID, Data: ConvertToXML("body", b)})
 				}
 			} else {
-				outEdge.Attributes = append(outEdge.Attributes, AttributeCharData{Key: "d0", Data: edge.body.ToString()})
+				outEdge.Attributes = append(outEdge.Attributes, AttributeCharData{Key: BODY_JSON_ATTR_ID, Data: edge.body.ToString()})
 			}
 		}
 		for _, tag := range edge.tags {
-			outEdge.Attributes = append(outEdge.Attributes, AttributeInnerXML{Key: "d3", Data: tag})
+			outEdge.Attributes = append(outEdge.Attributes, AttributeInnerXML{Key: LINK_TAG_STRING_ATTR_ID, Data: tag})
 		}
 		outEdges = append(outEdges, outEdge)
 	}
-	bodyType := "string"
-	if json2xml {
-		bodyType = "xml"
-	}
-	predefinedAttributesTypes := []Key{
-		{Id: "d0", For: "all", AttrName: "body", AttrType: bodyType},
-		{Id: "d1", For: "edge", AttrName: "name", AttrType: "string"},
-		{Id: "d2", For: "edge", AttrName: "type", AttrType: "string"},
-		{Id: "d3", For: "edge", AttrName: "tag", AttrType: "string"},
-	}
-	s, err := exportToGraphMLString(outNodes, outEdges, predefinedAttributesTypes)
+	s, err := exportToGraphMLString(outNodes, outEdges)
 	if err != nil {
 		logger.Logf(logger.ErrorLevel, "createGraphML error: %s\n", err.Error())
 	}
