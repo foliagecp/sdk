@@ -33,22 +33,28 @@ type Graph struct {
 }
 
 type Node struct {
-	XMLName    xml.Name    `xml:"node"`
-	Id         string      `xml:"id,attr"`
-	Attributes []Attribute `xml:"data"`
+	XMLName    xml.Name      `xml:"node"`
+	Id         string        `xml:"id,attr"`
+	Attributes []interface{} `xml:"data"`
 }
 
 type Edge struct {
-	XMLName    xml.Name    `xml:"edge"`
-	Source     string      `xml:"source,attr"`
-	Target     string      `xml:"target,attr"`
-	Attributes []Attribute `xml:"data"`
+	XMLName    xml.Name      `xml:"edge"`
+	Source     string        `xml:"source,attr"`
+	Target     string        `xml:"target,attr"`
+	Attributes []interface{} `xml:"data"`
 }
 
-type Attribute struct {
+type AttributeInnerXML struct {
 	XMLName xml.Name    `xml:"data"`
 	Key     string      `xml:"key,attr"`
 	Data    interface{} `xml:",innerxml"`
+}
+
+type AttributeCharData struct {
+	XMLName xml.Name    `xml:"data"`
+	Key     string      `xml:"key,attr"`
+	Data    interface{} `xml:",chardata"`
 }
 
 var (
@@ -121,16 +127,20 @@ func ConvertToXML(name string, value interface{}) []Element {
 	}
 }
 
-func createGraphML(sourceVertex string, domain sfPlugins.Domain, nodes map[string]*easyjson.JSON, edges []gEdge) string {
+func createGraphML(sourceVertex string, domain sfPlugins.Domain, nodes map[string]*easyjson.JSON, edges []gEdge, json2xml bool) string {
 	outNodes := []Node{}
 	for id, body := range nodes {
 		outNode := Node{
 			Id:         id,
-			Attributes: []Attribute{},
+			Attributes: []interface{}{},
 		}
 		if body.IsNonEmptyObject() {
-			if b, ok := body.AsObject(); ok {
-				outNode.Attributes = append(outNode.Attributes, Attribute{Key: "d0", Data: ConvertToXML("body", b)})
+			if json2xml {
+				if b, ok := body.AsObject(); ok {
+					outNode.Attributes = append(outNode.Attributes, AttributeInnerXML{Key: "d0", Data: ConvertToXML("body", b)})
+				}
+			} else {
+				outNode.Attributes = append(outNode.Attributes, AttributeCharData{Key: "d0", Data: body.ToString()})
 			}
 		}
 		outNodes = append(outNodes, outNode)
@@ -140,18 +150,22 @@ func createGraphML(sourceVertex string, domain sfPlugins.Domain, nodes map[strin
 		outEdge := Edge{
 			Source: edge.from,
 			Target: edge.to,
-			Attributes: []Attribute{
-				{Key: "d1", Data: edge.name},
-				{Key: "d2", Data: edge.tp},
+			Attributes: []interface{}{
+				AttributeInnerXML{Key: "d1", Data: edge.name},
+				AttributeInnerXML{Key: "d2", Data: edge.tp},
 			},
 		}
 		if edge.body.IsNonEmptyObject() {
-			if b, ok := edge.body.AsObject(); ok {
-				outEdge.Attributes = append(outEdge.Attributes, Attribute{Key: "d0", Data: ConvertToXML("body", b)})
+			if json2xml {
+				if b, ok := edge.body.AsObject(); ok {
+					outEdge.Attributes = append(outEdge.Attributes, AttributeInnerXML{Key: "d0", Data: ConvertToXML("body", b)})
+				}
+			} else {
+				outEdge.Attributes = append(outEdge.Attributes, AttributeCharData{Key: "d0", Data: edge.body.ToString()})
 			}
 		}
 		for _, tag := range edge.tags {
-			outEdge.Attributes = append(outEdge.Attributes, Attribute{Key: "d3", Data: tag})
+			outEdge.Attributes = append(outEdge.Attributes, AttributeInnerXML{Key: "d3", Data: tag})
 		}
 		outEdges = append(outEdges, outEdge)
 	}
