@@ -221,12 +221,21 @@ func (r *Runtime) runGarbageCellector() (err error) {
 func (r *Runtime) TestKVPutUpdateGet() {
 	fmt.Println("!!!!!!!!!!!!!!!!! TestKVPutGet")
 
-	system.MsgOnErrorReturn(kv.KVPut(r.js, r.Domain.kv, "a#b@c$d", []byte("dsfadf")))
-	a, e := kv.KVGet(r.js, r.Domain.kv, "a#b@c$d")
+	system.MsgOnErrorReturn(kv.KVPut(r.js, r.Domain.kv, "x.a#b@c$d", []byte("dsfadf")))
+	a, e := kv.KVGet(r.js, r.Domain.kv, "x.a#b@c$d")
 	fmt.Println(a, e)
 
-	system.MsgOnErrorReturn(kv.KVUpdate(r.js, r.Domain.kv, "a#b@c$d", []byte("dsfadf33333"), a.Revision()))
+	system.MsgOnErrorReturn(kv.KVUpdate(r.js, r.Domain.kv, "x.a#b@c$d", []byte("dsfadf33333"), a.Revision()))
 
-	a1, e1 := kv.KVGet(r.js, r.Domain.kv, "a#b@c$d")
+	a1, e1 := kv.KVGet(r.js, r.Domain.kv, "x.a#b@c$d")
 	fmt.Println(a1, e1)
+
+	system.MsgOnErrorReturn(kv.KVPut(r.js, r.Domain.kv, "x.a1#11$1", []byte("yyerty")))
+	if w, err := r.Domain.kv.Watch("x.*"); err == nil {
+		for entry := range w.Updates() {
+			if entry != nil {
+				fmt.Println(entry)
+			}
+		}
+	}
 }*/
