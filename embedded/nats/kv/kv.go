@@ -32,11 +32,19 @@ const (
 	kvSubjectsPreTmpl       = "$KV.%s."
 	kvSubjectsPreDomainTmpl = "%s.$KV.%s."
 	kvNoPending             = "0"
+
+	_EMPTY_          = ""
+	kvLatestRevision = 0
+
+	kvop    = "KV-Operation"
+	kvdel   = "DEL"
+	kvpurge = "PURGE"
 )
 
 var (
 	validBucketRe = regexp.MustCompile(`\A[a-zA-Z0-9_-]+\z`)
 	semVerRe      = regexp.MustCompile(`\Av?([0-9]+)\.?([0-9]+)?\.?([0-9]+)?`)
+	validKeyRe    = regexp.MustCompile(`\A[-/_$#@=\.a-zA-Z0-9]+\z`)
 )
 
 func versionComponents(version string) (major, minor, patch int, err error) {
@@ -204,7 +212,14 @@ func CreateKeyValue(nc *nats.Conn, js nats.JetStreamContext, cfg *nats.KeyValueC
 	return js.KeyValue(cfg.Bucket)
 }
 
-func DeleteKeyValueValue(js nats.JetStreamContext, kv nats.KeyValue, key string) error {
+func keyValid(key string) bool {
+	if len(key) == 0 || key[0] == '.' || key[len(key)-1] == '.' {
+		return false
+	}
+	return validKeyRe.MatchString(key)
+}
+
+func KVDelete(js nats.JetStreamContext, kv nats.KeyValue, key string) error {
 	streamName := fmt.Sprintf(kvBucketNameTmpl, kv.Bucket())
 	topicName := fmt.Sprintf("$KV.%s.%s", kv.Bucket(), key)
 	rms, err := js.GetLastMsg(streamName, topicName)
@@ -212,4 +227,151 @@ func DeleteKeyValueValue(js nats.JetStreamContext, kv nats.KeyValue, key string)
 		return err
 	}
 	return js.SecureDeleteMsg(fmt.Sprintf(kvBucketNameTmpl, kv.Bucket()), rms.Sequence)
+}
+
+func KVPut(js nats.JetStreamContext, kv nats.KeyValue, key string, value []byte) (revision uint64, err error) {
+	if !keyValid(key) {
+		return 0, nats.ErrInvalidKey
+	}
+
+	var b strings.Builder
+
+	if reflect.ValueOf(kv).Elem().FieldByName("useJSPfx").Bool() {
+		opts := reflect.ValueOf(js).Elem().FieldByName("opts")
+		if !opts.CanAddr() {
+			return 0, fmt.Errorf("KVPut error: js.opts == nil, cannot obtain js.opts.pre")
+		}
+		js_opts_pre := opts.Elem().FieldByName("pre").String()
+		b.WriteString(js_opts_pre)
+	}
+
+	kv_putPre := reflect.ValueOf(kv).Elem().FieldByName("putPre").String()
+	if kv_putPre != _EMPTY_ {
+		b.WriteString(kv_putPre)
+	} else {
+		b.WriteString(reflect.ValueOf(kv).Elem().FieldByName("pre").String())
+	}
+	b.WriteString(key)
+
+	pa, err := js.Publish(b.String(), value)
+	if err != nil {
+		return 0, err
+	}
+	return pa.Sequence, err
+}
+
+func KVUpdate(js nats.JetStreamContext, kv nats.KeyValue, key string, value []byte, revision uint64) (uint64, error) {
+	if !keyValid(key) {
+		return 0, nats.ErrInvalidKey
+	}
+
+	var b strings.Builder
+	if reflect.ValueOf(kv).Elem().FieldByName("useJSPfx").Bool() {
+		opts := reflect.ValueOf(js).Elem().FieldByName("opts")
+		if !opts.CanAddr() {
+			return 0, fmt.Errorf("KVUpdate error: js.opts == nil, cannot obtain js.opts.pre")
+		}
+		js_opts_pre := opts.Elem().FieldByName("pre").String()
+		b.WriteString(js_opts_pre)
+	}
+	b.WriteString(reflect.ValueOf(kv).Elem().FieldByName("pre").String())
+	b.WriteString(key)
+
+	m := nats.Msg{Subject: b.String(), Header: nats.Header{}, Data: value}
+	m.Header.Set(nats.ExpectedLastSubjSeqHdr, strconv.FormatUint(revision, 10))
+
+	pa, err := js.PublishMsg(&m)
+	if err != nil {
+		return 0, err
+	}
+	return pa.Sequence, err
+}
+
+// Underlying entry.
+type kve struct {
+	bucket   string
+	key      string
+	value    []byte
+	revision uint64
+	delta    uint64
+	created  time.Time
+	op       nats.KeyValueOp
+}
+
+func (e *kve) Bucket() string             { return e.bucket }
+func (e *kve) Key() string                { return e.key }
+func (e *kve) Value() []byte              { return e.value }
+func (e *kve) Revision() uint64           { return e.revision }
+func (e *kve) Created() time.Time         { return e.created }
+func (e *kve) Delta() uint64              { return e.delta }
+func (e *kve) Operation() nats.KeyValueOp { return e.op }
+
+// Get returns the latest value for the key.
+func KVGet(js nats.JetStreamContext, kv nats.KeyValue, key string) (nats.KeyValueEntry, error) {
+	e, err := kv_get(js, kv, key, kvLatestRevision)
+	if err != nil {
+		if errors.Is(err, nats.ErrKeyDeleted) {
+			return nil, nats.ErrKeyNotFound
+		}
+		return nil, err
+	}
+
+	return e, nil
+}
+
+func kv_get(js nats.JetStreamContext, kv nats.KeyValue, key string, revision uint64) (nats.KeyValueEntry, error) {
+	if !keyValid(key) {
+		return nil, nats.ErrInvalidKey
+	}
+
+	var b strings.Builder
+	b.WriteString(reflect.ValueOf(kv).Elem().FieldByName("pre").String())
+	b.WriteString(key)
+
+	var m *nats.RawStreamMsg
+	var err error
+	var _opts [1]nats.JSOpt
+	opts := _opts[:0]
+	if reflect.ValueOf(kv).Elem().FieldByName("useDirect").Bool() {
+		opts = append(opts, nats.DirectGet())
+	}
+
+	if revision == kvLatestRevision {
+		m, err = js.GetLastMsg(reflect.ValueOf(kv).Elem().FieldByName("stream").String(), b.String(), opts...)
+	} else {
+		m, err = js.GetMsg(reflect.ValueOf(kv).Elem().FieldByName("stream").String(), revision, opts...)
+		// If a sequence was provided, just make sure that the retrieved
+		// message subject matches the request.
+		if err == nil && m.Subject != b.String() {
+			return nil, nats.ErrKeyNotFound
+		}
+	}
+	if err != nil {
+		if errors.Is(err, nats.ErrMsgNotFound) {
+			err = nats.ErrKeyNotFound
+		}
+		return nil, err
+	}
+
+	entry := &kve{
+		bucket:   reflect.ValueOf(kv).Elem().FieldByName("name").String(),
+		key:      key,
+		value:    m.Data,
+		revision: m.Sequence,
+		created:  m.Time,
+	}
+
+	// Double check here that this is not a DEL Operation marker.
+	if len(m.Header) > 0 {
+		switch m.Header.Get(kvop) {
+		case kvdel:
+			entry.op = nats.KeyValueDelete
+			return entry, nats.ErrKeyDeleted
+		case kvpurge:
+			entry.op = nats.KeyValuePurge
+			return entry, nats.ErrKeyDeleted
+		}
+	}
+
+	return entry, nil
 }

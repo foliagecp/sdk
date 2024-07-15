@@ -213,7 +213,20 @@ func (r *Runtime) runGarbageCellector() (err error) {
 			if entry == nil {
 				break
 			}
-			kv.DeleteKeyValueValue(r.js, r.kv, entry.Key())
+			kv.KVDelete(r.js, r.kv, entry.Key())
 		}
 	}
+}
+
+func (r *Runtime) TestKVPutUpdateGet() {
+	fmt.Println("!!!!!!!!!!!!!!!!! TestKVPutGet")
+
+	system.MsgOnErrorReturn(kv.KVPut(r.js, r.Domain.kv, "a#b@c$d", []byte("dsfadf")))
+	a, e := kv.KVGet(r.js, r.Domain.kv, "a#b@c$d")
+	fmt.Println(a, e)
+
+	system.MsgOnErrorReturn(kv.KVUpdate(r.js, r.Domain.kv, "a#b@c$d", []byte("dsfadf33333"), a.Revision()))
+
+	a1, e1 := kv.KVGet(r.js, r.Domain.kv, "a#b@c$d")
+	fmt.Println(a1, e1)
 }*/
