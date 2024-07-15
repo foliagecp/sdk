@@ -26,7 +26,7 @@ import (
 )
 
 var (
-	keyValidationRegexp *regexp.Regexp = regexp.MustCompile(`^[a-zA-Z0-9/=_-][a-zA-Z0-9/=._-]+[a-zA-Z0-9/=_-]$|^[a-zA-Z0-9/=_-]*$`)
+	keyValidationRegexp *regexp.Regexp = regexp.MustCompile(`^[a-zA-Z0-9/=_$#@-][a-zA-Z0-9/=._$#@-]+[a-zA-Z0-9/=_$#@-]$|^[a-zA-Z0-9/=_$#@-]*$`)
 )
 
 type KeyValue struct {
@@ -328,7 +328,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 									//lg.Logf("---CACHE_KV TF DELETE: %s, %d, %d\n", key, kvRecordTime, appendFlag)
 
 									//system.MsgOnErrorReturn(kv.Delete(entry.Key()))
-									system.MsgOnErrorReturn(customNatsKv.DeleteKeyValueValue(cs.js, cs.kv, entry.Key()))
+									system.MsgOnErrorReturn(customNatsKv.KVDelete(cs.js, cs.kv, entry.Key()))
 
 									//cs.rootValue.purgeReady
 									//if csv := cs.getLastKeyCacheStoreValue(key); csv != nil {
@@ -338,7 +338,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 							} else if kvRecordTime == cacheRecordTime { // KV confirmes update
 								if appendFlag == 0 {
 									//system.MsgOnErrorReturn(kv.Delete(entry.Key()))
-									system.MsgOnErrorReturn(customNatsKv.DeleteKeyValueValue(cs.js, cs.kv, entry.Key()))
+									system.MsgOnErrorReturn(customNatsKv.KVDelete(cs.js, cs.kv, entry.Key()))
 								}
 								if csv := cs.getLastKeyCacheStoreValue(key); csv != nil {
 									csv.Lock("storeUpdatesHandler")
@@ -444,7 +444,9 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 						// Putting value into KV store ------------------
 						if csvChild.syncNeeded {
 							keyStr := key.(string)
-							_, putErr := kv.Put(cs.toStoreKey(newSuffix), finalBytes)
+							///_, putErr := kv.Put(cs.toStoreKey(newSuffix), finalBytes)
+
+							_, putErr := customNatsKv.KVPut(cs.js, kv, cs.toStoreKey(newSuffix), finalBytes)
 							if putErr == nil {
 								csvChild.Lock("kvLazyWriter")
 								if valueUpdateTime == csvChild.valueUpdateTime {
@@ -565,7 +567,7 @@ func (cs *Store) GetValue(key string) ([]byte, error) {
 
 	// Cache miss -----------------------------------------
 	if cacheMiss {
-		if entry, err := cs.kv.Get(cs.toStoreKey(key)); err == nil {
+		if entry, err := customNatsKv.KVGet(cs.js, cs.kv, cs.toStoreKey(key)); err == nil {
 			key := cs.fromStoreKey(entry.Key())
 			valueBytes := entry.Value()
 			result = valueBytes[9:]
