@@ -61,6 +61,7 @@ func NewRuntime(config RuntimeConfig) (r *Runtime, err error) {
 	if err != nil {
 		return
 	}
+	config.hubDomainName = r.Domain.hubDomainName
 
 	return
 }

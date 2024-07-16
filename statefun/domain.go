@@ -48,20 +48,30 @@ type Domain struct {
 	cache         *cache.Store
 }
 
-func NewDomain(nc *nats.Conn, js nats.JetStreamContext, hubDomainName string) (dm *Domain, e error) {
+func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredHubDomainName string) (dm *Domain, e error) {
 	accInfo, err := js.AccountInfo()
 	if err != nil {
 		return nil, err
 	}
 
-	domainName := accInfo.Domain
-	if domainName == "" {
-		domainName = HubDomainName
+	hubDomainName := desiredHubDomainName
+	thisDomainName := accInfo.Domain
+	if thisDomainName == "" {
+		if hubDomainName == "" {
+			thisDomainName = DefaultHubDomainName
+			hubDomainName = DefaultHubDomainName
+		} else {
+			thisDomainName = hubDomainName
+		}
+	} else {
+		if hubDomainName == "" {
+			hubDomainName = thisDomainName
+		}
 	}
 
 	domain := &Domain{
 		hubDomainName: hubDomainName,
-		name:          domainName,
+		name:          thisDomainName,
 		nc:            nc,
 		js:            js,
 	}
