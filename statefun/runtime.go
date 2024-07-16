@@ -57,11 +57,11 @@ func NewRuntime(config RuntimeConfig) (r *Runtime, err error) {
 		return
 	}
 
-	r.Domain, err = NewDomain(r.nc, r.js, config.hubDomainName)
+	r.Domain, err = NewDomain(r.nc, r.js, config.desiredHUBDomainName)
 	if err != nil {
 		return
 	}
-	config.hubDomainName = r.Domain.hubDomainName
+	config.desiredHUBDomainName = r.Domain.hubDomainName
 
 	return
 }
