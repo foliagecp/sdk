@@ -22,7 +22,7 @@ type RuntimeConfig struct {
 	functionTypeIDLifetimeMs       int
 	requestTimeoutSec              int
 	gcIntervalSec                  int
-	hubDomainName                  string
+	desiredHUBDomainName           string
 	handlesDomainRouters           bool
 }
 
@@ -35,7 +35,7 @@ func NewRuntimeConfig() *RuntimeConfig {
 		functionTypeIDLifetimeMs:       FunctionTypeIDLifetimeMs,
 		requestTimeoutSec:              RequestTimeoutSec,
 		gcIntervalSec:                  GCIntervalSec,
-		hubDomainName:                  DefaultHubDomainName,
+		desiredHUBDomainName:           DefaultHubDomainName,
 		handlesDomainRouters:           HandlesDomainRouters,
 	}
 }
@@ -46,12 +46,12 @@ func NewRuntimeConfigSimple(natsURL string, runtimeName string) *RuntimeConfig {
 }
 
 func (ro *RuntimeConfig) SetHubDomainName(hubDomainName string) *RuntimeConfig {
-	ro.hubDomainName = hubDomainName
+	ro.desiredHUBDomainName = hubDomainName
 	return ro
 }
 
 func (ro *RuntimeConfig) UseJSDomainAsHubDomainName() *RuntimeConfig {
-	ro.hubDomainName = "" // empty string means auto fill
+	ro.desiredHUBDomainName = "" // empty string means auto fill with current domain name from nats
 	return ro
 }
 
