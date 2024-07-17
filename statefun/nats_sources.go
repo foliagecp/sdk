@@ -15,7 +15,7 @@ import (
 )
 
 func AddRequestSourceNatsCore(ft *FunctionType) error {
-	_, err := ft.runtime.nc.Subscribe("request."+ft.runtime.Domain.name+"."+ft.name+".*", func(msg *nats.Msg) {
+	_, err := ft.runtime.nc.Subscribe(RequestPrefix+"."+ft.runtime.Domain.name+"."+ft.name+".*", func(msg *nats.Msg) {
 		system.MsgOnErrorReturn(handleNatsMsg(ft, msg, true, nil))
 	})
 

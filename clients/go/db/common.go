@@ -50,7 +50,7 @@ func getRequestFunc(nc *nats.Conn, NatsRequestTimeoutSec int, HubDomainName stri
 		}
 
 		resp, err := nc.Request(
-			fmt.Sprintf("request.%s.%s.%s", targetDomain, targetTypename, targetID),
+			fmt.Sprintf("%s.%s.%s.%s", sf.RequestPrefix, targetDomain, targetTypename, targetID),
 			buildNatsData("cli", "cli", payload, options),
 			time.Duration(NatsRequestTimeoutSec)*time.Second,
 		)
