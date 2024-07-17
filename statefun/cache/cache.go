@@ -26,7 +26,7 @@ import (
 )
 
 var (
-	keyValidationRegexp *regexp.Regexp = regexp.MustCompile(`^[a-zA-Z0-9/=_$#@-][a-zA-Z0-9/=._$#@-]+[a-zA-Z0-9/=_$#@-]$|^[a-zA-Z0-9/=_$#@-]*$`)
+	keyValidationRegexp *regexp.Regexp = regexp.MustCompile(`^[a-zA-Z0-9/=_$#@$%-][a-zA-Z0-9/=._$#@%-]+[a-zA-Z0-9/=_$#@%-]$|^[a-zA-Z0-9/=_$#@%-]*$`)
 )
 
 type KeyValue struct {
