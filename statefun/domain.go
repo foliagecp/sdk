@@ -21,6 +21,7 @@ type (
 
 const (
 	SignalPrefix                = "signal"
+	RequestPrefix               = "request"
 	FromGlobalSignalTmpl        = SignalPrefix + ".%s.%s"
 	DomainSubjectsIngressPrefix = "$SI"
 	DomainSubjectsEgressPrefix  = "$SE"
