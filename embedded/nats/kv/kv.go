@@ -44,7 +44,7 @@ const (
 var (
 	validBucketRe = regexp.MustCompile(`\A[a-zA-Z0-9_-]+\z`)
 	semVerRe      = regexp.MustCompile(`\Av?([0-9]+)\.?([0-9]+)?\.?([0-9]+)?`)
-	validKeyRe    = regexp.MustCompile(`\A[-/_$#@=\.a-zA-Z0-9]+\z`)
+	validKeyRe    = regexp.MustCompile(`\A[-/_$#@%=\.a-zA-Z0-9]+\z`)
 )
 
 func versionComponents(version string) (major, minor, patch int, err error) {
