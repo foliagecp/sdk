@@ -212,7 +212,7 @@ func CreateKeyValue(nc *nats.Conn, js nats.JetStreamContext, cfg *nats.KeyValueC
 	return js.KeyValue(cfg.Bucket)
 }
 
-func keyValid(key string) bool {
+func KeyValid(key string) bool {
 	if len(key) == 0 || key[0] == '.' || key[len(key)-1] == '.' {
 		return false
 	}
@@ -230,7 +230,7 @@ func KVDelete(js nats.JetStreamContext, kv nats.KeyValue, key string) error {
 }
 
 func KVPut(js nats.JetStreamContext, kv nats.KeyValue, key string, value []byte) (revision uint64, err error) {
-	if !keyValid(key) {
+	if !KeyValid(key) {
 		return 0, nats.ErrInvalidKey
 	}
 
@@ -261,7 +261,7 @@ func KVPut(js nats.JetStreamContext, kv nats.KeyValue, key string, value []byte)
 }
 
 func KVUpdate(js nats.JetStreamContext, kv nats.KeyValue, key string, value []byte, revision uint64) (uint64, error) {
-	if !keyValid(key) {
+	if !KeyValid(key) {
 		return 0, nats.ErrInvalidKey
 	}
 
@@ -320,7 +320,7 @@ func KVGet(js nats.JetStreamContext, kv nats.KeyValue, key string) (nats.KeyValu
 }
 
 func kv_get(js nats.JetStreamContext, kv nats.KeyValue, key string, revision uint64) (nats.KeyValueEntry, error) {
-	if !keyValid(key) {
+	if !KeyValid(key) {
 		return nil, nats.ErrInvalidKey
 	}
 
