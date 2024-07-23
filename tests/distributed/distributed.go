@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/foliagecp/easyjson"
@@ -18,6 +19,7 @@ import (
 	"github.com/foliagecp/sdk/statefun/system"
 
 	lg "github.com/foliagecp/sdk/statefun/logger"
+	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 )
 
 var (
@@ -94,8 +96,48 @@ func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 	}
 }
 
+func TestWeakClusteringShadowObjectFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	hubDomain := ctx.Domain.HubDomainName()
+	functionDomain := ctx.Domain.GetDomainFromObjectID(ctx.Self.ID)
+
+	if ctx.Reply == nil { // Signal came
+		lg.Logf(
+			lg.InfoLevel,
+			">> ShadowObject >> Signal from caller %s:%s on %s:%s\n",
+			ctx.Caller.Typename,
+			ctx.Caller.ID,
+			ctx.Self.Typename,
+			ctx.Self.ID,
+		)
+	} else { // Request came
+		lg.Logf(
+			lg.InfoLevel,
+			">>> ShadowObject >>> Request from caller %s:%s on %s:%s\n",
+			ctx.Caller.Typename,
+			ctx.Caller.ID,
+			ctx.Self.Typename,
+			ctx.Self.ID,
+		)
+		om := sfMediators.NewOpMediator(ctx)
+		om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONObjectWithKeyValue("msg", easyjson.NewJSON(fmt.Sprintf("hello from %s domain TestWeakClusteringShadowObjectFunction", ctx.Domain.Name()))))).Reply()
+	}
+
+	if functionDomain == hubDomain { // Function on HUB
+		fmt.Println("Weak clustering shadow object SIGNAL")
+		system.MsgOnErrorReturn(ctx.Signal(sfPlugins.JetstreamGlobalSignal, "domains.so.test", "leaf#bar", easyjson.NewJSONObject().GetPtr(), nil))
+
+		time.Sleep(1 * time.Second)
+
+		fmt.Println("Weak clustering shadow object REQUEST")
+		msg := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.NatsCoreGlobalRequest, "domains.so.test", "leaf#bar", easyjson.NewJSONObject().GetPtr(), nil))
+
+		fmt.Println("Weak clustering shadow object REQUEST's REPLY", msg.Status, msg.Details, msg.Meta, msg.Data.ToString())
+	}
+}
+
 func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	statefun.NewFunctionType(runtime, "domains.test", TestFunction, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
+	statefun.NewFunctionType(runtime, "domains.so.test", TestWeakClusteringShadowObjectFunction, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
 
 	graphCRUD.RegisterAllFunctionTypes(runtime)
 	graphDebug.RegisterAllFunctionTypes(runtime)
@@ -118,10 +160,13 @@ func Start() {
 				RunTriggersTest(runtime)
 			}
 			if CreateSimpleGraphTest {
-				CreateTestGraph(runtime)
+				//CreateTestGraph(runtime)
 			}
 			time.Sleep(1 * time.Second)
 			system.MsgOnErrorReturn(runtime.Signal(sfPlugins.JetstreamGlobalSignal, "domains.test", "foo", easyjson.NewJSONObject().GetPtr(), nil))
+
+			time.Sleep(1 * time.Second)
+			system.MsgOnErrorReturn(runtime.Signal(sfPlugins.JetstreamGlobalSignal, "domains.so.test", "foo", easyjson.NewJSONObject().GetPtr(), nil))
 		}
 		return nil
 	}
