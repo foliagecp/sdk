@@ -45,15 +45,15 @@ func initTriggersTest(runtime *statefun.Runtime) {
 func TriggersTestIteration(runtime *statefun.Runtime) {
 	system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("hub/a", "typea", easyjson.NewJSONObjectWithKeyValue("a_state", easyjson.NewJSON("created"))))
 	system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("leaf/b", "typeb", easyjson.NewJSONObjectWithKeyValue("b_state", easyjson.NewJSON("created"))))
-	system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkCreate("leaf/a", "leaf/b", "2b", nil, easyjson.NewJSONObjectWithKeyValue("ab_state", easyjson.NewJSON("created"))))
-	system.MsgOnErrorReturn(dbClient.CMDB.ObjectDelete("leaf/a"))
-	system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("leaf/a", "typea", easyjson.NewJSONObjectWithKeyValue("a_state", easyjson.NewJSON("recreated"))))
-	system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkCreate("leaf/a", "leaf/b", "2b", nil, easyjson.NewJSONObjectWithKeyValue("ab_state", easyjson.NewJSON("recreated"))))
+	system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkCreate("hub/a", "leaf/b", "2b", nil, easyjson.NewJSONObjectWithKeyValue("ab_state", easyjson.NewJSON("created"))))
+	system.MsgOnErrorReturn(dbClient.CMDB.ObjectDelete("hub/a"))
+	system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("hub/a", "typea", easyjson.NewJSONObjectWithKeyValue("a_state", easyjson.NewJSON("recreated"))))
+	system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkCreate("hub/a", "leaf/b", "2b", nil, easyjson.NewJSONObjectWithKeyValue("ab_state", easyjson.NewJSON("recreated"))))
 	system.MsgOnErrorReturn(dbClient.CMDB.ObjectUpdate("leaf/b", easyjson.NewJSONObjectWithKeyValue("b_state", easyjson.NewJSON("updated")), true))
-	system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkUpdate("leaf/a", "leaf/b", nil, easyjson.NewJSONObjectWithKeyValue("ab_state", easyjson.NewJSON("updated")), true))
-	system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkDelete("leaf/a", "leaf/b"))
+	system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkUpdate("hub/a", "leaf/b", nil, easyjson.NewJSONObjectWithKeyValue("ab_state", easyjson.NewJSON("updated")), true))
+	system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkDelete("hub/a", "leaf/b"))
 	system.MsgOnErrorReturn(dbClient.CMDB.ObjectDelete("leaf/b"))
-	system.MsgOnErrorReturn(dbClient.CMDB.ObjectDelete("leaf/a"))
+	system.MsgOnErrorReturn(dbClient.CMDB.ObjectDelete("hub/a"))
 }
 
 func registerTriggers1(runtime *statefun.Runtime) {
