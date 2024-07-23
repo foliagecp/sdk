@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/foliagecp/easyjson"
+	"github.com/nats-io/nats.go"
 
 	"github.com/foliagecp/sdk/statefun/logger"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
@@ -85,18 +86,21 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 			system.GlobalPrometrics.GetRoutinesCounter().Started("ingress-jetstreamGlobalSignal-gofunc")
 			defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("ingress-jetstreamGlobalSignal-gofunc")
 
-			// If publishing signal to the same domain
-			if r.Domain.name == r.Domain.GetDomainFromObjectID(targetID) {
-				system.MsgOnErrorReturn(r.nc.Publish( // Publish directly into function's topic bypassing egress router
-					fmt.Sprintf(DomainIngressSubjectsTmpl, r.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, r.Domain.name, targetTypename, targetID)),
-					buildNatsData(r.Domain.name, callerTypename, callerID, payload, options),
-				))
-			} else { // Publish into egress router
-				// TODO: If domain is for leaf-hub – leave as ts is, else signal to different NATS
-				system.MsgOnErrorReturn(r.nc.Publish(
-					fmt.Sprintf(DomainEgressSubjectsTmpl, r.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, r.Domain.GetDomainFromObjectID(targetID), targetTypename, targetID)),
-					buildNatsData(r.Domain.name, callerTypename, callerID, payload, options),
-				))
+			if r.isShadowObject(targetID) {
+				system.MsgOnErrorReturn(r.signalShadowObject(callerTypename, callerID, targetTypename, targetID, payload, options))
+			} else {
+				// If publishing signal to the same domain
+				if r.Domain.name == r.Domain.GetDomainFromObjectID(targetID) {
+					system.MsgOnErrorReturn(r.nc.Publish( // Publish directly into function's topic bypassing egress router
+						fmt.Sprintf(DomainIngressSubjectsTmpl, r.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, r.Domain.name, targetTypename, targetID)),
+						buildNatsData(r.Domain.name, callerTypename, callerID, payload, options),
+					))
+				} else { // Publish into egress router
+					system.MsgOnErrorReturn(r.nc.Publish(
+						fmt.Sprintf(DomainEgressSubjectsTmpl, r.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, r.Domain.GetDomainFromObjectID(targetID), targetTypename, targetID)),
+						buildNatsData(r.Domain.name, callerTypename, callerID, payload, options),
+					))
+				}
 			}
 		}()
 		return nil
@@ -191,12 +195,21 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 
 func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) (*easyjson.JSON, error) {
 	natsCoreGlobalRequest := func() (*easyjson.JSON, error) {
-		// TODO: If domain is for leaf-hub – leave as ts is, else request to different NATS
-		resp, err := r.nc.Request(
-			fmt.Sprintf("request.%s.%s.%s", r.Domain.GetDomainFromObjectID(targetID), targetTypename, targetID),
-			buildNatsData(r.Domain.name, callerTypename, callerID, payload, options),
-			time.Duration(r.config.requestTimeoutSec)*time.Second,
+		var (
+			resp *nats.Msg
+			err  error
 		)
+
+		if r.isShadowObject(targetID) {
+			resp, err = r.requestShadowObject(callerTypename, callerID, targetTypename, targetID, payload, options)
+		} else {
+			resp, err = r.nc.Request(
+				fmt.Sprintf("%s.%s.%s.%s", RequestPrefix, r.Domain.GetDomainFromObjectID(targetID), targetTypename, targetID),
+				buildNatsData(r.Domain.name, callerTypename, callerID, payload, options),
+				time.Duration(r.config.requestTimeoutSec)*time.Second,
+			)
+		}
+
 		if err == nil {
 			if j, ok := easyjson.JSONFromBytes(resp.Data); ok {
 				return &j, nil
