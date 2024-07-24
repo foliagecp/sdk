@@ -157,7 +157,6 @@ func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProces
 	result := easyjson.NewJSONObject()
 	if m.Data.PathExists("body") {
 		result.SetByPath("body", m.Data.GetByPath("body"))
-
 	}
 	result.SetByPath("to_types", easyjson.JSONFromArray(toTypes))
 	result.SetByPath("object_ids", easyjson.JSONFromArray(toObjects))
