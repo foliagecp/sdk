@@ -41,12 +41,13 @@ const (
 )
 
 type Domain struct {
-	hubDomainName string
-	name          string
-	nc            *nats.Conn
-	js            nats.JetStreamContext
-	kv            nats.KeyValue
-	cache         *cache.Store
+	hubDomainName      string
+	name               string
+	weakClusterDomains []string
+	nc                 *nats.Conn
+	js                 nats.JetStreamContext
+	kv                 nats.KeyValue
+	cache              *cache.Store
 }
 
 func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredHubDomainName string) (dm *Domain, e error) {
@@ -71,10 +72,11 @@ func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredHubDomainName str
 	}
 
 	domain := &Domain{
-		hubDomainName: hubDomainName,
-		name:          thisDomainName,
-		nc:            nc,
-		js:            js,
+		hubDomainName:      hubDomainName,
+		name:               thisDomainName,
+		weakClusterDomains: []string{thisDomainName},
+		nc:                 nc,
+		js:                 js,
 	}
 
 	return domain, nil
@@ -90,6 +92,42 @@ func (dm *Domain) Name() string {
 
 func (dm *Domain) Cache() *cache.Store {
 	return dm.cache
+}
+
+// Get all domains in weak cluster including this one
+func (dm *Domain) GetWeakClusterDomains() []string {
+	return dm.weakClusterDomains
+}
+
+// Set all domains in weak cluster (this domain name will also be included automatically if not defined)
+func (dm *Domain) SetWeakClusterDomains(weakClusterDomains []string) {
+	domainNamesMap := map[string]struct{}{}
+	for _, dm := range weakClusterDomains {
+		domainNamesMap[dm] = struct{}{}
+	}
+	domainNamesMap[dm.name] = struct{}{}
+
+	weakClusterUniqueDomainNamesIncludingThis := []string{}
+	for k := range domainNamesMap {
+		weakClusterUniqueDomainNamesIncludingThis = append(weakClusterUniqueDomainNamesIncludingThis, k)
+	}
+	dm.weakClusterDomains = weakClusterUniqueDomainNamesIncludingThis
+}
+
+func (dm *Domain) GetShadowObjectShadowId(objectIdWithAnyDomainName string) string {
+	objectDomain := dm.GetDomainFromObjectID(objectIdWithAnyDomainName)
+	if objectDomain == dm.name {
+		return objectIdWithAnyDomainName
+	} else {
+		return fmt.Sprintf(
+			"%s%s%s%s%s",
+			dm.name,
+			ObjectIDDomainSeparator,
+			objectDomain,
+			ObjectIDWeakClusteringDomainSeparator,
+			dm.GetObjectIDWithoutDomain(objectIdWithAnyDomainName),
+		)
+	}
 }
 
 func (dm *Domain) GetDomainFromObjectID(objectID string) string {
