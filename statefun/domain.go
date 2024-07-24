@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -41,13 +42,14 @@ const (
 )
 
 type Domain struct {
-	hubDomainName      string
-	name               string
-	weakClusterDomains []string
-	nc                 *nats.Conn
-	js                 nats.JetStreamContext
-	kv                 nats.KeyValue
-	cache              *cache.Store
+	hubDomainName           string
+	name                    string
+	weakClusterDomains      map[string]struct{}
+	weakClusterDomainsMutex sync.Mutex
+	nc                      *nats.Conn
+	js                      nats.JetStreamContext
+	kv                      nats.KeyValue
+	cache                   *cache.Store
 }
 
 func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredHubDomainName string) (dm *Domain, e error) {
@@ -74,7 +76,7 @@ func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredHubDomainName str
 	domain := &Domain{
 		hubDomainName:      hubDomainName,
 		name:               thisDomainName,
-		weakClusterDomains: []string{thisDomainName},
+		weakClusterDomains: map[string]struct{}{thisDomainName: {}},
 		nc:                 nc,
 		js:                 js,
 	}
@@ -96,22 +98,25 @@ func (dm *Domain) Cache() *cache.Store {
 
 // Get all domains in weak cluster including this one
 func (dm *Domain) GetWeakClusterDomains() []string {
-	return dm.weakClusterDomains
+	dm.weakClusterDomainsMutex.Lock()
+	defer dm.weakClusterDomainsMutex.Unlock()
+
+	weakClusterUniqueDomainNamesIncludingThis := []string{}
+	for k := range dm.weakClusterDomains {
+		weakClusterUniqueDomainNamesIncludingThis = append(weakClusterUniqueDomainNamesIncludingThis, k)
+	}
+	return weakClusterUniqueDomainNamesIncludingThis
 }
 
 // Set all domains in weak cluster (this domain name will also be included automatically if not defined)
 func (dm *Domain) SetWeakClusterDomains(weakClusterDomains []string) {
-	domainNamesMap := map[string]struct{}{}
-	for _, dm := range weakClusterDomains {
-		domainNamesMap[dm] = struct{}{}
-	}
-	domainNamesMap[dm.name] = struct{}{}
+	dm.weakClusterDomainsMutex.Lock()
+	defer dm.weakClusterDomainsMutex.Unlock()
 
-	weakClusterUniqueDomainNamesIncludingThis := []string{}
-	for k := range domainNamesMap {
-		weakClusterUniqueDomainNamesIncludingThis = append(weakClusterUniqueDomainNamesIncludingThis, k)
+	dm.weakClusterDomains = map[string]struct{}{dm.name: {}}
+	for _, dmn := range weakClusterDomains {
+		dm.weakClusterDomains[dmn] = struct{}{}
 	}
-	dm.weakClusterDomains = weakClusterUniqueDomainNamesIncludingThis
 }
 
 func (dm *Domain) GetShadowObjectShadowId(objectIdWithAnyDomainName string) string {
