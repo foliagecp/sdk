@@ -131,7 +131,7 @@ func (ft *FunctionType) idHandlerRoutine(id string, msgChannel chan FunctionType
 		Signal: func(signalProvider sfPlugins.SignalProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) error {
 			return ft.runtime.signal(signalProvider, ft.name, id, targetTypename, targetID, j, o)
 		},
-		Request: func(requestProvider sfPlugins.RequestProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) (*easyjson.JSON, error) {
+		Request: func(requestProvider sfPlugins.RequestProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
 			return ft.runtime.request(requestProvider, ft.name, id, targetTypename, targetID, j, o)
 		},
 		Egress: func(egressProvider sfPlugins.EgressProvider, j *easyjson.JSON, customId ...string) error {
