@@ -193,7 +193,11 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 	}
 }
 
-func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) (*easyjson.JSON, error) {
+func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
+	requestTimeoutDuration := time.Duration(r.config.requestTimeoutSec) * time.Second
+	if len(timeout) > 0 {
+		requestTimeoutDuration = timeout[0]
+	}
 	natsCoreGlobalRequest := func() (*easyjson.JSON, error) {
 		var (
 			resp *nats.Msg
@@ -206,7 +210,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 			resp, err = r.nc.Request(
 				fmt.Sprintf("%s.%s.%s.%s", RequestPrefix, r.Domain.GetDomainFromObjectID(targetID), targetTypename, targetID),
 				buildNatsData(r.Domain.name, callerTypename, callerID, payload, options),
-				time.Duration(r.config.requestTimeoutSec)*time.Second,
+				requestTimeoutDuration,
 			)
 		}
 
@@ -255,7 +259,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 					return resultJSON, nil
 				}
 				return nil, fmt.Errorf("goLangLocalRequest: target function with typename \"%s\" with id \"%s\" resufes to handle request", targetTypename, targetID)
-			case <-time.After(time.Duration(r.config.requestTimeoutSec) * time.Second):
+			case <-time.After(requestTimeoutDuration):
 				return nil, fmt.Errorf("goLangLocalRequest: timeout occured while requesting function typename \"%s\" with id \"%s\"", targetTypename, targetID)
 			}
 		case 1:
@@ -289,8 +293,8 @@ func (r *Runtime) Signal(signalProvider sfPlugins.SignalProvider, typename strin
 	return r.signal(signalProvider, "ingress", "signal", typename, id, payload, options)
 }
 
-func (r *Runtime) Request(requestProvider sfPlugins.RequestProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) (*easyjson.JSON, error) {
-	return r.request(requestProvider, "ingress", "request", typename, id, payload, options)
+func (r *Runtime) Request(requestProvider sfPlugins.RequestProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
+	return r.request(requestProvider, "ingress", "request", typename, id, payload, options, timeout...)
 }
 
 // ------------------------------------------------------------------------------------------------

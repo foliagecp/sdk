@@ -38,7 +38,7 @@ const (
 type EgressProvider int
 
 type SFSignalFunc func(SignalProvider, string, string, *easyjson.JSON, *easyjson.JSON) error
-type SFRequestFunc func(RequestProvider, string, string, *easyjson.JSON, *easyjson.JSON) (*easyjson.JSON, error)
+type SFRequestFunc func(RequestProvider, string, string, *easyjson.JSON, *easyjson.JSON, ...time.Duration) (*easyjson.JSON, error)
 type SFEgressFunc func(EgressProvider, *easyjson.JSON, ...string) error
 
 const (
@@ -60,6 +60,11 @@ type Domain interface {
 	CreateObjectIDWithDomain(domain string, objectID string, domainReplace bool) string
 	CreateObjectIDWithThisDomain(objectID string, domainReplace bool) string
 	CreateObjectIDWithHubDomain(objectID string, domainReplace bool) string
+	// Get all domains in weak cluster including this one
+	GetWeakClusterDomains() []string
+	// Set all domains in weak cluster (this domain name will also be included automatically if not defined)
+	SetWeakClusterDomains(weakClusterDomains []string)
+	GetShadowObjectShadowId(objectIdWithAnyDomainName string) string
 }
 
 type StatefunContextProcessor struct {
