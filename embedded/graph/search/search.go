@@ -11,6 +11,7 @@ import (
 	"github.com/foliagecp/sdk/clients/go/db"
 	"github.com/foliagecp/sdk/embedded/graph/crud"
 	"github.com/foliagecp/sdk/statefun"
+	"github.com/foliagecp/sdk/statefun/logger"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 )
@@ -70,56 +71,58 @@ func FieldValuePartialMatch(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 	resultObjects := easyjson.NewJSONObject()
 	commonFields := map[string]struct{}{}
 
-	objectIds, err := dbc.Query.JPGQLCtraQuery(crud.BUILT_IN_OBJECTS, fmt.Sprintf(".*[type('%s')]", crud.OBJECT_TYPELINK))
-	if err != nil {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed("cannot gather object ids via JPGQLCtraQuery")).Reply()
-		return
-	}
+	for _, domain := range ctx.Domain.GetWeakClusterDomains() {
+		objectIds, err := dbc.Query.JPGQLCtraQuery(crud.BUILT_IN_OBJECTS, fmt.Sprintf(".*[type('%s')]", crud.OBJECT_TYPELINK))
+		if err != nil {
+			logger.Logf(logger.ErrorLevel, "cannot gather object ids via JPGQLCtraQuery from domain with name=%s\n", domain)
+			continue
+		}
 
-	objectTypesList := getObjectTypeFilterFromPayload(ctx)
-	typeSearchFieldsIndex := map[string][]string{}
+		objectTypesList := getObjectTypeFilterFromPayload(ctx)
+		typeSearchFieldsIndex := map[string][]string{}
 
-	for _, objId := range objectIds {
-		data, err := dbc.CMDB.ObjectRead(objId)
-		if err == nil {
-			otype := ctx.Domain.GetObjectIDWithoutDomain(data.GetByPath("type").AsStringDefault(""))
-			if len(otype) > 0 {
-				if len(objectTypesList) > 0 {
-					if _, ok := objectTypesList[otype]; !ok {
-						continue
-					}
-				}
-				var searchFieldList []string
-				if fl, ok := typeSearchFieldsIndex[otype]; ok {
-					searchFieldList = fl
-				} else {
-					fieldList := []string{}
-					data, err := dbc.CMDB.TypeRead(otype)
-					if err == nil {
-						if fl, ok := data.GetByPath("body.search_fields").AsArrayString(); ok {
-							fieldList = fl
+		for _, objId := range objectIds {
+			data, err := dbc.CMDB.ObjectRead(ctx.Domain.GetShadowObjectShadowId(objId))
+			if err == nil {
+				otype := ctx.Domain.GetObjectIDWithoutDomain(data.GetByPath("type").AsStringDefault(""))
+				if len(otype) > 0 {
+					if len(objectTypesList) > 0 {
+						if _, ok := objectTypesList[otype]; !ok {
+							continue
 						}
 					}
-					typeSearchFieldsIndex[otype] = fieldList
-					searchFieldList = fieldList
-				}
+					var searchFieldList []string
+					if fl, ok := typeSearchFieldsIndex[otype]; ok {
+						searchFieldList = fl
+					} else {
+						fieldList := []string{}
+						data, err := dbc.Graph.VertexRead(ctx.Domain.GetShadowObjectShadowId(domain + statefun.ObjectIDDomainSeparator + otype))
+						if err == nil {
+							if fl, ok := data.GetByPath("body.search_fields").AsArrayString(); ok {
+								fieldList = fl
+							}
+						}
+						typeSearchFieldsIndex[otype] = fieldList
+						searchFieldList = fieldList
+					}
 
-				body := data.GetByPath("body")
-				objectSatisfiesSearch := false
+					body := data.GetByPath("body")
+					objectSatisfiesSearch := false
 
-				for _, field := range searchFieldList {
-					if body.PathExists(field) {
-						v := body.GetByPath(field)
-						fieldValue := fmt.Sprintf("%v", v.Value)
-						if strings.Contains(strings.ToLower(fieldValue), strings.ToLower(searchQuery)) {
-							commonFields[field] = struct{}{}
-							objectSatisfiesSearch = true
-							break
+					for _, field := range searchFieldList {
+						if body.PathExists(field) {
+							v := body.GetByPath(field)
+							fieldValue := fmt.Sprintf("%v", v.Value)
+							if strings.Contains(strings.ToLower(fieldValue), strings.ToLower(searchQuery)) {
+								commonFields[field] = struct{}{}
+								objectSatisfiesSearch = true
+								break
+							}
 						}
 					}
-				}
-				if objectSatisfiesSearch {
-					resultObjects.SetByPath(objId, data)
+					if objectSatisfiesSearch {
+						resultObjects.SetByPath(objId, data)
+					}
 				}
 			}
 		}
