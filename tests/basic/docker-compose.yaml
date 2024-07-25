@@ -3,7 +3,7 @@ version: "2.1"
 services:
   nats:
     image: nats:latest
-    command: -c /etc/nats/nats.conf -js -sd /data/jetstream --user nats --pass foliage
+    command: -c /etc/nats/nats.conf
     ports:
       - "4222:4222"
       - "6222:6222"

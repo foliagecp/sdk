@@ -3,7 +3,7 @@ version: "2.1"
 services:
   nats-hub:
     image: nats:latest
-    command: -c /etc/nats/hub.conf -js -sd /data/jetstream --user nats --pass foliage
+    command: -c /etc/nats/hub.conf
     ports:
       - "4222:4222"
       - "6222:6222"
@@ -14,7 +14,7 @@ services:
 
   nats-leaf:
     image: nats:latest
-    command: -c /etc/nats/leaf.conf -js -sd /data/jetstream --user nats --pass foliage
+    command: -c /etc/nats/leaf.conf
     ports:
       - "4223:4223"
       - "6223:6223"

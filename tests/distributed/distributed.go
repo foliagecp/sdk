@@ -160,7 +160,7 @@ func Start() {
 				RunTriggersTest(runtime)
 			}
 			if CreateSimpleGraphTest {
-				//CreateTestGraph(runtime)
+				CreateTestGraph(runtime)
 			}
 			time.Sleep(1 * time.Second)
 			system.MsgOnErrorReturn(runtime.Signal(sfPlugins.JetstreamGlobalSignal, "domains.test", "foo", easyjson.NewJSONObject().GetPtr(), nil))
