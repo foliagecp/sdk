@@ -184,8 +184,10 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 	case sfPlugins.AutoSignalSelect:
 		return jetstreamGlobalSignal() // TODO: Find a way to fix weak solution of the goLangLocalSignal
 		/*selection := sfPlugins.JetstreamGlobalSignal
-		if r.functionTypeIsReadyForGoLangCommunication(targetTypename, false, targetID) == 0 {
-			selection = sfPlugins.GolangLocalSignal
+		if r.isShadowObject(targetID) {
+			if r.functionTypeIsReadyForGoLangCommunication(targetTypename, false, targetID) == 0 {
+				selection = sfPlugins.GolangLocalSignal
+			}
 		}
 		return r.signal(selection, callerTypename, callerID, targetTypename, targetID, payload, options)*/
 	default:
@@ -280,8 +282,10 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 		return goLangLocalRequest()
 	case sfPlugins.AutoRequestSelect:
 		selection := sfPlugins.NatsCoreGlobalRequest
-		if r.functionTypeIsReadyForGoLangCommunication(targetTypename, true, targetID) == 0 {
-			selection = sfPlugins.GolangLocalRequest
+		if !r.isShadowObject(targetID) {
+			if r.functionTypeIsReadyForGoLangCommunication(targetTypename, true, targetID) == 0 {
+				selection = sfPlugins.GolangLocalRequest
+			}
 		}
 		return r.request(selection, callerTypename, callerID, targetTypename, targetID, payload, options)
 	default:
