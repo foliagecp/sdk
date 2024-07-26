@@ -64,7 +64,20 @@ type Domain interface {
 	GetWeakClusterDomains() []string
 	// Set all domains in weak cluster (this domain name will also be included automatically if not defined)
 	SetWeakClusterDomains(weakClusterDomains []string)
+	/*
+	* otherDomainName/ObjectId -> thisDomainName/otherDomainName#ObjectId
+	* thisDomainName/ObjectId -> thisDomainName/ObjectId
+	 */
 	GetShadowObjectShadowId(objectIdWithAnyDomainName string) string
+	/*
+	* domainName1/domainName2#ObjectId -> domainName2, ObjectId
+	 */
+	GetShadowObjectDomainAndID(shadowObjectId string) (domainName, objectIdWithoutDomain string, err error)
+	/*
+	* domainName1/domainName2#ObjectId -> true
+	* domainName1/ObjectId  -> false
+	 */
+	IsShadowObject(idWithDomain string) bool
 }
 
 type StatefunContextProcessor struct {
