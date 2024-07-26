@@ -78,7 +78,7 @@ func (env *statefunTestEnvironment) Stop() {
 	env.srv.WaitForShutdown()
 }
 
-func (env *statefunTestEnvironment) Request(provider plugins.RequestProvider, typename, id string, payload, options *easyjson.JSON) (*easyjson.JSON, error) {
+func (env *statefunTestEnvironment) Request(provider plugins.RequestProvider, typename, id string, payload, options *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
 	return env.runtime.Request(provider, typename, id, payload, options)
 }
 
