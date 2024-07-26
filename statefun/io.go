@@ -25,6 +25,53 @@ func buildNatsData(callerDomain string, callerTypename string, callerID string, 
 	return data.ToBytes()
 }
 
+func (r *Runtime) signalShadowObject(callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) error {
+	tDomainName, tObjectIdWithoutDomain, err := r.Domain.GetShadowObjectDomainAndID(targetID)
+	if err != nil {
+		return err
+	}
+	objectIdInRemoteDomain := fmt.Sprintf("%s%s%s", tDomainName, ObjectIDDomainSeparator, tObjectIdWithoutDomain)
+
+	shadowCallerID := fmt.Sprintf(
+		"%s%s%s%s%s",
+		tDomainName,
+		ObjectIDDomainSeparator,
+		r.Domain.GetDomainFromObjectID(callerID),
+		ObjectIDWeakClusteringDomainSeparator,
+		r.Domain.GetObjectIDWithoutDomain(callerID),
+	)
+	system.MsgOnErrorReturn(r.nc.Publish(
+		fmt.Sprintf(DomainIngressSubjectsTmpl, tDomainName, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, tDomainName, targetTypename, objectIdInRemoteDomain)),
+		buildNatsData(r.Domain.name, callerTypename, shadowCallerID, payload, options),
+	))
+
+	return nil
+}
+
+func (r *Runtime) requestShadowObject(callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) (*nats.Msg, error) {
+	tDomainName, tObjectIdWithoutDomain, err := r.Domain.GetShadowObjectDomainAndID(targetID)
+	if err != nil {
+		return nil, err
+	}
+	objectIdInRemoteDomain := fmt.Sprintf("%s%s%s", tDomainName, ObjectIDDomainSeparator, tObjectIdWithoutDomain)
+
+	shadowCallerID := fmt.Sprintf(
+		"%s%s%s%s%s",
+		tDomainName,
+		ObjectIDDomainSeparator,
+		r.Domain.GetDomainFromObjectID(callerID),
+		ObjectIDWeakClusteringDomainSeparator,
+		r.Domain.GetObjectIDWithoutDomain(callerID),
+	)
+	resp, err := r.nc.Request(
+		fmt.Sprintf("%s.%s.%s.%s", RequestPrefix, tDomainName, targetTypename, objectIdInRemoteDomain),
+		buildNatsData(r.Domain.name, callerTypename, shadowCallerID, payload, options),
+		time.Duration(r.config.requestTimeoutSec)*time.Second,
+	)
+
+	return resp, err
+}
+
 func (r *Runtime) egress(egressProvider sfPlugins.EgressProvider, callerTypename string, callerID string, payload *easyjson.JSON) error {
 	natsCoreEgress := func() error {
 		go func() {
@@ -86,7 +133,7 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 			system.GlobalPrometrics.GetRoutinesCounter().Started("ingress-jetstreamGlobalSignal-gofunc")
 			defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("ingress-jetstreamGlobalSignal-gofunc")
 
-			if r.isShadowObject(targetID) {
+			if r.Domain.IsShadowObject(targetID) {
 				system.MsgOnErrorReturn(r.signalShadowObject(callerTypename, callerID, targetTypename, targetID, payload, options))
 			} else {
 				// If publishing signal to the same domain
@@ -206,7 +253,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 			err  error
 		)
 
-		if r.isShadowObject(targetID) {
+		if r.Domain.IsShadowObject(targetID) {
 			resp, err = r.requestShadowObject(callerTypename, callerID, targetTypename, targetID, payload, options)
 		} else {
 			resp, err = r.nc.Request(
@@ -282,7 +329,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 		return goLangLocalRequest()
 	case sfPlugins.AutoRequestSelect:
 		selection := sfPlugins.NatsCoreGlobalRequest
-		if !r.isShadowObject(targetID) {
+		if !r.Domain.IsShadowObject(targetID) {
 			if r.functionTypeIsReadyForGoLangCommunication(targetTypename, true, targetID) == 0 {
 				selection = sfPlugins.GolangLocalRequest
 			}

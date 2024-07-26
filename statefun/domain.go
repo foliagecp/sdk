@@ -21,14 +21,15 @@ type (
 )
 
 const (
-	SignalPrefix                = "signal"
-	RequestPrefix               = "request"
-	FromGlobalSignalTmpl        = SignalPrefix + ".%s.%s"
-	DomainSubjectsIngressPrefix = "$SI"
-	DomainSubjectsEgressPrefix  = "$SE"
-	DomainIngressSubjectsTmpl   = DomainSubjectsIngressPrefix + ".%s.%s"
-	DomainEgressSubjectsTmpl    = DomainSubjectsEgressPrefix + ".%s.%s"
-	ObjectIDDomainSeparator     = "/"
+	SignalPrefix                          = "signal"
+	RequestPrefix                         = "request"
+	FromGlobalSignalTmpl                  = SignalPrefix + ".%s.%s"
+	DomainSubjectsIngressPrefix           = "$SI"
+	DomainSubjectsEgressPrefix            = "$SE"
+	DomainIngressSubjectsTmpl             = DomainSubjectsIngressPrefix + ".%s.%s"
+	DomainEgressSubjectsTmpl              = DomainSubjectsEgressPrefix + ".%s.%s"
+	ObjectIDDomainSeparator               = "/"
+	ObjectIDWeakClusteringDomainSeparator = "#"
 
 	streamPrefix = "$JS.%s.API"
 
@@ -119,6 +120,10 @@ func (dm *Domain) SetWeakClusterDomains(weakClusterDomains []string) {
 	}
 }
 
+/*
+ * otherDomainName/ObjectId -> thisDomainName/otherDomainName#ObjectId
+ * thisDomainName/ObjectId -> thisDomainName/ObjectId
+ */
 func (dm *Domain) GetShadowObjectShadowId(objectIdWithAnyDomainName string) string {
 	objectDomain := dm.GetDomainFromObjectID(objectIdWithAnyDomainName)
 	if objectDomain == dm.name {
@@ -133,6 +138,39 @@ func (dm *Domain) GetShadowObjectShadowId(objectIdWithAnyDomainName string) stri
 			dm.GetObjectIDWithoutDomain(objectIdWithAnyDomainName),
 		)
 	}
+}
+
+/*
+ * domainName1/domainName2#ObjectId -> domainName2, ObjectId
+ */
+func (dm *Domain) GetShadowObjectDomainAndID(shadowObjectId string) (domainName, objectIdWithoutDomain string, err error) {
+	err = nil
+
+	idWithoutDomain := dm.GetObjectIDWithoutDomain(shadowObjectId)
+
+	tokens := strings.Split(idWithoutDomain, ObjectIDWeakClusteringDomainSeparator)
+	if !(len(tokens) > 1 && len(tokens[0]) > 0 && len(tokens[1]) > 0) {
+		return "", "", fmt.Errorf("id=%s is not a shadow object's id", shadowObjectId)
+	}
+
+	domainName = tokens[0]
+	objectIdWithoutDomain = tokens[1]
+
+	return
+}
+
+/*
+ * domainName1/domainName2#ObjectId -> true
+ * domainName1/ObjectId  -> false
+ */
+func (dm *Domain) IsShadowObject(idWithDomain string) bool {
+	idWithoutDomain := dm.GetObjectIDWithoutDomain(idWithDomain)
+
+	if tokens := strings.Split(idWithoutDomain, ObjectIDWeakClusteringDomainSeparator); len(tokens) > 1 && len(tokens[0]) > 0 && len(tokens[1]) > 0 {
+		return true
+	}
+
+	return false
 }
 
 func (dm *Domain) GetDomainFromObjectID(objectID string) string {
