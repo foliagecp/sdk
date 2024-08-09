@@ -332,6 +332,7 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	}
 	result.SetByPath("type", easyjson.NewJSON(objectType))
 	result.SetByPath("to_objects", easyjson.JSONFromArray(toObjects))
+	result.SetByPath("links", m.Data.GetByPath("links"))
 
 	system.MsgOnErrorReturn(om.ReplyWithData(&result))
 }
