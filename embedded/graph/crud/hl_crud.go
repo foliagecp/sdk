@@ -291,8 +291,7 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 		toId := m.Data.GetByPath("links.out.ids").ArrayElement(i).AsStringDefault("")
 		if tp == TO_TYPELINK {
 			objectType = toId
-		}
-		if tp == OBJECT_TYPELINK {
+		} else {
 			toObjects = append(toObjects, toId)
 		}
 	}
