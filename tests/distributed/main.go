@@ -5,15 +5,35 @@ package main
 import (
 	"flag"
 	"fmt"
-
 	lg "github.com/foliagecp/sdk/statefun/logger"
+	"os"
 )
 
 func main() {
-	helpFlag := flag.Bool("h", false, "Show help message")
-	helpFlagAlias := flag.Bool("help", false, "Show help message (alias)")
-	logLevelFlag := flag.Int("ll", int(lg.InfoLevel), "Log level (0-6): panic, fatal, error, warn, info, debug, trace")
-	logReportCallerFlag := flag.Bool("lrp", false, "Log report caller shows file name and line number where log originates from")
+	helpFlag :=
+		flag.Bool(
+			"h",
+			false,
+			"Show help message",
+		)
+	helpFlagAlias :=
+		flag.Bool(
+			"help",
+			false,
+			"Show help message (alias)",
+		)
+	logLevelFlag :=
+		flag.Int(
+			"ll",
+			int(lg.InfoLevel), // == 2
+			"Log level [0;6]: panic, fatal, error, warn, info, debug, trace",
+		)
+	logReportCallerFlag :=
+		flag.Bool(
+			"lrp",
+			false,
+			"Log report caller shows file name and line number where log originates from",
+		)
 
 	flag.Parse()
 
@@ -24,8 +44,17 @@ func main() {
 		return
 	}
 
-	lg.SetOutputLevel(lg.LogLevel(*logLevelFlag))
-	lg.SetReportCaller(*logReportCallerFlag)
+	if *logLevelFlag < -2 || *logLevelFlag > 6 {
+		fmt.Println("Please select logging level from [0;6]")
+		return
+	}
+
+	lg.SetDefaultOptions(
+		os.Stdout,
+		// subtract and multiply, because each level has a factor of 4: -8, -4, 0, 4, 8, 12, 16
+		lg.LogLevel((*logLevelFlag-2)*4),
+		*logReportCallerFlag,
+	)
 
 	Start()
 }

@@ -3,6 +3,7 @@
 package statefun
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,8 +11,6 @@ import (
 	"time"
 
 	lg "github.com/foliagecp/sdk/statefun/logger"
-
-	rt "runtime"
 
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
@@ -23,14 +22,15 @@ var (
 	mutexLockedError = errors.New("error: mutex is locked")
 )
 
+// KeyMutexLock
 // errorOnLocked - if mutex is already locked, exit with error (do not wait for unlocking)
 func KeyMutexLock(runtime *Runtime, key string, errorOnLocked bool) (uint64, error) {
-	le := lg.GetCustomLogEntry(rt.Caller(1))
+	le := lg.GetLogger()
 	kv := runtime.Domain.kv
 	mutexResetLock := func(keyMutex string, now int64) (uint64, error) {
 		lockRevisionID, err := kv.Put(keyMutex, system.Int64ToBytes(now))
 		if err == nil {
-			le.Logf(lg.TraceLevel, "============== Locked %s\n", keyMutex)
+			le.Trace(context.TODO(), "============== Locked %s\n", keyMutex)
 			return lockRevisionID, nil
 		}
 		return 0, err
@@ -45,7 +45,7 @@ func KeyMutexLock(runtime *Runtime, key string, errorOnLocked bool) (uint64, err
 			}
 			return 0, err // Terminate with error
 		}
-		le.Logf(lg.TraceLevel, "============== Locked %s\n", entry.Key())
+		le.Trace(context.TODO(), "============== Locked %s\n", entry.Key())
 		return lockRevisionID, nil // Successfully locked
 	}
 	getKeyWatch := func(keyMutex string) (nats.KeyWatcher, error) {
@@ -67,14 +67,14 @@ func KeyMutexLock(runtime *Runtime, key string, errorOnLocked bool) (uint64, err
 						return
 					}
 					if lockTime+int64(runtime.config.kvMutexLifeTimeSec)*int64(time.Second) < system.GetCurrentTimeNs() {
-						le.Logf(lg.TraceLevel, "======================= WAITING FOR UNLOCK DONE (MUTEX IS DEAD)\n")
+						le.Trace(context.TODO(), "======================= WAITING FOR UNLOCK DONE (MUTEX IS DEAD)\n")
 						releaseKeyWatch(w)
 						return
 					}
 				}
 				releaseKeyWatch(w)
 			} else {
-				le.Logf(lg.ErrorLevel, "KeyMutexLock kv.Watch error %s\n", err)
+				le.Error(context.TODO(), "KeyMutexLock kv.Watch error %s\n", err)
 			}
 			// Maybe sleep is needed to prevent to often kv.Watch
 			// time.Sleep(100 * time.Microsecond)
@@ -84,7 +84,7 @@ func KeyMutexLock(runtime *Runtime, key string, errorOnLocked bool) (uint64, err
 	keyMutex := key + ".mutex"
 	mutexResetLockNeeded := false
 
-	le.Logf(lg.TraceLevel, "============== Locking %s\n", keyMutex)
+	le.Trace(context.TODO(), "============== Locking %s\n", keyMutex)
 	for {
 		now := system.GetCurrentTimeNs()
 
@@ -92,7 +92,7 @@ func KeyMutexLock(runtime *Runtime, key string, errorOnLocked bool) (uint64, err
 
 		entry, err := kv.Get(keyMutex) // Getting last mutex state for key
 		if err != nil {
-			if err == nats.ErrKeyNotFound {
+			if errors.Is(err, nats.ErrKeyNotFound) {
 				mutexResetLockNeeded = true
 			} else {
 				//keyValueMutexOperationMutex.Unlock()
@@ -113,7 +113,7 @@ func KeyMutexLock(runtime *Runtime, key string, errorOnLocked bool) (uint64, err
 			}
 			return revId, err
 		} else if lockTime+int64(runtime.config.kvMutexLifeTimeSec)*int64(time.Second) < now { // Mutex was locked by someone else and its lock is too old
-			le.Logf(lg.WarnLevel, "Context mutex for key=%s is too old, will be unlocked!\n", key)
+			le.Warn(context.TODO(), "Context mutex for key=%s is too old, will be unlocked!\n", key)
 			mutexResetLockNeeded = true
 			//keyValueMutexOperationMutex.Unlock()
 			continue
@@ -129,7 +129,7 @@ func KeyMutexLock(runtime *Runtime, key string, errorOnLocked bool) (uint64, err
 }
 
 func KeyMutexLockUpdate(runtime *Runtime, key string, lockRevisionID uint64) (uint64, error) {
-	le := lg.GetCustomLogEntry(rt.Caller(1))
+	le := lg.NewLogger(lg.Options{ReportCaller: true})
 	kv := runtime.Domain.kv
 
 	keyMutex := key + ".mutex"
@@ -138,7 +138,7 @@ func KeyMutexLockUpdate(runtime *Runtime, key string, lockRevisionID uint64) (ui
 		return 0, err
 	}
 	if entry.Revision() != lockRevisionID {
-		le.Logf(lg.WarnLevel, "Context mutex for key=%s with revision=%d was violated, new revision=%d!\n", key, lockRevisionID, entry.Revision())
+		le.Warn(context.TODO(), "Context mutex for key=%s with revision=%d was violated, new revision=%d!\n", key, lockRevisionID, entry.Revision())
 	}
 	lockTime := system.BytesToInt64(entry.Value())
 	if lockTime != 0 {
@@ -146,7 +146,7 @@ func KeyMutexLockUpdate(runtime *Runtime, key string, lockRevisionID uint64) (ui
 		if err != nil {
 			return 0, err
 		}
-		le.Logf(lg.TraceLevel, "============== Updated %s\n", keyMutex)
+		le.Trace(context.TODO(), "============== Updated %s\n", keyMutex)
 		return revId, err
 	} else {
 		return 0, fmt.Errorf("Context mutex for key=%s was already unlocked", key)
@@ -154,7 +154,7 @@ func KeyMutexLockUpdate(runtime *Runtime, key string, lockRevisionID uint64) (ui
 }
 
 func KeyMutexUnlock(runtime *Runtime, key string, lockRevisionID uint64) error {
-	le := lg.GetCustomLogEntry(rt.Caller(1))
+	le := lg.NewLogger(lg.Options{ReportCaller: true})
 	kv := runtime.Domain.kv
 
 	//keyValueMutexOperationMutex.Lock()
@@ -166,7 +166,7 @@ func KeyMutexUnlock(runtime *Runtime, key string, lockRevisionID uint64) error {
 		return err
 	}
 	if entry.Revision() != lockRevisionID {
-		le.Logf(lg.WarnLevel, "Context mutex for key=%s with revision=%d was violated, new revision=%d!\n", key, lockRevisionID, entry.Revision())
+		le.Warn(context.TODO(), "Context mutex for key=%s with revision=%d was violated, new revision=%d!\n", key, lockRevisionID, entry.Revision())
 	}
 	lockTime := system.BytesToInt64(entry.Value())
 	if lockTime != 0 {
@@ -175,9 +175,9 @@ func KeyMutexUnlock(runtime *Runtime, key string, lockRevisionID uint64) error {
 			return err
 		}
 	} else {
-		le.Logf(lg.WarnLevel, "Context mutex for key=%s was already unlocked!\n", key)
+		le.Warn(context.TODO(), "Context mutex for key=%s was already unlocked!\n", key)
 	}
-	le.Logf(lg.TraceLevel, "============== Unlocked %s\n", keyMutex)
+	le.Trace(context.TODO(), "============== Unlocked %s\n", keyMutex)
 	return nil // Successfully unlocked
 }
 

@@ -34,7 +34,7 @@ func NewPrometrics(pattern string, addr string) *Prometrics {
 			pattern = "/"
 		}
 		http.Handle(pattern, promhttp.Handler())
-		lg.Logln(lg.FatalLevel, http.ListenAndServe(addr, nil))
+		lg.Logln(lg.FatalLevel, http.ListenAndServe(addr, nil).Error())
 	}()
 
 	go pm.golangRuntimeStatsCollector()
