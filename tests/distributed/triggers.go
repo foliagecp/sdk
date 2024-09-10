@@ -1,7 +1,7 @@
 package main
 
 import (
-	"runtime"
+	"context"
 	"time"
 
 	"github.com/foliagecp/easyjson"
@@ -18,19 +18,19 @@ var (
 	triggersTestStatefun2 = "functions.tests.basic.trigger2"
 )
 
-func IsTransactionOperationOk(j *easyjson.JSON, err error) bool {
-	le := lg.GetCustomLogEntry(runtime.Caller(1))
+func IsTransactionOperationOk(ctx context.Context, j *easyjson.JSON, err error) bool {
+	le := lg.GetLogger()
 	if err != nil {
-		le.Logf(lg.ErrorLevel, "Transaction operation failed: %s\n", err)
+		le.Error(ctx, "Transaction operation failed: %s\n", err)
 		return false
 	}
 	if s, ok := j.GetByPath("payload.status").AsString(); ok {
 		if s != "ok" {
-			le.Logf(lg.WarnLevel, "Transaction status is not ok, raw data: %s\n", j.ToString())
+			le.Warn(ctx, "Transaction status is not ok, raw data: %s\n", j.ToString())
 			return false
 		}
 	} else {
-		le.Logf(lg.WarnLevel, "Transaction operation status format is unknown, raw data: %s\n", j.ToString())
+		le.Warn(ctx, "Transaction operation status format is unknown, raw data: %s\n", j.ToString())
 		return false
 	}
 	return true
