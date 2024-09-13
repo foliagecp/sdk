@@ -160,6 +160,7 @@ func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProces
 	}
 	result.SetByPath("to_types", easyjson.JSONFromArray(toTypes))
 	result.SetByPath("object_ids", easyjson.JSONFromArray(toObjects))
+	result.SetByPath("links", m.Data.GetByPath("links"))
 
 	system.MsgOnErrorReturn(om.ReplyWithData(&result))
 }
