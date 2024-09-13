@@ -196,7 +196,7 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 
 		needLinks := []_link{
 			{from: ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false), to: ctx.Self.ID, name: ctx.Self.ID, lt: OBJECT_TYPELINK},
-			{from: ctx.Self.ID, name: originType, to: originType, lt: TO_TYPELINK},
+			{from: ctx.Self.ID, name: "type", to: originType, lt: TO_TYPELINK},
 			{from: originType, name: ctx.Self.ID, to: ctx.Self.ID, lt: OBJECT_TYPELINK},
 		}
 
