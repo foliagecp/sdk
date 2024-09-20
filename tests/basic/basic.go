@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -18,7 +19,7 @@ import (
 
 	graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
 	"github.com/foliagecp/sdk/embedded/graph/jpgql"
-	statefun "github.com/foliagecp/sdk/statefun"
+	"github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/cache"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	sfPluginJS "github.com/foliagecp/sdk/statefun/plugins/js"
@@ -47,9 +48,6 @@ var (
 	// TriggersTest - test the Foliage cmdb crud triggers
 	TriggersTest bool = system.GetEnvMustProceed("TRIGGERS_TEST", true)
 	// KVMuticesTestDurationSec - key/value mutices test duration
-	KVMuticesTestDurationSec int = system.GetEnvMustProceed("KV_MUTICES_TEST_DURATION_SEC", 10)
-	// KVMuticesTestWorkers - key/value mutices workers to apply in the test
-	KVMuticesTestWorkers int = system.GetEnvMustProceed("KV_MUTICES_TEST_WORKERS", 4)
 
 	dbClient db.DBSyncClient
 )
@@ -169,10 +167,7 @@ func RunRequestReplyTest(runtime *statefun.Runtime) {
 func Start() {
 	system.GlobalPrometrics = system.NewPrometrics("", ":9901")
 
-	afterStart := func(runtime *statefun.Runtime) error {
-		if KVMuticesTest {
-			KVMuticesSimpleTest(runtime, KVMuticesTestDurationSec, KVMuticesTestWorkers, 2, 1)
-		}
+	afterStart := func(ctx context.Context, runtime *statefun.Runtime) error {
 
 		dbc, err := db.NewDBSyncClientFromRequestFunction(runtime.Request)
 		if err != nil {
@@ -196,7 +191,6 @@ func Start() {
 		body = easyjson.NewJSONObjectWithKeyValue("search_fields", easyjson.JSONFromArray([]string{"f1", "f2"}))
 		system.MsgOnErrorReturn(dbClient.CMDB.TypeUpdate("typeb", body, false))
 
-		// Test data for search -----------------------------------------------
 		b := easyjson.NewJSONObjectWithKeyValue("f2", easyjson.NewJSON(true))
 		b.SetByPath("f1.f11", easyjson.NewJSON(123.13))
 		dbClient.CMDB.ObjectCreate("test1", "typea", b)
@@ -204,7 +198,6 @@ func Start() {
 		b = easyjson.NewJSONObjectWithKeyValue("f1", easyjson.NewJSON("data1"))
 		b.SetByPath("f2", easyjson.NewJSON(119))
 		dbClient.CMDB.ObjectCreate("test3", "typeb", b)
-		// --------------------------------------------------------------------
 
 		fmt.Println("Starting GraphQL")
 		graphql.StartGraphqlServer("8080", &dbClient)
@@ -217,12 +210,10 @@ func Start() {
 			registerTriggerFunctions(runtime)
 		}
 		runtime.RegisterOnAfterStartFunction(afterStart, true)
-		if err := runtime.Start(cache.NewCacheConfig("main_cache")); err != nil {
+		if err := runtime.Start(context.TODO(), cache.NewCacheConfig("main_cache")); err != nil {
 			lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s\n", err)
 		}
 	} else {
 		lg.Logf(lg.ErrorLevel, "Cannot create statefun runtime due to an error: %s\n", err)
 	}
 }
-
-// --------------------------------------------------------------------------------------
