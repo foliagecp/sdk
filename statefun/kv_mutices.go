@@ -83,7 +83,6 @@ func KeyMutexLock(ctx context.Context, runtime *Runtime, key string, errorOnLock
 
 	keyMutex := key + ".mutex"
 	mutexResetLockNeeded := false
-
 	le.Trace(ctx, "============== Locking %s\n", keyMutex)
 	for {
 		now := system.GetCurrentTimeNs()
