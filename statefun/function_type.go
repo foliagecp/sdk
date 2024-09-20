@@ -3,6 +3,7 @@
 package statefun
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -206,7 +207,7 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 
 	typenameIDContextProcessor.ObjectMutexLock = func(objectId string, errorOnLocked bool) error {
 		lockId := fmt.Sprintf("%s-lock", objectId)
-		revId, err := KeyMutexLock(ft.runtime, lockId, errorOnLocked)
+		revId, err := KeyMutexLock(context.TODO(), ft.runtime, lockId, errorOnLocked)
 		if err == nil {
 			objCtx := ft.getContext(lockId)
 			objCtx.SetByPath("__lock_rev_id", easyjson.NewJSON(revId))
@@ -225,7 +226,7 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 		}
 		revId := uint64(v)
 
-		err := KeyMutexUnlock(ft.runtime, lockId, revId)
+		err := KeyMutexUnlock(context.TODO(), ft.runtime, lockId, revId)
 		if err != nil {
 			return err
 		}

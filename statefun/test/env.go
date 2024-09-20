@@ -1,6 +1,7 @@
 package test
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -46,7 +47,7 @@ func (env *statefunTestEnvironment) StartRuntime() error {
 	errChan := make(chan error, 1)
 
 	go func() {
-		if err := env.runtime.Start(env.cacheCfg); err != nil {
+		if err := env.runtime.Start(context.TODO(), env.cacheCfg); err != nil {
 			errChan <- err
 		}
 	}()

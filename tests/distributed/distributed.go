@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -147,7 +148,7 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 func Start() {
 	system.GlobalPrometrics = system.NewPrometrics("", ":"+PrometricsServerPort)
 
-	afterStart := func(runtime *statefun.Runtime) error {
+	afterStart := func(ctx context.Context, runtime *statefun.Runtime) error {
 		dbc, err := db.NewDBSyncClientFromRequestFunction(runtime.Request)
 		if err != nil {
 			return err
@@ -177,7 +178,7 @@ func Start() {
 			registerTriggerFunctions(runtime)
 		}
 		runtime.RegisterOnAfterStartFunction(afterStart, true)
-		if err := runtime.Start(cache.NewCacheConfig("main_cache")); err != nil {
+		if err := runtime.Start(context.TODO(), cache.NewCacheConfig("main_cache")); err != nil {
 			lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s\n", err)
 		}
 	} else {
