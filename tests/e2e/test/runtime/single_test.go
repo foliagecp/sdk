@@ -18,7 +18,7 @@ import (
 
 func TestKeyMutexLockUnlock(t *testing.T) {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
-	ctx, cancel = context.WithTimeout(ctx, 600*time.Second)
+	ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	// Set up NATS cluster
