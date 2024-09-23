@@ -8,7 +8,7 @@ require (
 	github.com/emicklei/dot v1.6.1
 	github.com/foliagecp/easyjson v0.1.0
 	github.com/nats-io/nats-server/v2 v2.10.12
-	github.com/nats-io/nats.go v1.33.1
+	github.com/nats-io/nats.go v1.37.0
 	github.com/prometheus/client_golang v1.17.0
 	github.com/stretchr/testify v1.9.0
 	github.com/testcontainers/testcontainers-go v0.33.0
