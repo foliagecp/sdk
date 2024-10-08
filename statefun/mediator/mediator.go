@@ -15,10 +15,10 @@ import (
 type OpType = uint8
 
 const (
-	MereOp OpType = iota
-	WorkerIsTaskedByAggregatorOp
-	AggregatorRepliedByWorkerOp
-	AggregatedWorkersOp
+	MereOp                       OpType = iota // Call came from an initial client
+	WorkerIsTaskedByAggregatorOp               // Call came from a higher function
+	AggregatorRepliedByWorkerOp                // Call came from a subordinate function
+	AggregatedWorkersOp                        // Call came from the last subordinate function, aggregated everything
 )
 
 const (
