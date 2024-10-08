@@ -62,6 +62,9 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 	statefun.NewFunctionType(runtime, "functions.graph.api.link.delete", LLAPILinkDelete, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
 	statefun.NewFunctionType(runtime, "functions.graph.api.link.read", LLAPILinkRead, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
 
+	// Graph level API registration
+	statefun.NewFunctionType(runtime, "functions.graph.api.link.cud", GraphAsyncLinkCUD, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
+
 	if runtime.Domain.Name() == runtime.Domain.HubDomainName() {
 		runtime.RegisterOnAfterStartFunction(cmdbSchemaPrepare, false)
 	}
