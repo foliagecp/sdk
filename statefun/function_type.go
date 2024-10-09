@@ -191,6 +191,8 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 			overridenReply.OverrideRequestCallback = func() *sfPlugins.SyncReply { return nil }
 			return overridenReply
 		}
+	} else {
+		typenameIDContextProcessor.Reply = nil
 	}
 
 	typenameIDContextProcessor.Payload = msg.Payload
