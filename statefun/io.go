@@ -7,7 +7,6 @@ import (
 	"github.com/foliagecp/easyjson"
 	"github.com/nats-io/nats.go"
 
-	"github.com/foliagecp/sdk/statefun/logger"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 )
@@ -116,10 +115,6 @@ func (r *Runtime) functionTypeIsReadyForGoLangCommunication(targetFunctionTypeNa
 		if targetFT.config.IsRequestProviderAllowed(sfPlugins.GolangLocalRequest) {
 			supportsCommunicationType = true
 		}
-	} else {
-		if targetFT.config.IsSignalProviderAllowed(sfPlugins.GolangLocalSignal) {
-			supportsCommunicationType = true
-		}
 	}
 	if !supportsCommunicationType {
 		return 3
@@ -127,118 +122,43 @@ func (r *Runtime) functionTypeIsReadyForGoLangCommunication(targetFunctionTypeNa
 	return 0
 }
 
-func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) error {
+func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) {
 	jetstreamGlobalSignal := func() error {
 		go func() {
+			var err error
 			system.GlobalPrometrics.GetRoutinesCounter().Started("ingress-jetstreamGlobalSignal-gofunc")
 			defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("ingress-jetstreamGlobalSignal-gofunc")
 
 			if r.Domain.IsShadowObject(targetID) {
-				system.MsgOnErrorReturn(r.signalShadowObject(callerTypename, callerID, targetTypename, targetID, payload, options))
+				err = r.signalShadowObject(callerTypename, callerID, targetTypename, targetID, payload, options)
 			} else {
 				// If publishing signal to the same domain
 				if r.Domain.name == r.Domain.GetDomainFromObjectID(targetID) {
-					system.MsgOnErrorReturn(r.nc.Publish( // Publish directly into function's topic bypassing egress router
+					err = r.nc.Publish( // Publish directly into function's topic bypassing egress router
 						fmt.Sprintf(DomainIngressSubjectsTmpl, r.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, r.Domain.name, targetTypename, targetID)),
 						buildNatsData(r.Domain.name, callerTypename, callerID, payload, options),
-					))
+					)
 				} else { // Publish into egress router
-					system.MsgOnErrorReturn(r.nc.Publish(
+					err = r.nc.Publish(
 						fmt.Sprintf(DomainEgressSubjectsTmpl, r.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, r.Domain.GetDomainFromObjectID(targetID), targetTypename, targetID)),
 						buildNatsData(r.Domain.name, callerTypename, callerID, payload, options),
-					))
+					)
 				}
+			}
+			if err != nil {
+				panic(fmt.Sprintf("jetstreamGlobalSignal failed but it cannot be not executed because of the data consistency: %s\n", err.Error()))
 			}
 		}()
 		return nil
 	}
-	// TODO: This implementation is weak, cause we always should wait one functions ends its execution before next can start
-	goLangLocalSignal := func() error {
-		switch r.functionTypeIsReadyForGoLangCommunication(targetTypename, false, targetID) {
-		case 0:
-			func() {
-				targetFT, _ := r.registeredFunctionTypes[targetTypename]
-
-				// Do not send original data, prevents same data concurrent access from different functions
-				var payloadCopy *easyjson.JSON = nil
-				var optionsCopy *easyjson.JSON = nil
-				if payload != nil {
-					payloadCopy = payload.Clone().GetPtr()
-				}
-				if options != nil {
-					optionsCopy = options.Clone().GetPtr()
-				}
-				// ----------------------------------------------------------------------------------------
-				functionMsg := FunctionTypeMsg{
-					Caller:  &sfPlugins.StatefunAddress{Typename: callerTypename, ID: callerID},
-					Payload: payloadCopy,
-					Options: optionsCopy,
-				}
-
-				ackChannel := make(chan struct{})
-				nackChannel := make(chan struct{})
-
-				functionMsg.AckCallback = func(ack bool) {
-					if ack {
-						ackChannel <- struct{}{}
-					} else {
-						functionMsg.RefusalCallback()
-					}
-				}
-				functionMsg.RefusalCallback = func() {
-					logger.Logf(logger.WarnLevel, "goLangLocalSignal: receiver typename=%s called on id=%s refused from msg, for safety reasons msg is being redirected to NATS Jetstream\n", targetTypename, targetID)
-					system.MsgOnErrorReturn(r.signal(sfPlugins.JetstreamGlobalSignal, callerTypename, callerID, targetTypename, targetID, payload, options))
-					nackChannel <- struct{}{}
-				}
-
-				targetFT.sendMsg(targetID, functionMsg)
-
-				select {
-				case _, ok := <-ackChannel:
-					if !ok {
-						logger.Logln(logger.ErrorLevel, "goLangLocalSignal: ackChannel was unexpectedly closed")
-					}
-					// if ok - whether signal is delivered
-				case _, ok := <-nackChannel:
-					if !ok {
-						logger.Logln(logger.ErrorLevel, "goLangLocalSignal: nackChannel was unexpectedly closed")
-					}
-					// if ok - whether signal is redirected to NATS Jetstream due to nack command
-				case <-time.After(time.Duration(targetFT.config.msgAckWaitMs) * time.Millisecond):
-					logger.Logf(logger.WarnLevel, "goLangLocalSignal: receiver typename=%s called on id=%s did not ack msg in time, for safety reasons msg is being redirected to NATS Jetstream\n", targetTypename, targetID)
-					system.MsgOnErrorReturn(r.signal(sfPlugins.JetstreamGlobalSignal, callerTypename, callerID, targetTypename, targetID, payload, options))
-				}
-			}()
-			return nil
-		case 1:
-			return fmt.Errorf("goLangLocalSignal: cannot request function with the typename %s via golang, domain differs: %s(runtime) != %s(id)\n", callerTypename, r.Domain.name, r.Domain.GetDomainFromObjectID(targetID))
-		case 2:
-			return fmt.Errorf("goLangLocalSignal: cannot request function with the typename %s via golang, not registered", callerTypename)
-		case 3:
-			fallthrough
-		default:
-			logger.Logf(logger.WarnLevel, "goLangLocalSignal: receiver typename=%s does not support golang signals, for safety reasons msg is being redirected to NATS Jetstream\n", targetTypename)
-			system.MsgOnErrorReturn(r.signal(sfPlugins.JetstreamGlobalSignal, callerTypename, callerID, targetTypename, targetID, payload, options))
-			return nil
-		}
-	}
 
 	switch signalProvider {
 	case sfPlugins.JetstreamGlobalSignal:
-		return jetstreamGlobalSignal()
-	case sfPlugins.GolangLocalSignal:
-		return goLangLocalSignal()
+		jetstreamGlobalSignal()
 	case sfPlugins.AutoSignalSelect:
-		return jetstreamGlobalSignal() // TODO: Find a way to fix weak solution of the goLangLocalSignal
-		/*selection := sfPlugins.JetstreamGlobalSignal
-		if r.isShadowObject(targetID) {
-			if r.functionTypeIsReadyForGoLangCommunication(targetTypename, false, targetID) == 0 {
-				selection = sfPlugins.GolangLocalSignal
-			}
-		}
-		return r.signal(selection, callerTypename, callerID, targetTypename, targetID, payload, options)*/
+		jetstreamGlobalSignal()
 	default:
-		return fmt.Errorf("unknown signal provider: %d", signalProvider)
+		jetstreamGlobalSignal()
 	}
 }
 
@@ -340,8 +260,8 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 	}
 }
 
-func (r *Runtime) Signal(signalProvider sfPlugins.SignalProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) error {
-	return r.signal(signalProvider, "ingress", "signal", typename, id, payload, options)
+func (r *Runtime) Signal(signalProvider sfPlugins.SignalProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) {
+	r.signal(signalProvider, "ingress", "signal", typename, id, payload, options)
 }
 
 func (r *Runtime) Request(requestProvider sfPlugins.RequestProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {

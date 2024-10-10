@@ -83,7 +83,7 @@ func JPGQLCallTreeResultAggregation(_ sfPlugins.StatefunExecutor, ctx *sfPlugins
 	case mediator.MereOp: // Initial call of jpgql
 		newOptions := ctx.Options
 		newOptions.SetByPath("started_nano", easyjson.NewJSON(time.Now().UnixNano()))
-		system.MsgOnErrorReturn(om.SignalWithAggregation(sfPlugins.JetstreamGlobalSignal, ctx.Self.Typename, vId+"==="+pId, ctx.Payload, newOptions))
+		om.SignalWithAggregation(sfPlugins.JetstreamGlobalSignal, ctx.Self.Typename, vId+"==="+pId, ctx.Payload, newOptions)
 	case mediator.WorkerIsTaskedByAggregatorOp:
 		currentObjectLinksQuery, err := getQueryFromPayload(ctx)
 		if err != nil {
@@ -113,11 +113,7 @@ func JPGQLCallTreeResultAggregation(_ sfPlugins.StatefunExecutor, ctx *sfPlugins
 				} else {
 					workerPayload := easyjson.NewJSONObject()
 					workerPayload.SetByPath("query", easyjson.NewJSON(nextQuery))
-					err := om.SignalWithAggregation(sfPlugins.JetstreamGlobalSignal, ctx.Self.Typename, objectID+"==="+pId, &workerPayload, ctx.Options)
-					if err != nil {
-						om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
-						return
-					}
+					om.SignalWithAggregation(sfPlugins.JetstreamGlobalSignal, ctx.Self.Typename, objectID+"==="+pId, &workerPayload, ctx.Options)
 					workersToAggregateFrom++
 				}
 			}

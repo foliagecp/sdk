@@ -207,13 +207,13 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 						return v
 					}
 				}
-				system.MsgOnErrorReturn(sfejs.ctx.Signal(
+				sfejs.ctx.Signal(
 					sfPlugins.SignalProvider(info.Args()[0].Int32()),
 					info.Args()[1].String(),
 					info.Args()[2].String(),
 					&j,
 					options,
-				))
+				)
 				v, _ := v8.NewValue(sfejs.vw, int32(0))
 				return v
 			}
