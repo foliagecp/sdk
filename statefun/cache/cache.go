@@ -152,6 +152,39 @@ func (csv *StoreValue) Put(value interface{}, updateInKV bool, customPutTime int
 	csv.Unlock("Put")
 }
 
+func (csv *StoreValue) PutKVSync(cs *Store, value interface{}, customPutTime int64) error {
+	csv.Lock("PutKVSync")
+	key := csv.keyInParent
+
+	csv.value = value
+	csv.valueExists = true
+	csv.purgeState = 0
+	if customPutTime < 0 {
+		customPutTime = system.GetCurrentTimeNs()
+	}
+	csv.valueUpdateTime = customPutTime
+	csv.syncNeeded = false
+	csv.syncedWithKV = true
+
+	// Putting directly into nats KV ----------------------
+	timeBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(timeBytes, uint64(csv.valueUpdateTime))
+	header := append(timeBytes, 1) // Add append flag "1"
+	finalBytes := append(header, csv.value.([]byte)...)
+	_, putErr := customNatsKv.KVPut(cs.js, cs.kv, cs.toStoreKey(csv.GetFullKeyString()), finalBytes)
+	// ----------------------------------------------------
+
+	if csv.parent != nil {
+		csv.parent.notifyUpdates.Range(func(_, v interface{}) bool {
+			notifySubscriber(v.(chan KeyValue), key, value)
+			return true
+		})
+	}
+
+	csv.Unlock("PutKVSync")
+	return putErr
+}
+
 func (csv *StoreValue) collectGarbage() {
 	system.GlobalPrometrics.GetRoutinesCounter().Started("cache.csv.collectGarbage")
 	defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("cache.csv.collectGarbage")
@@ -545,11 +578,17 @@ func (cs *Store) GetValueUpdateTime(key string) int64 {
 }
 
 func (cs *Store) GetValue(key string) ([]byte, error) {
+	v, _, e := cs.GetValueWithRecordTime(key)
+	return v, e
+}
+
+func (cs *Store) GetValueWithRecordTime(key string) ([]byte, int64, error) {
 	var result []byte = nil
 	var resultError error = nil
 
 	cacheMiss := true
 
+	var recordTime int64 = 0
 	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, false); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
 		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken, true); ok {
 			cacheMiss = false // Value exists in cache - no cache miss then
@@ -561,6 +600,7 @@ func (cs *Store) GetValue(key string) ([]byte, error) {
 			} else { // Value was intenionally deleted and was marked so, no cache miss policy can be applied here
 				resultError = fmt.Errorf("Value for for key=%s does not exist", key)
 			}
+			recordTime = csv.valueUpdateTime
 			csv.Unlock("GetValue")
 		}
 	}
@@ -576,6 +616,7 @@ func (cs *Store) GetValue(key string) ([]byte, error) {
 				appendFlag := valueBytes[8]
 				kvRecordTime := int64(binary.BigEndian.Uint64(valueBytes[:8]))
 				if appendFlag == 1 { // Valid value exists in KV store
+					recordTime = kvRecordTime
 					cs.SetValue(key, result, false, kvRecordTime, "")
 					resultError = nil
 				}
@@ -586,7 +627,7 @@ func (cs *Store) GetValue(key string) ([]byte, error) {
 	}
 	// ----------------------------------------------------
 
-	return result, resultError
+	return result, recordTime, resultError
 }
 
 func (cs *Store) GetValueAsJSON(key string) (*easyjson.JSON, error) {
@@ -719,6 +760,29 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 		}
 	}
 	return true
+}
+
+func (cs *Store) SetValueKVSync(key string, value []byte, customSetTime int64) error {
+	if !keyValidationRegexp.MatchString(key) {
+		return fmt.Errorf("key does not match keyValidationRegexp")
+	}
+
+	if customSetTime < 0 {
+		customSetTime = system.GetCurrentTimeNs()
+	}
+
+	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
+		var csvUpdate *StoreValue
+		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken, true); ok {
+			csvUpdate = csv
+		} else {
+			csvUpdate = &StoreValue{value: value, store: make(map[interface{}]*StoreValue), storeConsistencyWithKVLossTime: 0, valueExists: true, purgeState: 0, syncNeeded: false, syncedWithKV: true, valueUpdateTime: customSetTime}
+			parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate, true)
+		}
+		return csvUpdate.PutKVSync(cs, value, customSetTime)
+	}
+
+	return nil
 }
 
 func (cs *Store) Destroy() {
