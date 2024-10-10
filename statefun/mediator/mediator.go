@@ -113,6 +113,10 @@ func NewOpMediatorWithUniquenessControl(ctx *sfPlugins.StatefunContextProcessor,
 	return
 }
 
+func (om *OpMediator) GetID() string {
+	return om.mediatorId
+}
+
 func (om *OpMediator) AddIntermediateResult(ctx *sfPlugins.StatefunContextProcessor, intermediateResult *easyjson.JSON) {
 	msg := MakeOpMsg(SYNC_OP_STATUS_OK, "", "", *intermediateResult)
 
@@ -266,12 +270,12 @@ func (om *OpMediator) ReplyWithData(data *easyjson.JSON) error {
 			} else {
 				if paTypename, paId, aggrId, ok := om.releaseAggPackAndGetParentSignalAggregator(aggregationPack); ok {
 					if len(paTypename) == 0 || len(paId) == 0 {
-						return om.ctx.Egress(sfPlugins.NatsCoreEgress, reply)
+						om.ctx.Egress(sfPlugins.NatsCoreEgress, reply)
 					} else {
 						if len(aggrId) > 0 {
 							reply.SetByPath("__mAggregationIdReply", easyjson.NewJSON(aggrId))
 						}
-						return om.ctx.Signal(sfPlugins.JetstreamGlobalSignal, paTypename, paId, reply, nil)
+						om.ctx.Signal(sfPlugins.JetstreamGlobalSignal, paTypename, paId, reply, nil)
 					}
 				}
 			}
@@ -287,7 +291,7 @@ func (om *OpMediator) ReplyWithData(data *easyjson.JSON) error {
 					if om.opType == WorkerIsTaskedByAggregatorOp {
 						reply.SetByPath("__mAggregationIdReply", easyjson.NewJSON(om.meta1))
 					}
-					return om.ctx.Signal(sfPlugins.JetstreamGlobalSignal, om.ctx.Caller.Typename, om.ctx.Caller.ID, reply, nil)
+					om.ctx.Signal(sfPlugins.JetstreamGlobalSignal, om.ctx.Caller.Typename, om.ctx.Caller.ID, reply, nil)
 				}
 			}
 		}
@@ -300,16 +304,14 @@ func (om *OpMediator) Reply() {
 	system.MsgOnErrorReturn(om.ReplyWithData(nil))
 }
 
-func (om *OpMediator) SignalWithAggregation(provider sfPlugins.SignalProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) error {
+func (om *OpMediator) SignalWithAggregation(provider sfPlugins.SignalProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) {
 	// Create payload to send for a descendant ------------
 	if payload == nil || !payload.IsNonEmptyObject() {
 		payload = easyjson.NewJSONObject().GetPtr()
 	}
 	payload.SetByPath("__mAggregationId", easyjson.NewJSON(om.mediatorId))
 	// ----------------------------------------------------
-	if err := om.ctx.Signal(provider, typename, id, payload, options); err != nil {
-		return err
-	}
+	om.ctx.Signal(provider, typename, id, payload, options)
 
 	funcContext := om.ctx.GetFunctionContext()
 
@@ -346,6 +348,4 @@ func (om *OpMediator) SignalWithAggregation(provider sfPlugins.SignalProvider, t
 	// ----------------------------------------------------
 	om.ctx.SetFunctionContext(funcContext)
 	om.ctx.SetContextExpirationAfter(time.Duration(gcIntervalSec) * time.Second)
-
-	return nil
 }

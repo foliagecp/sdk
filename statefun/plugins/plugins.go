@@ -24,7 +24,6 @@ type SignalProvider int
 const (
 	AutoSignalSelect SignalProvider = iota
 	JetstreamGlobalSignal
-	GolangLocalSignal
 )
 
 type RequestProvider int
@@ -37,7 +36,7 @@ const (
 
 type EgressProvider int
 
-type SFSignalFunc func(SignalProvider, string, string, *easyjson.JSON, *easyjson.JSON) error
+type SFSignalFunc func(SignalProvider, string, string, *easyjson.JSON, *easyjson.JSON)
 type SFRequestFunc func(RequestProvider, string, string, *easyjson.JSON, *easyjson.JSON, ...time.Duration) (*easyjson.JSON, error)
 type SFEgressFunc func(EgressProvider, *easyjson.JSON, ...string) error
 

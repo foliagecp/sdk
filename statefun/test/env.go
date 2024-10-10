@@ -83,8 +83,8 @@ func (env *statefunTestEnvironment) Request(provider plugins.RequestProvider, ty
 	return env.runtime.Request(provider, typename, id, payload, options)
 }
 
-func (env *statefunTestEnvironment) Signal(provider plugins.SignalProvider, typename, id string, payload, options *easyjson.JSON) error {
-	return env.runtime.Signal(provider, typename, id, payload, options)
+func (env *statefunTestEnvironment) Signal(provider plugins.SignalProvider, typename, id string, payload, options *easyjson.JSON) {
+	env.runtime.Signal(provider, typename, id, payload, options)
 }
 
 func (env *statefunTestEnvironment) Publish(subj string, data []byte) error {
