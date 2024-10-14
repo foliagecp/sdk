@@ -152,7 +152,7 @@ func (csv *StoreValue) Put(value interface{}, updateInKV bool, customPutTime int
 	csv.Unlock("Put")
 }
 
-func (csv *StoreValue) PutKVSync(cs *Store, value interface{}, customPutTime int64) error {
+func (csv *StoreValue) PutKVSync(cs *Store, value interface{}, customPutTime int64) {
 	csv.Lock("PutKVSync")
 	key := csv.keyInParent
 
@@ -172,6 +172,9 @@ func (csv *StoreValue) PutKVSync(cs *Store, value interface{}, customPutTime int
 	header := append(timeBytes, 1) // Add append flag "1"
 	finalBytes := append(header, csv.value.([]byte)...)
 	_, putErr := customNatsKv.KVPut(cs.js, cs.kv, cs.toStoreKey(csv.GetFullKeyString()), finalBytes)
+	if putErr != nil {
+		panic(fmt.Sprintf("PutKVSync received error: %s", putErr.Error()))
+	}
 	// ----------------------------------------------------
 
 	if csv.parent != nil {
@@ -182,7 +185,6 @@ func (csv *StoreValue) PutKVSync(cs *Store, value interface{}, customPutTime int
 	}
 
 	csv.Unlock("PutKVSync")
-	return putErr
 }
 
 func (csv *StoreValue) collectGarbage() {
@@ -259,6 +261,29 @@ func (csv *StoreValue) Delete(updateInKV bool, customDeleteTime int64) {
 		csv.syncNeeded = false
 		csv.syncedWithKV = true
 	}
+	csv.Unlock("Delete")
+
+	if csv.parent != nil {
+		csv.parent.notifyUpdates.Range(func(_, v interface{}) bool {
+			notifySubscriber(v.(chan KeyValue), key, nil)
+			return true
+		})
+	}
+}
+
+func (csv *StoreValue) DeleteKVSync(cs *Store, customDeleteTime int64) {
+	csv.Lock("Delete")
+	key := csv.keyInParent
+
+	// Deleting directly from nats KV ---------------------
+	delErr := customNatsKv.KVDelete(cs.js, cs.kv, cs.toStoreKey(csv.GetFullKeyString()))
+	if delErr != nil {
+		panic(fmt.Sprintf("DeleteKVSync received error: %s", delErr.Error()))
+	}
+	// ----------------------------------------------------
+
+	csv.TryPurgeReady(false)
+	csv.TryPurgeConfirm(false)
 	csv.Unlock("Delete")
 
 	if csv.parent != nil {
@@ -582,6 +607,11 @@ func (cs *Store) GetValue(key string) ([]byte, error) {
 	return v, e
 }
 
+func (cs *Store) GetValueAsJSON(key string) (*easyjson.JSON, error) {
+	v, _, e := cs.GetValueWithRecordTimeAsJSON(key)
+	return v, e
+}
+
 func (cs *Store) GetValueWithRecordTime(key string) ([]byte, int64, error) {
 	var result []byte = nil
 	var resultError error = nil
@@ -630,15 +660,15 @@ func (cs *Store) GetValueWithRecordTime(key string) ([]byte, int64, error) {
 	return result, recordTime, resultError
 }
 
-func (cs *Store) GetValueAsJSON(key string) (*easyjson.JSON, error) {
-	value, err := cs.GetValue(key)
+func (cs *Store) GetValueWithRecordTimeAsJSON(key string) (*easyjson.JSON, int64, error) {
+	value, recordTime, err := cs.GetValueWithRecordTime(key)
 	if err == nil {
 		if j, ok := easyjson.JSONFromBytes(value); ok {
-			return &j, nil
+			return &j, recordTime, nil
 		}
-		return nil, fmt.Errorf("Value for key=%s is not a JSON", key)
+		return nil, recordTime, fmt.Errorf("Value for key=%s is not a JSON", key)
 	}
-	return nil, err
+	return nil, recordTime, err
 }
 
 func (cs *Store) TransactionBegin(transactionID string) {
@@ -779,9 +809,8 @@ func (cs *Store) SetValueKVSync(key string, value []byte, customSetTime int64) e
 			csvUpdate = &StoreValue{value: value, store: make(map[interface{}]*StoreValue), storeConsistencyWithKVLossTime: 0, valueExists: true, purgeState: 0, syncNeeded: false, syncedWithKV: true, valueUpdateTime: customSetTime}
 			parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate, true)
 		}
-		return csvUpdate.PutKVSync(cs, value, customSetTime)
+		csvUpdate.PutKVSync(cs, value, customSetTime)
 	}
-
 	return nil
 }
 
@@ -809,6 +838,19 @@ func (cs *Store) DeleteValue(key string, updateInKV bool, customDeleteTime int64
 			transaction.mutex.Unlock()
 		} else {
 			lg.Logf(lg.ErrorLevel, "DeleteValue: transaction with id=%s doesn't exist\n", transactionID)
+		}
+	}
+}
+
+func (cs *Store) DeleteValueKVSync(key string, customDeleteTime int64) {
+	if customDeleteTime < 0 {
+		customDeleteTime = system.GetCurrentTimeNs()
+	}
+	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, false); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
+		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken, true); ok {
+			if csv.valueExists {
+				csv.DeleteKVSync(cs, customDeleteTime)
+			}
 		}
 	}
 }
