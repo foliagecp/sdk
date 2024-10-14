@@ -31,18 +31,56 @@ func GraphVertexCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 	ctx.Domain.Cache().SetValueKVSync(ctx.Self.ID, vertexBody.ToBytes(), opTime) // Store vertex body in KV
 	// ----------------------------------
 
-	addVertexOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, nil, &vertexBody)
+	addVertexOpToOpStack(opStack, "create", ctx.Self.ID, nil, &vertexBody)
+
+	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
+}
+
+func GraphVertexUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, data *easyjson.JSON, opTime int64) {
+	opStack := getOpStackFromOptions(ctx.Options)
+
+	upsert := data.GetByPath("upsert").AsBoolDefault(false)
+	replace := data.GetByPath("replace").AsBoolDefault(false)
+
+	if !upsert && (!data.PathExists("body") || !data.GetByPath("body").IsObject()) {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("new body should be passed and must be a valid json-object when upsert==false"))).Reply()
+		return
+	}
+
+	oldBody, _, err := ctx.Domain.Cache().GetValueWithRecordTimeAsJSON(ctx.Self.ID)
+	if err != nil { // If vertex does not exist
+		if upsert {
+			createVertexPayload := easyjson.NewJSONObjectWithKeyValue("operation", easyjson.NewJSON("create"))
+			createVertexPayload.SetByPath("data.body", data.GetByPath("body"))
+			om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.vertex.cud", ctx.Self.ID, &createVertexPayload, ctx.Options)
+		} else {
+			om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("vertex with id=%s does not exist, nothing to update", ctx.Self.ID))).Reply()
+		}
+		return
+	}
+
+	body := data.GetByPath("body")
+	if !replace { // merge
+		newBody := oldBody.Clone().GetPtr()
+		newBody.DeepMerge(body)
+		body = *newBody
+	}
+
+	ctx.Domain.Cache().SetValueKVSync(ctx.Self.ID, body.ToBytes(), opTime) // Store vertex body in KV
+	addVertexOpToOpStack(opStack, "update", ctx.Self.ID, oldBody, &body)
 
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
 func GraphVertexCUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64) {
 	operation := ctx.Payload.GetByPath("operation").AsStringDefault("")
+	data := ctx.Payload.GetByPath("data")
 
 	switch strings.ToLower(operation) {
 	case "create":
-		data := ctx.Payload.GetByPath("data")
 		GraphVertexCreate(ctx, om, &data, opTime)
+	case "update":
+		GraphVertexUpdate(ctx, om, &data, opTime)
 	default:
 
 	}
@@ -99,7 +137,10 @@ func GraphVertexCUD(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContext
 				}
 			}
 		}
-		immediateAggregationResult := easyjson.NewJSONObjectWithKeyValue("op_stack", aggregatedOpStack)
-		system.MsgOnErrorReturn(om.ReplyWithData(immediateAggregationResult.GetPtr()))
+		var immediateAggregationResult *easyjson.JSON = nil
+		if aggregatedOpStack.IsNonEmptyObject() {
+			easyjson.NewJSONObjectWithKeyValue("op_stack", aggregatedOpStack)
+		}
+		system.MsgOnErrorReturn(om.ReplyWithData(immediateAggregationResult))
 	}
 }
