@@ -383,7 +383,6 @@ func GraphLinkCUD(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 
 func GraphLinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
-
 	opStack := getOpStackFromOptions(ctx.Options)
 
 	var linkName string
