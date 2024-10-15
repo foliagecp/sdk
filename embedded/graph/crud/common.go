@@ -64,7 +64,9 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 
 	// Graph level API registration
 	statefun.NewFunctionType(runtime, "functions.graph.api.vertex.cud", GraphVertexCUD, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
+	statefun.NewFunctionType(runtime, "functions.graph.api.vertex.read", GraphVertexRead, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
 	statefun.NewFunctionType(runtime, "functions.graph.api.link.cud", GraphLinkCUD, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
+	statefun.NewFunctionType(runtime, "functions.graph.api.link.read", GraphLinkRead, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
 
 	if runtime.Domain.Name() == runtime.Domain.HubDomainName() {
 		runtime.RegisterOnAfterStartFunction(cmdbSchemaPrepare, false)

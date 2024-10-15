@@ -125,10 +125,15 @@ func GraphLinkCreateToVertex(ctx *sfPlugins.StatefunContextProcessor, om *sfMedi
 	om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONNull())).Reply()
 }
 
-func getLinkNameTypeTargetFromVariousIdentifiers(ctx *sfPlugins.StatefunContextProcessor) (linkName string, linkType string, linkTargetId string, err error) {
-	linkName = ctx.Payload.GetByPath("data.name").AsStringDefault("")
-	linkType = ctx.Payload.GetByPath("data.type").AsStringDefault("")
-	linkTargetId = ctx.Domain.CreateObjectIDWithThisDomain(ctx.Payload.GetByPath("data.to").AsStringDefault(""), false)
+func getLinkNameTypeTargetFromVariousIdentifiers(ctx *sfPlugins.StatefunContextProcessor, payloadContainer string) (linkName string, linkType string, linkTargetId string, err error) {
+	prefix := ""
+	if len(payloadContainer) > 0 {
+		prefix = payloadContainer + "."
+	}
+
+	linkName = ctx.Payload.GetByPath(prefix + "name").AsStringDefault("")
+	linkType = ctx.Payload.GetByPath(prefix + "type").AsStringDefault("")
+	linkTargetId = ctx.Domain.CreateObjectIDWithThisDomain(ctx.Payload.GetByPath(prefix+"to").AsStringDefault(""), false)
 
 	if len(linkName) > 0 {
 		linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
@@ -164,7 +169,7 @@ func GraphLinkUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.Op
 	var linkName string
 	var linkTarget string
 	var linkType string
-	if lname, ltype, ltarget, err := getLinkNameTypeTargetFromVariousIdentifiers(ctx); err == nil {
+	if lname, ltype, ltarget, err := getLinkNameTypeTargetFromVariousIdentifiers(ctx, "data"); err == nil {
 		linkName = lname
 		linkType = ltype
 		linkTarget = ltarget
@@ -239,7 +244,7 @@ func GraphLinkDeleteFromVertex(ctx *sfPlugins.StatefunContextProcessor, om *sfMe
 	var linkName string
 	var linkTarget string
 	var linkType string
-	if lname, ltype, ltarget, err := getLinkNameTypeTargetFromVariousIdentifiers(ctx); err == nil {
+	if lname, ltype, ltarget, err := getLinkNameTypeTargetFromVariousIdentifiers(ctx, "data"); err == nil {
 		linkName = lname
 		linkType = ltype
 		linkTarget = ltarget
@@ -374,4 +379,52 @@ func GraphLinkCUD(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 		}
 		system.MsgOnErrorReturn(om.ReplyWithData(immediateAggregationResult))
 	}
+}
+
+func GraphLinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	om := sfMediators.NewOpMediator(ctx)
+
+	opStack := getOpStackFromOptions(ctx.Options)
+
+	var linkName string
+	var linkTarget string
+	var linkType string
+	if lname, ltype, ltarget, err := getLinkNameTypeTargetFromVariousIdentifiers(ctx, ""); err == nil {
+		linkName = lname
+		linkType = ltype
+		linkTarget = ltarget
+	} else {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
+		return
+	}
+	if !validLinkName.MatchString(linkName) {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("invalid link name")).Reply()
+		return
+	}
+
+	linkBody, err1 := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
+	if err1 != nil { // Link's body does not exist
+		linkBody = easyjson.NewJSONObject().GetPtr()
+	}
+
+	result := easyjson.NewJSONObjectWithKeyValue("body", *linkBody)
+
+	if ctx.Payload.GetByPath("details").AsBoolDefault(false) {
+		result.SetByPath("name", easyjson.NewJSON(linkName))
+		result.SetByPath("type", easyjson.NewJSON(linkType))
+		result.SetByPath("from", easyjson.NewJSON(ctx.Self.ID))
+		result.SetByPath("to", easyjson.NewJSON(linkTarget))
+
+		tags := []string{}
+		tagKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff3Pattern, ctx.Self.ID, linkName, "tag", ">"))
+		for _, tagKey := range tagKeys {
+			tagKeyTokens := strings.Split(tagKey, ".")
+			tags = append(tags, tagKeyTokens[len(tagKeyTokens)-1])
+		}
+		result.SetByPath("tags", easyjson.JSONFromArray(tags))
+	}
+
+	addLinkOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, linkTarget, linkName, linkType, nil, nil)
+
+	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(result.GetPtr(), opStack))).Reply()
 }

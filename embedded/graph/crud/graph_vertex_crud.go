@@ -193,3 +193,54 @@ func GraphVertexCUD(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContext
 		system.MsgOnErrorReturn(om.ReplyWithData(immediateAggregationResult))
 	}
 }
+
+func GraphVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	om := sfMediators.NewOpMediator(ctx)
+	opStack := getOpStackFromOptions(ctx.Options)
+
+	body, _, err := ctx.Domain.Cache().GetValueWithRecordTimeAsJSON(ctx.Self.ID)
+	if err != nil { // If vertex does not exist
+		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("vertex with id=%s does not exist", ctx.Self.ID))).Reply()
+		return
+	}
+
+	result := easyjson.NewJSONObjectWithKeyValue("body", *body)
+	if ctx.Payload.GetByPath("details").AsBoolDefault(false) {
+		outLinkNames := []string{}
+		outLinkTypes := []string{}
+		outLinkIds := []string{}
+		outLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
+		for _, outLinkKey := range outLinkKeys {
+			linkKeyTokens := strings.Split(outLinkKey, ".")
+			linkName := linkKeyTokens[len(linkKeyTokens)-1]
+			outLinkNames = append(outLinkNames, linkName)
+
+			linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
+			if err == nil {
+				tokens := strings.Split(string(linkTargetBytes), ".")
+				if len(tokens) == 2 {
+					outLinkTypes = append(outLinkTypes, tokens[0])
+					outLinkIds = append(outLinkIds, tokens[1])
+				}
+			}
+		}
+		result.SetByPath("links.out.names", easyjson.JSONFromArray(outLinkNames))
+		result.SetByPath("links.out.types", easyjson.JSONFromArray(outLinkTypes))
+		result.SetByPath("links.out.ids", easyjson.JSONFromArray(outLinkIds))
+
+		inLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
+		inLinks := easyjson.NewJSONArray()
+		for _, inLinkKey := range inLinkKeys {
+			linkKeyTokens := strings.Split(inLinkKey, ".")
+			linkName := linkKeyTokens[len(linkKeyTokens)-1]
+			linkFromVId := linkKeyTokens[len(linkKeyTokens)-2]
+			inLinkJson := easyjson.NewJSONObjectWithKeyValue("from", easyjson.NewJSON(linkFromVId))
+			inLinkJson.SetByPath("name", easyjson.NewJSON(linkName))
+			inLinks.AddToArray(inLinkJson)
+		}
+		result.SetByPath("links.in", inLinks)
+	}
+	addVertexOpToOpStack(opStack, "read", ctx.Self.ID, nil, nil)
+
+	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(result.GetPtr(), opStack))).Reply()
+}
