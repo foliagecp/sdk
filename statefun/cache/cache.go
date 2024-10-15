@@ -284,6 +284,7 @@ func (csv *StoreValue) DeleteKVSync(cs *Store, customDeleteTime int64) {
 
 	csv.TryPurgeReady(false)
 	csv.TryPurgeConfirm(false)
+	csv.valueExists = false
 	csv.Unlock("Delete")
 
 	if csv.parent != nil {
