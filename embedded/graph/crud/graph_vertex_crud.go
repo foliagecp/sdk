@@ -52,7 +52,7 @@ func GraphVertexUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 		if upsert {
 			createVertexPayload := easyjson.NewJSONObjectWithKeyValue("operation", easyjson.NewJSON("create"))
 			createVertexPayload.SetByPath("data.body", data.GetByPath("body"))
-			om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.vertex.cud", ctx.Self.ID, &createVertexPayload, ctx.Options)
+			om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Caller.Typename, ctx.Self.ID, &createVertexPayload, ctx.Options)
 		} else {
 			om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("vertex with id=%s does not exist, nothing to update", ctx.Self.ID))).Reply()
 		}
@@ -72,6 +72,53 @@ func GraphVertexUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
+func GraphVertexDelete(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, data *easyjson.JSON, opTime int64) {
+	opStack := getOpStackFromOptions(ctx.Options)
+
+	oldBody, _, err := ctx.Domain.Cache().GetValueWithRecordTimeAsJSON(ctx.Self.ID)
+	if err != nil { // If vertex does not exist
+		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("vertex with id=%s does not exist", ctx.Self.ID))).Reply()
+		return
+	}
+
+	ctx.Domain.Cache().DeleteValueKVSync(ctx.Self.ID, -1) // Delete vertex's body
+	addVertexOpToOpStack(opStack, "delete", ctx.Self.ID, oldBody, nil)
+
+	waiting4Aggregation := false
+	// Delete all out links -------------------------------
+	outLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
+	for _, outLinkKey := range outLinkKeys {
+		inLinkKeyTokens := strings.Split(outLinkKey, ".")
+		linkName := inLinkKeyTokens[len(inLinkKeyTokens)-1]
+
+		inLinkPayload := easyjson.NewJSONObjectWithKeyValue("operation", easyjson.NewJSON("delete"))
+		inLinkPayload.SetByPath("data.name", easyjson.NewJSON(linkName))
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.link.cud", ctx.Self.ID, &inLinkPayload, ctx.Options)
+		waiting4Aggregation = true
+	}
+	// ----------------------------------------------------
+
+	// Delete all in links --------------------------------
+	inLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
+	for _, inLinkKey := range inLinkKeys {
+		inLinkKeyTokens := strings.Split(inLinkKey, ".")
+		fromObjectID := inLinkKeyTokens[len(inLinkKeyTokens)-2]
+		linkName := inLinkKeyTokens[len(inLinkKeyTokens)-1]
+
+		inLinkPayload := easyjson.NewJSONObjectWithKeyValue("operation", easyjson.NewJSON("delete"))
+		inLinkPayload.SetByPath("data.name", easyjson.NewJSON(linkName))
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.link.cud", fromObjectID, &inLinkPayload, ctx.Options)
+		waiting4Aggregation = true
+	}
+	// ----------------------------------------------------
+
+	if waiting4Aggregation {
+		om.AddIntermediateResult(ctx, resultWithOpStack(nil, opStack).GetPtr())
+	} else {
+		om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
+	}
+}
+
 func GraphVertexCUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64) {
 	operation := ctx.Payload.GetByPath("operation").AsStringDefault("")
 	data := ctx.Payload.GetByPath("data")
@@ -81,6 +128,8 @@ func GraphVertexCUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfMe
 		GraphVertexCreate(ctx, om, &data, opTime)
 	case "update":
 		GraphVertexUpdate(ctx, om, &data, opTime)
+	case "delete":
+		GraphVertexDelete(ctx, om, &data, opTime)
 	default:
 
 	}
@@ -138,8 +187,8 @@ func GraphVertexCUD(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContext
 			}
 		}
 		var immediateAggregationResult *easyjson.JSON = nil
-		if aggregatedOpStack.IsNonEmptyObject() {
-			easyjson.NewJSONObjectWithKeyValue("op_stack", aggregatedOpStack)
+		if aggregatedOpStack.IsNonEmptyArray() {
+			immediateAggregationResult = easyjson.NewJSONObjectWithKeyValue("op_stack", aggregatedOpStack).GetPtr()
 		}
 		system.MsgOnErrorReturn(om.ReplyWithData(immediateAggregationResult))
 	}
