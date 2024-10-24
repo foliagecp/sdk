@@ -195,6 +195,10 @@ func GetEnv[T interface{}](key string, defaultVal T) (value T, err error) {
 	return
 }
 
+func IntToStr(i int64) string {
+	return strconv.FormatInt(i, 10)
+}
+
 func Str2Int(s string) int64 {
 	value, err := strconv.ParseInt(s, 10, 64)
 	if err == nil {
