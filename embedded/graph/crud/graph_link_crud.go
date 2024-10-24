@@ -41,7 +41,6 @@ func GraphLinkCreateFromVertex(ctx *sfPlugins.StatefunContextProcessor, om *sfMe
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("name is not defined")).Reply()
 		return
 	}
-
 	var linkType string
 	if s, ok := data.GetByPath("type").AsString(); ok && len(s) > 0 {
 		linkType = s
@@ -50,9 +49,14 @@ func GraphLinkCreateFromVertex(ctx *sfPlugins.StatefunContextProcessor, om *sfMe
 		return
 	}
 
+	if !FixateOperationIdTime(ctx, fmt.Sprintf("link-%s", linkName), opTime) {
+		om.AggregateOpMsg(sfMediators.OpMsgIdle("cannot be completed without losing consistency")).Reply()
+		return
+	}
+
 	// Check if link with this name already exists --------------
 	_, recordTime, err := ctx.Domain.Cache().GetValueWithRecordTime(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
-	if opTime != recordTime && err == nil {
+	if opTime != recordTime && err == nil { // Only our time makes us go further (operation was not completed previously)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s already exists", ctx.Self.ID, linkName))).Reply()
 		return
 	}
@@ -68,19 +72,6 @@ func GraphLinkCreateFromVertex(ctx *sfPlugins.StatefunContextProcessor, om *sfMe
 		return
 	}
 	// -----------------------------------------------------------
-
-	// Create this vertex if does not exist ----------------------
-	_, err = ctx.Domain.Cache().GetValue(ctx.Self.ID)
-	if err != nil {
-		createVertexPayload := easyjson.NewJSONObjectWithKeyValue("operation", easyjson.NewJSON("create"))
-		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.vertex.cud", ctx.Self.ID, &createVertexPayload, ctx.Options)
-	}
-	// -----------------------------------------------------------
-	// Create in link on descendant vertex --------------------
-	inLinkPayload := easyjson.NewJSONObjectWithKeyValue("operation", easyjson.NewJSON("create"))
-	inLinkPayload.SetByPath("data.in_name", easyjson.NewJSON(linkName))
-	om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, toId, &inLinkPayload, ctx.Options)
-	// --------------------------------------------------------
 
 	// Create out link on this vertex -------------------------
 	// Set link target ------------------
@@ -105,19 +96,40 @@ func GraphLinkCreateFromVertex(ctx *sfPlugins.StatefunContextProcessor, om *sfMe
 	}
 	// ----------------------------------
 	// --------------------------------------------------------
-	addLinkOpToOpStack(opStack, "create", ctx.Self.ID, toId, linkName, linkType, nil, &linkBody)
 
+	// Create this vertex if does not exist ----------------------
+	_, err = ctx.Domain.Cache().GetValue(ctx.Self.ID)
+	if err != nil {
+		createVertexPayload := easyjson.NewJSONObjectWithKeyValue("target", easyjson.NewJSON("vertex"))
+		createVertexPayload.SetByPath("operation", easyjson.NewJSON("create"))
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Caller.Typename, ctx.Self.ID, &createVertexPayload, ctx.Options)
+	}
+	// -----------------------------------------------------------
+	// Create in link on descendant vertex --------------------
+	inLinkPayload := easyjson.NewJSONObjectWithKeyValue("target", easyjson.NewJSON("link"))
+	inLinkPayload.SetByPath("operation", easyjson.NewJSON("create"))
+	inLinkPayload.SetByPath("data.in_name", easyjson.NewJSON(linkName))
+	om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, toId, &inLinkPayload, ctx.Options)
+	// --------------------------------------------------------
+
+	addLinkOpToOpStack(opStack, "create", ctx.Self.ID, toId, linkName, linkType, nil, &linkBody)
 	om.AddIntermediateResult(ctx, resultWithOpStack(nil, opStack).GetPtr())
 }
 
 func GraphLinkCreateToVertex(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, linkFromVertexUUID, inLinkName string, data *easyjson.JSON, opTime int64) {
-	ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, linkFromVertexUUID, inLinkName), nil, -1)
+	if !FixateOperationIdTime(ctx, fmt.Sprintf("inlink-%s", inLinkName), opTime) {
+		om.AggregateOpMsg(sfMediators.OpMsgIdle("cannot be completed without losing consistency")).Reply()
+		return
+	}
+
+	ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, linkFromVertexUUID, inLinkName), nil, opTime)
 
 	// Create this vertex if does not exist ----------------------
 	_, err := ctx.Domain.Cache().GetValue(ctx.Self.ID)
 	if err != nil {
-		createVertexPayload := easyjson.NewJSONObjectWithKeyValue("operation", easyjson.NewJSON("create"))
-		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.vertex.cud", ctx.Self.ID, &createVertexPayload, ctx.Options)
+		createVertexPayload := easyjson.NewJSONObjectWithKeyValue("target", easyjson.NewJSON("vertex"))
+		createVertexPayload.SetByPath("operation", easyjson.NewJSON("create"))
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.cud", ctx.Self.ID, &createVertexPayload, ctx.Options)
 		return
 	}
 	// -----------------------------------------------------------
@@ -175,12 +187,13 @@ func GraphLinkUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.Op
 		linkTarget = ltarget
 	} else {
 		if upsert {
-			createLinkPayload := easyjson.NewJSONObjectWithKeyValue("operation", easyjson.NewJSON("create"))
+			createLinkPayload := easyjson.NewJSONObjectWithKeyValue("target", easyjson.NewJSON("link"))
+			createLinkPayload.SetByPath("operation", easyjson.NewJSON("create"))
 			createLinkPayload.SetByPath("data.body", data.GetByPath("body"))
 			createLinkPayload.SetByPath("data.to", data.GetByPath("to"))
 			createLinkPayload.SetByPath("data.name", data.GetByPath("name"))
 			createLinkPayload.SetByPath("data.type", data.GetByPath("type"))
-			om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.link.cud", ctx.Self.ID, &createLinkPayload, ctx.Options)
+			om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, ctx.Self.ID, &createLinkPayload, ctx.Options)
 		} else {
 			om.AggregateOpMsg(sfMediators.OpMsgIdle(err.Error())).Reply()
 		}
@@ -188,6 +201,10 @@ func GraphLinkUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.Op
 	}
 	if !validLinkName.MatchString(linkName) {
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("invalid link name")).Reply()
+		return
+	}
+	if !FixateOperationIdTime(ctx, fmt.Sprintf("link-%s", linkName), opTime) {
+		om.AggregateOpMsg(sfMediators.OpMsgIdle("cannot be completed without losing consistency")).Reply()
 		return
 	}
 
@@ -218,16 +235,16 @@ func GraphLinkUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.Op
 
 	// Create out link on this vertex -------------------------
 	// Set link body --------------------
-	ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName), linkBody.ToBytes(), -1) // Store link body in KV
+	ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName), linkBody.ToBytes(), opTime) // Store link body in KV
 	// ----------------------------------
 	// Index link type ------------------
-	ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff3Pattern, ctx.Self.ID, linkName, "type", linkType), nil, -1)
+	ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff3Pattern, ctx.Self.ID, linkName, "type", linkType), nil, opTime)
 	// ----------------------------------
 	// Index link tags ------------------
 	if data.GetByPath("tags").IsNonEmptyArray() {
 		if linkTags, ok := data.GetByPath("tags").AsArrayString(); ok {
 			for _, linkTag := range linkTags {
-				ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff3Pattern, ctx.Self.ID, linkName, "tag", linkTag), nil, -1)
+				ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff3Pattern, ctx.Self.ID, linkName, "tag", linkTag), nil, opTime)
 			}
 		}
 	}
@@ -256,6 +273,10 @@ func GraphLinkDeleteFromVertex(ctx *sfPlugins.StatefunContextProcessor, om *sfMe
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("invalid link name")).Reply()
 		return
 	}
+	if !FixateOperationIdTime(ctx, fmt.Sprintf("link-%s", linkName), opTime) {
+		om.AggregateOpMsg(sfMediators.OpMsgIdle("cannot be completed without losing consistency")).Reply()
+		return
+	}
 
 	oldLinkBody, err1 := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
 	if err1 != nil { // Link's body does not exist
@@ -282,7 +303,8 @@ func GraphLinkDeleteFromVertex(ctx *sfPlugins.StatefunContextProcessor, om *sfMe
 	addLinkOpToOpStack(opStack, "delete", ctx.Self.ID, linkTarget, linkName, linkType, oldLinkBody, nil)
 
 	// Delete in link on descendant vertex --------------------
-	inLinkPayload := easyjson.NewJSONObjectWithKeyValue("operation", easyjson.NewJSON("delete"))
+	inLinkPayload := easyjson.NewJSONObjectWithKeyValue("target", easyjson.NewJSON("link"))
+	inLinkPayload.SetByPath("operation", easyjson.NewJSON("delete"))
 	inLinkPayload.SetByPath("data.in_name", easyjson.NewJSON(linkName))
 	om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, linkTarget, &inLinkPayload, ctx.Options)
 	// --------------------------------------------------------
@@ -291,13 +313,15 @@ func GraphLinkDeleteFromVertex(ctx *sfPlugins.StatefunContextProcessor, om *sfMe
 }
 
 func GraphLinkDeleteToVertex(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, linkFromVertexUUID, inLinkName string, data *easyjson.JSON, opTime int64) {
+	if !FixateOperationIdTime(ctx, fmt.Sprintf("inlink-%s", inLinkName), opTime) {
+		om.AggregateOpMsg(sfMediators.OpMsgIdle("cannot be completed without losing consistency")).Reply()
+		return
+	}
 	ctx.Domain.Cache().DeleteValueKVSync(fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, linkFromVertexUUID, inLinkName), -1)
-
 	om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONNull())).Reply()
 }
 
-func GraphLinkCUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64) {
-	operation := ctx.Payload.GetByPath("operation").AsStringDefault("")
+func GraphLinkCUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string, opTime int64) {
 	data := ctx.Payload.GetByPath("data")
 
 	switch strings.ToLower(operation) {
@@ -341,11 +365,11 @@ Reply:
 		status: string
 		details: string - optional, if any exists
 		data: json - optional, id any exists
-			op_stack: json array - optional
+			target: string - required // "link"
+			operation: string - required // "create", "update", "delete"
+			op_stack: json array - optionall
 */
-func GraphLinkCUD(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	om := sfMediators.NewOpMediator(ctx)
-
+func GraphLinkCUD(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string) {
 	switch om.GetOpType() {
 	case mediator.MereOp:
 		if len(ctx.Options.GetByPath("op_time").AsStringDefault("")) == 0 {
@@ -358,7 +382,7 @@ func GraphLinkCUD(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	case mediator.WorkerIsTaskedByAggregatorOp:
 		optTimeStr := ctx.Options.GetByPath("op_time").AsStringDefault("")
 		if len(optTimeStr) > 0 {
-			GraphLinkCUD_Dispatcher(ctx, om, system.Str2Int(optTimeStr))
+			GraphLinkCUD_Dispatcher(ctx, om, operation, system.Str2Int(optTimeStr))
 		} else {
 			om.AggregateOpMsg(sfMediators.OpMsgFailed("GraphLinkCUD operation processor recevied no op_time")).Reply()
 		}
@@ -373,57 +397,12 @@ func GraphLinkCUD(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 				}
 			}
 		}
-		var immediateAggregationResult *easyjson.JSON = nil
+		var immediateAggregationResult easyjson.JSON = easyjson.NewJSONObject()
 		if aggregatedOpStack.IsNonEmptyArray() {
-			immediateAggregationResult = easyjson.NewJSONObjectWithKeyValue("op_stack", aggregatedOpStack).GetPtr()
+			immediateAggregationResult = easyjson.NewJSONObjectWithKeyValue("op_stack", aggregatedOpStack)
 		}
-		system.MsgOnErrorReturn(om.ReplyWithData(immediateAggregationResult))
+		immediateAggregationResult.SetByPath("target", easyjson.NewJSON("link"))
+		immediateAggregationResult.SetByPath("operation", easyjson.NewJSON(operation))
+		system.MsgOnErrorReturn(om.ReplyWithData(&immediateAggregationResult))
 	}
-}
-
-func GraphLinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	om := sfMediators.NewOpMediator(ctx)
-	opStack := getOpStackFromOptions(ctx.Options)
-
-	var linkName string
-	var linkTarget string
-	var linkType string
-	if lname, ltype, ltarget, err := getLinkNameTypeTargetFromVariousIdentifiers(ctx, ""); err == nil {
-		linkName = lname
-		linkType = ltype
-		linkTarget = ltarget
-	} else {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
-		return
-	}
-	if !validLinkName.MatchString(linkName) {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed("invalid link name")).Reply()
-		return
-	}
-
-	linkBody, err1 := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
-	if err1 != nil { // Link's body does not exist
-		linkBody = easyjson.NewJSONObject().GetPtr()
-	}
-
-	result := easyjson.NewJSONObjectWithKeyValue("body", *linkBody)
-
-	if ctx.Payload.GetByPath("details").AsBoolDefault(false) {
-		result.SetByPath("name", easyjson.NewJSON(linkName))
-		result.SetByPath("type", easyjson.NewJSON(linkType))
-		result.SetByPath("from", easyjson.NewJSON(ctx.Self.ID))
-		result.SetByPath("to", easyjson.NewJSON(linkTarget))
-
-		tags := []string{}
-		tagKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff3Pattern, ctx.Self.ID, linkName, "tag", ">"))
-		for _, tagKey := range tagKeys {
-			tagKeyTokens := strings.Split(tagKey, ".")
-			tags = append(tags, tagKeyTokens[len(tagKeyTokens)-1])
-		}
-		result.SetByPath("tags", easyjson.JSONFromArray(tags))
-	}
-
-	addLinkOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, linkTarget, linkName, linkType, nil, nil)
-
-	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(result.GetPtr(), opStack))).Reply()
 }
