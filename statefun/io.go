@@ -124,31 +124,29 @@ func (r *Runtime) functionTypeIsReadyForGoLangCommunication(targetFunctionTypeNa
 
 func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) {
 	jetstreamGlobalSignal := func() error {
-		go func() {
-			var err error
-			system.GlobalPrometrics.GetRoutinesCounter().Started("ingress-jetstreamGlobalSignal-gofunc")
-			defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("ingress-jetstreamGlobalSignal-gofunc")
+		var err error
+		system.GlobalPrometrics.GetRoutinesCounter().Started("ingress-jetstreamGlobalSignal-gofunc")
+		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("ingress-jetstreamGlobalSignal-gofunc")
 
-			if r.Domain.IsShadowObject(targetID) {
-				err = r.signalShadowObject(callerTypename, callerID, targetTypename, targetID, payload, options)
-			} else {
-				// If publishing signal to the same domain
-				if r.Domain.name == r.Domain.GetDomainFromObjectID(targetID) {
-					err = r.nc.Publish( // Publish directly into function's topic bypassing egress router
-						fmt.Sprintf(DomainIngressSubjectsTmpl, r.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, r.Domain.name, targetTypename, targetID)),
-						buildNatsData(r.Domain.name, callerTypename, callerID, payload, options),
-					)
-				} else { // Publish into egress router
-					err = r.nc.Publish(
-						fmt.Sprintf(DomainEgressSubjectsTmpl, r.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, r.Domain.GetDomainFromObjectID(targetID), targetTypename, targetID)),
-						buildNatsData(r.Domain.name, callerTypename, callerID, payload, options),
-					)
-				}
+		if r.Domain.IsShadowObject(targetID) {
+			err = r.signalShadowObject(callerTypename, callerID, targetTypename, targetID, payload, options)
+		} else {
+			// If publishing signal to the same domain
+			if r.Domain.name == r.Domain.GetDomainFromObjectID(targetID) {
+				err = r.nc.Publish( // Publish directly into function's topic bypassing egress router
+					fmt.Sprintf(DomainIngressSubjectsTmpl, r.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, r.Domain.name, targetTypename, targetID)),
+					buildNatsData(r.Domain.name, callerTypename, callerID, payload, options),
+				)
+			} else { // Publish into egress router
+				err = r.nc.Publish(
+					fmt.Sprintf(DomainEgressSubjectsTmpl, r.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, r.Domain.GetDomainFromObjectID(targetID), targetTypename, targetID)),
+					buildNatsData(r.Domain.name, callerTypename, callerID, payload, options),
+				)
 			}
-			if err != nil {
-				panic(fmt.Sprintf("jetstreamGlobalSignal failed but it cannot be not executed because of the data consistency: %s\n", err.Error()))
-			}
-		}()
+		}
+		if err != nil {
+			panic(fmt.Sprintf("jetstreamGlobalSignal failed but it cannot be not executed because of the data consistency: %s\n", err.Error()))
+		}
 		return nil
 	}
 
@@ -261,7 +259,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 }
 
 func (r *Runtime) Signal(signalProvider sfPlugins.SignalProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) {
-	r.signal(signalProvider, "ingress", "signal", typename, id, payload, options)
+	r.signal(signalProvider, "", "", typename, id, payload, options)
 }
 
 func (r *Runtime) Request(requestProvider sfPlugins.RequestProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
