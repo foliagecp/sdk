@@ -117,6 +117,40 @@ func (om *OpMediator) GetID() string {
 	return om.mediatorId
 }
 
+func (om *OpMediator) GetMeta(ctx *sfPlugins.StatefunContextProcessor) easyjson.JSON {
+	funcContext := ctx.GetFunctionContext()
+
+	// Update the aggregation pack --------------------------
+	aggrPackPath := fmt.Sprintf(aggrPackTempl, om.mediatorId)
+	aggregationPack := funcContext.GetByPath(aggrPackPath)
+
+	var meta easyjson.JSON
+	if aggregationPack.PathExists("meta") {
+		meta = aggregationPack.GetByPath("meta")
+	} else {
+		meta = easyjson.NewJSONObject()
+	}
+
+	return meta
+}
+
+func (om *OpMediator) SetMeta(ctx *sfPlugins.StatefunContextProcessor, meta easyjson.JSON) {
+	funcContext := ctx.GetFunctionContext()
+
+	// Update the aggregation pack --------------------------
+	aggrPackPath := fmt.Sprintf(aggrPackTempl, om.mediatorId)
+	aggregationPack := funcContext.GetByPath(aggrPackPath)
+	if !aggregationPack.IsNonEmptyObject() {
+		aggregationPack = easyjson.NewJSONObject()
+	}
+
+	aggregationPack.SetByPath("meta", meta)
+	// ------------------------------------------------------
+
+	funcContext.SetByPath(aggrPackPath, aggregationPack)
+	ctx.SetFunctionContext(funcContext)
+}
+
 func (om *OpMediator) AddIntermediateResult(ctx *sfPlugins.StatefunContextProcessor, intermediateResult *easyjson.JSON) {
 	msg := MakeOpMsg(SYNC_OP_STATUS_OK, "", "", *intermediateResult)
 
@@ -296,7 +330,6 @@ func (om *OpMediator) ReplyWithData(data *easyjson.JSON) error {
 			}
 		}
 	}
-
 	return nil
 }
 
