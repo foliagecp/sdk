@@ -11,6 +11,56 @@ import (
 	"github.com/foliagecp/sdk/statefun/system"
 )
 
+func GraphVertexRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, data *easyjson.JSON, opTime int64) {
+	opStack := getOpStackFromOptions(ctx.Options)
+
+	body, _, err := ctx.Domain.Cache().GetValueWithRecordTimeAsJSON(ctx.Self.ID)
+	if err != nil { // If vertex does not exist
+		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("vertex with id=%s does not exist", ctx.Self.ID))).Reply()
+		return
+	}
+
+	result := easyjson.NewJSONObjectWithKeyValue("body", *body)
+	if data.GetByPath("details").AsBoolDefault(false) {
+		outLinkNames := []string{}
+		outLinkTypes := []string{}
+		outLinkIds := []string{}
+		outLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
+		for _, outLinkKey := range outLinkKeys {
+			linkKeyTokens := strings.Split(outLinkKey, ".")
+			linkName := linkKeyTokens[len(linkKeyTokens)-1]
+			outLinkNames = append(outLinkNames, linkName)
+
+			linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
+			if err == nil {
+				tokens := strings.Split(string(linkTargetBytes), ".")
+				if len(tokens) == 2 {
+					outLinkTypes = append(outLinkTypes, tokens[0])
+					outLinkIds = append(outLinkIds, tokens[1])
+				}
+			}
+		}
+		result.SetByPath("links.out.names", easyjson.JSONFromArray(outLinkNames))
+		result.SetByPath("links.out.types", easyjson.JSONFromArray(outLinkTypes))
+		result.SetByPath("links.out.ids", easyjson.JSONFromArray(outLinkIds))
+
+		inLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
+		inLinks := easyjson.NewJSONArray()
+		for _, inLinkKey := range inLinkKeys {
+			linkKeyTokens := strings.Split(inLinkKey, ".")
+			linkName := linkKeyTokens[len(linkKeyTokens)-1]
+			linkFromVId := linkKeyTokens[len(linkKeyTokens)-2]
+			inLinkJson := easyjson.NewJSONObjectWithKeyValue("from", easyjson.NewJSON(linkFromVId))
+			inLinkJson.SetByPath("name", easyjson.NewJSON(linkName))
+			inLinks.AddToArray(inLinkJson)
+		}
+		result.SetByPath("links.in", inLinks)
+	}
+	addVertexOpToOpStack(opStack, "read", ctx.Self.ID, nil, nil)
+
+	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(result.GetPtr(), opStack))).Reply()
+}
+
 func GraphVertexCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, data *easyjson.JSON, opTime int64) {
 	opStack := getOpStackFromOptions(ctx.Options)
 
@@ -110,7 +160,7 @@ func GraphVertexDelete(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 		inLinkPayload := easyjson.NewJSONObjectWithKeyValue("target", easyjson.NewJSON("link"))
 		inLinkPayload.SetByPath("operation", easyjson.NewJSON("delete"))
 		inLinkPayload.SetByPath("data.name", easyjson.NewJSON(linkName))
-		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.cud", ctx.Self.ID, &inLinkPayload, ctx.Options)
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Self.ID, &inLinkPayload, ctx.Options)
 		waiting4Aggregation = true
 	}
 	// ----------------------------------------------------
@@ -125,7 +175,7 @@ func GraphVertexDelete(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 		inLinkPayload := easyjson.NewJSONObjectWithKeyValue("target", easyjson.NewJSON("link"))
 		inLinkPayload.SetByPath("operation", easyjson.NewJSON("delete"))
 		inLinkPayload.SetByPath("data.name", easyjson.NewJSON(linkName))
-		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.cud", fromObjectID, &inLinkPayload, ctx.Options)
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", fromObjectID, &inLinkPayload, ctx.Options)
 		waiting4Aggregation = true
 	}
 	// ----------------------------------------------------
@@ -137,7 +187,7 @@ func GraphVertexDelete(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 	}
 }
 
-func GraphVertexCUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string, opTime int64) {
+func GraphVertexCRUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string, opTime int64) {
 	data := ctx.Payload.GetByPath("data")
 
 	switch strings.ToLower(operation) {
@@ -147,6 +197,8 @@ func GraphVertexCUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfMe
 		GraphVertexUpdate(ctx, om, &data, opTime)
 	case "delete":
 		GraphVertexDelete(ctx, om, &data, opTime)
+	case "read":
+		GraphVertexRead(ctx, om, &data, opTime)
 	default:
 
 	}
@@ -175,7 +227,7 @@ Reply:
 			operation: string - required // "create", "update", "delete"
 			op_stack: json array - optional
 */
-func GraphVertexCUD(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string) {
+func GraphVertexCRUD(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string) {
 	switch om.GetOpType() {
 	case mediator.MereOp:
 		if len(ctx.Options.GetByPath("op_time").AsStringDefault("")) == 0 {
@@ -188,27 +240,23 @@ func GraphVertexCUD(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContext
 	case mediator.WorkerIsTaskedByAggregatorOp:
 		optTimeStr := ctx.Options.GetByPath("op_time").AsStringDefault("")
 		if len(optTimeStr) > 0 {
-			GraphVertexCUD_Dispatcher(ctx, om, operation, system.Str2Int(optTimeStr))
+			GraphVertexCRUD_Dispatcher(ctx, om, operation, system.Str2Int(optTimeStr))
 		} else {
 			om.AggregateOpMsg(sfMediators.OpMsgFailed("GraphVertexCUD operation processor recevied no op_time")).Reply()
 		}
 	case mediator.AggregatedWorkersOp:
-		aggregatedOpStack := easyjson.NewJSONNull()
+		aggregatedData := easyjson.NewJSONNull()
 		for _, opMsg := range om.GetAggregatedOpMsgs() {
-			if opMsg.Data.PathExists("op_stack") {
-				if aggregatedOpStack.IsNull() {
-					aggregatedOpStack = opMsg.Data.GetByPath("op_stack").Clone()
+			if opMsg.Data.IsNonEmptyObject() {
+				if aggregatedData.IsNull() {
+					aggregatedData = opMsg.Data.Clone()
 				} else {
-					aggregatedOpStack.DeepMerge(opMsg.Data.GetByPath("op_stack"))
+					aggregatedData.DeepMerge(opMsg.Data)
 				}
 			}
 		}
-		var immediateAggregationResult easyjson.JSON = easyjson.NewJSONObject()
-		if aggregatedOpStack.IsNonEmptyArray() {
-			immediateAggregationResult = easyjson.NewJSONObjectWithKeyValue("op_stack", aggregatedOpStack)
-		}
-		immediateAggregationResult.SetByPath("target", easyjson.NewJSON("vertex"))
-		immediateAggregationResult.SetByPath("operation", easyjson.NewJSON(operation))
-		system.MsgOnErrorReturn(om.ReplyWithData(&immediateAggregationResult))
+		aggregatedData.SetByPath("target", easyjson.NewJSON("vertex"))
+		aggregatedData.SetByPath("operation", easyjson.NewJSON(operation))
+		system.MsgOnErrorReturn(om.ReplyWithData(&aggregatedData))
 	}
 }
