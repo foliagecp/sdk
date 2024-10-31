@@ -7,6 +7,7 @@ package system
 import (
 	"context"
 	"crypto/md5"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -25,6 +26,20 @@ var (
 
 type KeyMutex struct {
 	m *sync.Map
+}
+
+func StrToBase64(xmlText string) string {
+	xmlBytes := []byte(xmlText)
+	base64Encoded := base64.StdEncoding.EncodeToString(xmlBytes)
+	return base64Encoded
+}
+
+func Base64ToStr(base64Encoded string) string {
+	xmlBytes, err := base64.StdEncoding.DecodeString(base64Encoded)
+	if err != nil {
+		return ""
+	}
+	return string(xmlBytes)
 }
 
 func NewKeyMutex() KeyMutex {
