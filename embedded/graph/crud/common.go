@@ -22,7 +22,7 @@ const (
 
 	// key=fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff3Pattern, <fromVertexId>, <linkName>, <index_name>, <value>), value=nil
 	OutLinkIndexPrefPattern = "%s.out.index."
-	// key=fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff2Pattern, <toVertexId>, <fromVertexId>, <linkName>), value=nil
+	// key=fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff2Pattern, <toVertexId>, <fromVertexId>, <linkName>), value=linkType
 	InLinkKeyPrefPattern = "%s.in."
 )
 
@@ -64,8 +64,11 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 
 	// Graph level API registration
 	statefun.NewFunctionType(runtime, "functions.graph.api.crud", GraphCRUDGateway, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.graph.api.vertex.read", GraphVertexReadLoose, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.graph.api.link.read", GraphLinkReadLoose, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
+	//statefun.NewFunctionType(runtime, "functions.graph.api.vertex.read", GraphVertexReadLoose, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
+	//statefun.NewFunctionType(runtime, "functions.graph.api.link.read", GraphLinkReadLoose, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
+
+	// CMDB level API registration
+	statefun.NewFunctionType(runtime, "functions.cmdb.api.crud", CMDB_CRUDGateway, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
 
 	if runtime.Domain.Name() == runtime.Domain.HubDomainName() {
 		runtime.RegisterOnAfterStartFunction(cmdbSchemaPrepare, false)
