@@ -5,13 +5,11 @@ import (
 	"strings"
 
 	"github.com/foliagecp/easyjson"
-	"github.com/foliagecp/sdk/statefun/mediator"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
-	"github.com/foliagecp/sdk/statefun/system"
 )
 
-func GraphVertexRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, data *easyjson.JSON, opTime int64) {
+func GraphVertexRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
 	opStack := getOpStackFromOptions(ctx.Options)
 
 	body, _, err := ctx.Domain.Cache().GetValueWithRecordTimeAsJSON(ctx.Self.ID)
@@ -24,7 +22,7 @@ func GraphVertexRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.Op
 	if data.GetByPath("details").AsBoolDefault(false) {
 		outLinkNames := []string{}
 		outLinkTypes := []string{}
-		outLinkIds := []string{}
+		outLinkUUIDs := []string{}
 		outLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
 		for _, outLinkKey := range outLinkKeys {
 			linkKeyTokens := strings.Split(outLinkKey, ".")
@@ -36,32 +34,42 @@ func GraphVertexRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.Op
 				tokens := strings.Split(string(linkTargetBytes), ".")
 				if len(tokens) == 2 {
 					outLinkTypes = append(outLinkTypes, tokens[0])
-					outLinkIds = append(outLinkIds, tokens[1])
+					outLinkUUIDs = append(outLinkUUIDs, tokens[1])
 				}
 			}
 		}
 		result.SetByPath("links.out.names", easyjson.JSONFromArray(outLinkNames))
 		result.SetByPath("links.out.types", easyjson.JSONFromArray(outLinkTypes))
-		result.SetByPath("links.out.ids", easyjson.JSONFromArray(outLinkIds))
+		result.SetByPath("links.out.uuids", easyjson.JSONFromArray(outLinkUUIDs))
 
 		inLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
-		inLinks := easyjson.NewJSONArray()
+
+		inLinkNames := []string{}
+		inLinkTypes := []string{}
+		inLinkUUIDs := []string{}
 		for _, inLinkKey := range inLinkKeys {
-			linkKeyTokens := strings.Split(inLinkKey, ".")
-			linkName := linkKeyTokens[len(linkKeyTokens)-1]
-			linkFromVId := linkKeyTokens[len(linkKeyTokens)-2]
-			inLinkJson := easyjson.NewJSONObjectWithKeyValue("from", easyjson.NewJSON(linkFromVId))
-			inLinkJson.SetByPath("name", easyjson.NewJSON(linkName))
-			inLinks.AddToArray(inLinkJson)
+			if inLinkTypeBytes, err := ctx.Domain.Cache().GetValue(inLinkKey); err == nil {
+				linkKeyTokens := strings.Split(inLinkKey, ".")
+
+				linkType := string(inLinkTypeBytes)
+				linkName := linkKeyTokens[len(linkKeyTokens)-1]
+				linkFromVId := linkKeyTokens[len(linkKeyTokens)-2]
+
+				inLinkNames = append(inLinkNames, linkName)
+				inLinkTypes = append(inLinkTypes, linkType)
+				inLinkUUIDs = append(inLinkUUIDs, linkFromVId)
+			}
 		}
-		result.SetByPath("links.in", inLinks)
+		result.SetByPath("links.in.names", easyjson.JSONFromArray(inLinkNames))
+		result.SetByPath("links.in.types", easyjson.JSONFromArray(inLinkTypes))
+		result.SetByPath("links.in.uuids", easyjson.JSONFromArray(inLinkUUIDs))
 	}
 	addVertexOpToOpStack(opStack, "read", ctx.Self.ID, nil, nil)
 
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(result.GetPtr(), opStack))).Reply()
 }
 
-func GraphVertexCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, data *easyjson.JSON, opTime int64) {
+func GraphVertexCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
 	opStack := getOpStackFromOptions(ctx.Options)
 
 	if !FixateOperationIdTime(ctx, "", opTime) {
@@ -91,7 +99,7 @@ func GraphVertexCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
-func GraphVertexUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, data *easyjson.JSON, opTime int64) {
+func GraphVertexUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
 	opStack := getOpStackFromOptions(ctx.Options)
 
 	if !FixateOperationIdTime(ctx, "", opTime) {
@@ -110,8 +118,9 @@ func GraphVertexUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 	oldBody, _, err := ctx.Domain.Cache().GetValueWithRecordTimeAsJSON(ctx.Self.ID)
 	if err != nil { // If vertex does not exist
 		if upsert {
-			createVertexPayload := easyjson.NewJSONObjectWithKeyValue("target", easyjson.NewJSON("vertex"))
-			createVertexPayload.SetByPath("operation", easyjson.NewJSON("create"))
+			createVertexPayload := easyjson.NewJSONObject()
+			createVertexPayload.SetByPath("operation.type", easyjson.NewJSON("create"))
+			createVertexPayload.SetByPath("operation.target", easyjson.NewJSON("vertex"))
 			createVertexPayload.SetByPath("data.body", data.GetByPath("body"))
 			om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Caller.Typename, ctx.Self.ID, &createVertexPayload, ctx.Options)
 		} else {
@@ -133,7 +142,7 @@ func GraphVertexUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
-func GraphVertexDelete(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, data *easyjson.JSON, opTime int64) {
+func GraphVertexDelete(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, _ *easyjson.JSON) {
 	opStack := getOpStackFromOptions(ctx.Options)
 
 	if !FixateOperationIdTime(ctx, "", opTime) {
@@ -157,8 +166,9 @@ func GraphVertexDelete(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 		inLinkKeyTokens := strings.Split(outLinkKey, ".")
 		linkName := inLinkKeyTokens[len(inLinkKeyTokens)-1]
 
-		inLinkPayload := easyjson.NewJSONObjectWithKeyValue("target", easyjson.NewJSON("link"))
-		inLinkPayload.SetByPath("operation", easyjson.NewJSON("delete"))
+		inLinkPayload := easyjson.NewJSONObject()
+		inLinkPayload.SetByPath("operation.type", easyjson.NewJSON("delete"))
+		inLinkPayload.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
 		inLinkPayload.SetByPath("data.name", easyjson.NewJSON(linkName))
 		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Self.ID, &inLinkPayload, ctx.Options)
 		waiting4Aggregation = true
@@ -172,8 +182,9 @@ func GraphVertexDelete(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 		fromObjectID := inLinkKeyTokens[len(inLinkKeyTokens)-2]
 		linkName := inLinkKeyTokens[len(inLinkKeyTokens)-1]
 
-		inLinkPayload := easyjson.NewJSONObjectWithKeyValue("target", easyjson.NewJSON("link"))
-		inLinkPayload.SetByPath("operation", easyjson.NewJSON("delete"))
+		inLinkPayload := easyjson.NewJSONObject()
+		inLinkPayload.SetByPath("operation.type", easyjson.NewJSON("delete"))
+		inLinkPayload.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
 		inLinkPayload.SetByPath("data.name", easyjson.NewJSON(linkName))
 		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", fromObjectID, &inLinkPayload, ctx.Options)
 		waiting4Aggregation = true
@@ -187,76 +198,17 @@ func GraphVertexDelete(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 	}
 }
 
-func GraphVertexCRUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string, opTime int64) {
-	data := ctx.Payload.GetByPath("data")
-
+func GraphVertexCRUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string, opTime int64, data *easyjson.JSON) {
 	switch strings.ToLower(operation) {
 	case "create":
-		GraphVertexCreate(ctx, om, &data, opTime)
+		GraphVertexCreate(ctx, om, opTime, data)
 	case "update":
-		GraphVertexUpdate(ctx, om, &data, opTime)
+		GraphVertexUpdate(ctx, om, opTime, data)
 	case "delete":
-		GraphVertexDelete(ctx, om, &data, opTime)
+		GraphVertexDelete(ctx, om, opTime, data)
 	case "read":
-		GraphVertexRead(ctx, om, &data, opTime)
+		GraphVertexRead(ctx, om, opTime, data)
 	default:
-
-	}
-}
-
-/*
-Graph vertex Create, Update, Delete function.
-This function works via signals and request-reply.
-
-Request:
-
-	payload: json - optional
-		operation: string - requred // supported values (case insensitive): "create", "update", "delete"
-		data: json - required // operation data
-
-	options: json - optional
-		return_stack: bool - optional
-
-Reply:
-
-	payload: json
-		status: string
-		details: string - optional, if any exists
-		data: json - optional, id any exists
-			target: string - required // "vertex"
-			operation: string - required // "create", "update", "delete"
-			op_stack: json array - optional
-*/
-func GraphVertexCRUD(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string) {
-	switch om.GetOpType() {
-	case mediator.MereOp:
-		if len(ctx.Options.GetByPath("op_time").AsStringDefault("")) == 0 {
-			forwardOptions := ctx.Options.Clone()
-			forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
-			om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, ctx.Self.ID, ctx.Payload, &forwardOptions)
-			return
-		}
-		fallthrough
-	case mediator.WorkerIsTaskedByAggregatorOp:
-		optTimeStr := ctx.Options.GetByPath("op_time").AsStringDefault("")
-		if len(optTimeStr) > 0 {
-			GraphVertexCRUD_Dispatcher(ctx, om, operation, system.Str2Int(optTimeStr))
-		} else {
-			om.AggregateOpMsg(sfMediators.OpMsgFailed("GraphVertexCUD operation processor recevied no op_time")).Reply()
-		}
-	case mediator.AggregatedWorkersOp:
-		aggregatedData := easyjson.NewJSONNull()
-		for _, opMsg := range om.GetAggregatedOpMsgs() {
-			if opMsg.Data.IsNonEmptyObject() {
-				if aggregatedData.IsNull() {
-					aggregatedData = opMsg.Data.Clone()
-				} else {
-					aggregatedData.DeepMerge(opMsg.Data)
-				}
-			}
-		}
-		aggregatedData.SetByPath("target", easyjson.NewJSON("vertex"))
-		aggregatedData.SetByPath("operation", easyjson.NewJSON(operation))
-		system.MsgOnErrorReturn(om.ReplyWithData(&aggregatedData))
+		// TODO: Return error msg
 	}
 }

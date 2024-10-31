@@ -5,20 +5,31 @@ import (
 	"strings"
 
 	"github.com/foliagecp/easyjson"
+	"github.com/foliagecp/sdk/statefun/mediator"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 )
 
+type GraphCRUDDispatcher func(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string, opTime int64, data *easyjson.JSON)
+
+var (
+	graphCRUDDispatcherFromTarget = map[string]GraphCRUDDispatcher{
+		"vertex":      GraphVertexCRUD_Dispatcher,
+		"vertex.link": GraphVertexLinkCRUD_Dispatcher,
+	}
+)
+
 /*
-GraphCUDGateway. Garanties sequential order for all graph api calls
+GraphCRUDGateway. Garanties sequential order for all graph api calls
 This function works via signals and request-reply.
 
 Request:
 
 	payload: json - optional
-		target: string - requred // supported values (case insensitive): "vertex", "link"
-		operation: string - requred // supported values (case insensitive): "create", "update", "delete", "read"
+		operation: json
+			type: string - requred // supported values (case insensitive): "create", "update", "delete", "read"
+			target: string - requred // supported values (case insensitive): "vertex", "vertex.link"
 		data: json - required // operation data
 
 	options: json - optional
@@ -29,32 +40,64 @@ Reply:
 	payload: json
 		status: string
 		details: string - optional, if any exists
-		data: json - optional, id any exists
-			target: string - required // "vertex", "link"
-			operation: string - required // "create", "update", "delete"
+		data: json - optional, if any exists
+			operation: json
+				type: string - required // "create", "update", "delete", "read"
+				target: string - required // "vertex", "vertex.link"
 			op_stack: json array - optional
 */
 func GraphCRUDGateway(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
 
 	meta := om.GetMeta(ctx)
-	target := meta.GetByPath("target").AsStringDefault("")
-	operation := meta.GetByPath("operation").AsStringDefault("")
+	target := meta.GetByPath("operation.target").AsStringDefault("")
+	operation := meta.GetByPath("operation.type").AsStringDefault("")
 
 	if len(target) == 0 {
-		target = ctx.Payload.GetByPath("target").AsStringDefault("")
-		operation = ctx.Payload.GetByPath("operation").AsStringDefault("")
-		meta := easyjson.NewJSONObjectWithKeyValue("target", easyjson.NewJSON(target))
-		meta.SetByPath("operation", easyjson.NewJSON(operation))
+		target = ctx.Payload.GetByPath("operation.target").AsStringDefault("")
+		operation = ctx.Payload.GetByPath("operation.type").AsStringDefault("")
+		meta := easyjson.NewJSONObject()
+		meta.SetByPath("operation.target", easyjson.NewJSON(target))
+		meta.SetByPath("operation.type", easyjson.NewJSON(operation))
 		om.SetMeta(ctx, meta)
 	}
-	switch strings.ToLower(target) {
-	case "vertex":
-		GraphVertexCRUD(sfExec, ctx, om, operation)
-	case "link":
-		GraphLinkCRUD(sfExec, ctx, om, operation)
-	default:
+	GraphCRUDController(ctx, om, target, operation)
+}
 
+func GraphCRUDController(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, target string, operation string) {
+	var dispatcher *GraphCRUDDispatcher
+	if d, ok := graphCRUDDispatcherFromTarget[target]; ok {
+		dispatcher = &d
+	} else {
+		// TODO: Return error msg
+		return
+	}
+
+	switch om.GetOpType() {
+	case mediator.MereOp:
+		if len(ctx.Options.GetByPath("op_time").AsStringDefault("")) == 0 {
+			forwardOptions := ctx.Options.Clone()
+			forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
+			om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, ctx.Self.ID, ctx.Payload, &forwardOptions)
+			return
+		}
+		fallthrough
+	case mediator.WorkerIsTaskedByAggregatorOp:
+		data := ctx.Payload.GetByPath("data")
+		optTimeStr := ctx.Options.GetByPath("op_time").AsStringDefault("")
+		if len(optTimeStr) > 0 {
+			(*dispatcher)(ctx, om, operation, system.Str2Int(optTimeStr), &data)
+		} else {
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("GraphCRUDController for target %s detected no op_time", target))).Reply()
+		}
+	case mediator.AggregatedWorkersOp:
+		opInfo := easyjson.NewJSONObject()
+		opInfo.SetByPath("operation.type", easyjson.NewJSON(operation))
+		opInfo.SetByPath("operation.target", easyjson.NewJSON(target))
+		om.SetAdditionalReplyData(&opInfo)
+
+		aggregatedData := unifiedCRUDDataAggregator(om)
+		system.MsgOnErrorReturn(om.ReplyWithData(&aggregatedData))
 	}
 }
 
@@ -71,12 +114,42 @@ func FixateOperationIdTime(ctx *sfPlugins.StatefunContextProcessor, id string, o
 	return true
 }
 
-func GraphVertexReadLoose(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+/*func GraphVertexReadLoose(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
-	GraphVertexRead(ctx, om, ctx.Payload, system.GetCurrentTimeNs())
+	GraphVertexRead(ctx, om, system.GetCurrentTimeNs(), ctx.Payload)
 }
 
 func GraphLinkReadLoose(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
-	GraphLinkRead(ctx, om, ctx.Payload, system.GetCurrentTimeNs())
+	GraphVertexLinkRead(ctx, om, system.GetCurrentTimeNs(), ctx.Payload)
+}*/
+
+func getVertexLinkNameTypeTargetFromVariousIdentifiers(ctx *sfPlugins.StatefunContextProcessor, linkDataContainer *easyjson.JSON) (linkName string, linkType string, linkTargetId string, err error) {
+	linkName = linkDataContainer.GetByPath("name").AsStringDefault("")
+	linkType = linkDataContainer.GetByPath("type").AsStringDefault("")
+	linkTargetId = ctx.Domain.CreateObjectIDWithThisDomain(linkDataContainer.GetByPath("to").AsStringDefault(""), false)
+
+	if len(linkName) > 0 {
+		linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
+		if err != nil {
+			return "", "", "", fmt.Errorf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName)
+		}
+		linkTargetStr := string(linkTargetBytes)
+		linkTargetTokens := strings.Split(linkTargetStr, ".")
+		if len(linkTargetTokens) != 2 || len(linkTargetTokens[0]) == 0 || len(linkTargetTokens[1]) == 0 {
+			return "", "", "", fmt.Errorf("link from=%s with name=%s, has invalid target: %s", ctx.Self.ID, linkName, linkTargetStr)
+		}
+		return linkName, linkTargetTokens[0], linkTargetTokens[1], nil
+	} else {
+		if len(linkTargetId) > 0 {
+			if len(linkType) > 0 {
+				linkNameBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, linkType, linkTargetId))
+				if err != nil {
+					return "", "", "", fmt.Errorf("link from=%s to=%s with type=%s does not exist", ctx.Self.ID, linkTargetId, linkType)
+				}
+				return string(linkNameBytes), linkType, linkTargetId, nil
+			}
+		}
+	}
+	return "", "", "", fmt.Errorf("not enough information about link, link name or link type with link target id are needed")
 }
