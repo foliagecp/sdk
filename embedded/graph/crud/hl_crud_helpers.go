@@ -13,18 +13,23 @@ import (
 )
 
 const (
-	OBJECTS_TYPELINK = "__objects"
-	TYPES_TYPELINK   = "__types"
-	TO_TYPELINK      = "__type"
-	OBJECT_TYPELINK  = "__object"
+	ROOT_TYPES_LINKTYPE   = "__types"
+	ROOT_OBJECTS_LINKTYPE = "__objects"
 
-	GROUP_TYPELINK = "group"
+	TYPES_TYPE_LINKTYPE     = "__types_type"
+	OBJECTS_OBJECT_TYPELINK = "__objects_object"
 
+	TYPE_TYPE_LINKTYPE   = "__type_type"
+	TYPE_OBJECT_LINKTYPE = "__type_object"
+
+	GROUP_TYPELINK      = "group"
 	BUILT_IN_TYPES      = "types"
 	BUILT_IN_OBJECTS    = "objects"
 	BUILT_IN_ROOT       = "root"
 	BUILT_IN_TYPE_GROUP = "group"
 	BUILT_IN_OBJECT_NAV = "nav"
+
+	OBJECT_TYPE_LINKTYPE = "__object_type"
 )
 
 func typeOperationRedirectedToHub(ctx *sfPlugins.StatefunContextProcessor) bool {
@@ -165,13 +170,13 @@ func cmdbSchemaPrepare(ctx context.Context, runtime *statefun.Runtime) error {
 
 	v := easyjson.NewJSONObject()
 	v.SetByPath("to", easyjson.NewJSON(BUILT_IN_TYPES))
-	v.SetByPath("type", easyjson.NewJSON(TYPES_TYPELINK))
+	v.SetByPath("type", easyjson.NewJSON(ROOT_TYPES_LINKTYPE))
 	v.SetByPath("name", easyjson.NewJSON(runtime.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false)))
 	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", BUILT_IN_ROOT, &v, nil))
 
 	v = easyjson.NewJSONObject()
 	v.SetByPath("to", easyjson.NewJSON(BUILT_IN_OBJECTS))
-	v.SetByPath("type", easyjson.NewJSON(OBJECTS_TYPELINK))
+	v.SetByPath("type", easyjson.NewJSON(ROOT_OBJECTS_LINKTYPE))
 	v.SetByPath("name", easyjson.NewJSON(runtime.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false)))
 	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", BUILT_IN_ROOT, &v, nil))
 	// ----------------------------------------------------

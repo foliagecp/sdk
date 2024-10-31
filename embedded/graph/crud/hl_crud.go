@@ -54,7 +54,7 @@ func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	link := easyjson.NewJSONObject()
 	link.SetByPath("to", easyjson.NewJSON(ctx.Self.ID))
 	link.SetByPath("name", easyjson.NewJSON(ctx.Self.ID))
-	link.SetByPath("type", easyjson.NewJSON(TO_TYPELINK))
+	link.SetByPath("type", easyjson.NewJSON(TYPES_TYPE_LINKTYPE))
 
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", typesVertexId, &link, nil))).Reply()
 }
@@ -98,7 +98,7 @@ func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	om := sfMediators.NewOpMediator(ctx)
 
 	// Vertice's out links are stored in the same domain with the vertex
-	pattern := fmt.Sprintf(OutLinkTypeKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, OBJECT_TYPELINK, ">")
+	pattern := fmt.Sprintf(OutLinkTypeKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, TYPE_OBJECT_LINKTYPE, ">")
 	outLinkKeys := ctx.Domain.Cache().GetKeysByPattern(pattern)
 	for _, outLinkKey := range outLinkKeys {
 		inLinkKeyTokens := strings.Split(outLinkKey, ".")
@@ -145,11 +145,11 @@ func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProces
 	toObjects := []string{}
 	for i := 0; i < m.Data.GetByPath("links.out.names").ArraySize(); i++ {
 		tp := m.Data.GetByPath("links.out.types").ArrayElement(i).AsStringDefault("")
-		toId := m.Data.GetByPath("links.out.ids").ArrayElement(i).AsStringDefault("")
-		if tp == TO_TYPELINK {
+		toId := m.Data.GetByPath("links.out.uuids").ArrayElement(i).AsStringDefault("")
+		if tp == TYPE_TYPE_LINKTYPE {
 			toTypes = append(toTypes, toId)
 		}
-		if tp == OBJECT_TYPELINK {
+		if tp == TYPE_OBJECT_LINKTYPE {
 			toObjects = append(toObjects, toId)
 		}
 	}
@@ -195,9 +195,9 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 		}
 
 		needLinks := []_link{
-			{from: ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false), to: ctx.Self.ID, name: ctx.Self.ID, lt: OBJECT_TYPELINK},
-			{from: ctx.Self.ID, name: "type", to: originType, lt: TO_TYPELINK},
-			{from: originType, name: ctx.Self.ID, to: ctx.Self.ID, lt: OBJECT_TYPELINK},
+			{from: ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false), to: ctx.Self.ID, name: ctx.Self.ID, lt: OBJECTS_OBJECT_TYPELINK},
+			{from: ctx.Self.ID, name: "type", to: originType, lt: OBJECT_TYPE_LINKTYPE},
+			{from: originType, name: ctx.Self.ID, to: ctx.Self.ID, lt: TYPE_OBJECT_LINKTYPE},
 		}
 
 		for _, l := range needLinks {
@@ -289,8 +289,8 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	toObjects := []string{}
 	for i := 0; i < m.Data.GetByPath("links.out.names").ArraySize(); i++ {
 		tp := m.Data.GetByPath("links.out.types").ArrayElement(i).AsStringDefault("")
-		toId := m.Data.GetByPath("links.out.ids").ArrayElement(i).AsStringDefault("")
-		if tp == TO_TYPELINK {
+		toId := m.Data.GetByPath("links.out.uuids").ArrayElement(i).AsStringDefault("")
+		if tp == OBJECT_TYPE_LINKTYPE {
 			objectType = toId
 		} else {
 			toObjects = append(toObjects, toId)
@@ -370,7 +370,7 @@ func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	link := easyjson.NewJSONObject()
 	link.SetByPath("to", easyjson.NewJSON(toType))
 	link.SetByPath("name", easyjson.NewJSON(toType))
-	link.SetByPath("type", easyjson.NewJSON(TO_TYPELINK))
+	link.SetByPath("type", easyjson.NewJSON(TYPE_TYPE_LINKTYPE))
 	if ctx.Payload.PathExists("tags") {
 		link.SetByPath("tags", ctx.Payload.GetByPath("tags"))
 	}
@@ -404,7 +404,7 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	link := ctx.Payload.Clone()
 	link.SetByPath("to", easyjson.NewJSON(toType))
-	link.SetByPath("type", easyjson.NewJSON(TO_TYPELINK))
+	link.SetByPath("type", easyjson.NewJSON(TYPE_TYPE_LINKTYPE))
 	if ctx.Payload.PathExists("tags") {
 		link.SetByPath("tags", ctx.Payload.GetByPath("tags"))
 	}
@@ -463,7 +463,7 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	objectLink := easyjson.NewJSONObject()
 	objectLink.SetByPath("to", easyjson.NewJSON(toType))
-	objectLink.SetByPath("type", easyjson.NewJSON(TO_TYPELINK))
+	objectLink.SetByPath("type", easyjson.NewJSON(TYPE_TYPE_LINKTYPE))
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", ctx.Self.ID, &objectLink, nil)))
 
 	om.Reply()
@@ -489,7 +489,7 @@ func ReadTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("to", easyjson.NewJSON(toType))
-	payload.SetByPath("type", easyjson.NewJSON(TO_TYPELINK))
+	payload.SetByPath("type", easyjson.NewJSON(TYPE_TYPE_LINKTYPE))
 	payload.SetByPath("details", easyjson.NewJSON(true))
 	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", ctx.Self.ID, &payload, nil))
 	om.AggregateOpMsg(m)

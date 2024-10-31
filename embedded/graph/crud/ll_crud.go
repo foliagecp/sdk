@@ -273,7 +273,7 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		}
 		result.SetByPath("links.out.names", easyjson.JSONFromArray(outLinkNames))
 		result.SetByPath("links.out.types", easyjson.JSONFromArray(outLinkTypes))
-		result.SetByPath("links.out.ids", easyjson.JSONFromArray(outLinkIds))
+		result.SetByPath("links.out.uuids", easyjson.JSONFromArray(outLinkIds))
 
 		inLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
 		inLinks := easyjson.NewJSONArray()
@@ -337,7 +337,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	if payload.PathExists("in_name") {
 		if inLinkName, ok := payload.GetByPath("in_name").AsString(); ok && len(inLinkName) > 0 {
 			if linkFromObjectUUID := ctx.Caller.ID; len(linkFromObjectUUID) > 0 {
-				ctx.Domain.Cache().SetValue(fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff2Pattern, selfId, linkFromObjectUUID, inLinkName), nil, true, -1, "")
+				ctx.Domain.Cache().SetValue(fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff2Pattern, selfId, linkFromObjectUUID, inLinkName), []byte(payload.GetByPath("in_type").AsStringDefault("")), true, -1, "")
 				om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONNull())).Reply()
 				return
 			} else {
@@ -429,6 +429,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		// Create in link on descendant vertex --------------------
 		nextCallPayload := easyjson.NewJSONObject()
 		nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
+		nextCallPayload.SetByPath("in_type", easyjson.NewJSON(linkType))
 		targetId := toId
 		if toId == ctx.Self.ID {
 			targetId = targetId + "===self_link"
