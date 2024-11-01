@@ -74,13 +74,47 @@ func CMDBTypeRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMed
 
 		system.MsgOnErrorReturn(om.ReplyWithData(&result))
 	}
+}
 
+func CMDBTypeCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON, begin bool) {
+	if begin {
+		payload1 := easyjson.NewJSONObject()
+		payload1.SetByPath("operation.type", easyjson.NewJSON("create"))
+		payload1.SetByPath("operation.target", easyjson.NewJSON("vertex"))
+
+		forwardOptions := ctx.Options.Clone()
+		forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
+		forwardOptions.SetByPath("op_stack", easyjson.NewJSON(true))
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Self.ID, &payload1, &forwardOptions)
+
+		payload2 := easyjson.NewJSONObject()
+		payload2.SetByPath("operation.type", easyjson.NewJSON("create"))
+		payload2.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
+		payload2.SetByPath("data.to", easyjson.NewJSON(ctx.Self.ID))
+		payload2.SetByPath("data.type", easyjson.NewJSON(TYPES_TYPE_LINKTYPE))
+		payload2.SetByPath("data.name", easyjson.NewJSON(ctx.Self.ID))
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, true), &payload2, &forwardOptions)
+	} else {
+		msgs := om.GetAggregatedOpMsgs()
+		if len(msgs) == 0 {
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("no response data when tried to create type %s", ctx.Self.ID))).Reply()
+			return
+		}
+		if len(msgs) != 2 {
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("something went wrong when tried to create type %s (maybe inconsistency occured)", ctx.Self.ID))).Reply()
+			return
+		}
+
+		aggregatedData := unifiedCRUDDataAggregator(om)
+		aggregatedData.RemoveByPath("op_stack")
+		system.MsgOnErrorReturn(om.ReplyWithData(&aggregatedData))
+	}
 }
 
 func CMDBTypeCRUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string, opTime int64, data *easyjson.JSON, begin bool) {
 	switch strings.ToLower(operation) {
 	case "create":
-		//GraphVertexCreate(ctx, om, &data, opTime)
+		CMDBTypeCreate(ctx, om, opTime, data, begin)
 	case "update":
 		//GraphVertexUpdate(ctx, om, &data, opTime)
 	case "delete":
