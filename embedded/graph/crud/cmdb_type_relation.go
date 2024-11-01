@@ -21,6 +21,7 @@ func CMDBTypeRelationRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediato
 
 		forwardOptions := ctx.Options.Clone()
 		forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
+		forwardOptions.SetByPath("op_stack", easyjson.NewJSON(true))
 		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Self.ID, &payload, &forwardOptions)
 	} else {
 		msgs := om.GetAggregatedOpMsgs()
@@ -59,10 +60,49 @@ func CMDBTypeRelationRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediato
 	}
 }
 
+func CMDBTypeRelationCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON, begin bool) {
+	if begin {
+		to := data.GetByPath("to").AsStringDefault("")
+		if len(to) == 0 {
+			om.AggregateOpMsg(sfMediators.OpMsgFailed("missing target type name")).Reply()
+			return
+		}
+		objRelationType := data.GetByPath("object_relation_type").AsStringDefault("")
+		if len(objRelationType) == 0 {
+			om.AggregateOpMsg(sfMediators.OpMsgFailed("missing object_relation_type")).Reply()
+			return
+		}
+
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("operation.type", easyjson.NewJSON("create"))
+		payload.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
+		payload.SetByPath("data", data.Clone())
+		payload.SetByPath("data.body.type", easyjson.NewJSON(objRelationType))
+		payload.SetByPath("data.type", easyjson.NewJSON(TYPE_TYPE_LINKTYPE))
+		payload.SetByPath("data.name", easyjson.NewJSON(to))
+
+		forwardOptions := ctx.Options.Clone()
+		forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
+		forwardOptions.SetByPath("op_stack", easyjson.NewJSON(true))
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Self.ID, &payload, &forwardOptions)
+	} else {
+		msgs := om.GetAggregatedOpMsgs()
+		if len(msgs) == 0 {
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("no response data when tried to create type %s relation", ctx.Self.ID))).Reply()
+			return
+		}
+
+		result := msgs[0].Data.Clone()
+		result.RemoveByPath("op_stack")
+
+		system.MsgOnErrorReturn(om.ReplyWithData(&result))
+	}
+}
+
 func CMDBTypeRelationCRUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string, opTime int64, data *easyjson.JSON, begin bool) {
 	switch strings.ToLower(operation) {
 	case "create":
-		//GraphVertexCreate(ctx, om, &data, opTime)
+		CMDBTypeRelationCreate(ctx, om, opTime, data, begin)
 	case "update":
 		//GraphVertexUpdate(ctx, om, &data, opTime)
 	case "delete":
