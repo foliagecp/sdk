@@ -2,7 +2,6 @@ package crud
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/foliagecp/easyjson"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
@@ -11,6 +10,7 @@ import (
 )
 
 func CMDBTypeRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON, begin bool) {
+	// read:vertex -> result
 	if begin {
 		payload := easyjson.NewJSONObject()
 		payload.SetByPath("operation.type", easyjson.NewJSON("read"))
@@ -77,6 +77,7 @@ func CMDBTypeRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMed
 }
 
 func CMDBTypeCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON, begin bool) {
+	// create:vertex, create:vertex.link -> result
 	if begin {
 		payload1 := easyjson.NewJSONObject()
 		payload1.SetByPath("operation.type", easyjson.NewJSON("create"))
@@ -112,7 +113,7 @@ func CMDBTypeCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpM
 }
 
 func CMDBTypeCRUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string, opTime int64, data *easyjson.JSON, begin bool) {
-	switch strings.ToLower(operation) {
+	switch operation {
 	case "create":
 		CMDBTypeCreate(ctx, om, opTime, data, begin)
 	case "update":

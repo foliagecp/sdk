@@ -50,8 +50,8 @@ func GraphCRUDGateway(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefun
 	om := sfMediators.NewOpMediator(ctx)
 
 	meta := om.GetMeta(ctx)
-	target := meta.GetByPath("operation.target").AsStringDefault("")
-	operation := meta.GetByPath("operation.type").AsStringDefault("")
+	target := strings.ToLower(meta.GetByPath("operation.target").AsStringDefault(""))
+	operation := strings.ToLower(meta.GetByPath("operation.type").AsStringDefault(""))
 
 	if len(target) == 0 {
 		target = ctx.Payload.GetByPath("operation.target").AsStringDefault("")
@@ -64,6 +64,8 @@ func GraphCRUDGateway(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefun
 	GraphCRUDController(ctx, om, target, operation)
 }
 
+/* All operations start executing in the same order they were initiated (signalled).
+ * If all perations have the same execution stages (depth) they all will also end working in the same order */
 func GraphCRUDController(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, target string, operation string) {
 	var dispatcher *GraphCRUDDispatcher
 	if d, ok := graphCRUDDispatcherFromTarget[target]; ok {

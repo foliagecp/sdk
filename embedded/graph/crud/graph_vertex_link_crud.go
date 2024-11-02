@@ -337,7 +337,7 @@ func GraphVertexLinkDeleteToVertex(ctx *sfPlugins.StatefunContextProcessor, om *
 }
 
 func GraphVertexLinkCRUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string, opTime int64, data *easyjson.JSON) {
-	switch strings.ToLower(operation) {
+	switch operation {
 	case "create":
 		inType := data.GetByPath("in_type").AsStringDefault("")
 		inName := data.GetByPath("in_name").AsStringDefault("")
