@@ -199,7 +199,7 @@ func GraphVertexDelete(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 }
 
 func GraphVertexCRUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string, opTime int64, data *easyjson.JSON) {
-	switch strings.ToLower(operation) {
+	switch operation {
 	case "create":
 		GraphVertexCreate(ctx, om, opTime, data)
 	case "update":

@@ -11,7 +11,9 @@ import (
 )
 
 func CMDBObjectRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON, begin bool) {
+	// read:vertex -> result
 	if begin {
+		fmt.Println("1 CMDBObjectRead", ctx.Self.ID)
 		payload := easyjson.NewJSONObject()
 		payload.SetByPath("operation.type", easyjson.NewJSON("read"))
 		payload.SetByPath("operation.target", easyjson.NewJSON("vertex"))
@@ -27,6 +29,7 @@ func CMDBObjectRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpM
 			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("no data when tried to read type %s", ctx.Self.ID))).Reply()
 			return
 		}
+		fmt.Println("2 CMDBObjectRead", ctx.Self.ID)
 
 		resData := msgs[0].Data
 
@@ -73,6 +76,7 @@ func CMDBObjectRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpM
 }
 
 func CMDBObjectCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON, begin bool) {
+	// read:type, read:object(read:vertex -> result) -> result
 	if begin {
 		tp := data.GetByPath("type").AsStringDefault("")
 		if len(tp) == 0 {
@@ -81,13 +85,12 @@ func CMDBObjectCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.O
 		}
 		tp = ctx.Domain.CreateObjectIDWithHubDomain(tp, true)
 
+		forwardOptions := ctx.Options.Clone()
+		forwardOptions.RemoveByPath("op_time")
+
 		payload1 := easyjson.NewJSONObject()
 		payload1.SetByPath("operation.type", easyjson.NewJSON("read"))
 		payload1.SetByPath("operation.target", easyjson.NewJSON("type"))
-
-		forwardOptions := ctx.Options.Clone()
-		forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
-		forwardOptions.SetByPath("op_stack", easyjson.NewJSON(true))
 		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.cmdb.api.crud", tp, &payload1, &forwardOptions)
 
 		payload2 := easyjson.NewJSONObject()
@@ -169,7 +172,7 @@ func CMDBObjectCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.O
 }
 
 func CMDBObjectCRUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string, opTime int64, data *easyjson.JSON, begin bool) {
-	switch strings.ToLower(operation) {
+	switch operation {
 	case "create":
 		CMDBObjectCreate(ctx, om, opTime, data, begin)
 	case "update":

@@ -2,7 +2,6 @@ package crud
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/foliagecp/easyjson"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
@@ -11,7 +10,9 @@ import (
 )
 
 func CMDBTypeRelationRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON, begin bool) {
+	// read:vertex.link -> result
 	if begin {
+		fmt.Println("1 CMDBTypeRelationRead", ctx.Self.ID)
 		payload := easyjson.NewJSONObject()
 		payload.SetByPath("operation.type", easyjson.NewJSON("read"))
 		payload.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
@@ -29,6 +30,8 @@ func CMDBTypeRelationRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediato
 			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("no data when tried to read type %s relation", ctx.Self.ID))).Reply()
 			return
 		}
+
+		fmt.Println("2 CMDBTypeRelationRead", ctx.Self.ID)
 
 		resData := msgs[0].Data
 
@@ -61,6 +64,7 @@ func CMDBTypeRelationRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediato
 }
 
 func CMDBTypeRelationCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON, begin bool) {
+	// create:vertex.link -> result
 	if begin {
 		to := data.GetByPath("to").AsStringDefault("")
 		if len(to) == 0 {
@@ -100,7 +104,7 @@ func CMDBTypeRelationCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMedia
 }
 
 func CMDBTypeRelationCRUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string, opTime int64, data *easyjson.JSON, begin bool) {
-	switch strings.ToLower(operation) {
+	switch operation {
 	case "create":
 		CMDBTypeRelationCreate(ctx, om, opTime, data, begin)
 	case "update":

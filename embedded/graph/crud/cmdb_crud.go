@@ -2,6 +2,7 @@ package crud
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/statefun/mediator"
@@ -51,8 +52,11 @@ func CMDB_CRUDGateway(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefun
 	om := sfMediators.NewOpMediator(ctx)
 
 	meta := om.GetMeta(ctx)
-	target := meta.GetByPath("operation.target").AsStringDefault("")
-	operation := meta.GetByPath("operation.type").AsStringDefault("")
+	fmt.Println("")
+	fmt.Println("-----", om.GetID(), "'"+ctx.Options.GetByPath("op_time").AsStringDefault("")+"'", om.GetOpType(), meta.ToString())
+
+	target := strings.ToLower(meta.GetByPath("operation.target").AsStringDefault(""))
+	operation := strings.ToLower(meta.GetByPath("operation.type").AsStringDefault(""))
 
 	if len(target) == 0 {
 		target = ctx.Payload.GetByPath("operation.target").AsStringDefault("")
@@ -61,6 +65,7 @@ func CMDB_CRUDGateway(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefun
 		meta.SetByPath("operation.target", easyjson.NewJSON(target))
 		meta.SetByPath("operation.type", easyjson.NewJSON(operation))
 		om.SetMeta(ctx, meta)
+		fmt.Println("~~~~~", om.GetID(), meta.ToString())
 	}
 	CMDB_CRUDController(sfExec, ctx, om, target, operation)
 }
@@ -76,15 +81,29 @@ func CMDB_CRUDController(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 
 	switch om.GetOpType() {
 	case mediator.MereOp:
-		if len(ctx.Options.GetByPath("op_time").AsStringDefault("")) == 0 {
-			forwardOptions := ctx.Options.Clone()
-			forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
+		if strings.Split(target, ".")[0] == "type" && ctx.Domain.Name() != ctx.Domain.HubDomainName() { // Redirect to hub if needed
 			idOnHub := ctx.Domain.CreateObjectIDWithHubDomain(ctx.Self.ID, true)
-			om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, idOnHub, ctx.Payload, &forwardOptions)
+			om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, idOnHub, ctx.Payload, ctx.Options)
 			return
 		}
 		fallthrough
 	case mediator.WorkerIsTaskedByAggregatorOp:
+		if len(ctx.Options.GetByPath("op_time").AsStringDefault("")) == 0 { // No op_time is declared
+			/*// Extend execution if other operation is in progress for this id
+			if ctx.Caller.Typename != ctx.Self.Typename && om.IsOtherOpMediatorAlreadyAggregatingForThisFTypeAndID() {
+				// Two danger situations:
+				// 1. Parent with the same functionType calls for extra data (no opTime, ctx.Caller.Typename == ctx.Self.Typename)
+				// 2. After this call (no opTime, ctx.Caller.Typename == ctx.Self.Typename)
+				om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, ctx.Self.ID, ctx.Payload, ctx.Options)
+				return
+			}*/
+
+			forwardOptions := ctx.Options.Clone()
+			forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
+			om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, ctx.Self.ID, ctx.Payload, &forwardOptions)
+			return
+		}
+
 		data := ctx.Payload.GetByPath("data")
 		opTimeStr := ctx.Options.GetByPath("op_time").AsStringDefault("")
 		if len(opTimeStr) > 0 {
@@ -109,10 +128,12 @@ func CMDB_CRUDController(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 		data := meta.GetByPath("original_data")
 		opTimeStr := meta.GetByPath("original_op_time_str").AsStringDefault("")
 		if len(opTimeStr) > 0 {
+			fmt.Println("          (*dispatcher)")
 			(*dispatcher)(ctx, om, operation, system.Str2Int(opTimeStr), &data, false)
 			return
 		}
 		// --------------------------------------------------------------------
+		fmt.Println("          nnnnnone")
 		aggregatedData := unifiedCRUDDataAggregator(om)
 		system.MsgOnErrorReturn(om.ReplyWithData(&aggregatedData))
 	}

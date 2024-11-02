@@ -11,25 +11,26 @@ import (
 )
 
 func CMDBObjectRelationRead_ReadTypesRelation(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON, begin bool) {
+	// read:object(read:vertex -> result), read:object(read:vertex -> result) -> read:type.relation(read:vertex.link -> result) -> result
 	if begin {
+		fmt.Println("1 CMDBObjectRelationRead_ReadTypesRelation", ctx.Self.ID)
 		to := data.GetByPath("to").AsStringDefault("")
 		if len(to) == 0 {
 			om.AggregateOpMsg(sfMediators.OpMsgFailed("missing target object uuid")).Reply()
 			return
 		}
 
+		forwardOptions := ctx.Options.Clone()
+		forwardOptions.RemoveByPath("op_time")
+
 		payload1 := easyjson.NewJSONObject()
 		payload1.SetByPath("operation.type", easyjson.NewJSON("read"))
 		payload1.SetByPath("operation.target", easyjson.NewJSON("object"))
-
-		forwardOptions := ctx.Options.Clone()
-		forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
 		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.cmdb.api.crud", ctx.Self.ID, &payload1, &forwardOptions)
 
 		payload2 := easyjson.NewJSONObject()
 		payload2.SetByPath("operation.type", easyjson.NewJSON("read"))
 		payload2.SetByPath("operation.target", easyjson.NewJSON("object"))
-
 		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.cmdb.api.crud", to, &payload2, &forwardOptions)
 	} else {
 		msgs := om.GetAggregatedOpMsgs()
@@ -38,9 +39,11 @@ func CMDBObjectRelationRead_ReadTypesRelation(ctx *sfPlugins.StatefunContextProc
 			return
 		}
 		if len(msgs) == 1 { // Received data about types link
+			fmt.Println("3 CMDBObjectRelationRead_ReadTypesRelation", ctx.Self.ID)
 			resData := msgs[0].Data
 			system.MsgOnErrorReturn(om.ReplyWithData(&resData))
 		} else if len(msgs) == 2 { // Received data about objects
+			fmt.Println("2 CMDBObjectRelationRead_ReadTypesRelation", ctx.Self.ID)
 			om.Reaggregate(ctx)
 
 			var sourceObjectType string
@@ -69,9 +72,8 @@ func CMDBObjectRelationRead_ReadTypesRelation(ctx *sfPlugins.StatefunContextProc
 			if data.GetByPath("details").AsBoolDefault(false) {
 				payload.SetByPath("data.details", easyjson.NewJSON(true))
 			}
-
 			forwardOptions := ctx.Options.Clone()
-			forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
+			forwardOptions.RemoveByPath("op_time")
 			om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.cmdb.api.crud", sourceObjectType, &payload, &forwardOptions)
 		} else {
 			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("invalid data received when tried to read object %s' type relation", ctx.Self.ID))).Reply()
@@ -80,6 +82,7 @@ func CMDBObjectRelationRead_ReadTypesRelation(ctx *sfPlugins.StatefunContextProc
 }
 
 func CMDBObjectRelationRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON, begin bool) {
+	// read:object.relation[types_relation_only] -> read:vertex.link -> result
 	if data.GetByPath("types_relation_only").AsBoolDefault(false) {
 		CMDBObjectRelationRead_ReadTypesRelation(ctx, om, opTime, data, begin)
 		return
@@ -93,7 +96,7 @@ func CMDBObjectRelationRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMedia
 		payload.SetByPath("data.types_relation_only", easyjson.NewJSON(true))
 
 		forwardOptions := ctx.Options.Clone()
-		forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
+		forwardOptions.RemoveByPath("op_time")
 		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.cmdb.api.crud", ctx.Self.ID, &payload, &forwardOptions)
 	} else {
 		msgs := om.GetAggregatedOpMsgs()
@@ -137,7 +140,9 @@ func CMDBObjectRelationRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMedia
 }
 
 func CMDBObjectRelationCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON, begin bool) {
+	// read:object.relation[types_relation_only] -> create:vertex.link -> result
 	if begin {
+		fmt.Println("1 CMDBObjectRelationCreate", ctx.Self.ID)
 		payload := easyjson.NewJSONObject()
 		payload.SetByPath("operation.type", easyjson.NewJSON("read"))
 		payload.SetByPath("operation.target", easyjson.NewJSON("object.relation"))
@@ -145,7 +150,7 @@ func CMDBObjectRelationCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMed
 		payload.SetByPath("data.types_relation_only", easyjson.NewJSON(true))
 
 		forwardOptions := ctx.Options.Clone()
-		forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
+		forwardOptions.RemoveByPath("op_time")
 		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.cmdb.api.crud", ctx.Self.ID, &payload, &forwardOptions)
 	} else {
 		msgs := om.GetAggregatedOpMsgs()
@@ -154,6 +159,7 @@ func CMDBObjectRelationCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMed
 			return
 		}
 		if strings.Split(msgs[0].Meta, ":")[0] == ctx.Self.Typename {
+			fmt.Println("2 CMDBObjectRelationCreate", ctx.Self.ID)
 			om.Reaggregate(ctx)
 
 			payload := easyjson.NewJSONObject()
@@ -167,6 +173,7 @@ func CMDBObjectRelationCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMed
 			forwardOptions.SetByPath("op_stack", easyjson.NewJSON(true))
 			om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Self.ID, &payload, &forwardOptions)
 		} else {
+			fmt.Println("3 CMDBObjectRelationCreate", ctx.Self.ID)
 			result := msgs[0].Data.Clone()
 			result.RemoveByPath("op_stack")
 
@@ -176,7 +183,7 @@ func CMDBObjectRelationCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMed
 }
 
 func CMDBObjectRelationCRUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string, opTime int64, data *easyjson.JSON, begin bool) {
-	switch strings.ToLower(operation) {
+	switch operation {
 	case "create":
 		CMDBObjectRelationCreate(ctx, om, opTime, data, begin)
 	case "update":
