@@ -259,6 +259,19 @@ func (om *OpMediator) GetData() easyjson.JSON {
 	return easyjson.NewJSONNull()
 }
 
+func (om *OpMediator) IsOtherOpMediatorAlreadyAggregatingForThisFTypeAndID() bool {
+	funcContext := om.ctx.GetFunctionContext()
+	mediatorIds := funcContext.GetByPath(aggrPack).ObjectKeys()
+	for _, mediatorId := range mediatorIds {
+		aggrPackPath := fmt.Sprintf(aggrPackTempl, mediatorId)
+		callbacksPath := fmt.Sprintf("%s.callbacks", aggrPackPath)
+		if funcContext.GetByPath(callbacksPath).AsNumericDefault(-1) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (om *OpMediator) releaseAggPackOnAggregated() *easyjson.JSON {
 	funcContext := om.ctx.GetFunctionContext()
 	aggrPackPath := fmt.Sprintf(aggrPackTempl, om.mediatorId)
