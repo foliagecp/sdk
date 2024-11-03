@@ -122,9 +122,9 @@ func (om *OpMediator) Reaggregate(ctx *sfPlugins.StatefunContextProcessor) {
 		// Reset the aggregation pack --------------------------
 		aggrPackPath := fmt.Sprintf(aggrPackTempl, mediatorId)
 		aggregationPack := funcContext.GetByPath(aggrPackPath)
-		if !aggregationPack.IsNonEmptyObject() {
+		/*if !aggregationPack.IsNonEmptyObject() {
 			aggregationPack = easyjson.NewJSONObject()
-		}
+		}*/
 
 		aggregationPack.SetByPath("callbacks", easyjson.NewJSON(0))
 		aggregationPack.SetByPath("results", easyjson.NewJSONObject())
@@ -259,19 +259,6 @@ func (om *OpMediator) GetData() easyjson.JSON {
 	return easyjson.NewJSONNull()
 }
 
-func (om *OpMediator) IsOtherOpMediatorAlreadyAggregatingForThisFTypeAndID() bool {
-	funcContext := om.ctx.GetFunctionContext()
-	mediatorIds := funcContext.GetByPath(aggrPack).ObjectKeys()
-	for _, mediatorId := range mediatorIds {
-		aggrPackPath := fmt.Sprintf(aggrPackTempl, mediatorId)
-		callbacksPath := fmt.Sprintf("%s.callbacks", aggrPackPath)
-		if funcContext.GetByPath(callbacksPath).AsNumericDefault(-1) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
 func (om *OpMediator) releaseAggPackOnAggregated() *easyjson.JSON {
 	funcContext := om.ctx.GetFunctionContext()
 	aggrPackPath := fmt.Sprintf(aggrPackTempl, om.mediatorId)
@@ -381,13 +368,14 @@ func (om *OpMediator) Reply() {
 }
 
 func (om *OpMediator) SignalWithAggregation(provider sfPlugins.SignalProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) {
+	newPayload := payload.Clone().GetPtr()
 	// Create payload to send for a descendant ------------
-	if payload == nil || !payload.IsNonEmptyObject() {
-		payload = easyjson.NewJSONObject().GetPtr()
+	if newPayload == nil || !newPayload.IsNonEmptyObject() {
+		newPayload = easyjson.NewJSONObject().GetPtr()
 	}
-	payload.SetByPath("__mAggregationId", easyjson.NewJSON(om.mediatorId))
+	newPayload.SetByPath("__mAggregationId", easyjson.NewJSON(om.mediatorId))
 	// ----------------------------------------------------
-	om.ctx.Signal(provider, typename, id, payload, options)
+	om.ctx.Signal(provider, typename, id, newPayload, options)
 
 	funcContext := om.ctx.GetFunctionContext()
 
