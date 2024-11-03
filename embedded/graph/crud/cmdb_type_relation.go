@@ -12,7 +12,7 @@ import (
 func CMDBTypeRelationRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON, begin bool) {
 	// read:vertex.link -> result
 	if begin {
-		fmt.Println("1 CMDBTypeRelationRead", ctx.Self.ID)
+		fmt.Println("1 CMDBTypeRelationRead", om.GetID(), ctx.Self.ID)
 		payload := easyjson.NewJSONObject()
 		payload.SetByPath("operation.type", easyjson.NewJSON("read"))
 		payload.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
@@ -31,7 +31,7 @@ func CMDBTypeRelationRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediato
 			return
 		}
 
-		fmt.Println("2 CMDBTypeRelationRead", ctx.Self.ID)
+		fmt.Println("2 CMDBTypeRelationRead", om.GetID(), ctx.Self.ID)
 
 		resData := msgs[0].Data
 

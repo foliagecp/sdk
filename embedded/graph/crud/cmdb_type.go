@@ -12,6 +12,7 @@ import (
 func CMDBTypeRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON, begin bool) {
 	// read:vertex -> result
 	if begin {
+		fmt.Println("1 CMDBTypeRead", om.GetID(), ctx.Self.ID)
 		payload := easyjson.NewJSONObject()
 		payload.SetByPath("operation.type", easyjson.NewJSON("read"))
 		payload.SetByPath("operation.target", easyjson.NewJSON("vertex"))
@@ -26,6 +27,7 @@ func CMDBTypeRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMed
 			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("no data when tried to read type %s", ctx.Self.ID))).Reply()
 			return
 		}
+		fmt.Println("2 CMDBTypeRead", om.GetID(), ctx.Self.ID)
 
 		resData := msgs[0].Data
 
