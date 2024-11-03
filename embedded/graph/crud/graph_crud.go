@@ -66,7 +66,7 @@ func GraphCRUDGateway(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefun
 
 /* All operations start executing in the same order they were initiated (signalled).
  * If all perations have the same execution stages (depth) they all will also end working in the same order */
-func GraphCRUDController(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, target string, operation string) {
+func GraphCRUDController(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, target, operation string) {
 	var dispatcher *GraphCRUDDispatcher
 	if d, ok := graphCRUDDispatcherFromTarget[target]; ok {
 		dispatcher = &d
@@ -154,4 +154,14 @@ func getVertexLinkNameTypeTargetFromVariousIdentifiers(ctx *sfPlugins.StatefunCo
 		}
 	}
 	return "", "", "", fmt.Errorf("not enough information about link, link name or link type with link target id are needed")
+}
+
+func GraphDirtyVertexRead(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	om := sfMediators.NewOpMediator(ctx)
+	GraphVertexRead(ctx, om, system.GetCurrentTimeNs(), ctx.Payload)
+}
+
+func GraphDirtyVertexLinkRead(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	om := sfMediators.NewOpMediator(ctx)
+	GraphVertexLinkRead(ctx, om, system.GetCurrentTimeNs(), ctx.Payload)
 }

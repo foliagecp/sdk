@@ -11,7 +11,7 @@ import (
 	"github.com/foliagecp/sdk/statefun/system"
 )
 
-type CMDB_CRUDDispatcher func(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string, opTime int64, data *easyjson.JSON, begin bool)
+type CMDB_CRUDDispatcher func(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string, opTime int64, data *easyjson.JSON)
 
 var (
 	CMDB_CRUDDispatcherFromTarget = map[string]CMDB_CRUDDispatcher{
@@ -53,18 +53,10 @@ func CMDB_CRUDGateway(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefun
 
 	meta := om.GetMeta(ctx)
 
-	opTimeStr := strings.ToLower(meta.GetByPath("operation.op_time").AsStringDefault(""))
 	target := strings.ToLower(meta.GetByPath("operation.target").AsStringDefault(""))
 	operation := strings.ToLower(meta.GetByPath("operation.type").AsStringDefault(""))
 
-	if len(opTimeStr)*len(target)*len(operation) == 0 {
-		if len(opTimeStr) == 0 {
-			opTimeStr = ctx.Options.GetByPath("op_time").AsStringDefault("")
-			if len(opTimeStr) == 0 { // No op_time is declared
-				opTimeStr = fmt.Sprintf("%d", system.GetCurrentTimeNs())
-				ctx.Options.SetByPath("op_time", easyjson.NewJSON(opTimeStr))
-			}
-		}
+	if len(target) == 0 {
 		if len(target) == 0 {
 			target = ctx.Payload.GetByPath("operation.target").AsStringDefault("")
 		}
@@ -72,15 +64,11 @@ func CMDB_CRUDGateway(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefun
 			operation = ctx.Payload.GetByPath("operation.type").AsStringDefault("")
 		}
 		meta := easyjson.NewJSONObject()
-		meta.SetByPath("operation.op_time", easyjson.NewJSON(opTimeStr))
 		meta.SetByPath("operation.target", easyjson.NewJSON(target))
 		meta.SetByPath("operation.type", easyjson.NewJSON(operation))
 		om.SetMeta(ctx, meta)
 		fmt.Println("~~~~~", om.GetID(), meta.ToString())
 	}
-
-	fmt.Println("")
-	fmt.Println("-----", ctx.Self.ID+" --------", om.GetID(), "'"+opTimeStr+"'", om.GetOpType(), meta.ToString(), ctx.Payload.ToString())
 
 	if target == "object.relation" && operation == "create" {
 		fmt.Println("............")
@@ -88,36 +76,14 @@ func CMDB_CRUDGateway(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefun
 
 	if strings.Split(target, ".")[0] == "type" && ctx.Domain.Name() != ctx.Domain.HubDomainName() { // Redirect to hub if needed
 		idOnHub := ctx.Domain.CreateObjectIDWithHubDomain(ctx.Self.ID, true)
-		forwardOptions := ctx.Options.Clone()
-		forwardOptions.SetByPath("op_time", easyjson.NewJSON(opTimeStr))
-		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, idOnHub, ctx.Payload, &forwardOptions)
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, idOnHub, ctx.Payload, ctx.Options)
 		return
 	}
 
-	CMDB_CRUDController(sfExec, ctx, om, opTimeStr, target, operation)
+	CMDB_CRUDController(sfExec, ctx, om, target, operation)
 }
 
-func IsRunningOlderCMDBOpForThisID(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTimeStr string) bool {
-	const (
-		aggrPack      = "__mAggrPack"
-		aggrPackTempl = aggrPack + ".%s"
-	)
-	funcContext := ctx.GetFunctionContext()
-	mediatorIds := funcContext.GetByPath(aggrPack).ObjectKeys()
-	for _, mediatorId := range mediatorIds {
-		aggrPackPath := fmt.Sprintf(aggrPackTempl, mediatorId)
-		opTimePath := fmt.Sprintf("%s.meta.operation.op_time", aggrPackPath)
-		runningOptimeStr := funcContext.GetByPath(opTimePath).AsStringDefault("")
-		if len(runningOptimeStr) > 0 {
-			if system.Str2Int(runningOptimeStr) < system.Str2Int(opTimeStr) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func CMDB_CRUDController(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTimeStr, target, operation string) {
+func CMDB_CRUDController(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, target, operation string) {
 	var dispatcher *CMDB_CRUDDispatcher
 	if d, ok := CMDB_CRUDDispatcherFromTarget[target]; ok {
 		dispatcher = &d
@@ -128,27 +94,18 @@ func CMDB_CRUDController(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 
 	switch om.GetOpType() {
 	case mediator.MereOp:
-		fallthrough
-	case mediator.WorkerIsTaskedByAggregatorOp:
-		// Extend execution if other operation is in progress for this id
-		if IsRunningOlderCMDBOpForThisID(ctx, om, opTimeStr) {
-			// Two danger situations:
-			// 1. Parent with the same functionType calls for extra data (no opTime, ctx.Caller.Typename == ctx.Self.Typename)
-			// 2. After this call (no opTime, ctx.Caller.Typename == ctx.Self.Typename)
-			om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, ctx.Self.ID, ctx.Payload, ctx.Options)
+		if len(ctx.Options.GetByPath("op_time").AsStringDefault("")) == 0 {
+			forwardOptions := ctx.Options.Clone()
+			forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
+			om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, ctx.Self.ID, ctx.Payload, &forwardOptions)
 			return
 		}
-
+		fallthrough
+	case mediator.WorkerIsTaskedByAggregatorOp:
 		data := ctx.Payload.GetByPath("data")
-
+		opTimeStr := ctx.Options.GetByPath("op_time").AsStringDefault("")
 		if len(opTimeStr) > 0 {
-			// Mark this state as opBegin for CRUD End --------------
-			meta := om.GetMeta(ctx)
-			meta.SetByPath("original_data", data)
-			meta.SetByPath("original_op_time_str", easyjson.NewJSON(opTimeStr))
-			om.SetMeta(ctx, meta)
-			// ------------------------------------------------------
-			(*dispatcher)(ctx, om, operation, system.Str2Int(opTimeStr), &data, true)
+			(*dispatcher)(ctx, om, operation, system.Str2Int(opTimeStr), &data)
 		} else {
 			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("CMDB_CRUDController for target %s detected no op_time", target))).Reply()
 		}
@@ -157,20 +114,38 @@ func CMDB_CRUDController(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 		opInfo.SetByPath("operation.type", easyjson.NewJSON(operation))
 		opInfo.SetByPath("operation.target", easyjson.NewJSON(target))
 		om.SetAdditionalReplyData(&opInfo)
-
-		// Mark this state as opBegin = true for further CRUD End -------------
-		meta := om.GetMeta(ctx)
-		data := meta.GetByPath("original_data")
-		opTimeStr := meta.GetByPath("original_op_time_str").AsStringDefault("")
-		if len(opTimeStr) > 0 {
-			fmt.Println("          (*dispatcher)")
-			(*dispatcher)(ctx, om, operation, system.Str2Int(opTimeStr), &data, false)
-			return
-		}
-		// --------------------------------------------------------------------
-
 		aggregatedData := unifiedCRUDDataAggregator(om)
 		fmt.Println("          nnnnnone", aggregatedData.ToString())
 		system.MsgOnErrorReturn(om.ReplyWithData(&aggregatedData))
 	}
+}
+
+func CMDBDirtyTypeRead(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	om := sfMediators.NewOpMediator(ctx)
+	if ctx.Domain.Name() != ctx.Domain.HubDomainName() { // Redirect to hub if needed
+		idOnHub := ctx.Domain.CreateObjectIDWithHubDomain(ctx.Self.ID, true)
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, idOnHub, ctx.Payload, ctx.Options)
+		return
+	}
+	CMDBTypeRead(ctx, om, system.GetCurrentTimeNs(), ctx.Payload)
+}
+
+func CMDBDirtyTypeRelationRead(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	om := sfMediators.NewOpMediator(ctx)
+	if ctx.Domain.Name() != ctx.Domain.HubDomainName() { // Redirect to hub if needed
+		idOnHub := ctx.Domain.CreateObjectIDWithHubDomain(ctx.Self.ID, true)
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, idOnHub, ctx.Payload, ctx.Options)
+		return
+	}
+	CMDBTypeRelationRead(ctx, om, system.GetCurrentTimeNs(), ctx.Payload)
+}
+
+func CMDBDirtyObjectRead(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	om := sfMediators.NewOpMediator(ctx)
+	CMDBObjectRead(ctx, om, system.GetCurrentTimeNs(), ctx.Payload)
+}
+
+func CMDBDirtyObjectRelationRead(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	om := sfMediators.NewOpMediator(ctx)
+	CMDBObjectRelationRead(ctx, om, system.GetCurrentTimeNs(), ctx.Payload)
 }
