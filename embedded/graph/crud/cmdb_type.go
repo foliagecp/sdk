@@ -12,12 +12,14 @@ import (
 func CMDBTypeRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
 	fmt.Println("1 CMDBTypeRead", om.GetID(), ctx.Self.ID)
 	payload := easyjson.NewJSONObject()
-	payload.SetByPath("details", easyjson.NewJSON(true))
+	payload.SetByPath("operation.type", easyjson.NewJSON("read"))
+	payload.SetByPath("operation.target", easyjson.NewJSON("vertex"))
+	payload.SetByPath("data.details", easyjson.NewJSON(true))
 
 	forwardOptions := ctx.Options.Clone()
 	forwardOptions.SetByPath("op_stack", easyjson.NewJSON(true))
 
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.dirty.vertex.read", ctx.Self.ID, &payload, &forwardOptions)))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.crud", ctx.Self.ID, &payload, &forwardOptions)))
 	if om.GetLastSyncOp().Status != sfMediators.SYNC_OP_STATUS_OK {
 		om.Reply()
 		return
@@ -71,46 +73,29 @@ func CMDBTypeRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMed
 	system.MsgOnErrorReturn(om.ReplyWithData(&result))
 }
 
-/*func CMDBTypeCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
-	// create:vertex, create:vertex.link -> result
-	if begin {
-		payload1 := easyjson.NewJSONObject()
-		payload1.SetByPath("operation.type", easyjson.NewJSON("create"))
-		payload1.SetByPath("operation.target", easyjson.NewJSON("vertex"))
+func CMDBTypeCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
+	payload1 := easyjson.NewJSONObject()
+	payload1.SetByPath("operation.type", easyjson.NewJSON("create"))
+	payload1.SetByPath("operation.target", easyjson.NewJSON("vertex"))
 
-		forwardOptions := ctx.Options.Clone()
-		forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
-		forwardOptions.SetByPath("op_stack", easyjson.NewJSON(true))
-		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Self.ID, &payload1, &forwardOptions)
+	forwardOptions := ctx.Options.Clone()
+	forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
+	forwardOptions.SetByPath("op_stack", easyjson.NewJSON(true))
+	om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Self.ID, &payload1, &forwardOptions)
 
-		payload2 := easyjson.NewJSONObject()
-		payload2.SetByPath("operation.type", easyjson.NewJSON("create"))
-		payload2.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
-		payload2.SetByPath("data.to", easyjson.NewJSON(ctx.Self.ID))
-		payload2.SetByPath("data.type", easyjson.NewJSON(TYPES_TYPE_LINKTYPE))
-		payload2.SetByPath("data.name", easyjson.NewJSON(ctx.Self.ID))
-		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, true), &payload2, &forwardOptions)
-	} else {
-		msgs := om.GetAggregatedOpMsgs()
-		if len(msgs) == 0 {
-			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("no response data when tried to create type %s", ctx.Self.ID))).Reply()
-			return
-		}
-		if len(msgs) != 2 {
-			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("something went wrong when tried to create type %s (maybe inconsistency occured)", ctx.Self.ID))).Reply()
-			return
-		}
-
-		aggregatedData := unifiedCRUDDataAggregator(om)
-		aggregatedData.RemoveByPath("op_stack")
-		system.MsgOnErrorReturn(om.ReplyWithData(&aggregatedData))
-	}
-}*/
+	payload2 := easyjson.NewJSONObject()
+	payload2.SetByPath("operation.type", easyjson.NewJSON("create"))
+	payload2.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
+	payload2.SetByPath("data.to", easyjson.NewJSON(ctx.Self.ID))
+	payload2.SetByPath("data.type", easyjson.NewJSON(TYPES_TYPE_LINKTYPE))
+	payload2.SetByPath("data.name", easyjson.NewJSON(ctx.Self.ID))
+	om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, true), &payload2, &forwardOptions)
+}
 
 func CMDBTypeCRUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string, opTime int64, data *easyjson.JSON) {
 	switch operation {
 	case "create":
-		//CMDBTypeCreate(ctx, om, opTime, data, begin)
+		CMDBTypeCreate(ctx, om, opTime, data)
 	case "update":
 		//GraphVertexUpdate(ctx, om, &data, opTime)
 	case "delete":

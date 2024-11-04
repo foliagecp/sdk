@@ -116,6 +116,7 @@ func CMDB_CRUDController(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 		om.SetAdditionalReplyData(&opInfo)
 		aggregatedData := unifiedCRUDDataAggregator(om)
 		fmt.Println("          nnnnnone", aggregatedData.ToString())
+		aggregatedData.RemoveByPath("op_stack")
 		system.MsgOnErrorReturn(om.ReplyWithData(&aggregatedData))
 	}
 }
