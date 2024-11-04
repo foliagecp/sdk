@@ -147,27 +147,31 @@ func CMDBObjectCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.O
 			forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
 			forwardOptions.SetByPath("op_stack", easyjson.NewJSON(true))
 
-			payload2 := easyjson.NewJSONObject()
-			payload2.SetByPath("operation.type", easyjson.NewJSON("create"))
-			payload2.SetByPath("operation.target", easyjson.NewJSON("vertex"))
-			payload2.SetByPath("data", data.Clone())
-			om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Self.ID, &payload2, &forwardOptions)
-
-			payload3 := easyjson.NewJSONObject()
-			payload3.SetByPath("operation.type", easyjson.NewJSON("create"))
-			payload3.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
-			payload3.SetByPath("data.to", easyjson.NewJSON(ctx.Self.ID))
-			payload3.SetByPath("data.type", easyjson.NewJSON(TYPE_OBJECT_LINKTYPE))
-			payload3.SetByPath("data.name", easyjson.NewJSON(ctx.Self.ID))
-			om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", tp, &payload3, &forwardOptions)
-
-			payload4 := easyjson.NewJSONObject()
-			payload4.SetByPath("operation.type", easyjson.NewJSON("create"))
-			payload4.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
-			payload4.SetByPath("data.to", easyjson.NewJSON(ctx.Self.ID))
-			payload4.SetByPath("data.type", easyjson.NewJSON(OBJECTS_OBJECT_TYPELINK))
-			payload4.SetByPath("data.name", easyjson.NewJSON(ctx.Self.ID))
-			om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, true), &payload3, &forwardOptions)
+			{
+				payload := easyjson.NewJSONObject()
+				payload.SetByPath("operation.type", easyjson.NewJSON("create"))
+				payload.SetByPath("operation.target", easyjson.NewJSON("vertex"))
+				payload.SetByPath("data", data.Clone())
+				om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Self.ID, &payload, &forwardOptions)
+			}
+			{
+				payload := easyjson.NewJSONObject()
+				payload.SetByPath("operation.type", easyjson.NewJSON("create"))
+				payload.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
+				payload.SetByPath("data.to", easyjson.NewJSON(ctx.Self.ID))
+				payload.SetByPath("data.type", easyjson.NewJSON(TYPE_OBJECT_LINKTYPE))
+				payload.SetByPath("data.name", easyjson.NewJSON(ctx.Self.ID))
+				om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", tp, &payload, &forwardOptions)
+			}
+			{
+				payload := easyjson.NewJSONObject()
+				payload.SetByPath("operation.type", easyjson.NewJSON("create"))
+				payload.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
+				payload.SetByPath("data.to", easyjson.NewJSON(ctx.Self.ID))
+				payload.SetByPath("data.type", easyjson.NewJSON(OBJECTS_OBJECT_TYPELINK))
+				payload.SetByPath("data.name", easyjson.NewJSON(ctx.Self.ID))
+				om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, true), &payload, &forwardOptions)
+			}
 
 			return
 		}
