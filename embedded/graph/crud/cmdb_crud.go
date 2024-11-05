@@ -35,7 +35,7 @@ Request:
 		data: json - required // operation data
 
 	options: json - optional
-		return_stack: bool - optional
+		retries: int - optional // retries on execution failure, default: 20
 
 Reply:
 
@@ -46,10 +46,11 @@ Reply:
 			operation: json
 				type: string - required // "create", "update", "delete", "read"
 				target: string - required // "type", "type.relation" "object", "object.relation"
-			op_stack: json array - optional
 */
 func CMDB_CRUDGateway(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
+
+	fmt.Println(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>", ctx.Self.ID, om.GetID(), ctx.Payload.ToString())
 
 	meta := om.GetMeta(ctx)
 
@@ -67,7 +68,7 @@ func CMDB_CRUDGateway(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefun
 		meta.SetByPath("operation.target", easyjson.NewJSON(target))
 		meta.SetByPath("operation.type", easyjson.NewJSON(operation))
 		om.SetMeta(ctx, meta)
-		fmt.Println("~~~~~", om.GetID(), meta.ToString())
+		fmt.Println("~~~~~", ctx.Self.ID, om.GetID(), meta.ToString())
 	}
 
 	if target == "object.relation" && operation == "create" {
@@ -92,12 +93,25 @@ func CMDB_CRUDController(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 		return
 	}
 
+	selfCallWithOpTime := func(payload, options *easyjson.JSON) {
+		forwardOptions := options.Clone()
+		forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, ctx.Self.ID, payload, &forwardOptions)
+	}
+
+	fmt.Println("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", ctx.Self.ID, om.GetID(), om.GetOpType())
+
 	switch om.GetOpType() {
 	case mediator.MereOp:
 		if len(ctx.Options.GetByPath("op_time").AsStringDefault("")) == 0 {
-			forwardOptions := ctx.Options.Clone()
-			forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
-			om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, ctx.Self.ID, ctx.Payload, &forwardOptions)
+			// Retries meta -------------------------------
+			meta := om.GetMeta(ctx)
+			meta.SetByPath("retries", easyjson.NewJSON(ctx.Options.GetByPath("retries").AsNumericDefault(20)))
+			meta.SetByPath("retry_payload", *ctx.Payload.Clone().GetPtr())
+			meta.SetByPath("retry_options", *ctx.Options.Clone().GetPtr())
+			om.SetMeta(ctx, meta)
+			// --------------------------------------------
+			selfCallWithOpTime(ctx.Payload, ctx.Options)
 			return
 		}
 		fallthrough
@@ -110,12 +124,31 @@ func CMDB_CRUDController(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("CMDB_CRUDController for target %s detected no op_time", target))).Reply()
 		}
 	case mediator.AggregatedWorkersOp:
+		if om.GetStatus() != mediator.SYNC_OP_STATUS_OK {
+			meta := om.GetMeta(ctx)
+			retries := int(meta.GetByPath("retries").AsNumericDefault(0))
+			fmt.Println("^^^^^^^^^^", ctx.Self.ID, om.GetID(), retries)
+			if retries > 0 {
+				retryPayload := meta.GetByPath("retry_payload")
+				retryOptions := meta.GetByPath("retry_options")
+
+				retries--
+				fmt.Println("--------- RETRYING", operation, target, "LEFT:", retries)
+				meta.SetByPath("retries", easyjson.NewJSON(retries))
+				om.SetMeta(ctx, meta)
+
+				om.Reaggregate(ctx)
+				selfCallWithOpTime(&retryPayload, &retryOptions)
+				return
+			}
+		}
+
 		opInfo := easyjson.NewJSONObject()
 		opInfo.SetByPath("operation.type", easyjson.NewJSON(operation))
 		opInfo.SetByPath("operation.target", easyjson.NewJSON(target))
 		om.SetAdditionalReplyData(&opInfo)
 		aggregatedData := unifiedCRUDDataAggregator(om)
-		fmt.Println("          nnnnnone", aggregatedData.ToString())
+		fmt.Println("          nnnnnone", aggregatedData.ToString(), om.GetDetails(), om.GetStatus())
 		aggregatedData.RemoveByPath("op_stack")
 		system.MsgOnErrorReturn(om.ReplyWithData(&aggregatedData))
 	}

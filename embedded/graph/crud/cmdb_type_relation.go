@@ -17,16 +17,14 @@ func CMDBTypeRelationRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediato
 	}
 
 	payload := easyjson.NewJSONObject()
-	payload.SetByPath("operation.type", easyjson.NewJSON("read"))
-	payload.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
-	payload.SetByPath("data.to", data.GetByPath("to"))
-	payload.SetByPath("data.type", easyjson.NewJSON(TYPE_TYPE_LINKTYPE))
-	payload.SetByPath("data.details", easyjson.NewJSON(true))
+	payload.SetByPath("to", data.GetByPath("to"))
+	payload.SetByPath("type", easyjson.NewJSON(TYPE_TYPE_LINKTYPE))
+	payload.SetByPath("details", easyjson.NewJSON(true))
 
 	forwardOptions := ctx.Options.Clone()
 	forwardOptions.SetByPath("op_stack", easyjson.NewJSON(true))
 
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.crud", ctx.Self.ID, &payload, &forwardOptions)))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.dirty.vertex.link.read", ctx.Self.ID, &payload, &forwardOptions)))
 	if om.GetLastSyncOp().Status != sfMediators.SYNC_OP_STATUS_OK {
 		om.Reply()
 		return
