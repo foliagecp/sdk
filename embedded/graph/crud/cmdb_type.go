@@ -12,21 +12,22 @@ import (
 func CMDBTypeRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
 	fmt.Println("1 CMDBTypeRead", om.GetID(), ctx.Self.ID)
 	payload := easyjson.NewJSONObject()
-	payload.SetByPath("operation.type", easyjson.NewJSON("read"))
-	payload.SetByPath("operation.target", easyjson.NewJSON("vertex"))
-	payload.SetByPath("data.details", easyjson.NewJSON(true))
+	payload.SetByPath("details", easyjson.NewJSON(true))
 
 	forwardOptions := ctx.Options.Clone()
 	forwardOptions.SetByPath("op_stack", easyjson.NewJSON(true))
 
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.crud", ctx.Self.ID, &payload, &forwardOptions)))
+	fmt.Println("2 CMDBTypeRead", om.GetID(), ctx.Self.ID)
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.dirty.vertex.read", ctx.Self.ID, &payload, &forwardOptions)))
 	if om.GetLastSyncOp().Status != sfMediators.SYNC_OP_STATUS_OK {
+		fmt.Println("2.1 CMDBTypeRead", om.GetID(), ctx.Self.ID, om.GetLastSyncOp().ToJson().ToString())
 		om.Reply()
 		return
 	}
 
 	resData := om.GetLastSyncOp().Data
 
+	fmt.Println("3 CMDBTypeRead", om.GetID(), ctx.Self.ID)
 	vertexIsType := false
 	fromTypes := []string{}
 	for i := 0; i < resData.GetByPath("links.in.names").ArraySize(); i++ {
@@ -41,10 +42,12 @@ func CMDBTypeRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMed
 		}
 	}
 	if !vertexIsType {
+		fmt.Println("3.1 CMDBTypeRead", om.GetID(), ctx.Self.ID)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s is not a type", ctx.Self.ID)))
 		system.MsgOnErrorReturn(om.ReplyWithData(easyjson.NewJSONObject().GetPtr()))
 		return
 	}
+	fmt.Println("4 CMDBTypeRead", om.GetID(), ctx.Self.ID)
 	toTypes := []string{}
 	objects := []string{}
 	for i := 0; i < resData.GetByPath("links.out.names").ArraySize(); i++ {
@@ -70,6 +73,7 @@ func CMDBTypeRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMed
 		result.RemoveByPath("op_stack")
 	}
 
+	fmt.Println("5 CMDBTypeRead", om.GetID(), ctx.Self.ID)
 	system.MsgOnErrorReturn(om.ReplyWithData(&result))
 }
 
