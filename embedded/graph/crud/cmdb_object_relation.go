@@ -9,12 +9,14 @@ import (
 	"github.com/foliagecp/sdk/statefun/system"
 )
 
-func CMDBObjectRelationRead_ReadTypesRelation(ctx *sfPlugins.StatefunContextProcessor, fromObject, toObject string) (string, error) {
+func CMDBObjectRelationRead_ReadTypesRelation(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, toObject string, opTime int64) (string, error) {
 	var sourceObjectType string
 	var targetObjectType string
 	{
 		payload := easyjson.NewJSONObject()
-		msg := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.dirty.object.read", fromObject, &payload, nil))
+		payload.SetByPath("op_time", easyjson.NewJSON(system.IntToStr(opTime)))
+		msg := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.dirty.object.read", ctx.Self.ID, &payload, nil))
+		om.AggregateOpMsg(msg)
 		if msg.Status != sfMediators.SYNC_OP_STATUS_OK {
 			return "", fmt.Errorf(msg.Details)
 		}
@@ -25,7 +27,9 @@ func CMDBObjectRelationRead_ReadTypesRelation(ctx *sfPlugins.StatefunContextProc
 	}
 	{
 		payload := easyjson.NewJSONObject()
+		payload.SetByPath("op_time", easyjson.NewJSON(system.IntToStr(opTime)))
 		msg := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.dirty.object.read", toObject, &payload, nil))
+		om.AggregateOpMsg(msg)
 		if msg.Status != sfMediators.SYNC_OP_STATUS_OK {
 			return "", fmt.Errorf(msg.Details)
 		}
@@ -35,9 +39,11 @@ func CMDBObjectRelationRead_ReadTypesRelation(ctx *sfPlugins.StatefunContextProc
 		}
 	}
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.IntToStr(opTime)))
 	payload.SetByPath("to", easyjson.NewJSON(targetObjectType))
 	payload.SetByPath("details", easyjson.NewJSON(true))
 	msg := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.dirty.type.relation.read", sourceObjectType, &payload, nil))
+	om.AggregateOpMsg(msg)
 	if msg.Status != sfMediators.SYNC_OP_STATUS_OK {
 		return "", fmt.Errorf(msg.Details)
 	}
@@ -52,7 +58,7 @@ func CMDBObjectRelationRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMedia
 	}
 
 	var objectsLinkType string
-	if lt, err := CMDBObjectRelationRead_ReadTypesRelation(ctx, ctx.Self.ID, to); err != nil {
+	if lt, err := CMDBObjectRelationRead_ReadTypesRelation(ctx, om, to, opTime); err != nil {
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("error while reading objects relation type: %s", objectsLinkType))).Reply()
 		return
 	} else {
@@ -99,7 +105,7 @@ func CMDBObjectRelationCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMed
 	}
 
 	var objectsLinkType string
-	if lt, err := CMDBObjectRelationRead_ReadTypesRelation(ctx, ctx.Self.ID, to); err != nil {
+	if lt, err := CMDBObjectRelationRead_ReadTypesRelation(ctx, om, to, opTime); err != nil {
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("error while reading objects relation type: %s", err.Error()))).Reply()
 		return
 	} else {
