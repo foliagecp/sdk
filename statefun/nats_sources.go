@@ -107,6 +107,13 @@ func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool, msgAckCha
 		msgOptions = easyjson.NewJSONObject().GetPtr()
 	}
 
+	// Add nats meta into options -------------------------
+	meta, err := msg.Metadata()
+	if err == nil {
+		msgOptions.SetByPath("nats.timestamp_nano_str", easyjson.NewJSON(system.IntToStr(meta.Timestamp.UnixNano())))
+	}
+	// ----------------------------------------------------
+
 	caller := sfPlugins.StatefunAddress{}
 	if data.GetByPath("caller_typename").IsString() && data.GetByPath("caller_id").IsString() {
 		caller.Typename, _ = data.GetByPath("caller_typename").AsString()
