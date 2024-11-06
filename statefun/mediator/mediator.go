@@ -59,6 +59,7 @@ func NewOpMediatorWithUniquenessControl(ctx *sfPlugins.StatefunContextProcessor,
 	opType := MereOp
 	opMsgs := []OpMsg{}
 	meta1 := ""
+	var additionalReplyInfo *easyjson.JSON
 	if ctx.Payload != nil && ctx.Payload.IsNonEmptyObject() {
 		if aggrId, ok := ctx.Payload.GetByPath("__mAggregationId").AsString(); ok {
 			opType = WorkerIsTaskedByAggregatorOp
@@ -95,6 +96,10 @@ func NewOpMediatorWithUniquenessControl(ctx *sfPlugins.StatefunContextProcessor,
 			} else {
 				registeredResults = easyjson.NewJSONObject()
 			}
+			if aggregationPack.PathExists("additional_reply_info") {
+				additionalReplyInfo = aggregationPack.GetByPath("additional_reply_info").GetPtr()
+			}
+
 			registeredResults.SetByPath(system.StrToBase64(fmt.Sprintf("%s:%s", ctx.Caller.Typename, ctx.Caller.ID)), *ctx.Payload)
 			aggregationPack.SetByPath("results", registeredResults)
 
@@ -110,7 +115,7 @@ func NewOpMediatorWithUniquenessControl(ctx *sfPlugins.StatefunContextProcessor,
 			ctx.SetContextExpirationAfter(time.Duration(gcIntervalSec) * time.Second)
 		}
 	}
-	om = &OpMediator{ctx, opMsgs, mediatorId, opType, meta1, nil}
+	om = &OpMediator{ctx, opMsgs, mediatorId, opType, meta1, additionalReplyInfo}
 	return
 }
 
@@ -136,8 +141,23 @@ func (om *OpMediator) Reaggregate(ctx *sfPlugins.StatefunContextProcessor) {
 	}
 }
 
-func (om *OpMediator) SetAdditionalReplyData(addReplyData *easyjson.JSON) {
+func (om *OpMediator) SetAdditionalReplyData(ctx *sfPlugins.StatefunContextProcessor, addReplyData *easyjson.JSON) {
 	om.addReplyData = addReplyData
+
+	funcContext := ctx.GetFunctionContext()
+
+	// Update the aggregation pack --------------------------
+	aggrPackPath := fmt.Sprintf(aggrPackTempl, om.mediatorId)
+	aggregationPack := funcContext.GetByPath(aggrPackPath)
+	if !aggregationPack.IsNonEmptyObject() {
+		aggregationPack = easyjson.NewJSONObject()
+	}
+
+	aggregationPack.SetByPath("additional_reply_info", *addReplyData)
+	// ------------------------------------------------------
+
+	funcContext.SetByPath(aggrPackPath, aggregationPack)
+	ctx.SetFunctionContext(funcContext)
 }
 
 func (om *OpMediator) GetID() string {
@@ -180,7 +200,10 @@ func (om *OpMediator) SetMeta(ctx *sfPlugins.StatefunContextProcessor, meta easy
 
 func (om *OpMediator) AddIntermediateResult(ctx *sfPlugins.StatefunContextProcessor, intermediateResult *easyjson.JSON) {
 	msg := MakeOpMsg(SYNC_OP_STATUS_OK, "", "", *intermediateResult)
+	om.AddIntermediateResultMsg(ctx, msg)
+}
 
+func (om *OpMediator) AddIntermediateResultMsg(ctx *sfPlugins.StatefunContextProcessor, intermediateMsg OpMsg) {
 	funcContext := ctx.GetFunctionContext()
 
 	// Update the aggregation pack --------------------------
@@ -197,10 +220,10 @@ func (om *OpMediator) AddIntermediateResult(ctx *sfPlugins.StatefunContextProces
 		registeredResults = easyjson.NewJSONObject()
 	}
 
-	registeredResults.SetByPath(fmt.Sprintf("%s:%s", strings.ReplaceAll(ctx.Self.Typename, ".", "_"), fmt.Sprintf("%s-%d", ctx.Self.ID, registeredResults.KeysCount())), *msg.ToJson())
+	registeredResults.SetByPath(fmt.Sprintf("%s:%s", strings.ReplaceAll(ctx.Self.Typename, ".", "_"), fmt.Sprintf("%s-%d", ctx.Self.ID, registeredResults.KeysCount())), *intermediateMsg.ToJson())
 	aggregationPack.SetByPath("results", registeredResults)
 
-	om.opMsgs = append(om.opMsgs, msg)
+	om.opMsgs = append(om.opMsgs, intermediateMsg)
 	// ------------------------------------------------------
 
 	funcContext.SetByPath(aggrPackPath, aggregationPack)
