@@ -96,7 +96,7 @@ func GraphCRUDController(ctx *sfPlugins.StatefunContextProcessor, om *sfMediator
 		opInfo := easyjson.NewJSONObject()
 		opInfo.SetByPath("operation.type", easyjson.NewJSON(operation))
 		opInfo.SetByPath("operation.target", easyjson.NewJSON(target))
-		om.SetAdditionalReplyData(&opInfo)
+		om.SetAdditionalReplyData(ctx, &opInfo)
 
 		aggregatedData := unifiedCRUDDataAggregator(om)
 		system.MsgOnErrorReturn(om.ReplyWithData(&aggregatedData))
