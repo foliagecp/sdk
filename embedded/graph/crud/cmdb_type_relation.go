@@ -71,15 +71,23 @@ func CMDBTypeRelationCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMedia
 		return
 	}
 
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.dirty.type.read", ctx.Self.ID, easyjson.NewJSONObject().GetPtr(), nil)))
-	if om.GetLastSyncOp().Status != sfMediators.SYNC_OP_STATUS_OK {
-		om.Reply()
-		return
+	{
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("op_time", easyjson.NewJSON(system.IntToStr(opTime)))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.dirty.type.read", ctx.Self.ID, &payload, nil)))
+		if om.GetLastSyncOp().Status != sfMediators.SYNC_OP_STATUS_OK {
+			om.Reply()
+			return
+		}
 	}
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.dirty.type.read", to, easyjson.NewJSONObject().GetPtr(), nil)))
-	if om.GetLastSyncOp().Status != sfMediators.SYNC_OP_STATUS_OK {
-		om.Reply()
-		return
+	{
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("op_time", easyjson.NewJSON(system.IntToStr(opTime)))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.dirty.type.read", to, &payload, nil)))
+		if om.GetLastSyncOp().Status != sfMediators.SYNC_OP_STATUS_OK {
+			om.Reply()
+			return
+		}
 	}
 
 	payload := easyjson.NewJSONObject()

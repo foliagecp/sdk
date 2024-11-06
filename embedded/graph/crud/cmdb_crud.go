@@ -93,9 +93,9 @@ func CMDB_CRUDController(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 		return
 	}
 
-	selfCallWithOpTime := func(payload, options *easyjson.JSON) {
+	selfCallWithOpTime := func(payload, options *easyjson.JSON, opTimeStr string) {
 		forwardOptions := options.Clone()
-		forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
+		forwardOptions.SetByPath("op_time", easyjson.NewJSON(opTimeStr))
 		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, ctx.Self.ID, payload, &forwardOptions)
 	}
 
@@ -104,14 +104,27 @@ func CMDB_CRUDController(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 	switch om.GetOpType() {
 	case mediator.MereOp:
 		if len(ctx.Options.GetByPath("op_time").AsStringDefault("")) == 0 {
+			opTime := system.GetCurrentTimeNs()
+			if t := ctx.Options.GetByPath("nats.timestamp_nano_str").AsStringDefault(""); len(t) > 0 {
+				opTime = system.Str2Int(t)
+			}
+			opTimeStr := fmt.Sprintf("%d", opTime)
+			crudRegisterOperation(ctx, target, operation, opTime)
+
+			fmt.Println()
+			fmt.Println(" ...............   ", ctx.Self.ID, om.GetID(), om.GetOpType(), opTime, target, operation)
+			fmt.Println()
+
 			// Retries meta -------------------------------
 			meta := om.GetMeta(ctx)
-			meta.SetByPath("retries", easyjson.NewJSON(ctx.Options.GetByPath("retries").AsNumericDefault(20)))
-			meta.SetByPath("retry_payload", *ctx.Payload.Clone().GetPtr())
-			meta.SetByPath("retry_options", *ctx.Options.Clone().GetPtr())
+			meta.SetByPath("", easyjson.NewJSON(target))
+			meta.SetByPath("operation.time", easyjson.NewJSON(opTimeStr))
+			meta.SetByPath("operation.payload", *ctx.Payload.Clone().GetPtr())
+			meta.SetByPath("operation.options", *ctx.Options.Clone().GetPtr())
 			om.SetMeta(ctx, meta)
 			// --------------------------------------------
-			selfCallWithOpTime(ctx.Payload, ctx.Options)
+
+			selfCallWithOpTime(ctx.Payload, ctx.Options, opTimeStr)
 			return
 		}
 		fallthrough
@@ -124,31 +137,42 @@ func CMDB_CRUDController(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("CMDB_CRUDController for target %s detected no op_time", target))).Reply()
 		}
 	case mediator.AggregatedWorkersOp:
-		if om.GetStatus() != mediator.SYNC_OP_STATUS_OK {
-			meta := om.GetMeta(ctx)
-			retries := int(meta.GetByPath("retries").AsNumericDefault(0))
-			fmt.Println("^^^^^^^^^^", ctx.Self.ID, om.GetID(), retries)
-			if retries > 0 {
-				retryPayload := meta.GetByPath("retry_payload")
-				retryOptions := meta.GetByPath("retry_options")
+		meta := om.GetMeta(ctx)
+		opTimeStr := meta.GetByPath("operation.time").AsStringDefault("")
+		if len(opTimeStr) > 0 {
+			opTime := system.Str2Int(opTimeStr)
+			omStatus := om.GetStatus()
+			omDetails := om.GetDetails()
+			if target == "object" {
+				if strings.Contains(omDetails, "not_finished_cud.older") {
+					fmt.Println("               %%%%%%%%%%%%%%%%", omStatus)
+				}
+			}
+			if strings.Contains(omDetails, "not_finished_cud.older") {
+				fmt.Println("^^^^^^^^^^ RETRY", ctx.Self.ID, om.GetID())
 
-				retries--
+				opPayload := meta.GetByPath("operation.payload")
+				opOptions := meta.GetByPath("operation.options")
+
+				/*retries--
 				fmt.Println("--------- RETRYING", operation, target, "LEFT:", retries)
 				meta.SetByPath("retries", easyjson.NewJSON(retries))
-				om.SetMeta(ctx, meta)
+				om.SetMeta(ctx, meta)*/
 
 				om.Reaggregate(ctx)
-				selfCallWithOpTime(&retryPayload, &retryOptions)
+				selfCallWithOpTime(&opPayload, &opOptions, opTimeStr)
 				return
+			} else {
+				crudUnregisterOperation(ctx, target, operation, opTime)
 			}
 		}
 
 		opInfo := easyjson.NewJSONObject()
 		opInfo.SetByPath("operation.type", easyjson.NewJSON(operation))
 		opInfo.SetByPath("operation.target", easyjson.NewJSON(target))
-		om.SetAdditionalReplyData(&opInfo)
+		om.SetAdditionalReplyData(ctx, &opInfo)
 		aggregatedData := unifiedCRUDDataAggregator(om)
-		fmt.Println("          nnnnnone", aggregatedData.ToString(), om.GetDetails(), om.GetStatus())
+		fmt.Println("          <<<<<<<<<<<<<<<<<<<<<<< ", ctx.Self.ID, om.GetID(), aggregatedData.ToString(), om.GetDetails(), om.GetStatus())
 		aggregatedData.RemoveByPath("op_stack")
 		system.MsgOnErrorReturn(om.ReplyWithData(&aggregatedData))
 	}
@@ -161,7 +185,14 @@ func CMDBDirtyTypeRead(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, idOnHub, ctx.Payload, ctx.Options)
 		return
 	}
-	CMDBTypeRead(ctx, om, system.GetCurrentTimeNs(), ctx.Payload)
+
+	opTime := system.GetCurrentTimeNs()
+	if t := ctx.Payload.GetByPath("op_time").AsStringDefault(""); len(t) > 0 {
+		opTime = system.Str2Int(t)
+	}
+	dirtyReadAppendMeta(ctx, om, "type", "read", opTime)
+
+	CMDBTypeRead(ctx, om, opTime, ctx.Payload)
 }
 
 func CMDBDirtyTypeRelationRead(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
@@ -171,15 +202,36 @@ func CMDBDirtyTypeRelationRead(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins
 		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, idOnHub, ctx.Payload, ctx.Options)
 		return
 	}
-	CMDBTypeRelationRead(ctx, om, system.GetCurrentTimeNs(), ctx.Payload)
+
+	opTime := system.GetCurrentTimeNs()
+	if t := ctx.Payload.GetByPath("op_time").AsStringDefault(""); len(t) > 0 {
+		opTime = system.Str2Int(t)
+	}
+	dirtyReadAppendMeta(ctx, om, "type.relation", "read", opTime)
+
+	CMDBTypeRelationRead(ctx, om, opTime, ctx.Payload)
 }
 
 func CMDBDirtyObjectRead(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
-	CMDBObjectRead(ctx, om, system.GetCurrentTimeNs(), ctx.Payload)
+
+	opTime := system.GetCurrentTimeNs()
+	if t := ctx.Payload.GetByPath("op_time").AsStringDefault(""); len(t) > 0 {
+		opTime = system.Str2Int(t)
+	}
+	dirtyReadAppendMeta(ctx, om, "object", "read", opTime)
+
+	CMDBObjectRead(ctx, om, opTime, ctx.Payload)
 }
 
 func CMDBDirtyObjectRelationRead(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
-	CMDBObjectRelationRead(ctx, om, system.GetCurrentTimeNs(), ctx.Payload)
+
+	opTime := system.GetCurrentTimeNs()
+	if t := ctx.Payload.GetByPath("op_time").AsStringDefault(""); len(t) > 0 {
+		opTime = system.Str2Int(t)
+	}
+	dirtyReadAppendMeta(ctx, om, "object.relation", "read", opTime)
+
+	CMDBObjectRelationRead(ctx, om, opTime, ctx.Payload)
 }

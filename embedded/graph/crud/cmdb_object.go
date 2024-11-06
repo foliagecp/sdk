@@ -75,19 +75,27 @@ func CMDBObjectCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.O
 	}
 	tp = ctx.Domain.CreateObjectIDWithHubDomain(tp, true)
 
-	fmt.Println("CMDBObjectCreate 2", ctx.Self.ID)
-	typeMsg := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.dirty.type.read", tp, easyjson.NewJSONObject().GetPtr(), nil))
-	if typeMsg.Status != sfMediators.SYNC_OP_STATUS_OK {
-		fmt.Println("CMDBObjectCreate 2.1", ctx.Self.ID, typeMsg.ToJson().ToString())
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("type %s does not exist", tp))).Reply()
-		return
+	{
+		fmt.Println("CMDBObjectCreate 2", ctx.Self.ID)
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("op_time", easyjson.NewJSON(system.IntToStr(opTime)))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.dirty.type.read", tp, &payload, nil)))
+		if om.GetLastSyncOp().Status != sfMediators.SYNC_OP_STATUS_OK {
+			fmt.Println("CMDBObjectCreate 2.1", ctx.Self.ID, om.GetLastSyncOp().ToJson().ToString())
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("type %s does not exist", tp))).Reply()
+			return
+		}
 	}
-	fmt.Println("CMDBObjectCreate 3", ctx.Self.ID)
-	objectMsg := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.dirty.object.read", ctx.Self.ID, easyjson.NewJSONObject().GetPtr(), nil))
-	if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_OK {
-		existingObjectType := objectMsg.Data.GetByPathPtr("type").AsStringDefault("")
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("object %s with type %s already exists", ctx.Self.ID, existingObjectType))).Reply()
-		return
+	{
+		fmt.Println("CMDBObjectCreate 3", ctx.Self.ID)
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("op_time", easyjson.NewJSON(system.IntToStr(opTime)))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.dirty.object.read", ctx.Self.ID, &payload, nil)))
+		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_OK {
+			existingObjectType := om.GetLastSyncOp().Data.GetByPathPtr("type").AsStringDefault("")
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("object %s with type %s already exists", ctx.Self.ID, existingObjectType))).Reply()
+			return
+		}
 	}
 
 	forwardOptions := ctx.Options.Clone()

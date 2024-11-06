@@ -78,22 +78,27 @@ func CMDBTypeRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMed
 }
 
 func CMDBTypeCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
-	payload1 := easyjson.NewJSONObject()
-	payload1.SetByPath("operation.type", easyjson.NewJSON("create"))
-	payload1.SetByPath("operation.target", easyjson.NewJSON("vertex"))
-
 	forwardOptions := ctx.Options.Clone()
 	forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
 	forwardOptions.SetByPath("op_stack", easyjson.NewJSON(true))
-	om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Self.ID, &payload1, &forwardOptions)
-
-	payload2 := easyjson.NewJSONObject()
-	payload2.SetByPath("operation.type", easyjson.NewJSON("create"))
-	payload2.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
-	payload2.SetByPath("data.to", easyjson.NewJSON(ctx.Self.ID))
-	payload2.SetByPath("data.type", easyjson.NewJSON(TYPES_TYPE_LINKTYPE))
-	payload2.SetByPath("data.name", easyjson.NewJSON(ctx.Self.ID))
-	om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, true), &payload2, &forwardOptions)
+	{
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("operation.type", easyjson.NewJSON("create"))
+		payload.SetByPath("operation.target", easyjson.NewJSON("vertex"))
+		if data.PathExists("body") {
+			payload.SetByPath("data.body", data.GetByPath("body"))
+		}
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Self.ID, &payload, &forwardOptions)
+	}
+	{
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("operation.type", easyjson.NewJSON("create"))
+		payload.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
+		payload.SetByPath("data.to", easyjson.NewJSON(ctx.Self.ID))
+		payload.SetByPath("data.type", easyjson.NewJSON(TYPES_TYPE_LINKTYPE))
+		payload.SetByPath("data.name", easyjson.NewJSON(ctx.Self.ID))
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, true), &payload, &forwardOptions)
+	}
 }
 
 func CMDBTypeCRUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string, opTime int64, data *easyjson.JSON) {
