@@ -18,11 +18,22 @@ const (
 	opRegisterTemplate = opRegisterPrefixTemplate + ".%s.%d"
 )
 
+var (
+	CRUDValidTypes = map[string]struct{}{
+		"create": {},
+		"update": {},
+		"delete": {},
+		"read":   {},
+	}
+)
+
 func crudRegisterOperation(ctx *sfPlugins.StatefunContextProcessor, target, operation string, opTime int64) {
+	fmt.Println(">> crudRegisterOperation", ctx.Self.ID, target, operation, opTime)
 	ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(opRegisterTemplate, target, ctx.Self.ID, operation, opTime), []byte{0}, -1)
 }
 
 func crudUnregisterOperation(ctx *sfPlugins.StatefunContextProcessor, target, operation string, opTime int64) {
+	fmt.Println("<< crudUnregisterOperation", ctx.Self.ID, target, operation, opTime)
 	ctx.Domain.Cache().DeleteValueKVSync(fmt.Sprintf(opRegisterTemplate, target, ctx.Self.ID, operation, opTime), -1)
 }
 

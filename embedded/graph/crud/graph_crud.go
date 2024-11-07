@@ -54,13 +54,23 @@ func GraphCRUDGateway(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefun
 	operation := strings.ToLower(meta.GetByPath("operation.type").AsStringDefault(""))
 
 	if len(target) == 0 {
-		target = ctx.Payload.GetByPath("operation.target").AsStringDefault("")
-		operation = ctx.Payload.GetByPath("operation.type").AsStringDefault("")
+		target = strings.ToLower(ctx.Payload.GetByPath("operation.target").AsStringDefault(""))
+		operation = strings.ToLower(ctx.Payload.GetByPath("operation.type").AsStringDefault(""))
 		meta := easyjson.NewJSONObject()
 		meta.SetByPath("operation.target", easyjson.NewJSON(target))
 		meta.SetByPath("operation.type", easyjson.NewJSON(operation))
 		om.SetMeta(ctx, meta)
 	}
+
+	if _, ok := graphCRUDDispatcherFromTarget[target]; !ok {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("invalid operation target='%s'", target))).Reply()
+		return
+	}
+	if _, ok := CRUDValidTypes[operation]; !ok {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("invalid operation type='%s'", operation))).Reply()
+		return
+	}
+
 	GraphCRUDController(ctx, om, target, operation)
 }
 

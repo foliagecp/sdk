@@ -124,17 +124,94 @@ func CMDBObjectRelationCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMed
 	om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Self.ID, &payload, &forwardOptions)
 }
 
+func CMDBObjectRelationUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
+	to := data.GetByPath("to").AsStringDefault("")
+	if len(to) == 0 {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("missing target object uuid")).Reply()
+		return
+	}
+
+	upsert := data.GetByPath("upsert").AsBoolDefault(false)
+
+	if upsert {
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("operation.type", easyjson.NewJSON("create"))
+		payload.SetByPath("operation.target", easyjson.NewJSON("object.relation"))
+		payload.SetByPath("data", data.Clone())
+		forwardOptions := ctx.Options.Clone()
+		forwardOptions.SetByPath("op_time", easyjson.NewJSON(system.IntToStr(opTime)))
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.cmdb.api.crud", ctx.Self.ID, &payload, &forwardOptions)
+		return
+	}
+
+	objRelationType := ""
+	{
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("op_time", easyjson.NewJSON(system.IntToStr(opTime)))
+		payload.SetByPath("to", easyjson.NewJSON(to))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.dirty.object.relation.read", ctx.Self.ID, &payload, nil)))
+		if om.GetLastSyncOp().Status != sfMediators.SYNC_OP_STATUS_OK {
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("cannot update link from %s to %s, not a link between objects", ctx.Self.ID, to))).Reply()
+			return
+		}
+		objRelationType = om.GetLastSyncOp().Data.GetByPath("type").AsStringDefault("")
+	}
+	forwardOptions := ctx.Options.Clone()
+	forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
+	forwardOptions.SetByPath("op_stack", easyjson.NewJSON(true))
+	{
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("operation.type", easyjson.NewJSON("update"))
+		payload.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
+		payload.SetByPath("data", data.Clone())
+		payload.SetByPath("data.to", easyjson.NewJSON(to))
+		payload.SetByPath("data.type", easyjson.NewJSON(objRelationType))
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Self.ID, &payload, &forwardOptions)
+	}
+}
+
+func CMDBObjectRelationDelete(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
+	to := data.GetByPath("to").AsStringDefault("")
+	if len(to) == 0 {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("missing target object uuid")).Reply()
+		return
+	}
+
+	objRelationType := ""
+	{
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("op_time", easyjson.NewJSON(system.IntToStr(opTime)))
+		payload.SetByPath("to", easyjson.NewJSON(to))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.dirty.object.relation.read", ctx.Self.ID, &payload, nil)))
+		if om.GetLastSyncOp().Status != sfMediators.SYNC_OP_STATUS_OK {
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("cannot delete link from %s to %s, not a link between objects", ctx.Self.ID, to))).Reply()
+			return
+		}
+		objRelationType = om.GetLastSyncOp().Data.GetByPath("type").AsStringDefault("")
+	}
+	forwardOptions := ctx.Options.Clone()
+	forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
+	forwardOptions.SetByPath("op_stack", easyjson.NewJSON(true))
+	{
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("operation.type", easyjson.NewJSON("delete"))
+		payload.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
+		payload.SetByPath("data", data.Clone())
+		payload.SetByPath("data.to", easyjson.NewJSON(to))
+		payload.SetByPath("data.type", easyjson.NewJSON(objRelationType))
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Self.ID, &payload, &forwardOptions)
+	}
+}
+
 func CMDBObjectRelationCRUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string, opTime int64, data *easyjson.JSON) {
 	switch operation {
 	case "create":
 		CMDBObjectRelationCreate(ctx, om, opTime, data)
 	case "update":
-		//GraphVertexUpdate(ctx, om, &data, opTime)
+		CMDBObjectRelationUpdate(ctx, om, opTime, data)
 	case "delete":
-		//GraphVertexDelete(ctx, om, &data, opTime)
+		CMDBObjectRelationDelete(ctx, om, opTime, data)
 	case "read":
 		CMDBObjectRelationRead(ctx, om, opTime, data)
-	default:
-		// TODO: Return error msg
 	}
 }
