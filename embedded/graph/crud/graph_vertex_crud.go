@@ -208,7 +208,5 @@ func GraphVertexCRUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfM
 		GraphVertexDelete(ctx, om, opTime, data)
 	case "read":
 		GraphVertexRead(ctx, om, opTime, data)
-	default:
-		// TODO: Return error msg
 	}
 }

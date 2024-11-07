@@ -357,7 +357,5 @@ func GraphVertexLinkCRUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om 
 		}
 	case "read":
 		GraphVertexLinkRead(ctx, om, opTime, data)
-	default:
-		// TODO: Return error msg
 	}
 }

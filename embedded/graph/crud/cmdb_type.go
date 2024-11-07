@@ -10,24 +10,20 @@ import (
 )
 
 func CMDBTypeRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
-	fmt.Println("1 CMDBTypeRead", om.GetID(), ctx.Self.ID)
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("details", easyjson.NewJSON(true))
 
 	forwardOptions := ctx.Options.Clone()
 	forwardOptions.SetByPath("op_stack", easyjson.NewJSON(true))
 
-	fmt.Println("2 CMDBTypeRead", om.GetID(), ctx.Self.ID)
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.dirty.vertex.read", ctx.Self.ID, &payload, &forwardOptions)))
 	if om.GetLastSyncOp().Status != sfMediators.SYNC_OP_STATUS_OK {
-		fmt.Println("2.1 CMDBTypeRead", om.GetID(), ctx.Self.ID, om.GetLastSyncOp().ToJson().ToString())
 		om.Reply()
 		return
 	}
 
 	resData := om.GetLastSyncOp().Data
 
-	fmt.Println("3 CMDBTypeRead", om.GetID(), ctx.Self.ID)
 	vertexIsType := false
 	fromTypes := []string{}
 	for i := 0; i < resData.GetByPath("links.in.names").ArraySize(); i++ {
@@ -42,12 +38,10 @@ func CMDBTypeRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMed
 		}
 	}
 	if !vertexIsType {
-		fmt.Println("3.1 CMDBTypeRead", om.GetID(), ctx.Self.ID)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s is not a type", ctx.Self.ID)))
 		system.MsgOnErrorReturn(om.ReplyWithData(easyjson.NewJSONObject().GetPtr()))
 		return
 	}
-	fmt.Println("4 CMDBTypeRead", om.GetID(), ctx.Self.ID)
 	toTypes := []string{}
 	objects := []string{}
 	for i := 0; i < resData.GetByPath("links.out.names").ArraySize(); i++ {
@@ -73,7 +67,6 @@ func CMDBTypeRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMed
 		result.RemoveByPath("op_stack")
 	}
 
-	fmt.Println("5 CMDBTypeRead", om.GetID(), ctx.Self.ID)
 	system.MsgOnErrorReturn(om.ReplyWithData(&result))
 }
 
@@ -101,17 +94,81 @@ func CMDBTypeCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpM
 	}
 }
 
+func CMDBTypeUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
+	upsert := data.GetByPath("upsert").AsBoolDefault(false)
+
+	if upsert {
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("operation.type", easyjson.NewJSON("create"))
+		payload.SetByPath("operation.target", easyjson.NewJSON("type"))
+		payload.SetByPath("data", data.Clone())
+		forwardOptions := ctx.Options.Clone()
+		forwardOptions.SetByPath("op_time", easyjson.NewJSON(system.IntToStr(opTime)))
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.cmdb.api.crud", ctx.Self.ID, &payload, &forwardOptions)
+		return
+	}
+
+	{
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("op_time", easyjson.NewJSON(system.IntToStr(opTime)))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.dirty.type.read", ctx.Self.ID, &payload, nil)))
+		if om.GetLastSyncOp().Status != sfMediators.SYNC_OP_STATUS_OK {
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("cannot update %s, not a type", ctx.Self.ID))).Reply()
+			return
+		}
+	}
+	forwardOptions := ctx.Options.Clone()
+	forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
+	forwardOptions.SetByPath("op_stack", easyjson.NewJSON(true))
+	{
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("operation.type", easyjson.NewJSON("update"))
+		payload.SetByPath("operation.target", easyjson.NewJSON("vertex"))
+		payload.SetByPath("data", data.Clone())
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Self.ID, &payload, &forwardOptions)
+	}
+}
+
+func CMDBTypeDelete(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
+	objectUUIDs := []string{}
+	{
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("op_time", easyjson.NewJSON(system.IntToStr(opTime)))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.dirty.type.read", ctx.Self.ID, &payload, nil)))
+		if om.GetLastSyncOp().Status != sfMediators.SYNC_OP_STATUS_OK {
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("cannot delete %s, not a type", ctx.Self.ID))).Reply()
+			return
+		}
+		if a, ok := om.GetLastSyncOp().Data.GetByPath("object_uuids").AsArrayString(); ok {
+			objectUUIDs = a
+		}
+	}
+	forwardOptions := ctx.Options.Clone()
+	forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
+	forwardOptions.SetByPath("op_stack", easyjson.NewJSON(true))
+	{
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("operation.type", easyjson.NewJSON("delete"))
+		payload.SetByPath("operation.target", easyjson.NewJSON("vertex"))
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Self.ID, &payload, &forwardOptions)
+	}
+	for _, objectUUID := range objectUUIDs {
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("operation.type", easyjson.NewJSON("delete"))
+		payload.SetByPath("operation.target", easyjson.NewJSON("vertex"))
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", objectUUID, &payload, &forwardOptions)
+	}
+}
+
 func CMDBTypeCRUD_Dispatcher(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, operation string, opTime int64, data *easyjson.JSON) {
 	switch operation {
 	case "create":
 		CMDBTypeCreate(ctx, om, opTime, data)
 	case "update":
-		//GraphVertexUpdate(ctx, om, &data, opTime)
+		CMDBTypeUpdate(ctx, om, opTime, data)
 	case "delete":
-		//GraphVertexDelete(ctx, om, &data, opTime)
+		CMDBTypeDelete(ctx, om, opTime, data)
 	case "read":
 		CMDBTypeRead(ctx, om, opTime, data)
-	default:
-		// TODO: Return error msg
 	}
 }
