@@ -10,7 +10,7 @@ import (
 )
 
 func GraphVertexLinkRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
-	opStack := getOpStackFromOptions(ctx.Options)
+	opStack := getOperationStackFromOptions(ctx.Options)
 
 	var linkName string
 	var linkTarget string
@@ -50,13 +50,13 @@ func GraphVertexLinkRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediator
 		result.SetByPath("tags", easyjson.JSONFromArray(tags))
 	}
 
-	addLinkOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, linkTarget, linkName, linkType, nil, nil)
+	addVertexLinkOperationToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, linkTarget, linkName, linkType, nil, nil)
 
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(result.GetPtr(), opStack))).Reply()
 }
 
 func GraphVertexLinkCreateFromVertex(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
-	opStack := getOpStackFromOptions(ctx.Options)
+	opStack := getOperationStackFromOptions(ctx.Options)
 
 	var linkBody easyjson.JSON
 	if data.GetByPath("body").IsObject() {
@@ -159,7 +159,7 @@ func GraphVertexLinkCreateFromVertex(ctx *sfPlugins.StatefunContextProcessor, om
 	om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, toId, &inLinkPayload, ctx.Options)
 	// --------------------------------------------------------
 
-	addLinkOpToOpStack(opStack, "create", ctx.Self.ID, toId, linkName, linkType, nil, &linkBody)
+	addVertexLinkOperationToOpStack(opStack, "create", ctx.Self.ID, toId, linkName, linkType, nil, &linkBody)
 	om.AddIntermediateResult(ctx, resultWithOpStack(nil, opStack).GetPtr())
 }
 
@@ -186,7 +186,7 @@ func GraphVertexLinkCreateToVertex(ctx *sfPlugins.StatefunContextProcessor, om *
 }
 
 func GraphVertexLinkUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
-	opStack := getOpStackFromOptions(ctx.Options)
+	opStack := getOperationStackFromOptions(ctx.Options)
 
 	upsert := data.GetByPath("upsert").AsBoolDefault(false)
 	replace := data.GetByPath("replace").AsBoolDefault(false)
@@ -264,13 +264,13 @@ func GraphVertexLinkUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediat
 	}
 	// ----------------------------------
 	// --------------------------------------------------------
-	addLinkOpToOpStack(opStack, "update", ctx.Self.ID, linkTarget, linkName, linkType, oldLinkBody, &linkBody)
+	addVertexLinkOperationToOpStack(opStack, "update", ctx.Self.ID, linkTarget, linkName, linkType, oldLinkBody, &linkBody)
 
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
 func GraphVertexLinkDeleteFromVertex(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
-	opStack := getOpStackFromOptions(ctx.Options)
+	opStack := getOperationStackFromOptions(ctx.Options)
 
 	var linkName string
 	var linkTarget string
@@ -314,7 +314,7 @@ func GraphVertexLinkDeleteFromVertex(ctx *sfPlugins.StatefunContextProcessor, om
 	ctx.Domain.Cache().DeleteValueKVSync(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName), -1)
 	// ----------------------------------
 
-	addLinkOpToOpStack(opStack, "delete", ctx.Self.ID, linkTarget, linkName, linkType, oldLinkBody, nil)
+	addVertexLinkOperationToOpStack(opStack, "delete", ctx.Self.ID, linkTarget, linkName, linkType, oldLinkBody, nil)
 
 	// Delete in link on descendant vertex --------------------
 	inLinkPayload := easyjson.NewJSONObject()

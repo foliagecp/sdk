@@ -10,7 +10,7 @@ import (
 )
 
 func GraphVertexRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
-	opStack := getOpStackFromOptions(ctx.Options)
+	opStack := getOperationStackFromOptions(ctx.Options)
 
 	body, _, err := ctx.Domain.Cache().GetValueWithRecordTimeAsJSON(ctx.Self.ID)
 	if err != nil { // If vertex does not exist
@@ -64,13 +64,13 @@ func GraphVertexRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.Op
 		result.SetByPath("links.in.types", easyjson.JSONFromArray(inLinkTypes))
 		result.SetByPath("links.in.uuids", easyjson.JSONFromArray(inLinkUUIDs))
 	}
-	addVertexOpToOpStack(opStack, "read", ctx.Self.ID, nil, nil)
+	addVertexOperationToOpStack(opStack, "read", ctx.Self.ID, nil, nil)
 
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(result.GetPtr(), opStack))).Reply()
 }
 
 func GraphVertexCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
-	opStack := getOpStackFromOptions(ctx.Options)
+	opStack := getOperationStackFromOptions(ctx.Options)
 
 	if !FixateOperationIdTime(ctx, "", opTime) {
 		om.AggregateOpMsg(sfMediators.OpMsgIdle("cannot be completed without losing consistency")).Reply()
@@ -94,13 +94,13 @@ func GraphVertexCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 	ctx.Domain.Cache().SetValueKVSync(ctx.Self.ID, vertexBody.ToBytes(), opTime) // Store vertex body in KV
 	// ----------------------------------
 
-	addVertexOpToOpStack(opStack, "create", ctx.Self.ID, nil, &vertexBody)
+	addVertexOperationToOpStack(opStack, "create", ctx.Self.ID, nil, &vertexBody)
 
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
 func GraphVertexUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
-	opStack := getOpStackFromOptions(ctx.Options)
+	opStack := getOperationStackFromOptions(ctx.Options)
 
 	if !FixateOperationIdTime(ctx, "", opTime) {
 		om.AggregateOpMsg(sfMediators.OpMsgIdle("cannot be completed without losing consistency")).Reply()
@@ -137,13 +137,13 @@ func GraphVertexUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 	}
 
 	ctx.Domain.Cache().SetValueKVSync(ctx.Self.ID, body.ToBytes(), opTime) // Store vertex body in KV
-	addVertexOpToOpStack(opStack, "update", ctx.Self.ID, oldBody, &body)
+	addVertexOperationToOpStack(opStack, "update", ctx.Self.ID, oldBody, &body)
 
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
 func GraphVertexDelete(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, _ *easyjson.JSON) {
-	opStack := getOpStackFromOptions(ctx.Options)
+	opStack := getOperationStackFromOptions(ctx.Options)
 
 	if !FixateOperationIdTime(ctx, "", opTime) {
 		om.AggregateOpMsg(sfMediators.OpMsgIdle("cannot be completed without losing consistency")).Reply()
@@ -157,7 +157,7 @@ func GraphVertexDelete(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 	}
 
 	ctx.Domain.Cache().DeleteValueKVSync(ctx.Self.ID, -1) // Delete vertex's body
-	addVertexOpToOpStack(opStack, "delete", ctx.Self.ID, oldBody, nil)
+	addVertexOperationToOpStack(opStack, "delete", ctx.Self.ID, oldBody, nil)
 
 	waiting4Aggregation := false
 	// Delete all out links -------------------------------
