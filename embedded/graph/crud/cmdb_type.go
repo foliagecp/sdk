@@ -56,9 +56,7 @@ func CMDBTypeRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMed
 	}
 
 	result := easyjson.NewJSONObject()
-	if resData.PathExists("body") {
-		result.SetByPath("body", resData.GetByPath("body"))
-	}
+
 	result.SetByPath("types.to", easyjson.JSONFromArray(toTypes))
 	result.SetByPath("types.from", easyjson.JSONFromArray(fromTypes))
 	result.SetByPath("object_uuids", easyjson.JSONFromArray(objects))
@@ -66,11 +64,37 @@ func CMDBTypeRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMed
 		result.DeepMerge(resData)
 		result.RemoveByPath("op_stack")
 	}
+	if resData.PathExists("body") {
+		resultBody := resData.GetByPath("body").Clone()
+		triggers := resultBody.GetByPath("triggers")
+		resultBody.RemoveByPath("triggers")
+
+		if triggers.IsNonEmptyObject() {
+			result.SetByPath("triggers", triggers)
+		}
+
+		result.SetByPath("body", resultBody)
+	}
 
 	system.MsgOnErrorReturn(om.ReplyWithData(&result))
 }
 
 func CMDBTypeCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
+	{
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("op_time", easyjson.NewJSON(system.IntToStr(opTime)))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.dirty.type.read", ctx.Self.ID, &payload, nil)))
+		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_OK {
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("type %s already exists", ctx.Self.ID))).Reply()
+			return
+		}
+	}
+
+	triggers := easyjson.NewJSONObject()
+	if tr := data.GetByPath("triggers"); tr.IsNonEmptyObject() {
+		triggers = tr
+	}
+
 	forwardOptions := ctx.Options.Clone()
 	forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
 	forwardOptions.SetByPath("op_stack", easyjson.NewJSON(true))
@@ -81,6 +105,7 @@ func CMDBTypeCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpM
 		if data.PathExists("body") {
 			payload.SetByPath("data.body", data.GetByPath("body"))
 		}
+		payload.SetByPath("data.body.triggers", triggers)
 		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Self.ID, &payload, &forwardOptions)
 	}
 	{
@@ -117,6 +142,12 @@ func CMDBTypeUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpM
 			return
 		}
 	}
+
+	triggers := easyjson.NewJSONObject()
+	if tr := data.GetByPath("triggers"); tr.IsNonEmptyObject() {
+		triggers = tr
+	}
+
 	forwardOptions := ctx.Options.Clone()
 	forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
 	forwardOptions.SetByPath("op_stack", easyjson.NewJSON(true))
@@ -125,6 +156,7 @@ func CMDBTypeUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpM
 		payload.SetByPath("operation.type", easyjson.NewJSON("update"))
 		payload.SetByPath("operation.target", easyjson.NewJSON("vertex"))
 		payload.SetByPath("data", data.Clone())
+		payload.SetByPath("data.body.triggers", triggers)
 		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Self.ID, &payload, &forwardOptions)
 	}
 }
