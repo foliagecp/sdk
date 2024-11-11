@@ -68,6 +68,7 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 	statefun.NewFunctionType(runtime, "functions.graph.api.dirty.vertex.link.read", GraphDirtyVertexLinkRead, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
 
 	// CMDB level API registration
+	statefun.NewFunctionType(runtime, "functions.cmdb.api.crud.queue", CMDB_CRUDQueue, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
 	statefun.NewFunctionType(runtime, "functions.cmdb.api.crud", CMDB_CRUDGateway, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
 	statefun.NewFunctionType(runtime, "functions.cmdb.api.dirty.type.read", CMDBDirtyTypeRead, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
 	statefun.NewFunctionType(runtime, "functions.cmdb.api.dirty.type.relation.read", CMDBDirtyTypeRelationRead, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))

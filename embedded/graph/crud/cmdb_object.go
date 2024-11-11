@@ -37,6 +37,7 @@ func CMDBObjectRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpM
 			}
 		}
 	}
+
 	if len(objectType) == 0 {
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s is not an object", ctx.Self.ID)))
 		system.MsgOnErrorReturn(om.ReplyWithData(easyjson.NewJSONObject().GetPtr()))
@@ -168,6 +169,12 @@ func CMDBObjectDelete(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.O
 			return
 		}
 	}
+
+	deleteObjectMeta := easyjson.NewJSONObject()
+	deleteObjectMeta.SetByPath("__deleted_object.uuid", easyjson.NewJSON(ctx.Self.ID))
+	deleteObjectMeta.SetByPath("__deleted_object.type", easyjson.NewJSON(om.GetLastSyncOp().Data.GetByPath("type").AsStringDefault("")))
+	om.AddIntermediateResult(ctx, &deleteObjectMeta)
+
 	forwardOptions := ctx.Options.Clone()
 	forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
 	forwardOptions.SetByPath("op_stack", easyjson.NewJSON(true))

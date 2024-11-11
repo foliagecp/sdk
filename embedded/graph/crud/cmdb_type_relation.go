@@ -49,18 +49,24 @@ func CMDBTypeRelationRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediato
 
 	result := easyjson.NewJSONObject()
 
-	typesRelationBody := resData.GetByPath("body").Clone()
-	objectsRelationType := typesRelationBody.GetByPath("type").AsStringDefault("")
-	typesRelationBody.RemoveByPath("type")
+	resultBody := resData.GetByPath("body").Clone()
+	objectsRelationType := resultBody.GetByPath("type").AsStringDefault("")
+	triggers := resultBody.GetByPath("triggers")
 
-	result.SetByPath("body", typesRelationBody)
+	resultBody.RemoveByPath("type")
+	resultBody.RemoveByPath("triggers")
+
 	result.SetByPath("types.to", easyjson.NewJSON(toType))
 	result.SetByPath("types.from", easyjson.NewJSON(fromType))
 	result.SetByPath("object_relation_type", easyjson.NewJSON(objectsRelationType))
+	if triggers.IsNonEmptyObject() {
+		result.SetByPath("triggers", triggers)
+	}
 	if data.GetByPath("details").AsBoolDefault(false) {
 		result.DeepMerge(resData)
 		result.RemoveByPath("op_stack")
 	}
+	result.SetByPath("body", resultBody)
 
 	system.MsgOnErrorReturn(om.ReplyWithData(&result))
 }
@@ -96,11 +102,17 @@ func CMDBTypeRelationCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMedia
 		}
 	}
 
+	triggers := easyjson.NewJSONObject()
+	if tr := data.GetByPath("triggers"); tr.IsNonEmptyObject() {
+		triggers = tr
+	}
+
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("operation.type", easyjson.NewJSON("create"))
 	payload.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
 	payload.SetByPath("data", data.Clone())
 	payload.SetByPath("data.body.type", easyjson.NewJSON(objRelationType))
+	payload.SetByPath("data.body.triggers", triggers)
 	payload.SetByPath("data.type", easyjson.NewJSON(TYPE_TYPE_LINKTYPE))
 	payload.SetByPath("data.name", easyjson.NewJSON(to))
 
@@ -142,6 +154,12 @@ func CMDBTypeRelationUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMedia
 		}
 		objRelationType = om.GetLastSyncOp().Data.GetByPath("object_relation_type").AsStringDefault("")
 	}
+
+	triggers := easyjson.NewJSONObject()
+	if tr := data.GetByPath("triggers"); tr.IsNonEmptyObject() {
+		triggers = tr
+	}
+
 	forwardOptions := ctx.Options.Clone()
 	forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))
 	forwardOptions.SetByPath("op_stack", easyjson.NewJSON(true))
@@ -153,6 +171,7 @@ func CMDBTypeRelationUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMedia
 		payload.SetByPath("data.to", easyjson.NewJSON(to))
 		payload.SetByPath("data.type", easyjson.NewJSON(TYPE_TYPE_LINKTYPE))
 		payload.SetByPath("data.body.type", easyjson.NewJSON(objRelationType))
+		payload.SetByPath("data.body.triggers", triggers)
 		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.graph.api.crud", ctx.Self.ID, &payload, &forwardOptions)
 	}
 }

@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/foliagecp/easyjson"
-	"github.com/foliagecp/sdk/statefun/logger"
 	"github.com/foliagecp/sdk/statefun/mediator"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
@@ -22,6 +21,26 @@ var (
 		"object.relation": CMDBObjectRelationCRUD_Dispatcher,
 	}
 )
+
+func CMDB_CRUDQueue(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	om := sfMediators.NewOpMediator(ctx)
+
+	uuid := ctx.Payload.GetByPath("uuid").AsStringDefault("")
+	if len(uuid) == 0 {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("missing uuid")).Reply()
+		return
+	}
+
+	if ctx.Domain.Name() != ctx.Domain.HubDomainName() { // Redirect to hub if needed
+		idOnHub := ctx.Domain.CreateObjectIDWithHubDomain(ctx.Self.ID, true)
+		om.SignalWithAggregation(sfPlugins.AutoSignalSelect, ctx.Self.Typename, idOnHub, ctx.Payload, ctx.Options)
+		return
+	}
+
+	payload := ctx.Payload.Clone()
+	payload.RemoveByPath("uuid")
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.crud", uuid, &payload, ctx.Options))).Reply()
+}
 
 /*
 CMDB_CRUDGateway. Garanties sequential order for all graph api calls
@@ -110,17 +129,6 @@ func CMDB_CRUDController(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 				opTime = system.Str2Int(t)
 			}
 			opTimeStr := fmt.Sprintf("%d", opTime)
-			crudRegisterOperation(ctx, target, operation, opTime)
-
-			// Retries meta -------------------------------
-			meta := om.GetMeta(ctx)
-			meta.SetByPath("", easyjson.NewJSON(target))
-			meta.SetByPath("operation.time", easyjson.NewJSON(opTimeStr))
-			meta.SetByPath("operation.payload", *ctx.Payload.Clone().GetPtr())
-			meta.SetByPath("operation.options", *ctx.Options.Clone().GetPtr())
-			om.SetMeta(ctx, meta)
-			// --------------------------------------------
-
 			selfCallWithOpTime(ctx.Payload, ctx.Options, opTimeStr)
 			return
 		}
@@ -134,30 +142,18 @@ func CMDB_CRUDController(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("CMDB_CRUDController for target %s detected no op_time", target))).Reply()
 		}
 	case mediator.AggregatedWorkersOp:
-		meta := om.GetMeta(ctx)
-		opTimeStr := meta.GetByPath("operation.time").AsStringDefault("")
-		if len(opTimeStr) > 0 {
-			opTime := system.Str2Int(opTimeStr)
-			omDetails := om.GetDetails()
-			if strings.Contains(omDetails, "not_finished_cud.older") {
-				opPayload := meta.GetByPath("operation.payload")
-				opOptions := meta.GetByPath("operation.options")
-
-				om.Reaggregate(ctx)
-				selfCallWithOpTime(&opPayload, &opOptions, opTimeStr)
-				return
-			} else {
-				crudUnregisterOperation(ctx, target, operation, opTime)
-			}
-		} else {
-			logger.Logln(logger.FatalLevel, "no op time found")
-		}
-
 		opInfo := easyjson.NewJSONObject()
 		opInfo.SetByPath("operation.type", easyjson.NewJSON(operation))
 		opInfo.SetByPath("operation.target", easyjson.NewJSON(target))
 		om.SetAdditionalReplyData(ctx, &opInfo)
 		aggregatedData := unifiedCRUDDataAggregator(om)
+
+		if target == "object" || target == "object.relation" {
+			if aggregatedData.IsNonEmptyObject() {
+				execTriggers(ctx, &aggregatedData)
+			}
+		}
+
 		aggregatedData.RemoveByPath("op_stack")
 		system.MsgOnErrorReturn(om.ReplyWithData(&aggregatedData))
 	}
@@ -175,7 +171,6 @@ func CMDBDirtyTypeRead(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 	if t := ctx.Payload.GetByPath("op_time").AsStringDefault(""); len(t) > 0 {
 		opTime = system.Str2Int(t)
 	}
-	dirtyReadAppendMeta(ctx, om, "type", "read", opTime)
 
 	CMDBTypeRead(ctx, om, opTime, ctx.Payload)
 }
@@ -192,7 +187,6 @@ func CMDBDirtyTypeRelationRead(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins
 	if t := ctx.Payload.GetByPath("op_time").AsStringDefault(""); len(t) > 0 {
 		opTime = system.Str2Int(t)
 	}
-	dirtyReadAppendMeta(ctx, om, "type.relation", "read", opTime)
 
 	CMDBTypeRelationRead(ctx, om, opTime, ctx.Payload)
 }
@@ -204,7 +198,6 @@ func CMDBDirtyObjectRead(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.State
 	if t := ctx.Payload.GetByPath("op_time").AsStringDefault(""); len(t) > 0 {
 		opTime = system.Str2Int(t)
 	}
-	dirtyReadAppendMeta(ctx, om, "object", "read", opTime)
 
 	CMDBObjectRead(ctx, om, opTime, ctx.Payload)
 }
@@ -216,7 +209,6 @@ func CMDBDirtyObjectRelationRead(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugi
 	if t := ctx.Payload.GetByPath("op_time").AsStringDefault(""); len(t) > 0 {
 		opTime = system.Str2Int(t)
 	}
-	dirtyReadAppendMeta(ctx, om, "object.relation", "read", opTime)
 
 	CMDBObjectRelationRead(ctx, om, opTime, ctx.Payload)
 }
