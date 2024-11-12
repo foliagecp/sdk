@@ -35,126 +35,163 @@ func NewGraphSyncClientFromRequestFunction(request sfp.SFRequestFunc) (GraphSync
 	return GraphSyncClient{request: request}, nil
 }
 
+/*
+nats -s nats://nats:foliage@nats:4222 req request.hub.functions.graph.api.crud.a "{\"payload\":{\"operation\":{\"target\":\"vertex\",\"type\":\"create\"}},\"options\":{\"op_stack\":true}}"
+nats -s nats://nats:foliage@nats:4222 req request.hub.functions.graph.api.crud.a "{\"payload\":{\"operation\":{\"target\":\"vertex\",\"type\":\"update\"},\"data\":{\"body\":{\"foo\":\"bar\"}}},\"options\":{\"op_stack\":true}}"
+nats -s nats://nats:foliage@nats:4222 req request.hub.functions.graph.api.crud.a "{\"payload\":{\"operation\":{\"target\":\"vertex\",\"type\":\"delete\"}},\"options\":{\"op_stack\":true}}"
+
+nats -s nats://nats:foliage@nats:4222 req request.hub.functions.graph.api.dirty.vertex.read.a "{\"payload\":{\"details\":true},\"options\":{\"op_stack\":true}}"
+
+nats -s nats://nats:foliage@nats:4222 req request.hub.functions.graph.api.crud.a "{\"payload\":{\"operation\":{\"target\":\"vertex.link\",\"type\":\"create\"},\"data\":{\"to\":\"b\",\"name\":\"a2b\",\"type\":\"ta2b\",\"body\":{\"foo\":\"bar\"},\"tags\":[\"tagA\",\"tagB\"]}},\"options\":{\"op_stack\":true}}"
+nats -s nats://nats:foliage@nats:4222 req request.hub.functions.graph.api.crud.a "{\"payload\":{\"operation\":{\"target\":\"vertex.link\",\"type\":\"update\"},\"data\":{\"name\":\"a2b\",\"body\":{\"foo\":\"bar\"},\"tags\":[\"tagA\",\"tagB\"]}},\"options\":{\"op_stack\":true}}"
+nats -s nats://nats:foliage@nats:4222 req request.hub.functions.graph.api.crud.a "{\"payload\":{\"operation\":{\"target\":\"vertex.link\",\"type\":\"delete\"},\"data\":{\"name\":\"a2b\"}},\"options\":{\"op_stack\":true}}"
+
+nats -s nats://nats:foliage@nats:4222 req request.hub.functions.graph.api.dirty.vertex.link.read.a "{\"payload\":{\"name\":\"a2b\",\"details\":true},\"options\":{\"op_stack\":true}}"
+*/
+
 func (gc GraphSyncClient) VertexCreate(id string, body ...easyjson.JSON) error {
 	payload := easyjson.NewJSONObject()
-	payload.SetByPath("body", easyjson.NewJSONObject())
+	payload.SetByPath("operation.target", easyjson.NewJSON("vertex"))
+	payload.SetByPath("operation.type", easyjson.NewJSON("create"))
 	if len(body) > 0 {
-		payload.SetByPath("body", body[0])
+		payload.SetByPath("data.body", body[0])
 	}
-	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.vertex.create", id, &payload, nil)))
+	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.crud", id, &payload, nil)))
 }
 
 func (gc GraphSyncClient) VertexUpdate(id string, body easyjson.JSON, replace bool, upsert ...bool) error {
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("operation.target", easyjson.NewJSON("vertex"))
+	payload.SetByPath("operation.type", easyjson.NewJSON("update"))
 	if len(upsert) > 0 {
-		payload.SetByPath("upsert", easyjson.NewJSON(upsert[0]))
+		payload.SetByPath("data.upsert", easyjson.NewJSON(upsert[0]))
 	}
-	payload.SetByPath("replace", easyjson.NewJSON(replace))
-	payload.SetByPath("body", body)
+	payload.SetByPath("data.replace", easyjson.NewJSON(replace))
+	payload.SetByPath("data.body", body)
 
-	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.vertex.update", id, &payload, nil)))
+	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.crud", id, &payload, nil)))
 }
 
 func (gc GraphSyncClient) VertexDelete(id string) error {
-	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.vertex.delete", id, nil, nil)))
+	payload := easyjson.NewJSONObject()
+	payload.SetByPath("operation.target", easyjson.NewJSON("vertex"))
+	payload.SetByPath("operation.type", easyjson.NewJSON("delete"))
+	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.crud", id, &payload, nil)))
 }
 
 func (gc GraphSyncClient) VertexRead(id string, details ...bool) (easyjson.JSON, error) {
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("operation.target", easyjson.NewJSON("vertex"))
+	payload.SetByPath("operation.type", easyjson.NewJSON("read"))
 	if len(details) > 0 {
-		payload.SetByPath("details", easyjson.NewJSON(details[0]))
+		payload.SetByPath("data.details", easyjson.NewJSON(details[0]))
 	}
-	om := sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.vertex.read", id, &payload, nil))
+	om := sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.crud", id, &payload, nil))
 	return om.Data, OpErrorFromOpMsg(om)
 }
 
-func (gc GraphSyncClient) VerticesLinkCreate(from, to, linkName, linkType string, tags []string, body ...easyjson.JSON) error {
+func (gc GraphSyncClient) VertexLinkCreate(from, to, linkName, linkType string, tags []string, body ...easyjson.JSON) error {
 	payload := easyjson.NewJSONObject()
-	payload.SetByPath("to", easyjson.NewJSON(to))
-	payload.SetByPath("name", easyjson.NewJSON(linkName))
-	payload.SetByPath("type", easyjson.NewJSON(linkType))
-	payload.SetByPath("body", easyjson.NewJSONObject())
+	payload.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
+	payload.SetByPath("operation.type", easyjson.NewJSON("create"))
+	payload.SetByPath("data.to", easyjson.NewJSON(to))
+	payload.SetByPath("data.name", easyjson.NewJSON(linkName))
+	payload.SetByPath("data.type", easyjson.NewJSON(linkType))
 	if len(body) > 0 {
-		payload.SetByPath("body", body[0])
+		payload.SetByPath("data.body", body[0])
+	} else {
+		payload.SetByPath("data.body", easyjson.NewJSONObject())
 	}
 	if len(tags) > 0 {
 		payload.SetByPath("tags", easyjson.JSONFromArray(tags))
 	}
 
-	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.link.create", from, &payload, nil)))
+	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.crud", from, &payload, nil)))
 }
 
-func (gc GraphSyncClient) VerticesLinkUpdate(from, linkName string, tags []string, body easyjson.JSON, replace bool, toAndType4Upsert ...string) error {
+func (gc GraphSyncClient) VertexLinkUpdate(from, linkName string, tags []string, body easyjson.JSON, replace bool, toAndType4Upsert ...string) error {
 	payload := easyjson.NewJSONObject()
-	payload.SetByPath("name", easyjson.NewJSON(linkName))
-	payload.SetByPath("body", body)
+	payload.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
+	payload.SetByPath("operation.type", easyjson.NewJSON("update"))
+	payload.SetByPath("data.name", easyjson.NewJSON(linkName))
+	payload.SetByPath("data.body", body)
 	if len(tags) > 0 {
-		payload.SetByPath("tags", easyjson.JSONFromArray(tags))
+		payload.SetByPath("data.tags", easyjson.JSONFromArray(tags))
 	}
 	if len(toAndType4Upsert) > 0 {
 		if len(toAndType4Upsert) == 2 {
-			payload.SetByPath("upsert", easyjson.NewJSON(true))
-			payload.SetByPath("to", easyjson.NewJSON(toAndType4Upsert[0]))
-			payload.SetByPath("type", easyjson.NewJSON(toAndType4Upsert[1]))
+			payload.SetByPath("data.upsert", easyjson.NewJSON(true))
+			payload.SetByPath("data.to", easyjson.NewJSON(toAndType4Upsert[0]))
+			payload.SetByPath("data.type", easyjson.NewJSON(toAndType4Upsert[1]))
 		} else {
 			return fmt.Errorf("toAndType4Upsert must consist of 2 string values: \"to\" and \"type\"")
 		}
 	}
 
-	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.link.update", from, &payload, nil)))
+	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.crud", from, &payload, nil)))
 }
 
-func (gc GraphSyncClient) VerticesLinkUpdateByToAndType(from, to, linkType string, tags []string, body easyjson.JSON, replace bool, name4Upsert ...string) error {
+func (gc GraphSyncClient) VertexLinkUpdateByToAndType(from, to, linkType string, tags []string, body easyjson.JSON, replace bool, name4Upsert ...string) error {
 	payload := easyjson.NewJSONObject()
-	payload.SetByPath("to", easyjson.NewJSON(to))
-	payload.SetByPath("type", easyjson.NewJSON(linkType))
+	payload.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
+	payload.SetByPath("operation.type", easyjson.NewJSON("update"))
+	payload.SetByPath("data.to", easyjson.NewJSON(to))
+	payload.SetByPath("data.type", easyjson.NewJSON(linkType))
 
-	payload.SetByPath("body", body)
+	payload.SetByPath("data.body", body)
 	if len(tags) > 0 {
-		payload.SetByPath("tags", easyjson.JSONFromArray(tags))
+		payload.SetByPath("data.tags", easyjson.JSONFromArray(tags))
 	}
 	if len(name4Upsert) > 0 {
-		payload.SetByPath("upsert", easyjson.NewJSON(true))
-		payload.SetByPath("name", easyjson.NewJSON(name4Upsert[0]))
+		payload.SetByPath("data.upsert", easyjson.NewJSON(true))
+		payload.SetByPath("data.name", easyjson.NewJSON(name4Upsert[0]))
 	}
 
-	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.link.update", from, &payload, nil)))
+	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.crud", from, &payload, nil)))
 }
 
-func (gc GraphSyncClient) VerticesLinkDelete(from, linkName string) error {
+func (gc GraphSyncClient) VertexLinkDelete(from, linkName string) error {
 	payload := easyjson.NewJSONObject()
-	payload.SetByPath("name", easyjson.NewJSON(linkName))
+	payload.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
+	payload.SetByPath("operation.type", easyjson.NewJSON("delete"))
+	payload.SetByPath("data.name", easyjson.NewJSON(linkName))
 
-	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.link.delete", from, &payload, nil)))
+	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.crud", from, &payload, nil)))
 }
 
-func (gc GraphSyncClient) VerticesLinkDeleteByToAndType(from, to, linkType string) error {
+func (gc GraphSyncClient) VertexLinkDeleteByToAndType(from, to, linkType string) error {
 	payload := easyjson.NewJSONObject()
-	payload.SetByPath("to", easyjson.NewJSON(to))
-	payload.SetByPath("type", easyjson.NewJSON(linkType))
+	payload.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
+	payload.SetByPath("operation.type", easyjson.NewJSON("delete"))
+	payload.SetByPath("data.to", easyjson.NewJSON(to))
+	payload.SetByPath("data.type", easyjson.NewJSON(linkType))
 
-	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.link.delete", from, &payload, nil)))
+	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.crud", from, &payload, nil)))
 }
 
-func (gc GraphSyncClient) VerticesLinkRead(from, linkName string, details ...bool) (easyjson.JSON, error) {
+func (gc GraphSyncClient) VertexLinkRead(from, linkName string, details ...bool) (easyjson.JSON, error) {
 	payload := easyjson.NewJSONObject()
-	payload.SetByPath("name", easyjson.NewJSON(linkName))
+	payload.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
+	payload.SetByPath("operation.type", easyjson.NewJSON("read"))
+	payload.SetByPath("data.name", easyjson.NewJSON(linkName))
 	if len(details) > 0 {
-		payload.SetByPath("details", easyjson.NewJSON(details[0]))
+		payload.SetByPath("data.details", easyjson.NewJSON(details[0]))
 	}
 
-	om := sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.link.read", from, &payload, nil))
+	om := sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.crud", from, &payload, nil))
 	return om.Data, OpErrorFromOpMsg(om)
 }
 
-func (gc GraphSyncClient) VerticesLinkReadByToAndType(from, to, linkType string, details ...bool) (easyjson.JSON, error) {
+func (gc GraphSyncClient) VertexLinkReadByToAndType(from, to, linkType string, details ...bool) (easyjson.JSON, error) {
 	payload := easyjson.NewJSONObject()
-	payload.SetByPath("to", easyjson.NewJSON(to))
-	payload.SetByPath("type", easyjson.NewJSON(linkType))
+	payload.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
+	payload.SetByPath("operation.type", easyjson.NewJSON("read"))
+	payload.SetByPath("data.to", easyjson.NewJSON(to))
+	payload.SetByPath("data.type", easyjson.NewJSON(linkType))
 	if len(details) > 0 {
-		payload.SetByPath("details", easyjson.NewJSON(details[0]))
+		payload.SetByPath("data.details", easyjson.NewJSON(details[0]))
 	}
 
-	om := sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.link.read", from, &payload, nil))
+	om := sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.crud", from, &payload, nil))
 	return om.Data, OpErrorFromOpMsg(om)
 }

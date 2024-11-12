@@ -39,19 +39,19 @@ func IsTransactionOperationOk(ctx context.Context, j *easyjson.JSON, err error) 
 func initTriggersTest(runtime *statefun.Runtime) {
 	system.MsgOnErrorReturn(dbClient.CMDB.TypeCreate("typea"))
 	system.MsgOnErrorReturn(dbClient.CMDB.TypeCreate("typeb"))
-	system.MsgOnErrorReturn(dbClient.CMDB.TypesLinkCreate("typea", "typeb", "a2b", nil))
+	system.MsgOnErrorReturn(dbClient.CMDB.TypeRelationCreate("typea", "typeb", "a2b", nil))
 }
 
 func TriggersTestIteration(runtime *statefun.Runtime) {
 	system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("a", "typea", easyjson.NewJSONObjectWithKeyValue("a_state", easyjson.NewJSON("created"))))
 	system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("b", "typeb", easyjson.NewJSONObjectWithKeyValue("b_state", easyjson.NewJSON("created"))))
-	system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkCreate("a", "b", "2b", nil, easyjson.NewJSONObjectWithKeyValue("ab_state", easyjson.NewJSON("created"))))
+	system.MsgOnErrorReturn(dbClient.CMDB.ObjectRelationCreate("a", "b", "2b", nil, easyjson.NewJSONObjectWithKeyValue("ab_state", easyjson.NewJSON("created"))))
 	system.MsgOnErrorReturn(dbClient.CMDB.ObjectDelete("a"))
 	system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("a", "typea", easyjson.NewJSONObjectWithKeyValue("a_state", easyjson.NewJSON("recreated"))))
-	system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkCreate("a", "b", "2b", nil, easyjson.NewJSONObjectWithKeyValue("ab_state", easyjson.NewJSON("recreated"))))
+	system.MsgOnErrorReturn(dbClient.CMDB.ObjectRelationCreate("a", "b", "2b", nil, easyjson.NewJSONObjectWithKeyValue("ab_state", easyjson.NewJSON("recreated"))))
 	system.MsgOnErrorReturn(dbClient.CMDB.ObjectUpdate("b", easyjson.NewJSONObjectWithKeyValue("b_state", easyjson.NewJSON("updated")), true))
-	system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkUpdate("a", "b", nil, easyjson.NewJSONObjectWithKeyValue("ab_state", easyjson.NewJSON("updated")), true))
-	system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkDelete("a", "b"))
+	system.MsgOnErrorReturn(dbClient.CMDB.ObjectRelationUpdate("a", "b", nil, easyjson.NewJSONObjectWithKeyValue("ab_state", easyjson.NewJSON("updated")), true))
+	system.MsgOnErrorReturn(dbClient.CMDB.ObjectRelationDelete("a", "b"))
 	system.MsgOnErrorReturn(dbClient.CMDB.ObjectDelete("b"))
 	system.MsgOnErrorReturn(dbClient.CMDB.ObjectDelete("a"))
 }
@@ -62,7 +62,7 @@ func registerTriggers1(runtime *statefun.Runtime) {
 	system.MsgOnErrorReturn(dbClient.CMDB.TriggerObjectSet("typeb", db.UpdateTrigger, triggersTestStatefun1))
 	system.MsgOnErrorReturn(dbClient.CMDB.TriggerObjectSet("typeb", db.DeleteTrigger, triggersTestStatefun1))
 
-	system.MsgOnErrorReturn(dbClient.CMDB.TriggerLinkSet("typea", "typeb", db.UpdateTrigger, triggersTestStatefun1))
+	system.MsgOnErrorReturn(dbClient.CMDB.TriggerObjectRelationSet("typea", "typeb", db.UpdateTrigger, triggersTestStatefun1))
 }
 
 func registerTriggers2(runtime *statefun.Runtime) {
@@ -71,8 +71,8 @@ func registerTriggers2(runtime *statefun.Runtime) {
 
 	system.MsgOnErrorReturn(dbClient.CMDB.TriggerObjectSet("typeb", db.CreateTrigger, triggersTestStatefun1))
 
-	system.MsgOnErrorReturn(dbClient.CMDB.TriggerLinkSet("typea", "typeb", db.CreateTrigger, triggersTestStatefun1))
-	system.MsgOnErrorReturn(dbClient.CMDB.TriggerLinkSet("typea", "typeb", db.DeleteTrigger, triggersTestStatefun1))
+	system.MsgOnErrorReturn(dbClient.CMDB.TriggerObjectRelationSet("typea", "typeb", db.CreateTrigger, triggersTestStatefun1))
+	system.MsgOnErrorReturn(dbClient.CMDB.TriggerObjectRelationSet("typea", "typeb", db.DeleteTrigger, triggersTestStatefun1))
 }
 
 func registerTriggers3(runtime *statefun.Runtime) {
@@ -84,9 +84,9 @@ func registerTriggers3(runtime *statefun.Runtime) {
 	system.MsgOnErrorReturn(dbClient.CMDB.TriggerObjectSet("typeb", db.UpdateTrigger, triggersTestStatefun2))
 	system.MsgOnErrorReturn(dbClient.CMDB.TriggerObjectSet("typeb", db.DeleteTrigger, triggersTestStatefun2))
 
-	system.MsgOnErrorReturn(dbClient.CMDB.TriggerLinkSet("typea", "typeb", db.CreateTrigger, triggersTestStatefun2))
-	system.MsgOnErrorReturn(dbClient.CMDB.TriggerLinkSet("typea", "typeb", db.UpdateTrigger, triggersTestStatefun2))
-	system.MsgOnErrorReturn(dbClient.CMDB.TriggerLinkSet("typea", "typeb", db.DeleteTrigger, triggersTestStatefun2))
+	system.MsgOnErrorReturn(dbClient.CMDB.TriggerObjectRelationSet("typea", "typeb", db.CreateTrigger, triggersTestStatefun2))
+	system.MsgOnErrorReturn(dbClient.CMDB.TriggerObjectRelationSet("typea", "typeb", db.UpdateTrigger, triggersTestStatefun2))
+	system.MsgOnErrorReturn(dbClient.CMDB.TriggerObjectRelationSet("typea", "typeb", db.DeleteTrigger, triggersTestStatefun2))
 }
 
 func triggersStatefun1(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
