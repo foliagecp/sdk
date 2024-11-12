@@ -64,9 +64,11 @@ func CMDBTypeRelationRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediato
 	}
 	if data.GetByPath("details").AsBoolDefault(false) {
 		result.DeepMerge(resData)
-		result.RemoveByPath("op_stack")
 	}
 	result.SetByPath("body", resultBody)
+	if resData.PathExists("op_stack") {
+		result.SetByPath("op_stack", resData.GetByPath("op_stack"))
+	}
 
 	system.MsgOnErrorReturn(om.ReplyWithData(&result))
 }

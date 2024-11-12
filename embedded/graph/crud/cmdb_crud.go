@@ -22,7 +22,7 @@ var (
 	}
 )
 
-func CMDB_CRUDQueue(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+func CMDB_CRUDIsolated(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
 
 	uuid := ctx.Payload.GetByPath("uuid").AsStringDefault("")
@@ -74,7 +74,7 @@ func CMDB_CRUDGateway(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefun
 
 	target := strings.ToLower(meta.GetByPath("operation.target").AsStringDefault(""))
 	operation := strings.ToLower(meta.GetByPath("operation.type").AsStringDefault(""))
-
+	options := meta.GetByPath("operation.options").Clone().GetPtr()
 	if len(target) == 0 {
 		if len(target) == 0 {
 			target = strings.ToLower(ctx.Payload.GetByPath("operation.target").AsStringDefault(""))
@@ -85,8 +85,11 @@ func CMDB_CRUDGateway(sfExec sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefun
 		meta := easyjson.NewJSONObject()
 		meta.SetByPath("operation.target", easyjson.NewJSON(target))
 		meta.SetByPath("operation.type", easyjson.NewJSON(operation))
+		meta.SetByPath("operation.options", *ctx.Options)
 		om.SetMeta(ctx, meta)
 	}
+	options.DeepMerge(*ctx.Options)
+	ctx.Options = options
 
 	if _, ok := CMDB_CRUDDispatcherFromTarget[target]; !ok {
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("invalid operation target='%s'", target))).Reply()
@@ -153,8 +156,9 @@ func CMDB_CRUDController(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 				execTriggers(ctx, &aggregatedData)
 			}
 		}
-
-		aggregatedData.RemoveByPath("op_stack")
+		if !ctx.Options.GetByPath("op_stack").AsBoolDefault(false) {
+			aggregatedData.RemoveByPath("op_stack")
+		}
 		system.MsgOnErrorReturn(om.ReplyWithData(&aggregatedData))
 	}
 }

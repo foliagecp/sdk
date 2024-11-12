@@ -53,3 +53,18 @@ func addVertexLinkOperationToOpStack(opStack *easyjson.JSON, opType string, from
 	}
 	return false
 }
+
+func resultWithOpStack(existingResult *easyjson.JSON, opStack *easyjson.JSON) easyjson.JSON {
+	if existingResult == nil {
+		if opStack == nil {
+			return easyjson.NewJSONNull()
+		}
+		return easyjson.NewJSONObjectWithKeyValue("op_stack", *opStack)
+	} else {
+		if opStack == nil {
+			return *existingResult
+		}
+		existingResult.SetByPath("op_stack", *opStack)
+		return *existingResult
+	}
+}

@@ -62,7 +62,6 @@ func CMDBTypeRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMed
 	result.SetByPath("object_uuids", easyjson.JSONFromArray(objects))
 	if data.GetByPath("details").AsBoolDefault(false) {
 		result.DeepMerge(resData)
-		result.RemoveByPath("op_stack")
 	}
 	if resData.PathExists("body") {
 		resultBody := resData.GetByPath("body").Clone()
@@ -74,6 +73,9 @@ func CMDBTypeRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMed
 		}
 
 		result.SetByPath("body", resultBody)
+	}
+	if resData.PathExists("op_stack") {
+		result.SetByPath("op_stack", resData.GetByPath("op_stack"))
 	}
 
 	system.MsgOnErrorReturn(om.ReplyWithData(&result))
