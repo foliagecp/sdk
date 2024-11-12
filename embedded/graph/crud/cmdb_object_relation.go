@@ -57,17 +57,17 @@ func CMDBObjectRelationRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMedia
 		return
 	}
 
-	var objectsLinkType string
+	var objectRelationType string
 	if lt, err := CMDBObjectRelationRead_ReadTypesRelation(ctx, om, ctx.Self.ID, to, opTime); err != nil {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("error while reading objects relation type: %s", objectsLinkType))).Reply()
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("error while reading objects relation type: %s", objectRelationType))).Reply()
 		return
 	} else {
-		objectsLinkType = lt
+		objectRelationType = lt
 	}
 
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("to", data.GetByPath("to"))
-	payload.SetByPath("type", easyjson.NewJSON(objectsLinkType))
+	payload.SetByPath("type", easyjson.NewJSON(objectRelationType))
 	payload.SetByPath("details", easyjson.NewJSON(true))
 
 	forwardOptions := ctx.Options.Clone()
@@ -91,7 +91,9 @@ func CMDBObjectRelationRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMedia
 	result.SetByPath("tags", resData.GetByPath("tags"))
 	if data.GetByPath("details").AsBoolDefault(false) {
 		result.DeepMerge(resData)
-		result.RemoveByPath("op_stack")
+	}
+	if resData.PathExists("op_stack") {
+		result.SetByPath("op_stack", resData.GetByPath("op_stack"))
 	}
 
 	system.MsgOnErrorReturn(om.ReplyWithData(&result))
@@ -104,19 +106,19 @@ func CMDBObjectRelationCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMed
 		return
 	}
 
-	var objectsLinkType string
+	var objectRelationType string
 	if lt, err := CMDBObjectRelationRead_ReadTypesRelation(ctx, om, ctx.Self.ID, to, opTime); err != nil {
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("error while reading objects relation type: %s", err.Error()))).Reply()
 		return
 	} else {
-		objectsLinkType = lt
+		objectRelationType = lt
 	}
 
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("operation.type", easyjson.NewJSON("create"))
 	payload.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
 	payload.SetByPath("data", data.Clone())
-	payload.SetByPath("data.type", easyjson.NewJSON(objectsLinkType))
+	payload.SetByPath("data.type", easyjson.NewJSON(objectRelationType))
 
 	forwardOptions := ctx.Options.Clone()
 	forwardOptions.SetByPath("op_time", easyjson.NewJSON(fmt.Sprintf("%d", system.GetCurrentTimeNs())))

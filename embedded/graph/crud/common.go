@@ -1,8 +1,14 @@
 package crud
 
 import (
+	"context"
+	"regexp"
+
+	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/statefun"
+	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
+	"github.com/foliagecp/sdk/statefun/system"
 )
 
 const (
@@ -26,56 +32,107 @@ const (
 	InLinkKeyPrefPattern = "%s.in."
 )
 
-func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
-	// High-Level API Helpers
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.delete_object_filtered_out_links", DeleteObjectFilteredOutLinksStatefun, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetAllowedSignalProviders().SetMaxIdHandlers(-1))
+const (
+	// crud_op.<op_target>.<op_id>
+	opRegisterPrefixTemplate = "crud_op.%s.%s"
+	// crud_op.<op_target>.<op_id>.<op_type>.<op_time>
+	opRegisterTemplate = opRegisterPrefixTemplate + ".%s.%d"
+)
 
-	// High-Level API Registration
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.type.create", CreateType, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.type.update", UpdateType, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.type.delete", DeleteType, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.type.read", ReadType, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
+const (
+	ROOT_TYPES_LINKTYPE   = "__types"
+	ROOT_OBJECTS_LINKTYPE = "__objects"
 
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.types.link.create", CreateTypesLink, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.types.link.update", UpdateTypesLink, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.types.link.delete", DeleteTypesLink, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.types.link.read", ReadTypesLink, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
+	TYPES_TYPE_LINKTYPE     = "__types_type"
+	OBJECTS_OBJECT_TYPELINK = "__objects_object"
 
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.object.create", CreateObject, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.object.update", UpdateObject, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.object.delete", DeleteObject, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.object.read", ReadObject, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
+	TYPE_TYPE_LINKTYPE   = "__type_type"
+	TYPE_OBJECT_LINKTYPE = "__type_object"
 
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.objects.link.create", CreateObjectsLink, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.objects.link.update", UpdateObjectsLink, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.objects.link.delete", DeleteObjectsLink, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.objects.link.read", ReadObjectsLink, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
+	GROUP_TYPELINK      = "group"
+	BUILT_IN_TYPES      = "types"
+	BUILT_IN_OBJECTS    = "objects"
+	BUILT_IN_ROOT       = "root"
+	BUILT_IN_TYPE_GROUP = "group"
+	BUILT_IN_OBJECT_NAV = "nav"
 
-	// Low-Level API Registration
-	statefun.NewFunctionType(runtime, "functions.graph.api.vertex.create", LLAPIVertexCreate, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.graph.api.vertex.update", LLAPIVertexUpdate, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.graph.api.vertex.delete", LLAPIVertexDelete, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.graph.api.vertex.read", LLAPIVertexRead, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
+	OBJECT_TYPE_LINKTYPE = "__object_type"
+)
 
-	statefun.NewFunctionType(runtime, "functions.graph.api.link.create", LLAPILinkCreate, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.graph.api.link.update", LLAPILinkUpdate, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.graph.api.link.delete", LLAPILinkDelete, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.graph.api.link.read", LLAPILinkRead, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-
-	// Graph level API registration
-	statefun.NewFunctionType(runtime, "functions.graph.api.crud", GraphCRUDGateway, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.graph.api.dirty.vertex.read", GraphDirtyVertexRead, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.graph.api.dirty.vertex.link.read", GraphDirtyVertexLinkRead, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-
-	// CMDB level API registration
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.crud.queue", CMDB_CRUDQueue, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.crud", CMDB_CRUDGateway, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.dirty.type.read", CMDBDirtyTypeRead, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.dirty.type.relation.read", CMDBDirtyTypeRelationRead, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.dirty.object.read", CMDBDirtyObjectRead, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.dirty.object.relation.read", CMDBDirtyObjectRelationRead, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1))
-
-	if runtime.Domain.Name() == runtime.Domain.HubDomainName() {
-		runtime.RegisterOnAfterStartFunction(cmdbSchemaPrepare, false)
+var (
+	CRUDValidTypes = map[string]struct{}{
+		"create": {},
+		"update": {},
+		"delete": {},
+		"read":   {},
 	}
+	validLinkName = regexp.MustCompile(`\A[a-zA-Z0-9\/_-]+\z`)
+)
+
+func unifiedCRUDDataAggregator(om *sfMediators.OpMediator) easyjson.JSON {
+	aggregatedData := easyjson.NewJSONNull()
+	for _, opMsg := range om.GetAggregatedOpMsgs() {
+		if opMsg.Data.IsNonEmptyObject() {
+			if aggregatedData.IsNull() {
+				aggregatedData = opMsg.Data.Clone()
+			} else {
+				aggregatedData.DeepMerge(opMsg.Data)
+			}
+		}
+	}
+	return aggregatedData
+}
+
+func cmdbSchemaPrepare(ctx context.Context, runtime *statefun.Runtime) error {
+	// ----------------------------------------------------
+	{
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("operation.target", easyjson.NewJSON("vertex"))
+		payload.SetByPath("operation.type", easyjson.NewJSON("create"))
+		system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.crud", BUILT_IN_ROOT, &payload, nil))
+		system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.crud", BUILT_IN_TYPES, &payload, nil))
+		system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.crud", BUILT_IN_OBJECTS, &payload, nil))
+	}
+	{
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
+		payload.SetByPath("operation.type", easyjson.NewJSON("create"))
+		payload.SetByPath("data.to", easyjson.NewJSON(BUILT_IN_TYPES))
+		payload.SetByPath("data.type", easyjson.NewJSON(ROOT_TYPES_LINKTYPE))
+		payload.SetByPath("data.name", easyjson.NewJSON(runtime.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false)))
+		system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.crud", BUILT_IN_ROOT, &payload, nil))
+	}
+	{
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("operation.target", easyjson.NewJSON("vertex.link"))
+		payload.SetByPath("operation.type", easyjson.NewJSON("create"))
+		payload.SetByPath("data.to", easyjson.NewJSON(BUILT_IN_OBJECTS))
+		payload.SetByPath("data.type", easyjson.NewJSON(ROOT_OBJECTS_LINKTYPE))
+		payload.SetByPath("data.name", easyjson.NewJSON(runtime.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false)))
+		system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.crud", BUILT_IN_ROOT, &payload, nil))
+	}
+	// ----------------------------------------------------
+	// ----------------------------------------------------
+	{
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("operation.target", easyjson.NewJSON("type"))
+		payload.SetByPath("operation.type", easyjson.NewJSON("create"))
+		system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.crud", BUILT_IN_TYPE_GROUP, nil, nil))
+	}
+	{
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("operation.target", easyjson.NewJSON("type.relation"))
+		payload.SetByPath("operation.type", easyjson.NewJSON("create"))
+		payload.SetByPath("data.to", easyjson.NewJSON(BUILT_IN_TYPE_GROUP))
+		payload.SetByPath("data.object_relation_type", easyjson.NewJSON(GROUP_TYPELINK))
+		system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.crud", BUILT_IN_TYPE_GROUP, &payload, nil))
+	}
+	{
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("operation.target", easyjson.NewJSON("object"))
+		payload.SetByPath("operation.type", easyjson.NewJSON("create"))
+		system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.crud", BUILT_IN_OBJECT_NAV, &payload, nil))
+	}
+	// ----------------------------------------------------
+	return nil
 }

@@ -61,6 +61,9 @@ func CMDBObjectRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpM
 	if data.GetByPath("details").AsBoolDefault(false) {
 		result.DeepMerge(resData)
 	}
+	if resData.PathExists("op_stack") {
+		result.SetByPath("op_stack", resData.GetByPath("op_stack"))
+	}
 
 	system.MsgOnErrorReturn(om.ReplyWithData(&result))
 }

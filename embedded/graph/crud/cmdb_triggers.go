@@ -125,6 +125,7 @@ func execObjectRelationTriggers(ctx *sfPlugins.StatefunContextProcessor, fromObj
 
 		payload := easyjson.NewJSONObject()
 		payload.SetByPath(fmt.Sprintf("trigger.object.relation.%s", graphOperation), triggerData)
+
 		for _, f := range functions {
 			ctx.Signal(sfPlugins.JetstreamGlobalSignal, f, fromObjectId, &payload, nil)
 		}
