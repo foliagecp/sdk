@@ -74,7 +74,7 @@ func FieldValuePartialMatch(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 	for _, domain := range ctx.Domain.GetWeakClusterDomains() {
 		objectIds, err := dbc.Query.JPGQLCtraQuery(domain+statefun.ObjectIDDomainSeparator+crud.BUILT_IN_OBJECTS, fmt.Sprintf(".*[type('%s')]", crud.OBJECT_TYPELINK))
 		if err != nil {
-			logger.Logf(logger.ErrorLevel, "cannot gather object ids via JPGQLCtraQuery from domain with name=%s\n", domain)
+			logger.Logf(logger.ErrorLevel, "cannot gather object ids via JPGQLCtraQuery from domain with name=%s", domain)
 			continue
 		}
 

@@ -5,8 +5,9 @@ package main
 import (
 	"flag"
 	"fmt"
-	lg "github.com/foliagecp/sdk/statefun/logger"
 	"os"
+
+	lg "github.com/foliagecp/sdk/statefun/logger"
 )
 
 func main() {
@@ -52,9 +53,11 @@ func main() {
 	lg.SetDefaultOptions(
 		os.Stdout,
 		// subtract and multiply, because each level has a factor of 4: -8, -4, 0, 4, 8, 12, 16
-		lg.LogLevel((*logLevelFlag-2)*4),
+		lg.LogLevel((4-*logLevelFlag)*4),
 		*logReportCallerFlag,
 	)
+
+	lg.Logf(lg.InfoLevel, "hello %s", "world")
 
 	Start()
 }

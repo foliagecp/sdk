@@ -56,15 +56,15 @@ func notifySubscriber(c chan KeyValue, key interface{}, value interface{}) {
 }
 
 func (csv *StoreValue) Lock(caller string) {
-	//lg.Logf("------- Locking '%s' by '%s'\n", csv.keyInParent, caller)
+	//lg.Logf("------- Locking '%s' by '%s'", csv.keyInParent, caller)
 	csv.storeMutex.Lock()
-	//lg.Logf(">>>>>>> Locked '%s' by '%s'\n", csv.keyInParent, caller)
+	//lg.Logf(">>>>>>> Locked '%s' by '%s'", csv.keyInParent, caller)
 }
 
 func (csv *StoreValue) Unlock(caller string) {
-	//lg.Logf(">>>>>>> Unlocking '%s' by '%s'\n", csv.keyInParent, caller)
+	//lg.Logf(">>>>>>> Unlocking '%s' by '%s'", csv.keyInParent, caller)
 	csv.storeMutex.Unlock()
-	//lg.Logf("------- Unlocked '%s' by '%s'\n", csv.keyInParent, caller)
+	//lg.Logf("------- Unlocked '%s' by '%s'", csv.keyInParent, caller)
 }
 
 func (csv *StoreValue) GetFullKeyString() string {
@@ -322,10 +322,10 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 							cacheRecordTime := cs.GetValueUpdateTime(key)
 							if kvRecordTime > cacheRecordTime {
 								if appendFlag == 1 {
-									//lg.Logf("---CACHE_KV TF UPDATE: %s, %d, %d\n", key, kvRecordTime, appendFlag)
+									//lg.Logf("---CACHE_KV TF UPDATE: %s, %d, %d", key, kvRecordTime, appendFlag)
 									cs.SetValue(key, valueBytes[9:], false, kvRecordTime, "")
 								} else { // Someone else (other module) deleted a key from the cache
-									//lg.Logf("---CACHE_KV TF DELETE: %s, %d, %d\n", key, kvRecordTime, appendFlag)
+									//lg.Logf("---CACHE_KV TF DELETE: %s, %d, %d", key, kvRecordTime, appendFlag)
 
 									//system.MsgOnErrorReturn(kv.Delete(entry.Key()))
 									system.MsgOnErrorReturn(customNatsKv.KVDelete(cs.js, cs.kv, entry.Key()))
@@ -346,7 +346,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 									csv.TryPurgeConfirm(false)
 									csv.Unlock("storeUpdatesHandler")
 								}
-								//lg.Logf("---CACHE_KV TF TOO OLD: %s, %d, %d\n", key, kvRecordTime, appendFlag)
+								//lg.Logf("---CACHE_KV TF TOO OLD: %s, %d, %d", key, kvRecordTime, appendFlag)
 							}
 						} else if len(valueBytes) == 0 { // Complete delete signal from KV store
 							if csv := cs.getLastKeyCacheStoreValue(key); csv != nil {
@@ -356,11 +356,11 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 								csv.TryPurgeConfirm(false)
 								csv.Unlock("storeUpdatesHandler complete_delete")
 							}
-							//lg.Logf("---CACHE_KV EMPTY: %s\n", key)
+							//lg.Logf("---CACHE_KV EMPTY: %s", key)
 							// Deletion notify - omitting cause value must already be deleted from the cache
 						} else {
-							//lg.Logf("---CACHE_KV !T!F: %s\n", key)
-							lg.Logf(lg.ErrorLevel, "storeUpdatesHandler: received value without time and append flag!\n")
+							//lg.Logf("---CACHE_KV !T!F: %s", key)
+							lg.Logf(lg.ErrorLevel, "storeUpdatesHandler: received value without time and append flag!")
 						}
 					} else {
 						if inited.CompareAndSwap(false, true) {
@@ -371,7 +371,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 			}
 			system.MsgOnErrorReturn(w.Stop())
 		} else {
-			lg.Logf(lg.ErrorLevel, "storeUpdatesHandler kv.Watch error %s\n", err)
+			lg.Logf(lg.ErrorLevel, "storeUpdatesHandler kv.Watch error %s", err)
 		}
 	}
 	kvLazyWriter := func(cs *Store) {
@@ -433,7 +433,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 							if csvChild.valueUpdateTime > 0 && csvChild.valueUpdateTime <= cs.lruTresholdTime && csvChild.purgeState == 0 { // Older than or equal to specific time
 								// currentStoreValue locked by range no locking/unlocking needed
 								currentStoreValue.ConsistencyLoss(system.GetCurrentTimeNs())
-								//lg.Logf("Consistency lost for key=\"%s\" store\n", currentStoreValue.GetFullKeyString())
+								//lg.Logf("Consistency lost for key=\"%s\" store", currentStoreValue.GetFullKeyString())
 								//lg.Logln("Purging: " + newSuffix)
 								csvChild.TryPurgeReady(false)
 								csvChild.TryPurgeConfirm(false)
@@ -483,7 +483,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 					for i := 0; i < len(lruTimes); i++ {
 						cmpr = append(cmpr, lruTimes[i] > 0 && lruTimes[i] <= cs.lruTresholdTime)
 					}
-					lg.Logf("LEFT IN CACHE: %d (%d) - %s %s\n", len(lruTimes), cs.lruTresholdTime, fmt.Sprintln(cmpr), fmt.Sprintln(lruTimes))
+					lg.Logf("LEFT IN CACHE: %d (%d) - %s %s", len(lruTimes), cs.lruTresholdTime, fmt.Sprintln(cmpr), fmt.Sprintln(lruTimes))
 				}
 				// ----------------------------------------------------------------*/
 
@@ -508,7 +508,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 func (cs *Store) SubscribeLevelCallback(key string, callbackID string) chan KeyValue {
 	if _, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true); parentCacheStoreValue != nil {
 		onBufferOverflow := func() {
-			lg.Logf(lg.WarnLevel, "SubscribeLevelCallback SubscriptionNotificationsBuffer overflow for key=%s!\n", key)
+			lg.Logf(lg.WarnLevel, "SubscribeLevelCallback SubscriptionNotificationsBuffer overflow for key=%s!", key)
 		}
 		callbackChannelIn, callbackChannelOut := system.CreateDimSizeChannel[KeyValue](cs.cacheConfig.levelSubscriptionNotificationsBufferMaxSize, onBufferOverflow)
 		parentCacheStoreValue.notifyUpdates.Store(callbackID, callbackChannelIn)
@@ -715,7 +715,7 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 			transaction.operators = append(transaction.operators, &TransactionOperator{operatorType: 0, key: key, value: value, updateInKV: updateInKV, customTime: customSetTime})
 			transaction.mutex.Unlock()
 		} else {
-			lg.Logf(lg.ErrorLevel, "SetValue: transaction with id=%s doesn't exist\n", transactionID)
+			lg.Logf(lg.ErrorLevel, "SetValue: transaction with id=%s doesn't exist", transactionID)
 		}
 	}
 	return true
@@ -744,7 +744,7 @@ func (cs *Store) DeleteValue(key string, updateInKV bool, customDeleteTime int64
 			transaction.operators = append(transaction.operators, &TransactionOperator{operatorType: 1, key: key, value: nil, updateInKV: updateInKV, customTime: customDeleteTime})
 			transaction.mutex.Unlock()
 		} else {
-			lg.Logf(lg.ErrorLevel, "DeleteValue: transaction with id=%s doesn't exist\n", transactionID)
+			lg.Logf(lg.ErrorLevel, "DeleteValue: transaction with id=%s doesn't exist", transactionID)
 		}
 	}
 }
@@ -766,7 +766,7 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 				}
 			}
 		} else {
-			lg.Logf(lg.ErrorLevel, "GetKeysByPattern kv.Watch error %s\n", err)
+			lg.Logf(lg.ErrorLevel, "GetKeysByPattern kv.Watch error %s", err)
 		}
 		//lg.Logln("!!! GetKeysByPattern ended appendKeysFromKV")
 		cs.getKeysByPatternFromKVMutex.Unlock()
@@ -800,7 +800,7 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 				if keysCountBefore == keysCountAfter && childrenStoresAreConsistentWithKV {
 					// Restore consistency if relevant
 					//if atomic.CompareAndSwapInt64(&parentCacheStoreValue.storeConsistencyWithKVLossTime, consistencyWithKVLossTime, 0) {
-					//lg.Logf("Consistency restored for key=\"%s\" store\n", parentCacheStoreValue.GetFullKeyString())
+					//lg.Logf("Consistency restored for key=\"%s\" store", parentCacheStoreValue.GetFullKeyString())
 					//}
 					atomic.CompareAndSwapInt64(&parentCacheStoreValue.storeConsistencyWithKVLossTime, consistencyWithKVLossTime, 0)
 				}
@@ -859,7 +859,7 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 					for subCSV, subCSVConsistencyWithKVLossTime := range allSubCSVsToConsistencyWithKVLossTime {
 						// Restore consistency if relevant
 						//if atomic.CompareAndSwapInt64(&subCSV.storeConsistencyWithKVLossTime, subCSVConsistencyWithKVLossTime, 0) {
-						//lg.Logf("Consistency restored for key=\"%s\" store\n", subCSV.GetFullKeyString())
+						//lg.Logf("Consistency restored for key=\"%s\" store", subCSV.GetFullKeyString())
 						//}
 						atomic.CompareAndSwapInt64(&subCSV.storeConsistencyWithKVLossTime, subCSVConsistencyWithKVLossTime, 0)
 					}
@@ -889,7 +889,7 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 				// Cannot restore consistency here
 			}
 		} else {
-			lg.Logf(lg.ErrorLevel, "GetKeysByPattern: getLastExistingCacheStoreValueByKey returns nil\n")
+			lg.Logf(lg.ErrorLevel, "GetKeysByPattern: getLastExistingCacheStoreValueByKey returns nil")
 		}
 	}
 

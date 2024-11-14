@@ -199,7 +199,7 @@ func createGraphML(sourceVertex string, domain sfPlugins.Domain, nodes map[strin
 	}
 	s, err := exportToGraphMLString(outNodes, outEdges)
 	if err != nil {
-		logger.Logf(logger.ErrorLevel, "createGraphML error: %s\n", err.Error())
+		logger.Logf(logger.ErrorLevel, "createGraphML error: %s", err.Error())
 	}
 	return s
 }

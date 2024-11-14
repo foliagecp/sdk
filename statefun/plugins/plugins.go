@@ -121,10 +121,10 @@ func NewTypenameExecutor(alias string, source string, executorContructorFunction
 
 func (tnex *TypenameExecutorPlugin) AddForID(id string) {
 	if tnex.executorContructorFunction == nil {
-		lg.Logf(lg.ErrorLevel, "Cannot create new StatefunExecutor for id=%s: missing newExecutor function\n", id)
+		lg.Logf(lg.ErrorLevel, "Cannot create new StatefunExecutor for id=%s: missing newExecutor function", id)
 		tnex.idExecutors.Store(id, nil)
 	} else {
-		lg.Logf(lg.TraceLevel, "______________ Created StatefunExecutor for id=%s\n", id)
+		lg.Logf(lg.TraceLevel, "______________ Created StatefunExecutor for id=%s", id)
 		executor := tnex.executorContructorFunction(tnex.alias, tnex.source)
 		tnex.idExecutors.Store(id, executor)
 	}
