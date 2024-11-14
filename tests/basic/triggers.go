@@ -21,16 +21,16 @@ var (
 func IsTransactionOperationOk(ctx context.Context, j *easyjson.JSON, err error) bool {
 	le := lg.GetLogger()
 	if err != nil {
-		le.Error(ctx, "Transaction operation failed: %s\n", err)
+		le.Error(ctx, "Transaction operation failed: %s", err)
 		return false
 	}
 	if s, ok := j.GetByPath("payload.status").AsString(); ok {
 		if s != "ok" {
-			le.Warn(ctx, "Transaction status is not ok, raw data: %s\n", j.ToString())
+			le.Warn(ctx, "Transaction status is not ok, raw data: %s", j.ToString())
 			return false
 		}
 	} else {
-		le.Warn(ctx, "Transaction operation status format is unknown, raw data: %s\n", j.ToString())
+		le.Warn(ctx, "Transaction operation status format is unknown, raw data: %s", j.ToString())
 		return false
 	}
 	return true
@@ -90,12 +90,12 @@ func registerTriggers3(runtime *statefun.Runtime) {
 }
 
 func triggersStatefun1(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	lg.Logf(lg.DebugLevel, "-------> %s:%s\n", ctx.Self.Typename, ctx.Self.ID)
+	lg.Logf(lg.DebugLevel, "-------> %s:%s", ctx.Self.Typename, ctx.Self.ID)
 	lg.Logln(lg.DebugLevel, "== Payload:", ctx.Payload.ToString())
 }
 
 func triggersStatefun2(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	lg.Logf(lg.DebugLevel, "-------> %s:%s\n", ctx.Self.Typename, ctx.Self.ID)
+	lg.Logf(lg.DebugLevel, "-------> %s:%s", ctx.Self.Typename, ctx.Self.ID)
 	lg.Logln(lg.DebugLevel, "== Payload:", ctx.Payload.ToString())
 }
 

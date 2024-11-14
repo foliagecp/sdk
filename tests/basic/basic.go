@@ -64,7 +64,7 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefun
 	increment := int(options.GetByPath("increment").AsNumericDefault(0))
 
 	if MasterFunctionLogs {
-		lg.Logf(lg.DebugLevel, "-------> %s:%s\n", ctx.Self.Typename, ctx.Self.ID)
+		lg.Logf(lg.DebugLevel, "-------> %s:%s", ctx.Self.Typename, ctx.Self.ID)
 		lg.Logln(lg.DebugLevel, "== Payload:", ctx.Payload.ToString())
 		lg.Logln(lg.DebugLevel, "== Context:", functionContext.ToString())
 	}
@@ -97,7 +97,7 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefun
 		}
 		incrementValue += increment
 		functionContext.SetByPath("counter", easyjson.NewJSON(incrementValue))
-		lg.Logf(lg.DebugLevel, "++ Function context's counter value incrementated by %d\n", increment)
+		lg.Logf(lg.DebugLevel, "++ Function context's counter value incrementated by %d", increment)
 	}
 
 	if MasterFunctionObjectContextProcess {
@@ -129,7 +129,7 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 			// Assign JavaScript StatefunExecutor for TypenameExecutorPlugin
 			system.MsgOnErrorReturn(ft.SetExecutor(jsFileName, string(content), sfPluginJS.StatefunExecutorPluginJSContructor))
 		} else {
-			lg.Logf(lg.ErrorLevel, "Could not load JS script: %v\n", err)
+			lg.Logf(lg.ErrorLevel, "Could not load JS script: %v", err)
 		}
 	}
 
@@ -148,7 +148,7 @@ func RunRequestReplyTest(runtime *statefun.Runtime) {
 		system.MsgOnErrorReturn(err)
 	} else {
 		if _, ok := replyJson.GetByPath("counter").AsNumeric(); ok {
-			lg.Logf(lg.DebugLevel, "GolangLocalRequest test passed! Got reply from %s: %s\n", funcTypename, replyJson.ToString())
+			lg.Logf(lg.DebugLevel, "GolangLocalRequest test passed! Got reply from %s: %s", funcTypename, replyJson.ToString())
 		}
 	}
 
@@ -157,7 +157,7 @@ func RunRequestReplyTest(runtime *statefun.Runtime) {
 		system.MsgOnErrorReturn(err)
 	} else {
 		if _, ok := replyJson.GetByPath("counter").AsNumeric(); ok {
-			lg.Logf(lg.DebugLevel, "NatsCoreGlobalRequest test passed! Got reply from %s: %s\n", funcTypename, replyJson.ToString())
+			lg.Logf(lg.DebugLevel, "NatsCoreGlobalRequest test passed! Got reply from %s: %s", funcTypename, replyJson.ToString())
 		}
 	}
 
@@ -211,9 +211,9 @@ func Start() {
 		}
 		runtime.RegisterOnAfterStartFunction(afterStart, true)
 		if err := runtime.Start(context.TODO(), cache.NewCacheConfig("main_cache")); err != nil {
-			lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s\n", err)
+			lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s", err)
 		}
 	} else {
-		lg.Logf(lg.ErrorLevel, "Cannot create statefun runtime due to an error: %s\n", err)
+		lg.Logf(lg.ErrorLevel, "Cannot create statefun runtime due to an error: %s", err)
 	}
 }

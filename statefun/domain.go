@@ -352,7 +352,7 @@ func (dm *Domain) createStreamIfNotExists(sc *nats.StreamConfig) error {
 func (dm *Domain) createRouter(sourceStreamName string, subject string, tsc targetSubjectCalculator) error {
 	consumerName := sourceStreamName + "-" + dm.name + "-consumer"
 	consumerGroup := consumerName + "-group"
-	lg.Logf(lg.TraceLevel, "Handling domain (domain=%s) router for sourceStreamName=%s\n", dm.name, sourceStreamName)
+	lg.Logf(lg.TraceLevel, "Handling domain (domain=%s) router for sourceStreamName=%s", dm.name, sourceStreamName)
 
 	// Create stream consumer if does not exist ---------------------
 	consumerExists := false
@@ -381,15 +381,15 @@ func (dm *Domain) createRouter(sourceStreamName string, subject string, tsc targ
 		consumerGroup,
 		func(msg *nats.Msg) {
 			targetSubject, err := tsc(msg)
-			//lg.Logf(lg.TraceLevel, "Routing (from_domain=%s) %s:%s -> %s\n", dm.name, sourceStreamName, msg.Subject, targetSubject)
+			//lg.Logf(lg.TraceLevel, "Routing (from_domain=%s) %s:%s -> %s", dm.name, sourceStreamName, msg.Subject, targetSubject)
 			if err == nil {
 				pubAck, err := dm.js.Publish(targetSubject, msg.Data)
 				if err == nil {
-					lg.Logf(lg.TraceLevel, "Routed (from_domain=%s) %s:%s -> (to_domain=%s) %s:%s\n", dm.name, sourceStreamName, msg.Subject, pubAck.Domain, pubAck.Stream, targetSubject)
+					lg.Logf(lg.TraceLevel, "Routed (from_domain=%s) %s:%s -> (to_domain=%s) %s:%s", dm.name, sourceStreamName, msg.Subject, pubAck.Domain, pubAck.Stream, targetSubject)
 					system.MsgOnErrorReturn(msg.Ack())
 					return
 				} else {
-					lg.Logf(lg.ErrorLevel, "Domain (domain=%s) router with sourceStreamName=%s cannot republish message to subject %s: %s\n", dm.name, sourceStreamName, targetSubject, err)
+					lg.Logf(lg.ErrorLevel, "Domain (domain=%s) router with sourceStreamName=%s cannot republish message to subject %s: %s", dm.name, sourceStreamName, targetSubject, err)
 					_, err := dm.js.Publish(msg.Subject, msg.Data)
 					if err == nil {
 						system.MsgOnErrorReturn(msg.Ack())
@@ -403,7 +403,7 @@ func (dm *Domain) createRouter(sourceStreamName string, subject string, tsc targ
 		nats.ManualAck(),
 	)
 	if err != nil {
-		lg.Logf(lg.ErrorLevel, "Invalid subscription for domain (domain=%s) router with sourceStreamName=%s: %s\n", dm.name, sourceStreamName, err)
+		lg.Logf(lg.ErrorLevel, "Invalid subscription for domain (domain=%s) router with sourceStreamName=%s: %s", dm.name, sourceStreamName, err)
 		return err
 	}
 	return nil

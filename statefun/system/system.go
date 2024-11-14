@@ -120,7 +120,7 @@ func MsgOnErrorReturn(retVars ...interface{}) {
 	le := lg.GetLogger()
 	for _, retVar := range retVars {
 		if err, ok := retVar.(error); ok {
-			le.Error(context.TODO(), fmt.Sprintf("%s\n", err))
+			le.Error(context.TODO(), fmt.Sprintf("%s", err))
 		}
 	}
 }

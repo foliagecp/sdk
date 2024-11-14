@@ -43,7 +43,7 @@ func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 	if ctx.Reply == nil { // Signal came
 		lg.Logf(
 			lg.InfoLevel,
-			">>> Signal from caller %s:%s on %s:%s\n",
+			">>> Signal from caller %s:%s on %s:%s",
 			ctx.Caller.Typename,
 			ctx.Caller.ID,
 			ctx.Self.Typename,
@@ -79,7 +79,7 @@ func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 	} else { // Request came
 		lg.Logf(
 			lg.InfoLevel,
-			">>>>>> Request from caller %s:%s on %s:%s\n",
+			">>>>>> Request from caller %s:%s on %s:%s",
 			ctx.Caller.Typename,
 			ctx.Caller.ID,
 			ctx.Self.Typename,
@@ -104,7 +104,7 @@ func TestWeakClusteringShadowObjectFunction(executor sfPlugins.StatefunExecutor,
 	if ctx.Reply == nil { // Signal came
 		lg.Logf(
 			lg.InfoLevel,
-			">> ShadowObject >> Signal from caller %s:%s on %s:%s\n",
+			">> ShadowObject >> Signal from caller %s:%s on %s:%s",
 			ctx.Caller.Typename,
 			ctx.Caller.ID,
 			ctx.Self.Typename,
@@ -113,7 +113,7 @@ func TestWeakClusteringShadowObjectFunction(executor sfPlugins.StatefunExecutor,
 	} else { // Request came
 		lg.Logf(
 			lg.InfoLevel,
-			">>> ShadowObject >>> Request from caller %s:%s on %s:%s\n",
+			">>> ShadowObject >>> Request from caller %s:%s on %s:%s",
 			ctx.Caller.Typename,
 			ctx.Caller.ID,
 			ctx.Self.Typename,
@@ -179,10 +179,10 @@ func Start() {
 		}
 		runtime.RegisterOnAfterStartFunction(afterStart, true)
 		if err := runtime.Start(context.TODO(), cache.NewCacheConfig("main_cache")); err != nil {
-			lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s\n", err)
+			lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s", err)
 		}
 	} else {
-		lg.Logf(lg.ErrorLevel, "Cannot create statefun runtime due to an error: %s\n", err)
+		lg.Logf(lg.ErrorLevel, "Cannot create statefun runtime due to an error: %s", err)
 	}
 }
 

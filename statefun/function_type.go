@@ -287,7 +287,7 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 			if v, ok := ft.idRunningStatus.Load(id); ok {
 				running, boolFine := v.(bool)
 				if !boolFine {
-					logger.Logf(logger.ErrorLevel, "Function type GC failed to get idRunningStatus in bool format ftName=%s for id=%s\n", ft.name, id)
+					logger.Logf(logger.ErrorLevel, "Function type GC failed to get idRunningStatus in bool format ftName=%s for id=%s", ft.name, id)
 				}
 				if running {
 					return true
@@ -307,7 +307,7 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 			}
 
 			garbageCollected++
-			//lg.Logf(">>>>>>>>>>>>>> Garbage collected handler for %s:%s\n", ft.name, id)
+			//lg.Logf(">>>>>>>>>>>>>> Garbage collected handler for %s:%s", ft.name, id)
 
 			ft.idKeyMutex.Unlock(id)
 		} else {
@@ -316,7 +316,7 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 		return true
 	})
 	if garbageCollected > 0 && handlersRunning == 0 {
-		lg.Logf(lg.TraceLevel, ">>>>>>>>>>>>>> Garbage collected for typename %s - no id handlers left\n", ft.name)
+		lg.Logf(lg.TraceLevel, ">>>>>>>>>>>>>> Garbage collected for typename %s - no id handlers left", ft.name)
 	}
 
 	return

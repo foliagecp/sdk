@@ -186,7 +186,7 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 					}
 				}
 				functionMsg.RefusalCallback = func() {
-					logger.Logf(logger.WarnLevel, "goLangLocalSignal: receiver typename=%s called on id=%s refused from msg, for safety reasons msg is being redirected to NATS Jetstream\n", targetTypename, targetID)
+					logger.Logf(logger.WarnLevel, "goLangLocalSignal: receiver typename=%s called on id=%s refused from msg, for safety reasons msg is being redirected to NATS Jetstream", targetTypename, targetID)
 					system.MsgOnErrorReturn(r.signal(sfPlugins.JetstreamGlobalSignal, callerTypename, callerID, targetTypename, targetID, payload, options))
 					nackChannel <- struct{}{}
 				}
@@ -205,19 +205,19 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 					}
 					// if ok - whether signal is redirected to NATS Jetstream due to nack command
 				case <-time.After(time.Duration(targetFT.config.msgAckWaitMs) * time.Millisecond):
-					logger.Logf(logger.WarnLevel, "goLangLocalSignal: receiver typename=%s called on id=%s did not ack msg in time, for safety reasons msg is being redirected to NATS Jetstream\n", targetTypename, targetID)
+					logger.Logf(logger.WarnLevel, "goLangLocalSignal: receiver typename=%s called on id=%s did not ack msg in time, for safety reasons msg is being redirected to NATS Jetstream", targetTypename, targetID)
 					system.MsgOnErrorReturn(r.signal(sfPlugins.JetstreamGlobalSignal, callerTypename, callerID, targetTypename, targetID, payload, options))
 				}
 			}()
 			return nil
 		case 1:
-			return fmt.Errorf("goLangLocalSignal: cannot request function with the typename %s via golang, domain differs: %s(runtime) != %s(id)\n", callerTypename, r.Domain.name, r.Domain.GetDomainFromObjectID(targetID))
+			return fmt.Errorf("goLangLocalSignal: cannot request function with the typename %s via golang, domain differs: %s(runtime) != %s(id)", callerTypename, r.Domain.name, r.Domain.GetDomainFromObjectID(targetID))
 		case 2:
 			return fmt.Errorf("goLangLocalSignal: cannot request function with the typename %s via golang, not registered", callerTypename)
 		case 3:
 			fallthrough
 		default:
-			logger.Logf(logger.WarnLevel, "goLangLocalSignal: receiver typename=%s does not support golang signals, for safety reasons msg is being redirected to NATS Jetstream\n", targetTypename)
+			logger.Logf(logger.WarnLevel, "goLangLocalSignal: receiver typename=%s does not support golang signals, for safety reasons msg is being redirected to NATS Jetstream", targetTypename)
 			system.MsgOnErrorReturn(r.signal(sfPlugins.JetstreamGlobalSignal, callerTypename, callerID, targetTypename, targetID, payload, options))
 			return nil
 		}
@@ -312,7 +312,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 				return nil, fmt.Errorf("goLangLocalRequest: timeout occured while requesting function typename \"%s\" with id \"%s\"", targetTypename, targetID)
 			}
 		case 1:
-			return nil, fmt.Errorf("goLangLocalRequest: cannot request function with the typename %s via golang, domain differs: %s(runtime) != %s(id)\n", callerTypename, r.Domain.name, r.Domain.GetDomainFromObjectID(targetID))
+			return nil, fmt.Errorf("goLangLocalRequest: cannot request function with the typename %s via golang, domain differs: %s(runtime) != %s(id)", callerTypename, r.Domain.name, r.Domain.GetDomainFromObjectID(targetID))
 		case 2:
 			return nil, fmt.Errorf("goLangLocalRequest: cannot request function with the typename %s via golang, not registered", callerTypename)
 		case 3:
