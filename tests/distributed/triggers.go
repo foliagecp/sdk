@@ -21,16 +21,16 @@ var (
 func IsTransactionOperationOk(ctx context.Context, j *easyjson.JSON, err error) bool {
 	le := lg.GetLogger()
 	if err != nil {
-		le.Error(ctx, "Transaction operation failed: %s", err)
+		le.Errorf(ctx, "Transaction operation failed: %s", err)
 		return false
 	}
 	if s, ok := j.GetByPath("payload.status").AsString(); ok {
 		if s != "ok" {
-			le.Warn(ctx, "Transaction status is not ok, raw data: %s", j.ToString())
+			le.Warnf(ctx, "Transaction status is not ok, raw data: %s", j.ToString())
 			return false
 		}
 	} else {
-		le.Warn(ctx, "Transaction operation status format is unknown, raw data: %s", j.ToString())
+		le.Warnf(ctx, "Transaction operation status format is unknown, raw data: %s", j.ToString())
 		return false
 	}
 	return true

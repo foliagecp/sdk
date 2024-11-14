@@ -114,7 +114,7 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 	<-r.shutdown
 
 	// Perform cleanup.
-	logger.Info(context.TODO(), "Shutting down runtime...")
+	logger.Infof(context.TODO(), "Shutting down runtime...")
 	r.wg.Wait()
 	return nil
 }
@@ -143,7 +143,7 @@ func (r *Runtime) createStreams(ctx context.Context) error {
 					Retention: nats.InterestPolicy,
 				})
 				if err != nil {
-					logger.Error(context.TODO(), "Failed to add stream: %v", err)
+					logger.Errorf(context.TODO(), "Failed to add stream: %v", err)
 					return err
 				}
 			}
