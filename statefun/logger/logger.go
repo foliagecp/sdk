@@ -147,6 +147,10 @@ func (l *Logger) With(fields map[string]interface{}) *Logger {
 	return newLogger
 }
 
+func (l *Logger) logf(ctx context.Context, level LogLevel, msg string, args ...interface{}) {
+	l.log(ctx, level, fmt.Sprintf(msg, args...))
+}
+
 // log logs a message at the specified level
 func (l *Logger) log(ctx context.Context, level LogLevel, msg string, args ...interface{}) {
 	if level < l.level {
@@ -214,6 +218,34 @@ func (l *Logger) Panic(ctx context.Context, msg string, args ...interface{}) {
 	l.log(ctx, PanicLevel, msg, args...)
 }
 
+func (l *Logger) Tracef(ctx context.Context, msg string, args ...interface{}) {
+	l.logf(ctx, TraceLevel, msg, args...)
+}
+
+func (l *Logger) Debugf(ctx context.Context, msg string, args ...interface{}) {
+	l.logf(ctx, DebugLevel, msg, args...)
+}
+
+func (l *Logger) Infof(ctx context.Context, msg string, args ...interface{}) {
+	l.logf(ctx, InfoLevel, msg, args...)
+}
+
+func (l *Logger) Warnf(ctx context.Context, msg string, args ...interface{}) {
+	l.logf(ctx, WarnLevel, msg, args...)
+}
+
+func (l *Logger) Errorf(ctx context.Context, msg string, args ...interface{}) {
+	l.logf(ctx, ErrorLevel, msg, args...)
+}
+
+func (l *Logger) Fatalf(ctx context.Context, msg string, args ...interface{}) {
+	l.logf(ctx, FatalLevel, msg, args...)
+}
+
+func (l *Logger) Panicf(ctx context.Context, msg string, args ...interface{}) {
+	l.logf(ctx, PanicLevel, msg, args...)
+}
+
 // Logf formats log messages, uses global logger
 //
 // Deprecated. Use l.Trace(), l.Debug(), l.Info(), l.Warn(), l.Error(), l.Fatal(), l.Panic() instead
@@ -221,19 +253,19 @@ func Logf(ll LogLevel, format string, args ...interface{}) {
 	l := GetLogger()
 	switch ll {
 	case PanicLevel:
-		l.Panic(context.TODO(), format, args...)
+		l.Panicf(context.TODO(), format, args...)
 	case FatalLevel:
-		l.Fatal(context.TODO(), format, args...)
+		l.Fatalf(context.TODO(), format, args...)
 	case ErrorLevel:
-		l.Error(context.TODO(), format, args...)
+		l.Errorf(context.TODO(), format, args...)
 	case WarnLevel:
-		l.Warn(context.TODO(), format, args...)
+		l.Warnf(context.TODO(), format, args...)
 	case InfoLevel:
-		l.Info(context.TODO(), format, args...)
+		l.Infof(context.TODO(), format, args...)
 	case DebugLevel:
-		l.Debug(context.TODO(), format, args...)
+		l.Debugf(context.TODO(), format, args...)
 	case TraceLevel:
-		l.Trace(context.TODO(), format, args...)
+		l.Tracef(context.TODO(), format, args...)
 	}
 }
 
