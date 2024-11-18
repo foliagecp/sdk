@@ -113,6 +113,7 @@ func ObjectNameGenerator(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Sta
 	}
 
 	bodyWithName := easyjson.NewJSONObject()
-	bodyWithName.SetByPath("__meta.name", easyjson.NewJSON(resultName))
+	path := ctx.Payload.GetByPath("result_name_path").AsStringDefault("__meta.name")
+	bodyWithName.SetByPath(path, easyjson.NewJSON(resultName))
 	system.MsgOnErrorReturn(dbc.CMDB.ObjectUpdate(ctx.Self.ID, bodyWithName, false))
 }
