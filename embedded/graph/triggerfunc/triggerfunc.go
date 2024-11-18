@@ -41,6 +41,7 @@ try {
 }
 let type_data = context.type_data
 let object_data = context.object_data
+let result_name_path = ""
 let result_name = ""
 if (code_exists) {
 	try {
@@ -50,6 +51,9 @@ if (code_exists) {
 	}
 }
 if (result_name && result_name.length > 0) {
+	if (result_name_path && result_name_path.length > 0) {
+		context.result_name_path = result_name_path
+	}
 	context.result_name = result_name
 	var contextStr = JSON.stringify(context)
 	statefun_setFunctionContext(contextStr)
