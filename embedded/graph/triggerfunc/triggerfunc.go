@@ -97,6 +97,16 @@ func ObjectNameGenerator(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Sta
 	functionContext.SetByPath("type_data", *typeData)
 	ctx.SetFunctionContext(functionContext)
 
+	if ctx.Payload.PathExists("trigger.link") {
+		link := ctx.Payload.GetByPath("trigger.link")
+		for _, k := range link.ObjectKeys() {
+			toId := link.GetByPath(k + ".to").AsStringDefault("")
+			if len(toId) > 0 {
+				ctx.Signal(sfPlugins.AutoSignalSelect, ctx.Self.Typename, toId, nil, nil)
+			}
+		}
+	}
+
 	if executor != nil {
 		if err := executor.BuildError(); err != nil {
 			lg.Logln(lg.ErrorLevel, err.Error())
