@@ -103,6 +103,7 @@ func ObjectNameGenerator(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Sta
 			toId := link.GetByPath(k + ".to").AsStringDefault("")
 			if len(toId) > 0 {
 				ctx.Signal(sfPlugins.AutoSignalSelect, ctx.Self.Typename, toId, nil, nil)
+				break
 			}
 		}
 	}
