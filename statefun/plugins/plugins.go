@@ -14,6 +14,12 @@ import (
 	"github.com/foliagecp/easyjson"
 )
 
+type PluginError interface {
+	Error() string
+	GetLocation() string
+	GetStackTrace() string
+}
+
 type StatefunAddress struct {
 	Typename string
 	ID       string
