@@ -17,15 +17,15 @@ type CustomJSError struct {
 	*v8.JSError
 }
 
-func (e CustomJSError) Error() string {
+func (e *CustomJSError) Error() string {
 	return e.Message
 }
 
-func (e CustomJSError) GetLocation() string {
+func (e *CustomJSError) GetLocation() string {
 	return e.Location
 }
 
-func (e CustomJSError) GetStackTrace() string {
+func (e *CustomJSError) GetStackTrace() string {
 	return e.StackTrace
 }
 
@@ -332,9 +332,9 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 
 	s, e := sfejs.vw.CompileUnboundScript(source, alias, v8.CompileOptions{}) // compile script to get cached data
 
-	var err CustomJSError
+	var err *CustomJSError
 	if e != nil {
-		err = CustomJSError{e.(*v8.JSError)}
+		err = &CustomJSError{e.(*v8.JSError)}
 	}
 
 	sfejs.vmContect = v8.NewContext(sfejs.vw, global) // new context within the VM
@@ -347,9 +347,9 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 func (sfejs *StatefunExecutorPluginJS) Run(ctx *sfPlugins.StatefunContextProcessor) error {
 	sfejs.ctx = ctx
 	_, e := sfejs.copiledScript.Run(sfejs.vmContect)
-	var err CustomJSError
+	var err *CustomJSError
 	if e != nil {
-		err = CustomJSError{e.(*v8.JSError)}
+		err = &CustomJSError{e.(*v8.JSError)}
 	}
 
 	return err
