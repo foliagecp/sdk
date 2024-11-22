@@ -103,7 +103,7 @@ func ObjectNameGenerator(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Sta
 			toId := link.GetByPath(k + ".to").AsStringDefault("")
 			if len(toId) > 0 {
 				ctx.Signal(sfPlugins.AutoSignalSelect, ctx.Self.Typename, toId, nil, nil)
-				break
+				return // When link trigger function is executed only on "to" object
 			}
 		}
 	}
@@ -111,11 +111,11 @@ func ObjectNameGenerator(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Sta
 	if executor != nil {
 		if err := executor.BuildError(); err != nil {
 			lg.Logln(lg.ErrorLevel, err.Error())
-			logger.Logf(logger.ErrorLevel, "ObjectNameGenerator cannot execute script, object with id=%s: %s", ctx.Self.ID, err.Error())
+			logger.Logf(logger.ErrorLevel, "ObjectNameGenerator build script for object of type=%s with id=%s: %s", typeName, ctx.Self.ID, err.Error())
 			return
 		} else {
 			if err := executor.Run(ctx); err != nil {
-				lg.Logln(lg.ErrorLevel, err.Error())
+				lg.Logf(lg.ErrorLevel, "ObjectNameGenerator run script for object of type=%s with id=%s: %s", typeName, ctx.Self.ID, err.Error())
 			}
 		}
 	}
