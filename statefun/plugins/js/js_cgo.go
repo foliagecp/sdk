@@ -13,6 +13,22 @@ import (
 	v8 "rogchap.com/v8go"
 )
 
+type CustomJSError struct {
+	*v8.JSError
+}
+
+func (e CustomJSError) Error() string {
+	return e.Message
+}
+
+func (e CustomJSError) GetLocation() string {
+	return e.Location
+}
+
+func (e CustomJSError) GetStackTrace() string {
+	return e.StackTrace
+}
+
 type StatefunExecutorPluginJS struct {
 	vw            *v8.Isolate
 	vmContect     *v8.Context
@@ -314,15 +330,28 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 	system.MsgOnErrorReturn(global.Set("statefun_egress", statefunEgress))
 	system.MsgOnErrorReturn(global.Set("print", print))
 
-	sfejs.vmContect = v8.NewContext(sfejs.vw, global)                                                         // new context within the VM
-	sfejs.copiledScript, sfejs.buildError = sfejs.vw.CompileUnboundScript(source, alias, v8.CompileOptions{}) // compile script to get cached data
+	s, e := sfejs.vw.CompileUnboundScript(source, alias, v8.CompileOptions{}) // compile script to get cached data
+
+	var err CustomJSError
+	if e != nil {
+		err = CustomJSError{e.(*v8.JSError)}
+	}
+
+	sfejs.vmContect = v8.NewContext(sfejs.vw, global) // new context within the VM
+	sfejs.copiledScript = s
+	sfejs.buildError = err
 
 	return sfejs
 }
 
 func (sfejs *StatefunExecutorPluginJS) Run(ctx *sfPlugins.StatefunContextProcessor) error {
 	sfejs.ctx = ctx
-	_, err := sfejs.copiledScript.Run(sfejs.vmContect)
+	_, e := sfejs.copiledScript.Run(sfejs.vmContect)
+	var err CustomJSError
+	if e != nil {
+		err = CustomJSError{e.(*v8.JSError)}
+	}
+
 	return err
 }
 
