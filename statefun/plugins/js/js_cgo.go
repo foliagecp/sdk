@@ -5,6 +5,8 @@
 package js
 
 import (
+	"fmt"
+
 	"github.com/foliagecp/easyjson"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 
@@ -336,7 +338,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 	system.MsgOnErrorReturn(global.Set("statefun_egress", statefunEgress))
 	system.MsgOnErrorReturn(global.Set("print", print))
 
-	s, e := sfejs.vw.CompileUnboundScript(source, alias, v8.CompileOptions{}) // compile script to get cached data
+	s, e := sfejs.vw.CompileUnboundScript(fmt.Sprintf("{%s}", source), alias, v8.CompileOptions{}) // compile script to get cached data
 
 	sfejs.vmContect = v8.NewContext(sfejs.vw, global) // new context within the VM
 	sfejs.copiledScript = s
