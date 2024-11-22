@@ -115,7 +115,7 @@ func ObjectNameGenerator(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Sta
 		} else {
 			if err := executor.Run(ctx); err != nil {
 				e := err.(sfPlugins.PluginError)
-				lg.Logf(lg.ErrorLevel, "ObjectNameGenerator run script for object of type=%s with id=%s: %s [%s]", typeName, ctx.Self.ID, e.Error(), e.GetStackTrace())
+				lg.Logf(lg.ErrorLevel, "ObjectNameGenerator run script for object of type=%s with id=%s: %s [%s]", typeName, ctx.Self.ID, e.Error(), e.GetLocation())
 			}
 		}
 	}
