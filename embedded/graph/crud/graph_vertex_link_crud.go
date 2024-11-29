@@ -28,7 +28,7 @@ func GraphVertexLinkRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediator
 		return
 	}
 
-	linkBody, err1 := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
+	linkBody, err1 := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, linkName))
 	if err1 != nil { // Link's body does not exist
 		linkBody = easyjson.NewJSONObject().GetPtr()
 	}
@@ -42,7 +42,7 @@ func GraphVertexLinkRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediator
 		result.SetByPath("vertex.to", easyjson.NewJSON(linkTarget))
 
 		tags := []string{}
-		tagKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff3Pattern, ctx.Self.ID, linkName, "tag", ">"))
+		tagKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff3Pattern, ctx.Self.ID, linkName, "tag", ">"))
 		for _, tagKey := range tagKeys {
 			tagKeyTokens := strings.Split(tagKey, ".")
 			tags = append(tags, tagKeyTokens[len(tagKeyTokens)-1])
@@ -99,14 +99,14 @@ func GraphVertexLinkCreateFromVertex(ctx *sfPlugins.StatefunContextProcessor, om
 	}
 
 	// Check if link with this name already exists --------------
-	_, recordTime, err := ctx.Domain.Cache().GetValueWithRecordTime(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
+	_, recordTime, err := ctx.Domain.Cache().GetValueWithRecordTime(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, linkName))
 	if opTime != recordTime && err == nil { // Only our time makes us go further (operation was not completed previously)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s already exists", ctx.Self.ID, linkName))).Reply()
 		return
 	}
 	// ----------------------------------------------------------
 	// Check if link with this type "type" to "to" already exists
-	_, recordTime, err = ctx.Domain.Cache().GetValueWithRecordTime(fmt.Sprintf(OutLinkTypeKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, linkType, toId))
+	_, recordTime, err = ctx.Domain.Cache().GetValueWithRecordTime(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, ctx.Self.ID, linkType, toId))
 	if opTime != recordTime && err == nil {
 		om.AggregateOpMsg(
 			sfMediators.OpMsgFailed(
@@ -119,22 +119,22 @@ func GraphVertexLinkCreateFromVertex(ctx *sfPlugins.StatefunContextProcessor, om
 
 	// Create out link on this vertex -------------------------
 	// Set link target ------------------
-	ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName), []byte(fmt.Sprintf("%s.%s", linkType, toId)), opTime) // Store link body in KV
+	ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, linkName), []byte(fmt.Sprintf("%s.%s", linkType, toId)), opTime) // Store link body in KV
 	// ----------------------------------
 	// Set link body --------------------
-	ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName), linkBody.ToBytes(), opTime) // Store link body in KV
+	ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, linkName), linkBody.ToBytes(), opTime) // Store link body in KV
 	// ----------------------------------
 	// Set link type --------------------
-	ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(OutLinkTypeKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, linkType, toId), []byte(linkName), opTime) // Store link type
+	ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, ctx.Self.ID, linkType, toId), []byte(linkName), opTime) // Store link type
 	// ----------------------------------
 	// Index link type ------------------
-	ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff3Pattern, ctx.Self.ID, linkName, "type", linkType), nil, opTime)
+	ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff3Pattern, ctx.Self.ID, linkName, "type", linkType), nil, opTime)
 	// ----------------------------------
 	// Index link tags ------------------
 	if data.GetByPath("tags").IsNonEmptyArray() {
 		if linkTags, ok := data.GetByPath("tags").AsArrayString(); ok {
 			for _, linkTag := range linkTags {
-				ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff3Pattern, ctx.Self.ID, linkName, "tag", linkTag), nil, opTime)
+				ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff3Pattern, ctx.Self.ID, linkName, "tag", linkTag), nil, opTime)
 			}
 		}
 	}
@@ -169,7 +169,7 @@ func GraphVertexLinkCreateToVertex(ctx *sfPlugins.StatefunContextProcessor, om *
 		return
 	}
 
-	ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, linkFromVertexUUID, inLinkName), []byte(inLinkType), opTime)
+	ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, ctx.Self.ID, linkFromVertexUUID, inLinkName), []byte(inLinkType), opTime)
 
 	// Create this vertex if does not exist ----------------------
 	_, err := ctx.Domain.Cache().GetValue(ctx.Self.ID)
@@ -222,7 +222,7 @@ func GraphVertexLinkUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediat
 		return
 	}
 
-	oldLinkBody, err1 := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
+	oldLinkBody, err1 := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, linkName))
 	if err1 != nil { // Link's body does not exist
 		oldLinkBody = easyjson.NewJSONObject().GetPtr()
 	}
@@ -236,7 +236,7 @@ func GraphVertexLinkUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediat
 
 	if replace {
 		// Remove all indices -----------------------------
-		indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, linkName, ">"))
+		indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff2Pattern, ctx.Self.ID, linkName, ">"))
 		for _, indexKey := range indexKeys {
 			ctx.Domain.Cache().DeleteValueKVSync(indexKey, -1)
 		}
@@ -249,16 +249,16 @@ func GraphVertexLinkUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediat
 
 	// Create out link on this vertex -------------------------
 	// Set link body --------------------
-	ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName), linkBody.ToBytes(), opTime) // Store link body in KV
+	ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, linkName), linkBody.ToBytes(), opTime) // Store link body in KV
 	// ----------------------------------
 	// Index link type ------------------
-	ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff3Pattern, ctx.Self.ID, linkName, "type", linkType), nil, opTime)
+	ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff3Pattern, ctx.Self.ID, linkName, "type", linkType), nil, opTime)
 	// ----------------------------------
 	// Index link tags ------------------
 	if data.GetByPath("tags").IsNonEmptyArray() {
 		if linkTags, ok := data.GetByPath("tags").AsArrayString(); ok {
 			for _, linkTag := range linkTags {
-				ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff3Pattern, ctx.Self.ID, linkName, "tag", linkTag), nil, opTime)
+				ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff3Pattern, ctx.Self.ID, linkName, "tag", linkTag), nil, opTime)
 			}
 		}
 	}
@@ -292,26 +292,26 @@ func GraphVertexLinkDeleteFromVertex(ctx *sfPlugins.StatefunContextProcessor, om
 		return
 	}
 
-	oldLinkBody, err1 := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
+	oldLinkBody, err1 := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, linkName))
 	if err1 != nil { // Link's body does not exist
 		oldLinkBody = easyjson.NewJSONObject().GetPtr()
 	}
 
 	// Remove all indices -----------------------------
-	indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, linkName, ">"))
+	indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff2Pattern, ctx.Self.ID, linkName, ">"))
 	for _, indexKey := range indexKeys {
 		ctx.Domain.Cache().DeleteValueKVSync(indexKey, -1)
 	}
 	// ------------------------------------------------
 
 	// Delete link type -----------------
-	ctx.Domain.Cache().DeleteValueKVSync(fmt.Sprintf(OutLinkTypeKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, linkType, linkTarget), -1)
+	ctx.Domain.Cache().DeleteValueKVSync(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, ctx.Self.ID, linkType, linkTarget), -1)
 	// ----------------------------------
 	// Delete link body -----------------
-	ctx.Domain.Cache().DeleteValueKVSync(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName), -1)
+	ctx.Domain.Cache().DeleteValueKVSync(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, linkName), -1)
 	// ----------------------------------
 	// Delete link target ---------------
-	ctx.Domain.Cache().DeleteValueKVSync(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName), -1)
+	ctx.Domain.Cache().DeleteValueKVSync(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, linkName), -1)
 	// ----------------------------------
 
 	addVertexLinkOperationToOpStack(opStack, "delete", ctx.Self.ID, linkTarget, linkName, linkType, oldLinkBody, nil)
@@ -332,7 +332,7 @@ func GraphVertexLinkDeleteToVertex(ctx *sfPlugins.StatefunContextProcessor, om *
 		om.AggregateOpMsg(sfMediators.OpMsgIdle("cannot be completed without losing consistency")).Reply()
 		return
 	}
-	ctx.Domain.Cache().DeleteValueKVSync(fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, linkFromVertexUUID, inLinkName), -1)
+	ctx.Domain.Cache().DeleteValueKVSync(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, ctx.Self.ID, linkFromVertexUUID, inLinkName), -1)
 	om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONNull())).Reply()
 }
 

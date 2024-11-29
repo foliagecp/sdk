@@ -7,6 +7,7 @@ import (
 	"github.com/foliagecp/easyjson"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
+	"github.com/foliagecp/sdk/statefun/system"
 )
 
 func GraphVertexRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
@@ -23,13 +24,13 @@ func GraphVertexRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.Op
 		outLinkNames := []string{}
 		outLinkTypes := []string{}
 		outLinkUUIDs := []string{}
-		outLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
+		outLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, ">"))
 		for _, outLinkKey := range outLinkKeys {
 			linkKeyTokens := strings.Split(outLinkKey, ".")
 			linkName := linkKeyTokens[len(linkKeyTokens)-1]
 			outLinkNames = append(outLinkNames, linkName)
 
-			linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
+			linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, linkName))
 			if err == nil {
 				tokens := strings.Split(string(linkTargetBytes), ".")
 				if len(tokens) == 2 {
@@ -42,7 +43,7 @@ func GraphVertexRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.Op
 		result.SetByPath("links.out.types", easyjson.JSONFromArray(outLinkTypes))
 		result.SetByPath("links.out.uuids", easyjson.JSONFromArray(outLinkUUIDs))
 
-		inLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
+		inLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, ">"))
 
 		inLinkNames := []string{}
 		inLinkTypes := []string{}
@@ -69,6 +70,37 @@ func GraphVertexRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.Op
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(result.GetPtr(), opStack))).Reply()
 }
 
+func indexVertexBody(ctx *sfPlugins.StatefunContextProcessor, opTime int64, vertexBody easyjson.JSON, reindex bool) {
+	if reindex {
+		// Remove all indices -----------------------------
+		indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(BodyValueIndexPrefPattern+KeySuff1Pattern, ctx.Self.ID, ">"))
+		for _, indexKey := range indexKeys {
+			ctx.Domain.Cache().DeleteValueKVSync(indexKey, -1)
+		}
+		// ------------------------------------------------
+	}
+	// Index body keys ------------------------------------
+	for _, bodyKey := range vertexBody.ObjectKeys() {
+		value := vertexBody.GetByPath(bodyKey)
+		bytesVal := []byte{}
+
+		if value.IsBool() {
+			bytesVal = system.BoolToBytes(value.AsBoolDefault(false))
+		}
+		if value.IsNumeric() {
+			bytesVal = system.Float64ToBytes(value.AsNumericDefault(0))
+		}
+		if value.IsString() {
+			bytesVal = []byte(value.AsStringDefault(""))
+		}
+
+		if len(bytesVal) > 0 {
+			ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(BodyValueIndexPrefPattern+KeySuff1Pattern, ctx.Self.ID, bodyKey), bytesVal, opTime)
+		}
+	}
+	// ----------------------------------------------------
+}
+
 func GraphVertexCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
 	opStack := getOperationStackFromOptions(ctx.Options)
 
@@ -93,6 +125,7 @@ func GraphVertexCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 	// Set vertex body ------------------
 	ctx.Domain.Cache().SetValueKVSync(ctx.Self.ID, vertexBody.ToBytes(), opTime) // Store vertex body in KV
 	// ----------------------------------
+	indexVertexBody(ctx, opTime, vertexBody, false)
 
 	addVertexOperationToOpStack(opStack, "create", ctx.Self.ID, nil, &vertexBody)
 
@@ -137,6 +170,8 @@ func GraphVertexUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 	}
 
 	ctx.Domain.Cache().SetValueKVSync(ctx.Self.ID, body.ToBytes(), opTime) // Store vertex body in KV
+	indexVertexBody(ctx, opTime, body, true)
+
 	addVertexOperationToOpStack(opStack, "update", ctx.Self.ID, oldBody, &body)
 
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
@@ -161,7 +196,7 @@ func GraphVertexDelete(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 
 	waiting4Aggregation := false
 	// Delete all out links -------------------------------
-	outLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
+	outLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, ">"))
 	for _, outLinkKey := range outLinkKeys {
 		inLinkKeyTokens := strings.Split(outLinkKey, ".")
 		linkName := inLinkKeyTokens[len(inLinkKeyTokens)-1]
@@ -176,7 +211,7 @@ func GraphVertexDelete(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 	// ----------------------------------------------------
 
 	// Delete all in links --------------------------------
-	inLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, ">"))
+	inLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, ">"))
 	for _, inLinkKey := range inLinkKeys {
 		inLinkKeyTokens := strings.Split(inLinkKey, ".")
 		fromObjectID := inLinkKeyTokens[len(inLinkKeyTokens)-2]
