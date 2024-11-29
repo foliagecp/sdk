@@ -1,8 +1,12 @@
 
 
+//go:build cgo
+
 package js
 
 import (
+	"fmt"
+
 	"github.com/foliagecp/easyjson"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 
@@ -11,13 +15,35 @@ import (
 	v8 "rogchap.com/v8go"
 )
 
+type CustomJSError struct {
+	Message    string
+	Location   string
+	StackTrace string
+}
+
+func NewCustomJSError(jse v8.JSError) error {
+	return &CustomJSError{Message: jse.Message, Location: jse.Location, StackTrace: jse.StackTrace}
+}
+
+func (e *CustomJSError) Error() string {
+	return e.Message
+}
+
+func (e *CustomJSError) GetLocation() string {
+	return e.Location
+}
+
+func (e *CustomJSError) GetStackTrace() string {
+	return e.StackTrace
+}
+
 type StatefunExecutorPluginJS struct {
 	vw            *v8.Isolate
 	vmContect     *v8.Context
 	copiledScript *v8.UnboundScript
 	buildError    error
 
-	contextProcessor *sfPlugins.StatefunContextProcessor
+	ctx *sfPlugins.StatefunContextProcessor
 }
 
 func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.StatefunExecutor {
@@ -27,64 +53,64 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 
 	// () -> string
 	statefunGetSelfTypenane := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//lg.Logf("statefun_getSelfTypename: %v\n", info.Args()) // when the JS function is called this Go callback will execute
+		//lg.Logf("statefun_getSelfTypename: %v", info.Args()) // when the JS function is called this Go callback will execute
 		if len(info.Args()) != 0 {
-			lg.Logf(lg.ErrorLevel, "statefun_getSelfTypename requires no arguments but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_getSelfTypename requires no arguments but got %d", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
-		v, _ := v8.NewValue(sfejs.vw, sfejs.contextProcessor.Self.Typename)
+		v, _ := v8.NewValue(sfejs.vw, sfejs.ctx.Self.Typename)
 		return v // you can return a value back to the JS caller if required
 	})
 	// () -> string
 	statefunGetSelfID := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//lg.Logf("statefun_getSelfId: %v\n", info.Args())
+		//lg.Logf("statefun_getSelfId: %v", info.Args())
 		if len(info.Args()) != 0 {
-			lg.Logf(lg.ErrorLevel, "statefun_getSelfId requires no arguments but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_getSelfId requires no arguments but got %d", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
-		v, _ := v8.NewValue(sfejs.vw, sfejs.contextProcessor.Self.ID)
+		v, _ := v8.NewValue(sfejs.vw, sfejs.ctx.Self.ID)
 		return v
 	})
 	// () -> string
 	statefunGetCallerTypenane := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//lg.Logf("statefun_getCallerTypename: %v\n", info.Args()) // when the JS function is called this Go callback will execute
+		//lg.Logf("statefun_getCallerTypename: %v", info.Args()) // when the JS function is called this Go callback will execute
 		if len(info.Args()) != 0 {
-			lg.Logf(lg.ErrorLevel, "statefun_getCallerTypename requires no arguments but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_getCallerTypename requires no arguments but got %d", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
-		v, _ := v8.NewValue(sfejs.vw, sfejs.contextProcessor.Caller.Typename)
+		v, _ := v8.NewValue(sfejs.vw, sfejs.ctx.Caller.Typename)
 		return v // you can return a value back to the JS caller if required
 	})
 	// () -> string
 	statefunGetCallerID := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//lg.Logf("statefun_getCallerId: %v\n", info.Args())
+		//lg.Logf("statefun_getCallerId: %v", info.Args())
 		if len(info.Args()) != 0 {
-			lg.Logf(lg.ErrorLevel, "statefun_getCallerId requires no arguments but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_getCallerId requires no arguments but got %d", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
-		v, _ := v8.NewValue(sfejs.vw, sfejs.contextProcessor.Caller.ID)
+		v, _ := v8.NewValue(sfejs.vw, sfejs.ctx.Caller.ID)
 		return v
 	})
 	// () -> string
 	statefunGetFunctionContext := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//lg.Logf("statefun_getFunctionContext: %v\n", info.Args())
+		//lg.Logf("statefun_getFunctionContext: %v", info.Args())
 		if len(info.Args()) != 0 {
-			lg.Logf(lg.ErrorLevel, "statefun_getFunctionContext requires no arguments but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_getFunctionContext requires no arguments but got %d", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
-		v, _ := v8.NewValue(sfejs.vw, (*sfejs.contextProcessor.GetFunctionContext()).ToString())
+		v, _ := v8.NewValue(sfejs.vw, (*sfejs.ctx.GetFunctionContext()).ToString())
 		return v
 	})
 	// (string) -> int
 	statefunSetFunctionContext := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//lg.Logf("statefun_setFunctionContext: %v\n", info.Args())
+		//lg.Logf("statefun_setFunctionContext: %v", info.Args())
 		if len(info.Args()) != 1 {
-			lg.Logf(lg.ErrorLevel, "statefun_setFunctionContext requires 1 argument but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_setFunctionContext requires 1 argument but got %d", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, int32(1))
 			return v
 		}
@@ -99,15 +125,15 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 			v, _ := v8.NewValue(sfejs.vw, int32(3))
 			return v
 		}
-		sfejs.contextProcessor.SetFunctionContext(&newContext)
+		sfejs.ctx.SetFunctionContext(&newContext)
 		v, _ := v8.NewValue(sfejs.vw, int32(0))
 		return v
 	})
 	// (string) -> int
 	statefunSetRequestReplyData := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//lg.Logf("statefun_setRequestReplyData: %v\n", info.Args())
+		//lg.Logf("statefun_setRequestReplyData: %v", info.Args())
 		if len(info.Args()) != 1 {
-			lg.Logf(lg.ErrorLevel, "statefun_setRequestReplyData requires 1 argument but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_setRequestReplyData requires 1 argument but got %d", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, int32(1))
 			return v
 		}
@@ -115,7 +141,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 			v, _ := v8.NewValue(sfejs.vw, int32(2))
 			return v
 		}
-		if sfejs.contextProcessor.Reply == nil {
+		if sfejs.ctx.Reply == nil {
 			v, _ := v8.NewValue(sfejs.vw, int32(3))
 			return v
 		}
@@ -125,26 +151,26 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 			v, _ := v8.NewValue(sfejs.vw, int32(4))
 			return v
 		}
-		sfejs.contextProcessor.Reply.With(&requestReplyData)
+		sfejs.ctx.Reply.With(&requestReplyData)
 		v, _ := v8.NewValue(sfejs.vw, int32(0))
 		return v
 	})
 	// () -> string
 	statefunGetObjectContext := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//lg.Logf("statefun_getObjectContext: %v\n", info.Args())
+		//lg.Logf("statefun_getObjectContext: %v", info.Args())
 		if len(info.Args()) != 0 {
-			lg.Logf(lg.ErrorLevel, "statefun_getObjectContext requires no arguments but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_getObjectContext requires no arguments but got %d", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
-		v, _ := v8.NewValue(sfejs.vw, (*sfejs.contextProcessor.GetObjectContext()).ToString())
+		v, _ := v8.NewValue(sfejs.vw, (*sfejs.ctx.GetObjectContext()).ToString())
 		return v
 	})
 	// (string) -> int
 	statefunSetObjectContext := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//lg.Logf("statefun_setObjectContext: %v\n", info.Args())
+		//lg.Logf("statefun_setObjectContext: %v", info.Args())
 		if len(info.Args()) != 1 {
-			lg.Logf(lg.ErrorLevel, "statefun_setObjectContext requires 1 argument but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_setObjectContext requires 1 argument but got %d", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, int32(1))
 			return v
 		}
@@ -159,7 +185,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 			v, _ := v8.NewValue(sfejs.vw, int32(3))
 			return v
 		}
-		sfejs.contextProcessor.SetObjectContext(&newContext)
+		sfejs.ctx.SetObjectContext(&newContext)
 		v, _ := v8.NewValue(sfejs.vw, int32(0))
 		return v
 	})
@@ -167,29 +193,29 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 	statefunGetPayload := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		//lg.Logf("statefun_getPayload: %v", info.Args())
 		if len(info.Args()) != 0 {
-			lg.Logf(lg.ErrorLevel, "statefun_getPayload requires no arguments but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_getPayload requires no arguments but got %d", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
-		v, _ := v8.NewValue(sfejs.vw, sfejs.contextProcessor.Payload.ToString())
+		v, _ := v8.NewValue(sfejs.vw, sfejs.ctx.Payload.ToString())
 		return v
 	})
 	// () -> string
 	statefunGetOptions := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		//lg.Logf("statefun_getOptions: %v", info.Args())
 		if len(info.Args()) != 0 {
-			lg.Logf(lg.ErrorLevel, "statefun_getOptions requires no arguments but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_getOptions requires no arguments but got %d", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, nil)
 			return v
 		}
-		v, _ := v8.NewValue(sfejs.vw, sfejs.contextProcessor.Options.ToString())
+		v, _ := v8.NewValue(sfejs.vw, sfejs.ctx.Options.ToString())
 		return v
 	})
 	// (int, string, string, string, string) -> int
 	statefunSignal := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//lg.Logf("statefun_signal: %v\n", info.Args())
+		//lg.Logf("statefun_signal: %v", info.Args())
 		if len(info.Args()) != 5 {
-			lg.Logf(lg.ErrorLevel, "statefun_signal requires 5 argument but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_signal requires 5 argument but got %d", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, int32(1))
 			return v
 		}
@@ -200,12 +226,12 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 					if o, ok := easyjson.JSONFromString(info.Args()[4].String()); ok {
 						options = &o
 					} else {
-						lg.Logf(lg.ErrorLevel, "statefunSignal options is not empty and not a JSON: %s\n", info.Args()[4].String())
+						lg.Logf(lg.ErrorLevel, "statefun_signal options is not empty and not a JSON: %s", info.Args()[4].String())
 						v, _ := v8.NewValue(sfejs.vw, int32(4))
 						return v
 					}
 				}
-				system.MsgOnErrorReturn(sfejs.contextProcessor.Signal(
+				system.MsgOnErrorReturn(sfejs.ctx.Signal(
 					sfPlugins.SignalProvider(info.Args()[0].Int32()),
 					info.Args()[1].String(),
 					info.Args()[2].String(),
@@ -215,7 +241,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 				v, _ := v8.NewValue(sfejs.vw, int32(0))
 				return v
 			}
-			lg.Logf(lg.ErrorLevel, "statefunSignal payload is not a JSON: %s\n", info.Args()[2].String())
+			lg.Logf(lg.ErrorLevel, "statefun_signal payload is not a JSON: %s", info.Args()[2].String())
 			v, _ := v8.NewValue(sfejs.vw, int32(3))
 			return v
 		}
@@ -224,9 +250,9 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 	})
 	// (int, string, string, string, string) -> int|string
 	statefunRequest := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		//lg.Logf("statefun_request: %v\n", info.Args())
+		//lg.Logf("statefun_request: %v", info.Args())
 		if len(info.Args()) != 5 {
-			lg.Logf(lg.ErrorLevel, "statefun_request requires 5 argument but got %d\n", len(info.Args()))
+			lg.Logf(lg.ErrorLevel, "statefun_request requires 5 argument but got %d", len(info.Args()))
 			v, _ := v8.NewValue(sfejs.vw, int32(1))
 			return v
 		}
@@ -237,12 +263,12 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 					if o, ok := easyjson.JSONFromString(info.Args()[4].String()); ok {
 						options = &o
 					} else {
-						lg.Logf(lg.ErrorLevel, "statefunRequest options is not empty and not a JSON: %s\n", info.Args()[4].String())
+						lg.Logf(lg.ErrorLevel, "statefun_request options is not empty and not a JSON: %s", info.Args()[4].String())
 						v, _ := v8.NewValue(sfejs.vw, int32(4))
 						return v
 					}
 				}
-				j, err := sfejs.contextProcessor.Request(
+				j, err := sfejs.ctx.Request(
 					sfPlugins.RequestProvider(info.Args()[0].Int32()),
 					info.Args()[1].String(),
 					info.Args()[2].String(),
@@ -256,7 +282,31 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 				v, _ := v8.NewValue(sfejs.vw, j.ToString())
 				return v
 			}
-			lg.Logf(lg.ErrorLevel, "statefunRequest payload is not a JSON: %s\n", info.Args()[2].String())
+			lg.Logf(lg.ErrorLevel, "statefun_request payload is not a JSON: %s", info.Args()[2].String())
+			v, _ := v8.NewValue(sfejs.vw, int32(3))
+			return v
+		}
+		v, _ := v8.NewValue(sfejs.vw, int32(2))
+		return v
+	})
+	// (int, string) -> int
+	statefunEgress := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		//lg.Logf("statefun_egress: %v", info.Args())
+		if len(info.Args()) != 2 {
+			lg.Logf(lg.ErrorLevel, "statefun_egress requires 2 argument but got %d", len(info.Args()))
+			v, _ := v8.NewValue(sfejs.vw, int32(1))
+			return v
+		}
+		if info.Args()[0].IsInt32() && info.Args()[1].IsString() {
+			if j, ok := easyjson.JSONFromString(info.Args()[1].String()); ok {
+				system.MsgOnErrorReturn(sfejs.ctx.Egress(
+					sfPlugins.EgressProvider(info.Args()[0].Int32()),
+					&j,
+				))
+				v, _ := v8.NewValue(sfejs.vw, int32(0))
+				return v
+			}
+			lg.Logf(lg.ErrorLevel, "statefun_egress payload is not a JSON: %s", info.Args()[2].String())
 			v, _ := v8.NewValue(sfejs.vw, int32(3))
 			return v
 		}
@@ -265,7 +315,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 	})
 	// (string)
 	print := v8.NewFunctionTemplate(sfejs.vw, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		lg.Logf(lg.InfoLevel, "%s: %v\n", alias, info.Args())
+		lg.Logf(lg.InfoLevel, "%s: %v", alias, info.Args())
 		return nil
 	})
 
@@ -285,18 +335,31 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 
 	system.MsgOnErrorReturn(global.Set("statefun_signal", statefunSignal))
 	system.MsgOnErrorReturn(global.Set("statefun_request", statefunRequest))
+	system.MsgOnErrorReturn(global.Set("statefun_egress", statefunEgress))
 	system.MsgOnErrorReturn(global.Set("print", print))
 
-	sfejs.vmContect = v8.NewContext(sfejs.vw, global)                                                         // new context within the VM
-	sfejs.copiledScript, sfejs.buildError = sfejs.vw.CompileUnboundScript(source, alias, v8.CompileOptions{}) // compile script to get cached data
+	s, e := sfejs.vw.CompileUnboundScript(fmt.Sprintf("{%s}", source), alias, v8.CompileOptions{}) // compile script to get cached data
+
+	sfejs.vmContect = v8.NewContext(sfejs.vw, global) // new context within the VM
+	sfejs.copiledScript = s
+
+	if e != nil {
+		jse := e.(*v8.JSError)
+		sfejs.buildError = NewCustomJSError(*jse)
+	}
 
 	return sfejs
 }
 
-func (sfejs *StatefunExecutorPluginJS) Run(contextProcessor *sfPlugins.StatefunContextProcessor) error {
-	sfejs.contextProcessor = contextProcessor
-	_, err := sfejs.copiledScript.Run(sfejs.vmContect)
-	return err
+func (sfejs *StatefunExecutorPluginJS) Run(ctx *sfPlugins.StatefunContextProcessor) error {
+	sfejs.ctx = ctx
+
+	if _, e := sfejs.copiledScript.Run(sfejs.vmContect); e != nil {
+		jse := e.(*v8.JSError)
+		return NewCustomJSError(*jse)
+	}
+
+	return nil
 }
 
 func (sfejs *StatefunExecutorPluginJS) BuildError() error {

@@ -5,13 +5,13 @@
 package system
 
 import (
+	"context"
 	"crypto/md5"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"os"
-	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -117,10 +117,10 @@ func CreateDimSizeChannel[T interface{}](maxBufferElements int, onBufferOverflow
 }
 
 func MsgOnErrorReturn(retVars ...interface{}) {
-	le := lg.GetCustomLogEntry(runtime.Caller(1))
+	le := lg.GetLogger()
 	for _, retVar := range retVars {
 		if err, ok := retVar.(error); ok {
-			le.Logf(lg.ErrorLevel, "%s\n", err)
+			le.Error(context.TODO(), fmt.Sprintf("%s", err))
 		}
 	}
 }

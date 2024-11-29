@@ -3,12 +3,14 @@
 package statefun
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/foliagecp/sdk/statefun/logger"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -29,16 +31,21 @@ type FunctionType struct {
 	idKeyMutex              system.KeyMutex
 	idHandlersChannel       sync.Map
 	idHandlersLastMsgTime   sync.Map
+	idRunningStatus         sync.Map
 	executor                *sfPlugins.TypenameExecutorPlugin
 	instancesControlChannel chan struct{}
 	resourceMutex           sync.Mutex
 }
 
+const (
+	contextExpirationKey = "____ctx_expires_after_ms"
+)
+
 func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHandler, config FunctionTypeConfig) *FunctionType {
 	ft := &FunctionType{
 		runtime:                 runtime,
 		name:                    name,
-		subject:                 name + ".*",
+		subject:                 fmt.Sprintf(DomainIngressSubjectsTmpl, runtime.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, runtime.Domain.name, name, "*")),
 		logicHandler:            logicHandler,
 		idKeyMutex:              system.NewKeyMutex(),
 		config:                  config,
@@ -58,28 +65,12 @@ func (ft *FunctionType) SetExecutor(alias string, content string, constructor fu
 	return nil
 }
 
-func (ft *FunctionType) sendMsg(id string, msg FunctionTypeMsg) {
-	/*// After message was received do typename balance if the one is needed and hasn't been done yet -------
-	if ft.config.balanceNeeded {
-		if !ft.config.balanced {
-			var err error
-			ft.typenameLockRevisionID, err = FunctionTypeMutexLock(ft, true)
-			if err != nil {
-				lg.Logf(lg.WarnLevel, "function with type %s has received a message, but this typename was already locked! Skipping message...\n", ft.name)
-				// Preventing from rapidly calling this function over and over again if no function
-				// in other runtime that can handle this message and kv mutex is already dead
-				time.Sleep(time.Duration(ft.config.msgAckWaitMs/2) * time.Millisecond) // Sleep duration must be guarantee less than msgAckWaitMs, otherwise may miss doing Nak (via RefusalCallback) in time
-				if msg.RefusalCallback != nil {
-					msg.RefusalCallback()
-				}
-				return
-			}
-			ft.config.balanced = true
-		}
-	}
-	// ----------------------------------------------------------------------------------------------------*/
+func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
+	id := ft.runtime.Domain.CreateObjectIDWithThisDomain(originId, false)
 
 	ft.idKeyMutex.Lock(id)
+	defer ft.idKeyMutex.Unlock(id)
+
 	// Send msg to type id handler ------------------------------------------------------
 	var msgChannel chan FunctionTypeMsg
 
@@ -125,24 +116,31 @@ func (ft *FunctionType) sendMsg(id string, msg FunctionTypeMsg) {
 		}
 	}
 	// ----------------------------------------------------------------------------------
-	ft.idKeyMutex.Unlock(id)
 }
 
 func (ft *FunctionType) idHandlerRoutine(id string, msgChannel chan FunctionTypeMsg) {
 	system.GlobalPrometrics.GetRoutinesCounter().Started("functiontype-idHandlerRoutine")
 	defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("functiontype-idHandlerRoutine")
 	typenameIDContextProcessor := sfPlugins.StatefunContextProcessor{
-		GlobalCache:        ft.runtime.cacheStore,
-		GetFunctionContext: func() *easyjson.JSON { return ft.getContext(ft.name + "." + id) },
-		SetFunctionContext: func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
-		GetObjectContext:   func() *easyjson.JSON { return ft.getContext(id) },
-		SetObjectContext:   func(context *easyjson.JSON) { ft.setContext(id, context) },
-		Self:               sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
+		GetFunctionContext:        func() *easyjson.JSON { return ft.getContext(ft.name + "." + id) },
+		SetFunctionContext:        func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
+		SetContextExpirationAfter: func(after time.Duration) { ft.setContextExpirationAfter(ft.name+"."+id, after) },
+		GetObjectContext:          func() *easyjson.JSON { return ft.getContext(id) },
+		SetObjectContext:          func(context *easyjson.JSON) { ft.setContext(id, context) },
+		Domain:                    ft.runtime.Domain,
+		Self:                      sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
 		Signal: func(signalProvider sfPlugins.SignalProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) error {
 			return ft.runtime.signal(signalProvider, ft.name, id, targetTypename, targetID, j, o)
 		},
-		Request: func(requestProvider sfPlugins.RequestProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) (*easyjson.JSON, error) {
+		Request: func(requestProvider sfPlugins.RequestProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
 			return ft.runtime.request(requestProvider, ft.name, id, targetTypename, targetID, j, o)
+		},
+		Egress: func(egressProvider sfPlugins.EgressProvider, j *easyjson.JSON, customId ...string) error {
+			egressId := id
+			if len(customId) > 0 {
+				egressId = customId[0]
+			}
+			return ft.runtime.egress(egressProvider, ft.name, egressId, j)
 		},
 		// To be assigned later:
 		// Call: ...
@@ -160,21 +158,12 @@ func (ft *FunctionType) idHandlerRoutine(id string, msgChannel chan FunctionType
 }
 
 func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameIDContextProcessor *sfPlugins.StatefunContextProcessor) {
-	/*var lockRevisionID uint64 = 0
+	ft.idRunningStatus.Store(id, true)
+	defer ft.idRunningStatus.Store(id, false)
 
-	if !ft.config.balanceNeeded { // Use context mutex lock if function type is not typename balanced
-		var err error
-		lockRevisionID, err = ContextMutexLock(ft, id, false)
-		if err != nil {
-			if msg.RefusalCallback != nil {
-				msg.RefusalCallback()
-			}
-			return
-		}
-	}*/
-
+	msgRequestCallback := msg.RequestCallback
 	replyDataChannel := make(chan *easyjson.JSON, 1)
-	if msg.RequestCallback != nil {
+	if msgRequestCallback != nil {
 		typenameIDContextProcessor.Reply = &sfPlugins.SyncReply{}
 
 		replyDataChannel <- easyjson.NewJSONObject().GetPtr()
@@ -184,12 +173,23 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 			default:
 			}
 		}
-		typenameIDContextProcessor.Reply.CancelDefault = func() {
+		typenameIDContextProcessor.Reply.CancelDefaultReply = func() {
 			cancelReplyIfExists()
 		}
 		typenameIDContextProcessor.Reply.With = func(data *easyjson.JSON) {
 			cancelReplyIfExists()
-			replyDataChannel <- data // Put new value
+			replyDataChannel <- data // Put new value that will replace existing
+		}
+		typenameIDContextProcessor.Reply.OverrideRequestCallback = func() *sfPlugins.SyncReply {
+			msgRequestCallback = nil
+
+			overridenReply := &sfPlugins.SyncReply{}
+			overridenReply.With = func(data *easyjson.JSON) {
+				msg.RequestCallback(data)
+			}
+			overridenReply.CancelDefaultReply = func() {}
+			overridenReply.OverrideRequestCallback = func() *sfPlugins.SyncReply { return nil }
+			return overridenReply
 		}
 	}
 
@@ -205,9 +205,9 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 	}
 	typenameIDContextProcessor.Caller = *msg.Caller
 
-	typenameIDContextProcessor.ObjectMutexLock = func(errorOnLocked bool) error {
-		lockId := fmt.Sprintf("%s-lock", id)
-		revId, err := KeyMutexLock(ft.runtime, lockId, errorOnLocked)
+	typenameIDContextProcessor.ObjectMutexLock = func(objectId string, errorOnLocked bool) error {
+		lockId := fmt.Sprintf("%s-lock", objectId)
+		revId, err := KeyMutexLock(context.TODO(), ft.runtime, lockId, errorOnLocked)
 		if err == nil {
 			objCtx := ft.getContext(lockId)
 			objCtx.SetByPath("__lock_rev_id", easyjson.NewJSON(revId))
@@ -216,8 +216,8 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 		}
 		return err
 	}
-	typenameIDContextProcessor.ObjectMutexUnlock = func() error {
-		lockId := fmt.Sprintf("%s-lock", id)
+	typenameIDContextProcessor.ObjectMutexUnlock = func(objectId string) error {
+		lockId := fmt.Sprintf("%s-lock", objectId)
 
 		objCtx := ft.getContext(lockId)
 		v, ok := objCtx.GetByPath("__lock_rev_id").AsNumeric()
@@ -226,11 +226,11 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 		}
 		revId := uint64(v)
 
-		err := KeyMutexUnlock(ft.runtime, lockId, revId)
+		err := KeyMutexUnlock(context.TODO(), ft.runtime, lockId, revId)
 		if err != nil {
 			return err
 		}
-		ft.runtime.cacheStore.DeleteValue(lockId, true, -1, "")
+		ft.runtime.Domain.cache.DeleteValue(lockId, true, -1, "")
 		return nil
 	}
 
@@ -252,29 +252,48 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 	if msg.AckCallback != nil {
 		msg.AckCallback(true)
 	}
-	if msg.RequestCallback != nil {
+	if msgRequestCallback != nil {
 		var replyData *easyjson.JSON = nil
 		select {
 		case replyData = <-replyDataChannel:
 		case <-time.After(time.Duration(ft.runtime.config.requestTimeoutSec) * time.Second):
 			replyData.SetByPath("status", easyjson.NewJSON("timeout"))
 		}
-		msg.RequestCallback(replyData)
+		msgRequestCallback(replyData)
 	}
 
-	/*if !ft.config.balanceNeeded { // Use context mutex lock if function type is not typename balanced
-		system.MsgOnErrorReturn(ContextMutexUnlock(ft, id, lockRevisionID))
-	}*/
 	atomic.StoreInt64(&ft.runtime.glce, time.Now().UnixNano())
 }
 
 func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, handlersRunning int) {
 	now := time.Now().UnixNano()
 
+	// Deleting function contexts which are expired ---------
+	for _, funcCtxKey := range ft.runtime.Domain.Cache().GetKeysByPattern(ft.name + ".>") {
+		expirationTime := int64(ft.getContext(funcCtxKey).GetByPath(contextExpirationKey).AsNumericDefault(-1))
+		if expirationTime > 0 {
+			if expirationTime < now {
+				ft.runtime.Domain.Cache().DeleteValue(funcCtxKey, true, -1, "")
+			}
+		}
+	}
+	// ------------------------------------------------------
+
 	ft.idHandlersLastMsgTime.Range(func(key, value interface{}) bool {
 		id := key.(string)
 		lastMsgTime := value.(int64)
+
 		if lastMsgTime+int64(typenameIDLifetimeMs)*int64(time.Millisecond) < now {
+			if v, ok := ft.idRunningStatus.Load(id); ok {
+				running, boolFine := v.(bool)
+				if !boolFine {
+					logger.Logf(logger.ErrorLevel, "Function type GC failed to get idRunningStatus in bool format ftName=%s for id=%s", ft.name, id)
+				}
+				if running {
+					return true
+				}
+			}
+
 			ft.idKeyMutex.Lock(id)
 
 			v, _ := ft.idHandlersChannel.Load(id)
@@ -282,13 +301,13 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 			close(msgChannel)
 			ft.idHandlersChannel.Delete(id)
 			ft.idHandlersLastMsgTime.Delete(id)
+			ft.idRunningStatus.Delete(id)
 			if ft.executor != nil {
 				ft.executor.RemoveForID(id)
 			}
-			// TODO: When to delete  function context??? function's context may be needed later!!!!
-			// cacheStore.DeleteValue(ft.name+"."+id, true, -1, "") // Deleting function context
+
 			garbageCollected++
-			//lg.Logf(">>>>>>>>>>>>>> Garbage collected handler for %s:%s\n", ft.name, id)
+			//lg.Logf(">>>>>>>>>>>>>> Garbage collected handler for %s:%s", ft.name, id)
 
 			ft.idKeyMutex.Unlock(id)
 		} else {
@@ -297,18 +316,14 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 		return true
 	})
 	if garbageCollected > 0 && handlersRunning == 0 {
-		lg.Logf(lg.TraceLevel, ">>>>>>>>>>>>>> Garbage collected for typename %s - no id handlers left\n", ft.name)
-		/*if ft.config.balanced {
-			ft.config.balanced = false
-			system.MsgOnErrorReturn(FunctionTypeMutexUnlock(ft, ft.typenameLockRevisionID))
-		}*/
+		lg.Logf(lg.TraceLevel, ">>>>>>>>>>>>>> Garbage collected for typename %s - no id handlers left", ft.name)
 	}
 
 	return
 }
 
 func (ft *FunctionType) getContext(keyValueID string) *easyjson.JSON {
-	if j, err := ft.runtime.cacheStore.GetValueAsJSON(keyValueID); err == nil {
+	if j, err := ft.runtime.Domain.cache.GetValueAsJSON(keyValueID); err == nil {
 		return j
 	}
 	j := easyjson.NewJSONObject()
@@ -317,9 +332,21 @@ func (ft *FunctionType) getContext(keyValueID string) *easyjson.JSON {
 
 func (ft *FunctionType) setContext(keyValueID string, context *easyjson.JSON) {
 	if context == nil {
-		ft.runtime.cacheStore.SetValue(keyValueID, nil, true, -1, "")
+		ft.runtime.Domain.cache.DeleteValue(keyValueID, true, -1, "")
 	} else {
-		ft.runtime.cacheStore.SetValue(keyValueID, context.ToBytes(), true, -1, "")
+		ft.runtime.Domain.cache.SetValue(keyValueID, context.ToBytes(), true, -1, "")
+	}
+}
+
+// Negative duration removes expiration
+func (ft *FunctionType) setContextExpirationAfter(keyValueID string, after time.Duration) {
+	if j, err := ft.runtime.Domain.cache.GetValueAsJSON(keyValueID); err == nil {
+		if after < 0 {
+			j.RemoveByPath(contextExpirationKey)
+		} else {
+			j.SetByPath(contextExpirationKey, easyjson.NewJSON(time.Now().Add(after).UnixNano()))
+		}
+		ft.runtime.Domain.cache.SetValue(keyValueID, j.ToBytes(), true, -1, "")
 	}
 }
 

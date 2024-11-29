@@ -56,8 +56,8 @@ type FunctionLogicHandler func(sfPlugins.StatefunExecutor, *sfPlugins.StatefunCo
 For example:
 
 ```go
-func CustomFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlugins.StatefunContextProcessor) {
-    contextProcessor.Call("functions.tests.basic.master", contextProcessor.Self.ID, contextProcessor.Payload)
+func CustomFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+    ctx.Call("functions.tests.basic.master", ctx.Self.ID, ctx.Payload)
 }
 ```
 
@@ -66,11 +66,11 @@ func CustomFunction(executor sfPlugins.StatefunExecutor, contextProcessor *sfPlu
 At the end of the body of "CustomFunction," add the following code:
 
 ```go
-contextProcessor.Call("functions.tests.basic.master", contextProcessor.Self.ID, contextProcessor.Payload, contextProcessor.Options)
+ctx.Call("functions.tests.basic.master", ctx.Self.ID, ctx.Payload, ctx.Options)
 ```
 
 4. Working with Context Within the Function:
 
-Use the [contextProcessor](https://pkg.go.dev/github.com/foliagecp/sdk/statefun/plugins/#StatefunContextProcessor) variable to call the needed methods.
+Use the [ctx](https://pkg.go.dev/github.com/foliagecp/sdk/statefun/plugins/#StatefunContextProcessor) variable to call the needed methods.
 
 > Do not forget to remove NATS stream from NATS server if a new function typename was added!!!

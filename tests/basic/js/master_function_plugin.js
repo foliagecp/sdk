@@ -31,6 +31,9 @@ statefun_setRequestReplyData(<string of JSON>) -> int(status)
 statefun_signal(<int of signal provider>, <string of typename>, <string of id>, <string with JSON payload>, <string with JSON options>) -> int(status)
 // Synchronously call a stateful function by its typename and id (string)
 statefun_request(<int of request provider>, <string of typename>, <string of id>, <string with JSON payload>, <string with JSON options>) -> string(json)|int(err status)
+// Egress data from a stateful function
+statefun_egress(<int of egress provider>, <string with JSON payload>) -> int(status)
+
 // Print arbitrary values
 print(v1, v2, ...)
 */
@@ -42,4 +45,4 @@ print("++ Function context's counter value incrementated by JS by", options.incr
 var contextStr = JSON.stringify(context)
 statefun_setFunctionContext(contextStr)
 
-statefun_signal(0, "test.basic", "egress", contextStr, "") // Send function's context data to the egress/nats-topic "test.basic.egress"
+statefun_egress(0, contextStr) // Send function's context data to the egress/nats-topic "egress.functions.tests.basic.master.<id>"

@@ -1,215 +1,310 @@
-
-
-// Foliage primary statefun package.
-// Provides all everything that is needed for Foliage stateful functions and Foliage applications
 package statefun
 
 import (
 	"context"
-	"fmt"
-	"slices"
+	"errors"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	lg "github.com/foliagecp/sdk/statefun/logger"
-	"github.com/prometheus/client_golang/prometheus"
-
-	"github.com/foliagecp/sdk/embedded/nats/kv"
-	"github.com/foliagecp/sdk/statefun/cache"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
+
+	"github.com/foliagecp/sdk/statefun/cache"
+	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
-type Runtime struct {
-	config     RuntimeConfig
-	nc         *nats.Conn
-	js         nats.JetStreamContext
-	kv         nats.KeyValue
-	cacheStore *cache.Store
+type OnAfterStartFunction func(ctx context.Context, runtime *Runtime) error
 
-	registeredFunctionTypes map[string]*FunctionType
-
-	gt0  int64 // Global time 0 - time of the very first message receving by any function type
-	glce int64 // Global last call ended - time of last call of last function handling id of any function type
-	gc   int64 // Global counter - max total id handlers for all function types
+type onAfterStartFunctionWithMode struct {
+	f     OnAfterStartFunction
+	async bool
 }
 
-func NewRuntime(config RuntimeConfig) (r *Runtime, err error) {
-	r = &Runtime{
+// Runtime represents the runtime environment for stateful functions.
+type Runtime struct {
+	config RuntimeConfig
+	nc     *nats.Conn
+	js     nats.JetStreamContext
+	Domain *Domain
+
+	registeredFunctionTypes       map[string]*FunctionType
+	onAfterStartFunctionsWithMode []onAfterStartFunctionWithMode
+
+	gt0  int64 // Global time 0 - time of the very first message receiving by any function type
+	glce int64 // Global last call ended - time of last call of last function handling id of any function type
+	gc   int64 // Global counter - max total id handlers for all function types
+
+	shutdown chan struct{}
+	wg       sync.WaitGroup
+}
+
+// NewRuntime initializes a new Runtime instance with the given configuration.
+func NewRuntime(config RuntimeConfig) (*Runtime, error) {
+	r := &Runtime{
 		config:                  config,
 		registeredFunctionTypes: make(map[string]*FunctionType),
+		shutdown:                make(chan struct{}),
 	}
 
+	var err error
 	r.nc, err = nats.Connect(config.natsURL)
 	if err != nil {
-		return
+		return nil, err
 	}
 
 	r.js, err = r.nc.JetStream(nats.PublishAsyncMaxPending(256))
 	if err != nil {
-		return
+		return nil, err
 	}
 
-	// Create application key value store bucket if does not exist --
-	kvExists := false
-	if kv, err := r.js.KeyValue(config.keyValueStoreBucketName); err == nil {
-		r.kv = kv
-		kvExists = true
+	r.Domain, err = NewDomain(r.nc, r.js, config.desiredHUBDomainName)
+	if err != nil {
+		return nil, err
 	}
-	if !kvExists {
-		r.kv, err = kv.CreateKeyValue(r.nc, r.js, &nats.KeyValueConfig{
-			Bucket: config.keyValueStoreBucketName,
-		})
-		/*r.kv, err = r.js.CreateKeyValue(&nats.KeyValueConfig{
-			Bucket: config.keyValueStoreBucketName,
-		})*/
-		if err != nil {
-			return
-		}
-		kvExists = true
-	}
-	if !kvExists {
-		err = fmt.Errorf("Nats KV was not inited")
-		return
-	}
-	// --------------------------------------------------------------
+	r.config.desiredHUBDomainName = r.Domain.hubDomainName
 
-	return
+	return r, nil
 }
 
-func (r *Runtime) Start(cacheConfig *cache.Config, onAfterStart func(runtime *Runtime) error) (err error) {
-	// Create streams if does not exist ------------------------------
-	/* Each stream contains a single subject (topic).
-	 * Differently named stream with overlapping subjects cannot exist!
-	 */
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+// RegisterOnAfterStartFunction registers a function to be called after the runtime starts.
+// The function can be set to run asynchronously.
+func (r *Runtime) RegisterOnAfterStartFunction(f OnAfterStartFunction, async bool) {
+	if f != nil {
+		r.onAfterStartFunctionsWithMode = append(r.onAfterStartFunctionsWithMode, onAfterStartFunctionWithMode{f, async})
+	}
+}
+
+// Start initializes streams and starts function subscriptions.
+// It also handles graceful shutdown via context.Context.
+func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
+	logger := lg.NewLogger(lg.Options{ReportCaller: true, Level: lg.InfoLevel})
+
+	// Create streams if they do not exist.
+	if err := r.createStreams(ctx); err != nil {
+		return err
+	}
+
+	// Start the domain.
+	if err := r.Domain.start(cacheConfig, r.config.handlesDomainRouters); err != nil {
+		return err
+	}
+
+	// Handle single-instance functions.
+	singleInstanceFunctionRevisions := make(map[string]uint64)
+	if err := r.handleSingleInstanceFunctions(ctx, singleInstanceFunctionRevisions); err != nil {
+		return err
+	}
+
+	// Start function subscriptions.
+	if err := r.startFunctionSubscriptions(ctx, singleInstanceFunctionRevisions); err != nil {
+		return err
+	}
+
+	// Run after-start functions.
+	r.runAfterStartFunctions(ctx)
+
+	// Start garbage collector.
+	r.wg.Add(1)
+	go r.runGarbageCollector(ctx)
+
+	// Wait for shutdown signal.
+	<-r.shutdown
+
+	// Perform cleanup.
+	logger.Infof(context.TODO(), "Shutting down runtime...")
+	r.wg.Wait()
+	return nil
+}
+
+// Shutdown gracefully stops the runtime.
+func (r *Runtime) Shutdown() {
+	close(r.shutdown)
+}
+
+// createStreams ensures that the necessary NATS streams exist.
+func (r *Runtime) createStreams(ctx context.Context) error {
+	logger := lg.NewLogger(lg.Options{ReportCaller: true, Level: lg.InfoLevel})
 	var existingStreams []string
-	for info := range r.js.StreamsInfo(nats.Context(ctx)) {
+
+	streamInfoCh := r.js.StreamsInfo(nats.Context(ctx))
+	for info := range streamInfoCh {
 		existingStreams = append(existingStreams, info.Config.Name)
 	}
-	for _, functionType := range r.registeredFunctionTypes {
-		if !slices.Contains(existingStreams, functionType.getStreamName()) {
-			_, err := r.js.AddStream(&nats.StreamConfig{
-				Name:     functionType.getStreamName(),
-				Subjects: []string{functionType.subject},
-			})
-			system.MsgOnErrorReturn(err)
-		}
-	}
-	// --------------------------------------------------------------
 
-	lg.Logln(lg.TraceLevel, "Initializing the cache store...")
-	r.cacheStore = cache.NewCacheStore(context.Background(), cacheConfig, r.js, r.kv)
-	lg.Logln(lg.TraceLevel, "Cache store inited!")
-
-	// Functions running in a single instance controller --------------------------------
-	singleInstanceFunctionRevisions := map[string]uint64{}
-	singleInstanceFunctionLocksUpdater := func(sifr map[string]uint64) {
-		system.GlobalPrometrics.GetRoutinesCounter().Started("singleInstanceFunctionLocksUpdater")
-		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("singleInstanceFunctionLocksUpdater")
-		if len(sifr) > 0 {
-			for {
-				time.Sleep(time.Duration(r.config.kvMutexLifeTimeSec) / 2 * time.Second)
-				for ftName, revId := range sifr {
-					newRevId, err := KeyMutexLockUpdate(r, system.GetHashStr(ftName), revId)
-					if err != nil {
-						lg.Logf(lg.ErrorLevel, "KeyMutexLockUpdate for single instance function type %s failed: %s", ftName, err.Error())
-					} else {
-						sifr[ftName] = newRevId
-					}
-				}
-			}
-		}
-	}
-	// ----------------------------------------------------------------------------------
-
-	// Start function subscriptions ---------------------------------
-	for ftName, ft := range r.registeredFunctionTypes {
-		if !ft.config.multipleInstancesAllowed {
-			revId, err := KeyMutexLock(r, system.GetHashStr(ftName), true)
-			if err != nil {
-				if err == mutexLockedError {
-					lg.Logf(lg.WarnLevel, "Function type %s is already running somewhere and multipleInstancesAllowed==false, skipping", ft.name)
-					continue
-				} else {
+	for _, ft := range r.registeredFunctionTypes {
+		if ft.config.IsSignalProviderAllowed(sfPlugins.JetstreamGlobalSignal) {
+			if !contains(existingStreams, ft.getStreamName()) {
+				_, err := r.js.AddStream(&nats.StreamConfig{
+					Name:      ft.getStreamName(),
+					Subjects:  []string{ft.subject},
+					Retention: nats.InterestPolicy,
+				})
+				if err != nil {
+					logger.Errorf(context.TODO(), "Failed to add stream: %v", err)
 					return err
 				}
 			}
-			singleInstanceFunctionRevisions[ftName] = revId
-		}
-
-		system.MsgOnErrorReturn(AddSignalSourceJetstreamQueuePushConsumer(ft))
-		if ft.config.serviceActive {
-			system.MsgOnErrorReturn(AddRequestSourceNatsCore(ft))
 		}
 	}
-	// --------------------------------------------------------------
-
-	go singleInstanceFunctionLocksUpdater(singleInstanceFunctionRevisions)
-
-	if onAfterStart != nil {
-		go func() {
-			system.GlobalPrometrics.GetRoutinesCounter().Started("runtime_onAfterStart")
-			defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("runtime_onAfterStart")
-			system.MsgOnErrorReturn(onAfterStart(r))
-		}()
-	}
-	system.MsgOnErrorReturn(r.runGarbageCellector())
-
-	return
+	return nil
 }
 
-func (r *Runtime) runGarbageCellector() (err error) {
-	for {
-		// Start function subscriptions ---------------------------------
-		var totalIdsGrbageCollected int
-		var totalIDHandlersRunning int
+// handleSingleInstanceFunctions manages single-instance function locks.
+func (r *Runtime) handleSingleInstanceFunctions(ctx context.Context, revisions map[string]uint64) error {
+	for ftName, ft := range r.registeredFunctionTypes {
+		if !ft.config.multipleInstancesAllowed {
+			revID, err := KeyMutexLock(ctx, r, system.GetHashStr(ftName), true)
+			if err != nil {
+				if errors.Is(err, ErrMutexLocked) {
+					lg.Logf(lg.WarnLevel, "Function type %s is already running elsewhere; skipping", ft.name)
+					continue
+				}
+				return err
+			}
+			revisions[ftName] = revID
+		}
+	}
 
-		measureName := "stetefun_instances"
-		var gaugeVec *prometheus.GaugeVec
-		var gaugeVecErr error
-		gaugeVec, gaugeVecErr = system.GlobalPrometrics.EnsureGaugeVecSimple(measureName, "Stateful function instances", []string{"typename"})
+	// Start lock updater for single-instance functions.
+	if len(revisions) > 0 {
+		r.wg.Add(1)
+		go r.singleInstanceFunctionLocksUpdater(ctx, revisions)
+	}
 
-		for _, ft := range r.registeredFunctionTypes {
-			n1, n2 := ft.gc(r.config.functionTypeIDLifetimeMs)
-			totalIdsGrbageCollected += n1
-			totalIDHandlersRunning += n2
-			if gaugeVec != nil && gaugeVecErr == nil {
-				gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(float64(n2))
+	return nil
+}
+
+// startFunctionSubscriptions starts the function subscriptions based on the configuration.
+func (r *Runtime) startFunctionSubscriptions(ctx context.Context, revisions map[string]uint64) error {
+	for _, ft := range r.registeredFunctionTypes {
+		if ft.config.IsSignalProviderAllowed(sfPlugins.JetstreamGlobalSignal) {
+			if err := AddSignalSourceJetstreamQueuePushConsumer(ft); err != nil {
+				return err
 			}
 		}
+		if ft.config.IsRequestProviderAllowed(sfPlugins.NatsCoreGlobalRequest) {
+			if err := AddRequestSourceNatsCore(ft); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
 
-		if totalIdsGrbageCollected > 0 && totalIDHandlersRunning == 0 {
-			// Result time output -----------------------------------------------------------------
-			if totalIDHandlersRunning == 0 {
-				glce := atomic.LoadInt64(&r.glce)
-				gt0 := atomic.LoadInt64(&r.gt0)
-				gc := atomic.LoadInt64(&r.gc)
+// runAfterStartFunctions executes the registered OnAfterStart functions.
+func (r *Runtime) runAfterStartFunctions(ctx context.Context) {
+	for _, fnWithMode := range r.onAfterStartFunctionsWithMode {
+		if fnWithMode.async {
+			r.wg.Add(1)
+			go func(f OnAfterStartFunction) {
+				defer r.wg.Done()
+				system.GlobalPrometrics.GetRoutinesCounter().Started("runtime_onAfterStart")
+				defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("runtime_onAfterStart")
+				if err := f(ctx, r); err != nil {
+					lg.Logf(lg.ErrorLevel, "OnAfterStartFunction error: %v", err)
+				}
+			}(fnWithMode.f)
+		} else {
+			if err := fnWithMode.f(ctx, r); err != nil {
+				lg.Logf(lg.ErrorLevel, "OnAfterStartFunction error: %v", err)
+			}
+		}
+	}
+}
 
-				dt := glce - gt0
+// runGarbageCollector periodically cleans up expired function instances.
+func (r *Runtime) runGarbageCollector(ctx context.Context) {
+	defer r.wg.Done()
+	ticker := time.NewTicker(time.Duration(r.config.gcIntervalSec) * time.Second)
+	defer ticker.Stop()
 
-				if gc > 0 && dt > 0 {
-					lg.Logf(lg.TraceLevel, "!!!!!!!!!!!!!!!!! %d runs, total time (ns/ms): %d/%d, function dt (ns/ms): %d/%d -> %dHz\n", gc, dt, dt/1000000, dt/gc, dt/gc/1000000, gc*1000000000/dt)
-					atomic.StoreInt64(&r.gc, 0)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.shutdown:
+			return
+		case <-ticker.C:
+			r.collectGarbage()
+		}
+	}
+}
+
+// collectGarbage performs the garbage collection.
+func (r *Runtime) collectGarbage() {
+	var totalGarbageCollected int
+	var totalHandlersRunning int
+
+	measureName := "statefun_instances"
+	gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple(measureName, "Stateful function instances", []string{"typename"})
+	if err != nil {
+		lg.Logf(lg.ErrorLevel, "Error ensuring GaugeVec: %v", err)
+	}
+
+	for _, ft := range r.registeredFunctionTypes {
+		collected, running := ft.gc(r.config.functionTypeIDLifetimeMs)
+		totalGarbageCollected += collected
+		totalHandlersRunning += running
+
+		if gaugeVec != nil {
+			gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(float64(running))
+		}
+	}
+
+	if totalGarbageCollected > 0 && totalHandlersRunning == 0 {
+		r.reportPerformanceMetrics()
+	}
+}
+
+// reportPerformanceMetrics logs performance metrics when all handlers are idle.
+func (r *Runtime) reportPerformanceMetrics() {
+	glce := atomic.LoadInt64(&r.glce)
+	gt0 := atomic.LoadInt64(&r.gt0)
+	gc := atomic.LoadInt64(&r.gc)
+
+	dt := glce - gt0
+
+	if gc > 0 && dt > 0 {
+		lg.Logf(lg.TraceLevel, "%d runs, total time (ns/ms): %d/%d, function dt (ns/ms): %d/%d -> %dHz",
+			gc, dt, dt/1e6, dt/gc, (dt/gc)/1e6, (gc*1e9)/dt)
+		atomic.StoreInt64(&r.gc, 0)
+	}
+}
+
+// singleInstanceFunctionLocksUpdater periodically updates locks for single-instance functions.
+func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisions map[string]uint64) {
+	defer r.wg.Done()
+	ticker := time.NewTicker(time.Duration(r.config.kvMutexLifeTimeSec) / 2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.shutdown:
+			return
+		case <-ticker.C:
+			for ftName, revID := range revisions {
+				newRevID, err := KeyMutexLockUpdate(ctx, r, system.GetHashStr(ftName), revID)
+				if err != nil {
+					lg.Logf(lg.ErrorLevel, "KeyMutexLockUpdate failed for %s: %v", ftName, err)
+				} else {
+					revisions[ftName] = newRevID
 				}
 			}
-			// ------------------------------------------------------------------------------------
 		}
-		// --------------------------------------------------------------
-
-		time.Sleep(1 * time.Second)
 	}
 }
 
-/*func (r *Runtime) TestKVCleanup() {
-	fmt.Println("!!!!!!!!!!!!!!!!! TestKVCleanup")
-	if w, err := r.kv.WatchAll(); err == nil {
-		for entry := range w.Updates() {
-			if entry == nil {
-				break
-			}
-			kv.DeleteKeyValueValue(r.js, r.kv, entry.Key())
+// contains checks if a slice contains a particular string.
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
 		}
 	}
-}*/
+	return false
+}

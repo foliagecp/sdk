@@ -15,12 +15,12 @@ import (
 )
 
 func AddRequestSourceNatsCore(ft *FunctionType) error {
-	_, err := ft.runtime.nc.Subscribe(fmt.Sprintf("service.%s", ft.subject), func(msg *nats.Msg) {
+	_, err := ft.runtime.nc.Subscribe(RequestPrefix+"."+ft.runtime.Domain.name+"."+ft.name+".*", func(msg *nats.Msg) {
 		system.MsgOnErrorReturn(handleNatsMsg(ft, msg, true, nil))
 	})
 
 	if err != nil {
-		lg.Logf(lg.ErrorLevel, "Invalid request reply subscription for function type %s: %s\n", ft.name, err)
+		lg.Logf(lg.ErrorLevel, "Invalid request reply subscription for function type %s: %s", ft.name, err)
 		return err
 	}
 
@@ -28,9 +28,9 @@ func AddRequestSourceNatsCore(ft *FunctionType) error {
 }
 
 func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType) error {
-	consumerName := strings.ReplaceAll(ft.name, ".", "")
+	consumerName := ft.runtime.Domain.name + "-" + strings.ReplaceAll(ft.name, ".", "")
 	consumerGroup := consumerName + "-group"
-	lg.Logf(lg.TraceLevel, "Handling function type %s\n", ft.name)
+	lg.Logf(lg.TraceLevel, "Handling function type %s", ft.name)
 
 	// Create stream consumer if does not exist ---------------------
 	consumerExists := false
@@ -75,7 +75,7 @@ func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType) error {
 		nats.ManualAck(),
 	)
 	if err != nil {
-		lg.Logf(lg.ErrorLevel, "Invalid signal subscription for function type %s: %s\n", ft.name, err)
+		lg.Logf(lg.ErrorLevel, "Invalid signal subscription for function type %s: %s", ft.name, err)
 		return err
 	}
 	return nil
@@ -88,7 +88,7 @@ func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool, msgAckCha
 	data, ok := easyjson.JSONFromBytes(msg.Data)
 	if !ok {
 		system.MsgOnErrorReturn(msg.Ack())
-		return fmt.Errorf("nats.Msg for function %s with id=%s is not a JSON\n", ft.name, id)
+		return fmt.Errorf("nats.Msg for function %s with id=%s is not a JSON", ft.name, id)
 	}
 
 	var payload *easyjson.JSON
