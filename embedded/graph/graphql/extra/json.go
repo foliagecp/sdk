@@ -3,6 +3,8 @@ package extra
 import (
 	"encoding/json"
 	"io"
+
+	"github.com/foliagecp/sdk/statefun/system"
 )
 
 // JSON определяет тип данных, представляющий JSON-объект
@@ -10,7 +12,7 @@ type JSON map[string]interface{}
 
 // MarshalGQL сериализует JSON в формат, используемый GraphQL
 func (j JSON) MarshalGQL(w io.Writer) {
-	json.NewEncoder(w).Encode(j)
+	system.MsgOnErrorReturn(json.NewEncoder(w).Encode(j))
 }
 
 // UnmarshalGQL десериализует данные из формата GraphQL в JSON

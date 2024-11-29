@@ -193,11 +193,11 @@ func Start() {
 
 		b := easyjson.NewJSONObjectWithKeyValue("f2", easyjson.NewJSON(true))
 		b.SetByPath("f1.f11", easyjson.NewJSON(123.13))
-		dbClient.CMDB.ObjectCreate("test1", "typea", b)
-		dbClient.CMDB.ObjectCreate("test2", "typea", easyjson.NewJSONObjectWithKeyValue("f2", easyjson.NewJSON("bar")))
+		system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("test1", "typea", b))
+		system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("test2", "typea", easyjson.NewJSONObjectWithKeyValue("f2", easyjson.NewJSON("bar"))))
 		b = easyjson.NewJSONObjectWithKeyValue("f1", easyjson.NewJSON("data1"))
 		b.SetByPath("f2", easyjson.NewJSON(119))
-		dbClient.CMDB.ObjectCreate("test3", "typeb", b)
+		system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("test3", "typeb", b))
 
 		fmt.Println("Starting GraphQL")
 		graphql.StartGraphqlServer("8080", &dbClient)
