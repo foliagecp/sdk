@@ -5,6 +5,7 @@
 package system
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"encoding/base64"
@@ -259,6 +260,39 @@ func BytesToInt64(v []byte) int64 {
 		return 0
 	}
 	return int64(binary.LittleEndian.Uint64(v))
+}
+
+func Float64ToBytes(f float64) []byte {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, f)
+	if err != nil {
+		return []byte{}
+	}
+	return buf.Bytes()
+}
+
+func BytesToFloat64(b []byte) float64 {
+	buf := bytes.NewReader(b)
+	var f float64
+	err := binary.Read(buf, binary.LittleEndian, &f)
+	if err != nil {
+		return 0.0
+	}
+	return f
+}
+
+func BoolToBytes(b bool) []byte {
+	if b {
+		return []byte{1}
+	}
+	return []byte{0}
+}
+
+func BytesToBool(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	return data[0] != 0
 }
 
 func GetCurrentTimeNs() int64 {
