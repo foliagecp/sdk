@@ -142,7 +142,7 @@ func getVertexLinkNameTypeTargetFromVariousIdentifiers(ctx *sfPlugins.StatefunCo
 	linkTargetId = ctx.Domain.CreateObjectIDWithThisDomain(linkDataContainer.GetByPath("to").AsStringDefault(""), false)
 
 	if len(linkName) > 0 {
-		linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+LinkKeySuff1Pattern, ctx.Self.ID, linkName))
+		linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, linkName))
 		if err != nil {
 			return "", "", "", fmt.Errorf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName)
 		}
@@ -155,7 +155,7 @@ func getVertexLinkNameTypeTargetFromVariousIdentifiers(ctx *sfPlugins.StatefunCo
 	} else {
 		if len(linkTargetId) > 0 {
 			if len(linkType) > 0 {
-				linkNameBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, linkType, linkTargetId))
+				linkNameBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, ctx.Self.ID, linkType, linkTargetId))
 				if err != nil {
 					return "", "", "", fmt.Errorf("link from=%s to=%s with type=%s does not exist", ctx.Self.ID, linkTargetId, linkType)
 				}
