@@ -1,470 +1,601 @@
 package crud
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/foliagecp/easyjson"
-	"github.com/foliagecp/sdk/embedded/graph/common"
-	sfplugins "github.com/foliagecp/sdk/statefun/plugins"
+	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
+	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 )
 
+func replyWithoutOpStack(om *sfMediators.OpMediator, ctx *sfPlugins.StatefunContextProcessor, data ...easyjson.JSON) {
+	var res easyjson.JSON
+	if len(data) > 0 {
+		res = data[0]
+
+	} else {
+		res = om.GetData()
+	}
+
+	returnOpStack := false
+	if ctx.Options != nil {
+		returnOpStack = ctx.Options.GetByPath("op_stack").AsBoolDefault(false)
+	}
+	if !returnOpStack {
+		res.RemoveByPath("op_stack")
+	}
+	if !res.IsNonEmptyObject() {
+		res = easyjson.NewJSONNull()
+	}
+	system.MsgOnErrorReturn(om.ReplyWithData(&res))
+}
+
 /*
 	{
-		"prefix": string, optional
 		"body": json
 	}
-
-create types -> type link
 */
-func CreateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
-	selfID := contextProcessor.Self.ID
-	payload := contextProcessor.Payload
+func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	if typeOperationRedirectedToHub(ctx) {
+		return
+	}
+	om := sfMediators.NewOpMediator(ctx)
+	typesVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false)
 
-	prefix := payload.GetByPath("prefix").AsStringDefault("")
-
-	linkBodyKey := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, prefix+Types, TypeLink, selfID)
-	if _, err := contextProcessor.GlobalCache.GetValue(linkBodyKey); err == nil {
-		replyOk(contextProcessor)
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", ctx.Self.ID, ctx.Payload, nil)))
+	if om.GetStatus() == sfMediators.SYNC_OP_STATUS_INCOMPLETE || om.GetStatus() == sfMediators.SYNC_OP_STATUS_FAILED {
+		om.Reply()
 		return
 	}
 
-	_, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.create", selfID, payload, nil)
-	if err != nil {
-		replyError(contextProcessor, err)
-		return
-	}
-
+	// LINK: types -> <type_name>
 	link := easyjson.NewJSONObject()
-	link.SetByPath("descendant_uuid", easyjson.NewJSON(selfID))
-	link.SetByPath("link_type", easyjson.NewJSON(TypeLink))
-	link.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{TypeTag + selfID}))
+	link.SetByPath("to", easyjson.NewJSON(ctx.Self.ID))
+	link.SetByPath("name", easyjson.NewJSON(ctx.Self.ID))
+	link.SetByPath("type", easyjson.NewJSON(TO_TYPELINK))
 
-	_, err = contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.create", prefix+Types, &link, nil)
-	if err != nil {
-		replyError(contextProcessor, err)
-		return
-	}
-
-	replyOk(contextProcessor)
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", typesVertexId, &link, nil))).Reply()
 }
 
 /*
 	{
-		"strategy": string, optional, default: DeepMerge
+		"upsert": bool - optional, default: false
+		"replace": bool - optional, default: false
 		"body": json
 	}
 */
-func UpdateType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
-	selfID := contextProcessor.Self.ID
-
-	payload := contextProcessor.Payload
-
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.update", selfID, payload, nil)
-	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
+func UpdateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	if typeOperationRedirectedToHub(ctx) {
 		return
 	}
 
-	replyOk(contextProcessor)
+	om := sfMediators.NewOpMediator(ctx)
+
+	// Handle upsert request ------------------------------
+	upsert := ctx.Payload.GetByPath("upsert").AsBoolDefault(false)
+	if upsert {
+		ctx.Payload.RemoveByPath("upsert")
+		som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", ctx.Self.ID, nil, nil))
+		if som.Status != sfMediators.SYNC_OP_STATUS_OK { // Type does not exist
+			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.create", ctx.Self.ID, ctx.Payload, ctx.Options))).Reply()
+			return
+		}
+	}
+	// ----------------------------------------------------
+
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.update", ctx.Self.ID, ctx.Payload, nil))).Reply()
 }
 
-func DeleteType(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
-	replyOk(contextProcessor)
+/*
+ */
+func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	if typeOperationRedirectedToHub(ctx) {
+		return
+	}
+
+	om := sfMediators.NewOpMediator(ctx)
+
+	// Vertice's out links are stored in the same domain with the vertex
+	pattern := fmt.Sprintf(OutLinkTypeKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, OBJECT_TYPELINK, ">")
+	outLinkKeys := ctx.Domain.Cache().GetKeysByPattern(pattern)
+	for _, outLinkKey := range outLinkKeys {
+		inLinkKeyTokens := strings.Split(outLinkKey, ".")
+		toObjectID := inLinkKeyTokens[len(inLinkKeyTokens)-1]
+
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.delete", toObjectID, nil, nil)))
+		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
+			om.Reply()
+			return
+		}
+	}
+
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.delete", ctx.Self.ID, nil, nil))).Reply()
+}
+
+/*
+ */
+func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	if typeOperationRedirectedToHub(ctx) {
+		return
+	}
+
+	om := sfMediators.NewOpMediator(ctx)
+
+	payload := easyjson.NewJSONObjectWithKeyValue("details", easyjson.NewJSON(true))
+	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", ctx.Self.ID, &payload, nil))
+	om.AggregateOpMsg(m)
+
+	vertexIsType := false
+	typesVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false)
+	for i := 0; i < m.Data.GetByPath("links.in").ArraySize(); i++ {
+		fromId := m.Data.GetByPath("links.in").ArrayElement(i).GetByPath("from").AsStringDefault("")
+		if fromId == typesVertexId {
+			vertexIsType = true
+		}
+	}
+	if !vertexIsType {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s is not a type", ctx.Self.ID)))
+		system.MsgOnErrorReturn(om.ReplyWithData(easyjson.NewJSONObject().GetPtr()))
+		return
+	}
+
+	toTypes := []string{}
+	toObjects := []string{}
+	for i := 0; i < m.Data.GetByPath("links.out.names").ArraySize(); i++ {
+		tp := m.Data.GetByPath("links.out.types").ArrayElement(i).AsStringDefault("")
+		toId := m.Data.GetByPath("links.out.ids").ArrayElement(i).AsStringDefault("")
+		if tp == TO_TYPELINK {
+			toTypes = append(toTypes, toId)
+		}
+		if tp == OBJECT_TYPELINK {
+			toObjects = append(toObjects, toId)
+		}
+	}
+
+	result := easyjson.NewJSONObject()
+	if m.Data.PathExists("body") {
+		result.SetByPath("body", m.Data.GetByPath("body"))
+	}
+	result.SetByPath("to_types", easyjson.JSONFromArray(toTypes))
+	result.SetByPath("object_ids", easyjson.JSONFromArray(toObjects))
+	result.SetByPath("links", m.Data.GetByPath("links"))
+
+	system.MsgOnErrorReturn(om.ReplyWithData(&result))
 }
 
 /*
 	{
-		"prefix": string, optional,
-		"origin_type": string,
+		"origin_type": string
 		"body": json
 	}
-
-create objects -> object link
-
-create type -> object link
-
-create object -> type link
-
-TODO: Add origin type check
 */
-func CreateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
-	selfID := contextProcessor.Self.ID
-	payload := contextProcessor.Payload
+func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	om := sfMediators.NewOpMediator(ctx)
 
-	originType, ok := payload.GetByPath("origin_type").AsString()
+	originType, ok := ctx.Payload.GetByPath("origin_type").AsString()
 	if !ok {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("origin_type is not defined")).Reply()
 		return
 	}
+	originType = ctx.Domain.CreateObjectIDWithHubDomain(originType, true)
+	options := easyjson.NewJSONObjectWithKeyValue("op_stack", easyjson.NewJSON(true))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", ctx.Self.ID, ctx.Payload, &options)))
 
-	prefix := payload.GetByPath("prefix").AsStringDefault("")
-
-	linkBodyKey := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, prefix+Objects, ObjectLink, selfID)
-	if _, err := contextProcessor.GlobalCache.GetValue(linkBodyKey); err == nil {
-		replyOk(contextProcessor)
-		return
+	targetReply := om.GetLastSyncOp().Data
+	var opStack *easyjson.JSON
+	if targetReply.PathExists("op_stack") {
+		opStack = targetReply.GetByPathPtr("op_stack")
 	}
 
-	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.create", selfID, payload, &options)
-	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
-		return
-	}
-
-	type _link struct {
-		from, to, lt string
-	}
-
-	needLinks := []_link{
-		{from: prefix + Objects, to: selfID, lt: ObjectLink},
-		{from: selfID, to: prefix + originType, lt: TypeLink},
-		{from: prefix + originType, to: selfID, lt: ObjectLink},
-	}
-
-	for _, l := range needLinks {
-		link := easyjson.NewJSONObject()
-		link.SetByPath("descendant_uuid", easyjson.NewJSON(l.to))
-		link.SetByPath("link_type", easyjson.NewJSON(l.lt))
-		link.SetByPath("link_body", easyjson.NewJSONObject())
-
-		switch l.lt {
-		case TypeLink:
-			link.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{TypeTag + l.to}))
+	if !(om.GetStatus() == sfMediators.SYNC_OP_STATUS_INCOMPLETE) {
+		type _link struct {
+			from, to, name, lt string
 		}
 
-		r, e := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.create", l.from, &link, nil)
-		if e := checkRequestError(r, e); e != nil {
-			replyError(contextProcessor, e)
-			return
+		needLinks := []_link{
+			{from: ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false), to: ctx.Self.ID, name: ctx.Self.ID, lt: OBJECT_TYPELINK},
+			{from: ctx.Self.ID, name: "type", to: originType, lt: TO_TYPELINK},
+			{from: originType, name: ctx.Self.ID, to: ctx.Self.ID, lt: OBJECT_TYPELINK},
+		}
+
+		for _, l := range needLinks {
+			link := easyjson.NewJSONObject()
+			link.SetByPath("to", easyjson.NewJSON(l.to))
+			link.SetByPath("name", easyjson.NewJSON(l.name))
+			link.SetByPath("type", easyjson.NewJSON(l.lt))
+			link.SetByPath("body", easyjson.NewJSONObject())
+
+			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", l.from, &link, nil)))
+			if om.GetStatus() == sfMediators.SYNC_OP_STATUS_INCOMPLETE {
+				break // Operation cannot be completed fully, interrupt where it is now and go to the end
+			}
 		}
 	}
 
-	if result.PathExists("op_stack") {
-		executeTriggersFromLLOpStack(contextProcessor, result.GetByPath("op_stack").GetPtr())
+	if opStack != nil {
+		executeTriggersFromLLOpStack(ctx, opStack, "", "")
 	}
 
-	replyOk(contextProcessor)
+	replyWithoutOpStack(om, ctx, targetReply)
 }
 
 /*
 	{
-		"mode": string, optional, default: merge
+		"origin_type": string, not requred! required only if "upsert"==true
+		"upsert": bool - optional, default: false
+		"replace": bool - optional, default: false
 		"body": json
 	}
 */
-func UpdateObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
-	selfID := contextProcessor.Self.ID
-	payload := contextProcessor.Payload
+func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	om := sfMediators.NewOpMediator(ctx)
 
-	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.update", selfID, payload, &options)
-	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
+	// Handle upsert request ------------------------------
+	upsert := ctx.Payload.GetByPath("upsert").AsBoolDefault(false)
+	if upsert {
+		ctx.Payload.RemoveByPath("upsert")
+		if findObjectType(ctx, ctx.Self.ID) == "" { // Object does not exist
+			if ctx.Payload.GetByPath("origin_type").IsString() {
+				om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.create", ctx.Self.ID, ctx.Payload, ctx.Options)))
+				replyWithoutOpStack(om, ctx)
+			} else {
+				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("object with id=%s does exist, upsert=true but origin_type is not specified", ctx.Self.ID))).Reply()
+			}
+			return
+		}
+	}
+	// ----------------------------------------------------
+
+	options := easyjson.NewJSONObjectWithKeyValue("op_stack", easyjson.NewJSON(true))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.update", ctx.Self.ID, ctx.Payload, &options)))
+	if om.GetLastSyncOp().Data.PathExists("op_stack") {
+		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), "", "")
+	}
+
+	replyWithoutOpStack(om, ctx)
+}
+
+/*
+ */
+func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	om := sfMediators.NewOpMediator(ctx)
+
+	objectType := findObjectType(ctx, ctx.Self.ID)
+
+	options := easyjson.NewJSONObjectWithKeyValue("op_stack", easyjson.NewJSON(true))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.delete", ctx.Self.ID, nil, &options)))
+	if om.GetLastSyncOp().Data.PathExists("op_stack") {
+		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), ctx.Self.ID, objectType)
+	}
+
+	replyWithoutOpStack(om, ctx)
+}
+
+/*
+ */
+func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	om := sfMediators.NewOpMediator(ctx)
+
+	payload := easyjson.NewJSONObjectWithKeyValue("details", easyjson.NewJSON(true))
+	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", ctx.Self.ID, &payload, nil))
+	om.AggregateOpMsg(m)
+	if om.GetLastSyncOp().Data.PathExists("op_stack") {
+		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), "", "")
+	}
+
+	objectType := ""
+	toObjects := []string{}
+	for i := 0; i < m.Data.GetByPath("links.out.names").ArraySize(); i++ {
+		tp := m.Data.GetByPath("links.out.types").ArrayElement(i).AsStringDefault("")
+		toId := m.Data.GetByPath("links.out.ids").ArrayElement(i).AsStringDefault("")
+		if tp == TO_TYPELINK {
+			objectType = toId
+		} else {
+			toObjects = append(toObjects, toId)
+		}
+	}
+	if len(objectType) == 0 {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("objects with id=%s has no type", ctx.Self.ID)))
+		system.MsgOnErrorReturn(om.ReplyWithData(easyjson.NewJSONObject().GetPtr()))
 		return
 	}
 
-	if result.PathExists("op_stack") {
-		executeTriggersFromLLOpStack(contextProcessor, result.GetByPath("op_stack").GetPtr())
+	vertexIsObject := false
+	typeBidirectionalLink := false
+	objectsVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false)
+	for i := 0; i < m.Data.GetByPath("links.in").ArraySize(); i++ {
+		fromId := m.Data.GetByPath("links.in").ArrayElement(i).GetByPath("from").AsStringDefault("")
+		if fromId == objectsVertexId {
+			vertexIsObject = true
+		}
+		if fromId == objectType {
+			typeBidirectionalLink = true
+		}
+	}
+	if !vertexIsObject {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s is not an object, not connected to objects topology", ctx.Self.ID)))
+		system.MsgOnErrorReturn(om.ReplyWithData(easyjson.NewJSONObject().GetPtr()))
+		return
+	}
+	if !typeBidirectionalLink {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s is not an object, inlink from type is broken", ctx.Self.ID)))
+		system.MsgOnErrorReturn(om.ReplyWithData(easyjson.NewJSONObject().GetPtr()))
+		return
 	}
 
-	replyOk(contextProcessor)
+	result := easyjson.NewJSONObject()
+	if m.Data.PathExists("body") {
+		result.SetByPath("body", m.Data.GetByPath("body"))
+
+	}
+	result.SetByPath("type", easyjson.NewJSON(objectType))
+	result.SetByPath("to_objects", easyjson.JSONFromArray(toObjects))
+	result.SetByPath("links", m.Data.GetByPath("links"))
+
+	system.MsgOnErrorReturn(om.ReplyWithData(&result))
 }
 
 /*
 	{
-		"mode": "vertex" | "cascade", optional, default: vertex
-	}
-*/
-func DeleteObject(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
-	selfID := contextProcessor.Self.ID
-	payload := contextProcessor.Payload
-
-	mode := payload.GetByPath("mode").AsStringDefault("vertex")
-	switch mode {
-	case "cascade":
-		visited := map[string]struct{}{
-			selfID: {},
-		}
-		queue := []string{selfID}
-
-		for len(queue) > 0 {
-			elem := queue[0]
-			pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, elem, ">")
-			children := contextProcessor.GlobalCache.GetKeysByPattern(pattern)
-
-			for _, v := range children {
-				split := strings.Split(v, ".")
-				if len(split) == 0 {
-					continue
-				}
-
-				id := split[len(split)-1]
-
-				if _, ok := visited[id]; ok {
-					continue
-				}
-
-				visited[id] = struct{}{}
-				queue = append(queue, id)
-			}
-
-			queue = queue[1:]
-			if len(queue) == 0 {
-				break
-			}
-
-			empty := easyjson.NewJSONObject()
-			options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-			result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.delete", elem, &empty, &options)
-			if err := checkRequestError(result, err); err != nil {
-				replyError(contextProcessor, err)
-				return
-			}
-
-			if result.PathExists("op_stack") {
-				executeTriggersFromLLOpStack(contextProcessor, result.GetByPath("op_stack").GetPtr())
-			}
-		}
-	case "vertex":
-		empty := easyjson.NewJSONObject()
-		options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-		result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.vertex.delete", selfID, &empty, &options)
-		if err := checkRequestError(result, err); err != nil {
-			replyError(contextProcessor, err)
-			return
-		}
-
-		if result.PathExists("op_stack") {
-			executeTriggersFromLLOpStack(contextProcessor, result.GetByPath("op_stack").GetPtr())
-		}
-	}
-
-	replyOk(contextProcessor)
-}
-
-/*
-	{
-		"to": string,
-		"object_link_type": string
+		"to": string
+		"object_type": string
 		"body": json
+		"tags": []string
 	}
 
 create type -> type link
 */
-func CreateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
-	selfID := contextProcessor.Self.ID
-	payload := contextProcessor.Payload
+func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	if typeOperationRedirectedToHub(ctx) {
+		return
+	}
 
-	objectLinkType, ok := payload.GetByPath("object_link_type").AsString()
+	om := sfMediators.NewOpMediator(ctx)
+
+	objectLinkType, ok := ctx.Payload.GetByPath("object_type").AsString()
 	if !ok {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("object_type is not defined")).Reply()
 		return
 	}
 
-	to, ok := payload.GetByPath("to").AsString()
+	toType, ok := ctx.Payload.GetByPath("to").AsString()
 	if !ok {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
-
-	linkBodyKey := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, selfID, TypeLink, to)
-	if _, err := contextProcessor.GlobalCache.GetValue(linkBodyKey); err == nil {
-		replyOk(contextProcessor)
-		return
-	}
+	toType = ctx.Domain.CreateObjectIDWithHubDomain(toType, true)
 
 	link := easyjson.NewJSONObject()
-	link.SetByPath("descendant_uuid", easyjson.NewJSON(to))
-	link.SetByPath("link_type", easyjson.NewJSON(TypeLink))
-	link.SetByPath("link_body.link_type", easyjson.NewJSON(objectLinkType))
-	link.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{TypeTag + to}))
-
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.create", selfID, &link, nil)
-	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
-		return
+	link.SetByPath("to", easyjson.NewJSON(toType))
+	link.SetByPath("name", easyjson.NewJSON(toType))
+	link.SetByPath("type", easyjson.NewJSON(TO_TYPELINK))
+	if ctx.Payload.PathExists("tags") {
+		link.SetByPath("tags", ctx.Payload.GetByPath("tags"))
 	}
+	link.SetByPath("body.type", easyjson.NewJSON(objectLinkType))
 
-	replyOk(contextProcessor)
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", ctx.Self.ID, &link, nil))).Reply()
 }
 
 /*
 	{
 		"to": string,
-		"object_link_type": string, optional
 		"body": json, optional
+		"tags": []string
+		"upsert": bool
+		"replace": bool
 	}
-
-if object_link_type not empty
-  - prepare link_body.link_type = object_link_type
-  - after success updating, find all objects with certain types and change link_type
 */
-func UpdateTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
-	selfID := contextProcessor.Self.ID
-	payload := contextProcessor.Payload
+func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	if typeOperationRedirectedToHub(ctx) {
+		return
+	}
 
-	to, ok := payload.GetByPath("to").AsString()
+	om := sfMediators.NewOpMediator(ctx)
+
+	toType, ok := ctx.Payload.GetByPath("to").AsString()
 	if !ok {
-		replyError(contextProcessor, errors.New("to undefined"))
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
+	toType = ctx.Domain.CreateObjectIDWithHubDomain(toType, true)
 
-	objectLinkType := payload.GetByPath("object_link_type").AsStringDefault("")
-	body := payload.GetByPath("body")
-
-	if objectLinkType == "" && !body.IsNonEmptyObject() {
-		replyError(contextProcessor, errors.New("nothing to update"))
-		return
+	link := ctx.Payload.Clone()
+	link.SetByPath("to", easyjson.NewJSON(toType))
+	link.SetByPath("type", easyjson.NewJSON(TO_TYPELINK))
+	if ctx.Payload.PathExists("tags") {
+		link.SetByPath("tags", ctx.Payload.GetByPath("tags"))
 	}
-
-	updateLinkPayload := easyjson.NewJSONObject()
-	updateLinkPayload.SetByPath("descendant_uuid", easyjson.NewJSON(to))
-	updateLinkPayload.SetByPath("link_type", easyjson.NewJSON(TypeLink))
-	updateLinkPayload.SetByPath("link_body", body)
-	updateLinkPayload.SetByPath("link_body.tags", easyjson.JSONFromArray([]string{TypeTag + to}))
-
-	needUpdateObjectLinkType := objectLinkType != ""
-	currentObjectLinkType := ""
-
-	if needUpdateObjectLinkType {
-		updateLinkPayload.SetByPath("link_body.link_type", easyjson.NewJSON(objectLinkType))
-
-		currentBody, err := getTypesLinkBody(contextProcessor, selfID, to)
-		if err != nil {
-			replyError(contextProcessor, err)
-			return
-		}
-
-		currentObjectLinkType, _ = currentBody.GetByPath("link_body.link_type").AsString()
+	if ctx.Payload.PathExists("upsert") {
+		link.SetByPath("name", easyjson.NewJSON(toType))
+		link.SetByPath("upsert", ctx.Payload.GetByPath("upsert"))
 	}
-
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.update", selfID, &updateLinkPayload, nil)
-	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
-		return
+	if ctx.Payload.PathExists("replace") {
+		link.SetByPath("replace", ctx.Payload.GetByPath("replace"))
 	}
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.update", ctx.Self.ID, &link, nil)))
 
-	// update link type of objects with certain types
-	if needUpdateObjectLinkType {
-		objects := findTypeObjects(contextProcessor, selfID)
-		for _, objectID := range objects {
-			pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, objectID, currentObjectLinkType, ">")
-			keys := contextProcessor.GlobalCache.GetKeysByPattern(pattern)
-
-			for _, key := range keys {
-				split := strings.Split(key, ".")
-				toObjectID := split[len(split)-1]
-
-				// update link_type
-				updateObjectLinkPayload := easyjson.NewJSONObject()
-				updateObjectLinkPayload.SetByPath("descendant_uuid", easyjson.NewJSON(toObjectID))
-				updateObjectLinkPayload.SetByPath("link_type", easyjson.NewJSON(objectLinkType))
-				updateObjectLinkPayload.SetByPath("link_body", easyjson.NewJSONObject())
-
-				result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.update", objectID, &updateObjectLinkPayload, nil)
-				if err := checkRequestError(result, err); err != nil {
-					replyError(contextProcessor, err)
-					return
-				}
-			}
-		}
-	}
-
-	replyOk(contextProcessor)
+	om.Reply()
 }
 
-func DeleteTypesLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
-	replyOk(contextProcessor)
+/*
+	{
+		"to": string
+	}
+*/
+func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	if typeOperationRedirectedToHub(ctx) {
+		return
+	}
+
+	om := sfMediators.NewOpMediator(ctx)
+
+	toType, ok := ctx.Payload.GetByPath("to").AsString()
+	if !ok {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
+		return
+	}
+	toType = ctx.Domain.CreateObjectIDWithHubDomain(toType, true)
+
+	originLinkType, err := getObjectsLinkTypeFromTypesLink(ctx, ctx.Self.ID, toType)
+	if err != nil {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
+		return
+	}
+
+	typeObjects, err := findTypeObjects(ctx, ctx.Self.ID)
+	if err != nil {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
+		return
+	}
+
+	payload := easyjson.NewJSONObjectWithKeyValue("link_type", easyjson.NewJSON(originLinkType))
+	payload.SetByPath("to_object_type", easyjson.NewJSON(toType))
+	options := easyjson.NewJSONObjectWithKeyValue("op_stack", easyjson.NewJSON(true))
+	for _, objectId := range typeObjects {
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.delete_object_filtered_out_links", objectId, &payload, &options)))
+		if om.GetLastSyncOp().Data.PathExists("op_stack") {
+			executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), "", "")
+		}
+	}
+
+	objectLink := easyjson.NewJSONObject()
+	objectLink.SetByPath("to", easyjson.NewJSON(toType))
+	objectLink.SetByPath("type", easyjson.NewJSON(TO_TYPELINK))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", ctx.Self.ID, &objectLink, nil)))
+
+	om.Reply()
+}
+
+/*
+	{
+		"to": string
+	}
+*/
+func ReadTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	if typeOperationRedirectedToHub(ctx) {
+		return
+	}
+
+	om := sfMediators.NewOpMediator(ctx)
+
+	toType, ok := ctx.Payload.GetByPath("to").AsString()
+	if !ok {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
+		return
+	}
+
+	payload := easyjson.NewJSONObject()
+	payload.SetByPath("to", easyjson.NewJSON(toType))
+	payload.SetByPath("type", easyjson.NewJSON(TO_TYPELINK))
+	payload.SetByPath("details", easyjson.NewJSON(true))
+	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", ctx.Self.ID, &payload, nil))
+	om.AggregateOpMsg(m)
+
+	om.Reply()
 }
 
 /*
 	{
 		"to": string,
+		"name": string, // optional, "to" will be used if not defined
 		"body": json
+		"tags": []string
 	}
 
 create object -> object link
 */
-func CreateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
-	selfID := contextProcessor.Self.ID
-	payload := contextProcessor.Payload
+func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	om := sfMediators.NewOpMediator(ctx)
 
-	objectToID, ok := payload.GetByPath("to").AsString()
+	objectToID, ok := ctx.Payload.GetByPath("to").AsString()
 	if !ok {
-		replyError(contextProcessor, errors.New("to undefined"))
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
+	objectToID = ctx.Domain.CreateObjectIDWithThisDomain(objectToID, false)
 
-	linkType, err := getReferenceLinkTypeBetweenTwoObjects(contextProcessor, selfID, objectToID)
+	linkName, ok := ctx.Payload.GetByPath("name").AsString()
+	if !ok {
+		linkName = objectToID
+	}
+
+	_, _, linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, ctx.Self.ID, objectToID)
 	if err != nil {
-		replyError(contextProcessor, err)
-		return
-	}
-
-	linkBodyKey := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, selfID, linkType, objectToID)
-	if _, err := contextProcessor.GlobalCache.GetValue(linkBodyKey); err == nil {
-		replyOk(contextProcessor)
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
 		return
 	}
 
 	objectLink := easyjson.NewJSONObject()
-	objectLink.SetByPath("descendant_uuid", easyjson.NewJSON(objectToID))
-	objectLink.SetByPath("link_type", easyjson.NewJSON(linkType))
-	objectLink.SetByPath("link_body", payload.GetByPath("body"))
-
-	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.create", selfID, &objectLink, &options)
-	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
-		return
+	objectLink.SetByPath("to", easyjson.NewJSON(objectToID))
+	objectLink.SetByPath("name", easyjson.NewJSON(linkName))
+	objectLink.SetByPath("type", easyjson.NewJSON(linkType))
+	objectLink.SetByPath("body", ctx.Payload.GetByPath("body"))
+	if ctx.Payload.PathExists("tags") {
+		objectLink.SetByPath("tags", ctx.Payload.GetByPath("tags"))
 	}
 
-	if result.PathExists("op_stack") {
-		executeTriggersFromLLOpStack(contextProcessor, result.GetByPath("op_stack").GetPtr())
+	options := easyjson.NewJSONObjectWithKeyValue("op_stack", easyjson.NewJSON(true))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", ctx.Self.ID, &objectLink, &options)))
+	if om.GetLastSyncOp().Data.PathExists("op_stack") {
+		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), "", "")
 	}
 
-	replyOk(contextProcessor)
+	replyWithoutOpStack(om, ctx)
 }
 
 /*
 	{
-		"to": string,
+		"to": string
+		"name": string, // not needed, required if "upsert" is true
 		"body": json
+		"tags": []string
+		"upsert": bool
+		"replace": bool
 	}
 */
-func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
-	selfID := contextProcessor.Self.ID
-	payload := contextProcessor.Payload
+func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	om := sfMediators.NewOpMediator(ctx)
 
-	objectToID, ok := payload.GetByPath("to").AsString()
+	objectToID, ok := ctx.Payload.GetByPath("to").AsString()
 	if !ok {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
+	objectToID = ctx.Domain.CreateObjectIDWithThisDomain(objectToID, false)
 
-	linkType, err := getReferenceLinkTypeBetweenTwoObjects(contextProcessor, selfID, objectToID)
+	_, _, linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, ctx.Self.ID, objectToID)
 	if err != nil {
-		replyError(contextProcessor, err)
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
 		return
 	}
 
 	objectLink := easyjson.NewJSONObject()
-	objectLink.SetByPath("descendant_uuid", easyjson.NewJSON(objectToID))
-	objectLink.SetByPath("link_type", easyjson.NewJSON(linkType))
-	objectLink.SetByPath("link_body", payload.GetByPath("body"))
-
-	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.update", selfID, &objectLink, &options)
-	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
-		return
+	objectLink.SetByPath("to", easyjson.NewJSON(objectToID))
+	objectLink.SetByPath("type", easyjson.NewJSON(linkType))
+	objectLink.SetByPath("body", ctx.Payload.GetByPath("body"))
+	if ctx.Payload.PathExists("tags") {
+		objectLink.SetByPath("tags", ctx.Payload.GetByPath("tags"))
+	}
+	if ctx.Payload.PathExists("name") {
+		objectLink.SetByPath("name", ctx.Payload.GetByPath("name"))
+	}
+	if ctx.Payload.PathExists("upsert") {
+		objectLink.SetByPath("upsert", ctx.Payload.GetByPath("upsert"))
+	}
+	if ctx.Payload.PathExists("replace") {
+		objectLink.SetByPath("replace", ctx.Payload.GetByPath("replace"))
 	}
 
-	if result.PathExists("op_stack") {
-		executeTriggersFromLLOpStack(contextProcessor, result.GetByPath("op_stack").GetPtr())
+	options := easyjson.NewJSONObjectWithKeyValue("op_stack", easyjson.NewJSON(true))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.update", ctx.Self.ID, &objectLink, &options)))
+	if om.GetLastSyncOp().Data.PathExists("op_stack") {
+		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), "", "")
 	}
 
-	replyOk(contextProcessor)
+	replyWithoutOpStack(om, ctx)
 }
 
 /*
@@ -472,244 +603,69 @@ func UpdateObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins
 		"to": string,
 	}
 */
-func DeleteObjectsLink(_ sfplugins.StatefunExecutor, contextProcessor *sfplugins.StatefunContextProcessor) {
-	selfID := contextProcessor.Self.ID
-	payload := contextProcessor.Payload
+func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	om := sfMediators.NewOpMediator(ctx)
 
-	objectToID, ok := payload.GetByPath("to").AsString()
+	objectToID, ok := ctx.Payload.GetByPath("to").AsString()
 	if !ok {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
+	objectToID = ctx.Domain.CreateObjectIDWithThisDomain(objectToID, false)
 
-	linkType, err := getReferenceLinkTypeBetweenTwoObjects(contextProcessor, selfID, objectToID)
+	_, _, linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, ctx.Self.ID, objectToID)
 	if err != nil {
-		replyError(contextProcessor, err)
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
 		return
 	}
 
 	objectLink := easyjson.NewJSONObject()
-	objectLink.SetByPath("descendant_uuid", easyjson.NewJSON(objectToID))
-	objectLink.SetByPath("link_type", easyjson.NewJSON(linkType))
+	objectLink.SetByPath("to", easyjson.NewJSON(objectToID))
+	objectLink.SetByPath("type", easyjson.NewJSON(linkType))
 
-	options := easyjson.NewJSONObjectWithKeyValue("return_op_stack", easyjson.NewJSON(true))
-	result, err := contextProcessor.Request(sfplugins.GolangLocalRequest, "functions.graph.api.link.delete", selfID, &objectLink, &options)
-	if err := checkRequestError(result, err); err != nil {
-		replyError(contextProcessor, err)
+	options := easyjson.NewJSONObjectWithKeyValue("op_stack", easyjson.NewJSON(true))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", ctx.Self.ID, &objectLink, &options)))
+	if om.GetLastSyncOp().Data.PathExists("op_stack") {
+		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), "", "")
+	}
+
+	replyWithoutOpStack(om, ctx)
+}
+
+/*
+	{
+		"to": string
+	}
+*/
+func ReadObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	om := sfMediators.NewOpMediator(ctx)
+
+	toObject, ok := ctx.Payload.GetByPath("to").AsString()
+	if !ok {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
 
-	if result.PathExists("op_stack") {
-		executeTriggersFromLLOpStack(contextProcessor, result.GetByPath("op_stack").GetPtr())
-	}
-
-	replyOk(contextProcessor)
-}
-
-func getReferenceLinkTypeBetweenTwoObjects(ctx *sfplugins.StatefunContextProcessor, fromObjectId, toObjectId string) (string, error) {
-	fromTypeID := findObjectType(ctx, fromObjectId)
-	toTypeID := findObjectType(ctx, toObjectId)
-
-	linkBody, err := getTypesLinkBody(ctx, fromTypeID, toTypeID)
+	fromObjectType, toObjectType, linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, ctx.Self.ID, toObject)
 	if err != nil {
-		return "", err
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
+		return
 	}
 
-	linkType, ok := linkBody.GetByPath("link_type").AsString()
-	if !ok {
-		return "", fmt.Errorf("type of a link was not defined in link type")
-	}
-	return linkType, nil
-}
-
-func executeTriggersFromLLOpStack(ctx *sfplugins.StatefunContextProcessor, opStack *easyjson.JSON) {
-	if opStack != nil && opStack.IsArray() {
-		for i := 0; i < opStack.ArraySize(); i++ {
-			opData := opStack.ArrayElement(i)
-			opStr := opData.GetByPath("op").AsStringDefault("")
-			if len(opStr) > 0 {
-				for j := 0; j < 3; j++ {
-					if opStr == llAPIVertexCUDNames[j] {
-						vId := opData.GetByPath("id").AsStringDefault("")
-						if len(vId) > 0 && isVertexAnObject(ctx, vId) {
-							var oldBody *easyjson.JSON = nil
-							if opData.PathExists("old_body") {
-								oldBody = opData.GetByPath("old_body").GetPtr()
-							}
-							var newBody *easyjson.JSON = nil
-							if opData.PathExists("new_body") {
-								newBody = opData.GetByPath("new_body").GetPtr()
-							}
-							executeObjectTriggers(ctx, vId, oldBody, newBody, j)
-						}
-					}
-					if opStr == llAPILinkCUDNames[j] {
-						fromVId := opData.GetByPath("from_id").AsStringDefault("")
-						toVId := opData.GetByPath("to_id").AsStringDefault("")
-						lType := opData.GetByPath("type").AsStringDefault("")
-						if len(lType) > 0 && len(fromVId) > 0 && len(toVId) > 0 && isVertexAnObject(ctx, fromVId) && isVertexAnObject(ctx, toVId) {
-							var oldBody *easyjson.JSON = nil
-							if opData.PathExists("old_body") {
-								oldBody = opData.GetByPath("old_body").GetPtr()
-							}
-							var newBody *easyjson.JSON = nil
-							if opData.PathExists("new_body") {
-								newBody = opData.GetByPath("new_body").GetPtr()
-							}
-							executeLinkTriggers(ctx, fromVId, toVId, lType, oldBody, newBody, j)
-						}
-					}
-				}
-			}
-		}
-	}
-}
-
-func isVertexAnObject(ctx *sfplugins.StatefunContextProcessor, id string) bool {
-	return len(findObjectType(ctx, id)) > 0
-}
-
-func executeObjectTriggers(ctx *sfplugins.StatefunContextProcessor, objectID string, oldObjectBody, newObjectBody *easyjson.JSON, tt int /*0 - create, 1 - update, 2 - delete*/) {
-	triggers := getObjectTypeTriggers(ctx, objectID)
-	if triggers.IsNonEmptyObject() && tt >= 0 && tt < 3 {
-		elems := []string{"create", "update", "delete"}
-		var functions []string
-		if arr, ok := triggers.GetByPath(elems[tt]).AsArrayString(); ok {
-			functions = arr
-		}
-
-		triggerData := easyjson.NewJSONObject()
-		if oldObjectBody != nil {
-			triggerData.SetByPath("old_body", *oldObjectBody)
-		}
-		if newObjectBody != nil {
-			triggerData.SetByPath("new_body", *newObjectBody)
-		}
-		payload := easyjson.NewJSONObject()
-		payload.SetByPath(fmt.Sprintf("trigger.object.%s", elems[tt]), triggerData)
-
-		for _, f := range functions {
-			system.MsgOnErrorReturn(ctx.Signal(sfplugins.JetstreamGlobalSignal, f, objectID, &payload, nil))
-		}
-		// TODO: object deletion leads to object links deletions
-	}
-}
-
-func executeLinkTriggers(ctx *sfplugins.StatefunContextProcessor, fromObjectId, toObjectId, linkType string, oldLinkBody, newLinkBody *easyjson.JSON, tt int /*0 - create, 1 - update, 2 - delete*/) {
-	triggers := getObjectsLinkTypeTriggers(ctx, fromObjectId, toObjectId)
-	if triggers.IsNonEmptyObject() && tt >= 0 && tt < 3 {
-		elems := []string{"create", "update", "delete"}
-		var functions []string
-		if arr, ok := triggers.GetByPath(elems[tt]).AsArrayString(); ok {
-			functions = arr
-		}
-
-		referenceLinkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, fromObjectId, toObjectId)
-		if err != nil || referenceLinkType != linkType {
-			return
-		}
-
-		triggerData := easyjson.NewJSONObject()
-		triggerData.SetByPath("to", easyjson.NewJSON(toObjectId))
-		triggerData.SetByPath("type", easyjson.NewJSON(linkType))
-		if oldLinkBody != nil {
-			triggerData.SetByPath("old_body", *oldLinkBody)
-		}
-		if newLinkBody != nil {
-			triggerData.SetByPath("new_body", *newLinkBody)
-		}
-		payload := easyjson.NewJSONObject()
-		payload.SetByPath(fmt.Sprintf("trigger.link.%s", elems[tt]), triggerData)
-
-		for _, f := range functions {
-			system.MsgOnErrorReturn(ctx.Signal(sfplugins.JetstreamGlobalSignal, f, fromObjectId, &payload, nil))
-		}
-	}
-}
-
-func getObjectTypeTriggers(ctx *sfplugins.StatefunContextProcessor, objectID string) easyjson.JSON {
-	typeName := findObjectType(ctx, objectID)
-	typeBody, err := ctx.GlobalCache.GetValueAsJSON(typeName)
-	if err != nil || !typeBody.PathExists("triggers") {
-		return easyjson.NewJSONObject()
-	}
-	return typeBody.GetByPath("triggers")
-}
-
-func getObjectsLinkTypeTriggers(ctx *sfplugins.StatefunContextProcessor, fromObjectId, toObjectId string) easyjson.JSON {
-	fromTypeName := findObjectType(ctx, fromObjectId)
-	toTypeName := findObjectType(ctx, toObjectId)
-	typesLinkBody, err := getTypesLinkBody(ctx, fromTypeName, toTypeName)
-	if err != nil || !typesLinkBody.PathExists("triggers") {
-		return easyjson.NewJSONObject()
-	}
-	return typesLinkBody.GetByPath("triggers")
-}
-
-func findObjectType(ctx *sfplugins.StatefunContextProcessor, objectID string) string {
-	pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, objectID, TypeLink, ">")
-
-	keys := ctx.GlobalCache.GetKeysByPattern(pattern)
-	if len(keys) == 0 {
-		return ""
+	payload := easyjson.NewJSONObject()
+	payload.SetByPath("to", easyjson.NewJSON(toObject))
+	payload.SetByPath("type", easyjson.NewJSON(linkType))
+	payload.SetByPath("details", easyjson.NewJSON(true))
+	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", ctx.Self.ID, &payload, nil))
+	om.AggregateOpMsg(m)
+	if om.GetLastSyncOp().Data.PathExists("op_stack") {
+		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), "", "")
 	}
 
-	split := strings.Split(keys[0], ".")
+	result := m.Data
+	result.SetByPath("from_type", easyjson.NewJSON(fromObjectType))
+	result.SetByPath("to_type", easyjson.NewJSON(toObjectType))
 
-	return split[len(split)-1]
-}
-
-func findTypeObjects(ctx *sfplugins.StatefunContextProcessor, typeID string) []string {
-	pattern := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, typeID, ObjectLink, ">")
-
-	keys := ctx.GlobalCache.GetKeysByPattern(pattern)
-	if len(keys) == 0 {
-		return []string{}
-	}
-
-	out := make([]string, 0, len(keys))
-	for _, v := range keys {
-		split := strings.Split(v, ".")
-		out = append(out, split[len(split)-1])
-	}
-
-	return out
-}
-
-func getTypesLinkBody(ctx *sfplugins.StatefunContextProcessor, from, to string) (*easyjson.JSON, error) {
-	id := fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, from, TypeLink, to)
-
-	body, err := ctx.GlobalCache.GetValueAsJSON(id)
-	if err != nil {
-		return nil, fmt.Errorf("link %s, %s not found: %w", from, to, err)
-	}
-
-	return body, nil
-}
-
-func replyOk(ctx *sfplugins.StatefunContextProcessor, msg ...string) {
-	reply(ctx, "ok", msg)
-}
-
-func replyError(ctx *sfplugins.StatefunContextProcessor, err error) {
-	reply(ctx, "failed", err.Error())
-}
-
-func reply(ctx *sfplugins.StatefunContextProcessor, status string, data any) {
-	qid := common.GetQueryID(ctx)
-	reply := easyjson.NewJSONObject()
-	reply.SetByPath("status", easyjson.NewJSON(status))
-	reply.SetByPath("result", easyjson.NewJSON(data))
-	common.ReplyQueryID(qid, easyjson.NewJSONObjectWithKeyValue("payload", reply).GetPtr(), ctx)
-}
-
-func checkRequestError(result *easyjson.JSON, err error) error {
-	if err != nil {
-		return err
-	}
-
-	if result.GetByPath("status").AsStringDefault("failed") == "failed" {
-		return errors.New(result.GetByPath("result").AsStringDefault("unknown error"))
-	}
-
-	return nil
+	replyWithoutOpStack(om, ctx)
+	system.MsgOnErrorReturn(om.ReplyWithData(&result))
 }

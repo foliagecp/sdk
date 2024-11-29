@@ -3,47 +3,60 @@
 package statefun
 
 const (
+	RuntimeName                 = "runtime"
 	NatsURL                     = "nats://nats:foliage@nats:4222"
-	RuntimeName                 = "foliage_runtime"
-	KeyValueStoreBucketName     = RuntimeName + "_kv_store"
 	KVMutexLifetimeSec          = 120
 	KVMutexIsOldPollingInterval = 10
 	FunctionTypeIDLifetimeMs    = 5000
 	RequestTimeoutSec           = 60
+	GCIntervalSec               = 5
+	DefaultHubDomainName        = "hub"
+	HandlesDomainRouters        = true
 )
 
 type RuntimeConfig struct {
+	name                           string
 	natsURL                        string
-	keyValueStoreBucketName        string
 	kvMutexLifeTimeSec             int
 	kvMutexIsOldPollingIntervalSec int
 	functionTypeIDLifetimeMs       int
 	requestTimeoutSec              int
+	gcIntervalSec                  int
+	desiredHUBDomainName           string
+	handlesDomainRouters           bool
 }
 
 func NewRuntimeConfig() *RuntimeConfig {
 	return &RuntimeConfig{
+		name:                           RuntimeName,
 		natsURL:                        NatsURL,
-		keyValueStoreBucketName:        KeyValueStoreBucketName,
 		kvMutexLifeTimeSec:             KVMutexLifetimeSec,
 		kvMutexIsOldPollingIntervalSec: KVMutexIsOldPollingInterval,
 		functionTypeIDLifetimeMs:       FunctionTypeIDLifetimeMs,
 		requestTimeoutSec:              RequestTimeoutSec,
+		gcIntervalSec:                  GCIntervalSec,
+		desiredHUBDomainName:           DefaultHubDomainName,
+		handlesDomainRouters:           HandlesDomainRouters,
 	}
 }
 
 func NewRuntimeConfigSimple(natsURL string, runtimeName string) *RuntimeConfig {
 	ro := NewRuntimeConfig()
-	return ro.SetNatsURL(natsURL).SeKeyValueStoreBucketName("common_kv_store")
+	return ro.SetNatsURL(natsURL)
+}
+
+func (ro *RuntimeConfig) SetHubDomainName(hubDomainName string) *RuntimeConfig {
+	ro.desiredHUBDomainName = hubDomainName
+	return ro
+}
+
+func (ro *RuntimeConfig) UseJSDomainAsHubDomainName() *RuntimeConfig {
+	ro.desiredHUBDomainName = "" // empty string means auto fill with current domain name from nats
+	return ro
 }
 
 func (ro *RuntimeConfig) SetNatsURL(natsURL string) *RuntimeConfig {
 	ro.natsURL = natsURL
-	return ro
-}
-
-func (ro *RuntimeConfig) SeKeyValueStoreBucketName(keyValueStoreBucketName string) *RuntimeConfig {
-	ro.keyValueStoreBucketName = keyValueStoreBucketName
 	return ro
 }
 
@@ -64,5 +77,15 @@ func (ro *RuntimeConfig) SetFunctionTypeIDLifetimeMs(functionTypeIDLifetimeMs in
 
 func (ro *RuntimeConfig) SetRequestTimeoutSec(requestTimeoutSec int) *RuntimeConfig {
 	ro.requestTimeoutSec = requestTimeoutSec
+	return ro
+}
+
+func (ro *RuntimeConfig) SetGCIntervalSec(gcIntervalSec int) *RuntimeConfig {
+	ro.gcIntervalSec = gcIntervalSec
+	return ro
+}
+
+func (ro *RuntimeConfig) SetDomainRoutersHandling(handlesDomainRouters bool) *RuntimeConfig {
+	ro.handlesDomainRouters = handlesDomainRouters
 	return ro
 }

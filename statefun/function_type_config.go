@@ -2,7 +2,10 @@
 
 package statefun
 
-import "github.com/foliagecp/easyjson"
+import (
+	"github.com/foliagecp/easyjson"
+	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
+)
 
 const (
 	MsgAckWaitTimeoutMs      = 10000
@@ -15,20 +18,20 @@ const (
 )
 
 type FunctionTypeConfig struct {
-	msgAckWaitMs      int
-	msgChannelSize    int
-	msgAckChannelSize int
-	balanceNeeded     bool
-	//balanced                 bool
-	serviceActive            bool
+	msgAckWaitMs             int
+	msgChannelSize           int
+	msgAckChannelSize        int
+	balanceNeeded            bool
 	mutexLifeTimeSec         int
 	options                  *easyjson.JSON
 	multipleInstancesAllowed bool
 	maxIdHandlers            int
+	allowedSignalProviders   map[sfPlugins.SignalProvider]struct{}
+	allowedRequestProviders  map[sfPlugins.RequestProvider]struct{}
 }
 
 func NewFunctionTypeConfig() *FunctionTypeConfig {
-	return &FunctionTypeConfig{
+	ft := &FunctionTypeConfig{
 		msgAckWaitMs:             MsgAckWaitTimeoutMs,
 		msgChannelSize:           MsgChannelSize,
 		msgAckChannelSize:        MsgAckChannelSize,
@@ -37,7 +40,11 @@ func NewFunctionTypeConfig() *FunctionTypeConfig {
 		options:                  easyjson.NewJSONObject().GetPtr(),
 		multipleInstancesAllowed: MultipleInstancesAllowed,
 		maxIdHandlers:            MaxIdHandlers,
+		allowedSignalProviders:   map[sfPlugins.SignalProvider]struct{}{},
+		allowedRequestProviders:  map[sfPlugins.RequestProvider]struct{}{},
 	}
+	ft.allowedSignalProviders[sfPlugins.AutoSignalSelect] = struct{}{}
+	return ft
 }
 
 func (ftc *FunctionTypeConfig) SetMsgAckWaitMs(msgAckWaitMs int) *FunctionTypeConfig {
@@ -60,11 +67,40 @@ func (ftc *FunctionTypeConfig) SetBalanceNeeded(balanceNeeded bool) *FunctionTyp
 	return ftc
 }
 
-// TODO: if serviceActive == false GOLANG local call should also be not possible!
-// TODO: SetAccessebility([]string = "golang local request" | "golang local signal" | "jetstream signal" | "nats core request")
-func (ftc *FunctionTypeConfig) SetServiceState(active bool) *FunctionTypeConfig {
-	ftc.serviceActive = active
+func (ftc *FunctionTypeConfig) SetAllowedSignalProviders(allowedSignalProviders ...sfPlugins.SignalProvider) *FunctionTypeConfig {
+	ftc.allowedSignalProviders = map[sfPlugins.SignalProvider]struct{}{}
+	for _, asp := range allowedSignalProviders {
+		ftc.allowedSignalProviders[asp] = struct{}{}
+	}
 	return ftc
+}
+
+func (ftc *FunctionTypeConfig) SetAllowedRequestProviders(allowedRequestProviders ...sfPlugins.RequestProvider) *FunctionTypeConfig {
+	ftc.allowedRequestProviders = map[sfPlugins.RequestProvider]struct{}{}
+	for _, asp := range allowedRequestProviders {
+		ftc.allowedRequestProviders[asp] = struct{}{}
+	}
+	return ftc
+}
+
+func (ftc *FunctionTypeConfig) IsSignalProviderAllowed(signalProvider sfPlugins.SignalProvider) bool {
+	if _, ok := ftc.allowedSignalProviders[sfPlugins.AutoSignalSelect]; ok {
+		return true
+	}
+	if _, ok := ftc.allowedSignalProviders[signalProvider]; ok {
+		return true
+	}
+	return false
+}
+
+func (ftc *FunctionTypeConfig) IsRequestProviderAllowed(requestProvider sfPlugins.RequestProvider) bool {
+	if _, ok := ftc.allowedRequestProviders[sfPlugins.AutoRequestSelect]; ok {
+		return true
+	}
+	if _, ok := ftc.allowedRequestProviders[requestProvider]; ok {
+		return true
+	}
+	return false
 }
 
 func (ftc *FunctionTypeConfig) SetMultipleInstancesAllowance(allowed bool) *FunctionTypeConfig {

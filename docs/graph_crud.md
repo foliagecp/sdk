@@ -56,7 +56,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.vertex.d
 
 Example:  
 ```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.link.create.root "{\"payload\":{\"query_id\":\"QUERYID\", \"descendant_uuid\":\"a\", \"link_type\": \"type1\", \"link_body\":{\"tags\":[\"t1\", \"t2\"]}}}"
+nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.link.create.root "{\"payload\":{\"query_id\":\"QUERYID\", \"to\":\"a\", \"type\": \"type1\", \"body\":{\"tags\":[\"t1\", \"t2\"]}}}"
 ```
 
 ### functions.graph.api.link.update.<object_id>
@@ -65,7 +65,7 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.link.cre
 
 Example:  
 ```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.link.update.root "{\"payload\":{\"query_id\":\"QUERYID\", \"descendant_uuid\":\"a\", \"link_type\": \"type1\", \"link_body\":{\"tags\":[\"t4\"]}}}"
+nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.link.update.root "{\"payload\":{\"query_id\":\"QUERYID\", \"to\":\"a\", \"type\": \"type1\", \"body\":{\"tags\":[\"t4\"]}}}"
 ```
 
 ### functions.graph.api.link.delete.<object_id>
@@ -74,5 +74,5 @@ nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.link.upd
 
 Example:  
 ```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.link.delete.root "{\"payload\":{\"query_id\":\"QUERYID\", \"descendant_uuid\":\"a\", \"link_type\": \"type1\"}}"
+nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.link.delete.root "{\"payload\":{\"query_id\":\"QUERYID\", \"to\":\"a\", \"type\": \"type1\"}}"
 ```
