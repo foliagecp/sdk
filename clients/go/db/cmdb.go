@@ -275,7 +275,7 @@ func (cmdb CMDBSyncClient) ObjectCreate(objectID, originType string, body ...eas
 	payload.SetByPath("operation.type", easyjson.NewJSON("create"))
 	payload.SetByPath("data.type", easyjson.NewJSON(originType))
 	if len(body) > 0 {
-		payload.SetByPath("body", body[0])
+		payload.SetByPath("data.body", body[0])
 	} else {
 		payload.SetByPath("data.body", easyjson.NewJSONObject())
 	}
