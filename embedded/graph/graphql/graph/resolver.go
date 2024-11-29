@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/foliagecp/sdk/clients/go/db"
+	"github.com/foliagecp/sdk/statefun/system"
 )
 
 // This file will not be regenerated automatically.
@@ -14,15 +15,14 @@ type Resolver struct{}
 
 var DBC *db.DBSyncClient
 
-// JSON определяет тип данных, представляющий JSON-объект
 type JSON map[string]interface{}
 
-// MarshalGQL сериализует JSON в формат, используемый GraphQL
+// MarshalGQL serializes JSON into format used by GraphQL
 func (j JSON) MarshalGQL(w io.Writer) {
-	json.NewEncoder(w).Encode(j)
+	system.MsgOnErrorReturn(json.NewEncoder(w).Encode(j))
 }
 
-// UnmarshalGQL десериализует данные из формата GraphQL в JSON
+// UnmarshalGQL deserializes from GraphQL format into JSON
 func (j *JSON) UnmarshalGQL(v interface{}) error {
 	data, err := json.Marshal(v)
 	if err != nil {

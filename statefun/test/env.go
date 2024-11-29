@@ -10,13 +10,13 @@ import (
 	"github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/cache"
 	"github.com/foliagecp/sdk/statefun/plugins"
+	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats-server/v2/server"
 	natsservertest "github.com/nats-io/nats-server/v2/test"
 	"github.com/nats-io/nats.go"
 )
 
 var (
-	defaultNATSPort    = 10000
 	defaultRuntimeName = "test_app"
 	defaultCacheID     = "test_cache"
 )
@@ -74,7 +74,7 @@ func (env *statefunTestEnvironment) OnAfterStartFunction(f statefun.OnAfterStart
 }
 
 func (env *statefunTestEnvironment) Stop() {
-	env.cleanJetStreamStorage()
+	system.MsgOnErrorReturn(env.cleanJetStreamStorage())
 	env.srv.Shutdown()
 	env.srv.WaitForShutdown()
 }

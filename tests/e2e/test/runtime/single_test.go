@@ -3,7 +3,6 @@ package statefun_test
 import (
 	"context"
 	"fmt"
-	"github.com/foliagecp/sdk/statefun/cache"
 	"os/signal"
 	"strings"
 	"sync"
@@ -11,14 +10,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/foliagecp/sdk/statefun/cache"
+
 	"github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/logger"
 	"github.com/foliagecp/sdk/tests/e2e/test/nats"
 )
 
 func TestKeyMutexLockUnlock(t *testing.T) {
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
-	ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+	ctx0, _ := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
+	ctx, cancel := context.WithTimeout(ctx0, 30*time.Second)
 	defer cancel()
 
 	// Set up NATS cluster

@@ -157,7 +157,7 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 		switch r.functionTypeIsReadyForGoLangCommunication(targetTypename, false, targetID) {
 		case 0:
 			func() {
-				targetFT, _ := r.registeredFunctionTypes[targetTypename]
+				targetFT := r.registeredFunctionTypes[targetTypename]
 
 				// Do not send original data, prevents same data concurrent access from different functions
 				var payloadCopy *easyjson.JSON = nil
@@ -274,7 +274,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 	goLangLocalRequest := func() (*easyjson.JSON, error) {
 		switch r.functionTypeIsReadyForGoLangCommunication(targetTypename, true, targetID) {
 		case 0:
-			targetFT, _ := r.registeredFunctionTypes[targetTypename]
+			targetFT := r.registeredFunctionTypes[targetTypename]
 			resultJSONChannel := make(chan *easyjson.JSON)
 
 			// Do not send original data, prevents same data concurrent access from different functions

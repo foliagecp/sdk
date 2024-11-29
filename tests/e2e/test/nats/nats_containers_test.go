@@ -19,10 +19,11 @@ const testTimeout = time.Second * 600
 // TestNATSClusterCommunication tests basic sub/pub/rep functionality inside cluster
 // ToDo: tests for leaf nodes communication
 func TestNATSClusterCommunication(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	ctx0, concel0 := context.WithTimeout(context.Background(), testTimeout)
 	// terminate containers on system calls to avoid container leakage
-	ctx, cancel = signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
+	ctx, cancel := signal.NotifyContext(ctx0, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
 	defer cancel()
+	defer concel0()
 	clusterName := "testcluster"
 	numberOfNodes := 3
 	numberOfLeaves := 3

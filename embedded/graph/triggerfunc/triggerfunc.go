@@ -102,7 +102,7 @@ func ObjectNameGenerator(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Sta
 		for _, k := range link.ObjectKeys() {
 			toId := link.GetByPath(k + ".to").AsStringDefault("")
 			if len(toId) > 0 {
-				ctx.Signal(sfPlugins.AutoSignalSelect, ctx.Self.Typename, toId, nil, nil)
+				system.MsgOnErrorReturn(ctx.Signal(sfPlugins.AutoSignalSelect, ctx.Self.Typename, toId, nil, nil))
 				return // When link trigger function is executed only on "to" object
 			}
 		}
