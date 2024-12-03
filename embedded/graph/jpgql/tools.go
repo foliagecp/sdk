@@ -7,11 +7,11 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/embedded/graph/crud"
 
 	"github.com/PaesslerAG/gval"
 	"github.com/foliagecp/sdk/statefun/cache"
+	"github.com/foliagecp/sdk/statefun/system"
 )
 
 const QueryResultTopic = "functions.graph.query"
@@ -34,17 +34,17 @@ var filterParseLanguage = gval.NewLanguage(gval.Base(), gval.PropositionalLogic(
 		}
 		return filterA, nil
 	}),
-	gval.Function("Ltags", func(args ...interface{}) (interface{}, error) {
+	gval.Function("l_tags", func(args ...interface{}) (interface{}, error) {
 		if len(args) == 0 {
 			return nil, fmt.Errorf("at least one tag must be declared")
 		}
 		tagFeatures := []filterFeature{}
 		for _, arg := range args {
-			tagFeatures = append(tagFeatures, filterFeature{"tag", arg.(string)})
+			tagFeatures = append(tagFeatures, filterFeature{"l_tag", map[string]string{"idx": arg.(string)}})
 		}
 		return NewFilterDataWithConjunctionFeatures(tagFeatures), nil
 	}),
-	gval.Function("Ltype", func(args ...interface{}) (interface{}, error) {
+	gval.Function("l_type", func(args ...interface{}) (interface{}, error) {
 		if len(args) > 1 {
 			return nil, fmt.Errorf("multiple types are not permitted")
 		}
@@ -55,24 +55,37 @@ var filterParseLanguage = gval.NewLanguage(gval.Base(), gval.PropositionalLogic(
 		if len(t) == 0 {
 			return nil, fmt.Errorf("name must not be empty")
 		}
-		return NewFilterDataWithOneFeature(filterFeature{"type", t}), nil
+		return NewFilterDataWithOneFeature(filterFeature{"l_type", map[string]string{"idx": t}}), nil
 	}),
-	gval.Function("Vhas", func(args ...interface{}) (interface{}, error) { // vertex body filter
+	gval.Function("v_has", func(args ...interface{}) (interface{}, error) { // vertex body filter
 		if len(args) != 4 {
 			return nil, fmt.Errorf("required args are: key; value type; target value; operation;")
 		}
-		vbfData := easyjson.NewJSONObject()
-		vbfData.SetByPath("key", easyjson.NewJSON(args[0].(string)))
-		vbfData.SetByPath("value_type", easyjson.NewJSON(args[1].(string))) // "numeric", "string", "bool"
-		vbfData.SetByPath("operation", easyjson.NewJSON(args[2].(string)))  // "==", "!=", ">", "<"
-		vbfData.SetByPath("target_value", easyjson.NewJSON(args[3].(string)))
-		return NewFilterDataWithOneFeature(filterFeature{"vbf", vbfData.ToString()}), nil
+		value := map[string]string{
+			"key":          args[0].(string),
+			"value_type":   args[1].(string), // "numeric", "string", "bool"
+			"operation":    args[2].(string), // "==", "!=", ">", "<"
+			"target_value": args[3].(string),
+		}
+		return NewFilterDataWithOneFeature(filterFeature{"v_has", value}), nil
+	}),
+	gval.Function("l_has", func(args ...interface{}) (interface{}, error) { // link body filter
+		if len(args) != 4 {
+			return nil, fmt.Errorf("required args are: key; value type; target value; operation;")
+		}
+		value := map[string]string{
+			"key":          args[0].(string),
+			"value_type":   args[1].(string), // "numeric", "string", "bool"
+			"operation":    args[2].(string), // "==", "!=", ">", "<"
+			"target_value": args[3].(string),
+		}
+		return NewFilterDataWithOneFeature(filterFeature{"l_has", value}), nil
 	}),
 )
 
 type filterFeature struct {
 	name  string
-	value string
+	value map[string]string
 }
 
 type FilterData struct {
@@ -99,6 +112,7 @@ func NewFilterDataWithOneFeature(feature filterFeature) *FilterData {
 
 func ParseFilter(filterQuery string) (*FilterData, error) {
 	filterQuery = strings.ReplaceAll(filterQuery, `'`, `"`) // Allow to use single quotes
+	filterQuery = strings.ReplaceAll(filterQuery, `:`, `_`) // Allow to use colon
 	value, err := filterParseLanguage.Evaluate(filterQuery, nil)
 	if err != nil {
 		return nil, err
@@ -167,14 +181,74 @@ func GetSpecificLinkIndices(cacheStore *cache.Store, fromObjectID string, linkNa
 		}
 		indexName := linkKeyTokens[len(linkKeyTokens)-2]
 		indexValue := linkKeyTokens[len(linkKeyTokens)-1]
-		resultIndices["L"+indexName+"."+indexValue] = struct{}{}
+		resultIndices[indexName+"."+indexValue] = struct{}{}
 	}
 	// --------------------------------------------------------------------
 
 	return resultIndices
 }
 
-func IsLinkSatifiesFilterCreteria(cacheStore *cache.Store, objectID string, linkName string, linkFilterQuery string) bool {
+func IsVertexBodyHasIndexValue(cacheStore *cache.Store, vertexId, key, valueType, operation, targetValue string) bool {
+	typeStr := strings.ToLower(valueType)[:1]
+	indexKeys := cacheStore.GetKeysByPattern(fmt.Sprintf(crud.VertexBodyValueIndexPrefPattern+crud.KeySuff2Pattern, vertexId, typeStr, key))
+	return IsIndexedKeyMeetsRequirements(cacheStore, indexKeys, typeStr, operation, targetValue)
+}
+
+func IsLinkBodyHasIndexValue(cacheStore *cache.Store, fromVertexId, linkName, key, valueType, operation, targetValue string) bool {
+	typeStr := strings.ToLower(valueType)[:1]
+	indexKeys := cacheStore.GetKeysByPattern(fmt.Sprintf(crud.LinkBodyValueIndexPrefPattern+crud.KeySuff3Pattern, fromVertexId, linkName, typeStr, key))
+	return IsIndexedKeyMeetsRequirements(cacheStore, indexKeys, typeStr, operation, targetValue)
+}
+
+func IsIndexedKeyMeetsRequirements(cacheStore *cache.Store, indexKeys []string, typeStr, operation, targetValue string) bool {
+	for _, indexKey := range indexKeys {
+		if v, err := cacheStore.GetValue(indexKey); err == nil {
+			switch typeStr {
+			case "b":
+				valBool := system.BytesToBool(v)
+				targetValBool := system.Str2Bool(targetValue)
+				switch operation {
+				case "==":
+					return valBool == targetValBool
+				case "!=":
+					fallthrough
+				case "<":
+					fallthrough
+				case ">":
+					return valBool != targetValBool
+				}
+			case "n":
+				valNumeric := system.BytesToFloat64(v)
+				targetValNumeric := system.StringToFloat(targetValue)
+				switch operation {
+				case "==":
+					return valNumeric == targetValNumeric
+				case "!=":
+					return valNumeric != targetValNumeric
+				case "<":
+					return valNumeric < targetValNumeric
+				case ">":
+					return valNumeric > targetValNumeric
+				}
+			case "s":
+				valString := string(v)
+				switch operation {
+				case "==":
+					return valString == targetValue
+				case "!=":
+					return valString != targetValue
+				case "<":
+					return strings.Contains(targetValue, valString)
+				case ">":
+					return strings.Contains(valString, targetValue)
+				}
+			}
+		}
+	}
+	return false
+}
+
+func IsLinkSatifiesFilterCreteria(cacheStore *cache.Store, fromVertexId string, toVertexId string, linkName string, linkFilterQuery string) bool {
 	if len(linkFilterQuery) == 0 {
 		return true
 	}
@@ -182,17 +256,34 @@ func IsLinkSatifiesFilterCreteria(cacheStore *cache.Store, objectID string, link
 		if len(filterData.disjunctiveNormalFormOfFeatures) == 0 {
 			return true
 		}
-		linkIndicesMap := GetSpecificLinkIndices(cacheStore, objectID, linkName)
+		linkIndicesMap := GetSpecificLinkIndices(cacheStore, fromVertexId, linkName)
 		for _, features := range filterData.disjunctiveNormalFormOfFeatures {
 			featuresFromDisjunctionFound := true
 			for _, feature := range features {
-				if feature.name[0] == 'L' {
-					if _, ok := linkIndicesMap[feature.name+"."+feature.value]; !ok {
-						featuresFromDisjunctionFound = false
-						break
+				tokens := strings.Split(feature.name, "_")
+				if len(tokens) == 2 {
+					if tokens[0] == "l" {
+						if tokens[1] == "has" {
+							if !IsLinkBodyHasIndexValue(cacheStore, fromVertexId, linkName, feature.value["key"], feature.value["value_type"], feature.value["operation"], feature.value["target_value"]) {
+								featuresFromDisjunctionFound = false
+								break
+							}
+						} else {
+							if _, ok := linkIndicesMap[tokens[1]+"."+feature.value["idx"]]; !ok {
+								featuresFromDisjunctionFound = false
+								break
+							}
+						}
+					}
+					if tokens[0] == "v" {
+						if tokens[1] == "has" {
+							if !IsVertexBodyHasIndexValue(cacheStore, toVertexId, feature.value["key"], feature.value["value_type"], feature.value["operation"], feature.value["target_value"]) {
+								featuresFromDisjunctionFound = false
+								break
+							}
+						}
 					}
 				}
-
 			}
 			if featuresFromDisjunctionFound {
 				return true
@@ -222,8 +313,9 @@ func GetObjectIDsFromJPGQLLinkNameAndLinkFilterQuery(cacheStore *cache.Store, so
 	}
 
 	for _, linkName := range GetLinkNamesFromJPGQLLinkName(cacheStore, sourceId, jpgqlLinkName) {
-		if IsLinkSatifiesFilterCreteria(cacheStore, sourceId, linkName, linkFilterQuery) {
-			targetId := GetTargetIdFromSourceIdAndLinkName(cacheStore, sourceId, linkName)
+		targetId := GetTargetIdFromSourceIdAndLinkName(cacheStore, sourceId, linkName)
+		if IsLinkSatifiesFilterCreteria(cacheStore, sourceId, targetId, linkName, linkFilterQuery) {
+			// Is targetSatisfies
 			if len(targetId) > 0 {
 				result[targetId] = false
 			}
