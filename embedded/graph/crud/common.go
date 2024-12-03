@@ -19,10 +19,13 @@ const (
 
 	// Vertex related keys --------------------------------
 
-	// key=fmt.Sprintf(BodyValueIndexPrefPattern+KeySuff1Pattern, <vertexId>, <bodyKeyName>), value=<bodyKeyValue>
-	BodyValueIndexPrefPattern = "%s.body.index."
+	// key=fmt.Sprintf(BodyValueIndexPrefPattern+KeySuff2Pattern, <vertexId>, <bodyKeyName>, <valueType>), value=<bodyKeyValue>
+	VertexBodyValueIndexPrefPattern = "%s.body.index."
 
 	// Link related keys ----------------------------------
+
+	// key=fmt.Sprintf(BodyValueIndexPrefPattern+KeySuff3Pattern, <fromVertexId>, <linkName>, <bodyKeyName>, <valueType>), value=<bodyKeyValue>
+	LinkBodyValueIndexPrefPattern = "%s.out.body.index."
 
 	// key=fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, <fromVertexId>, <linkName>), value=<linkType.toVertexId>
 	OutLinkTargetKeyPrefPattern = "%s.out.to."

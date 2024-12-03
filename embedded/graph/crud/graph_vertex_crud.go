@@ -70,10 +70,10 @@ func GraphVertexRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.Op
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(result.GetPtr(), opStack))).Reply()
 }
 
-func indexVertexBody(ctx *sfPlugins.StatefunContextProcessor, opTime int64, vertexBody easyjson.JSON, reindex bool) {
+func indexVertexBody(ctx *sfPlugins.StatefunContextProcessor, vertexBody easyjson.JSON, opTime int64, reindex bool) {
 	if reindex {
 		// Remove all indices -----------------------------
-		indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(BodyValueIndexPrefPattern+KeySuff1Pattern, ctx.Self.ID, ">"))
+		indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(VertexBodyValueIndexPrefPattern+KeySuff1Pattern, ctx.Self.ID, ">"))
 		for _, indexKey := range indexKeys {
 			ctx.Domain.Cache().DeleteValueKVSync(indexKey, -1)
 		}
@@ -84,18 +84,22 @@ func indexVertexBody(ctx *sfPlugins.StatefunContextProcessor, opTime int64, vert
 		value := vertexBody.GetByPath(bodyKey)
 		bytesVal := []byte{}
 
+		typeStr := ""
 		if value.IsBool() {
+			typeStr = "b"
 			bytesVal = system.BoolToBytes(value.AsBoolDefault(false))
 		}
 		if value.IsNumeric() {
+			typeStr = "n"
 			bytesVal = system.Float64ToBytes(value.AsNumericDefault(0))
 		}
 		if value.IsString() {
+			typeStr = "s"
 			bytesVal = []byte(value.AsStringDefault(""))
 		}
 
 		if len(bytesVal) > 0 {
-			ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(BodyValueIndexPrefPattern+KeySuff1Pattern, ctx.Self.ID, bodyKey), bytesVal, opTime)
+			ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(VertexBodyValueIndexPrefPattern+KeySuff2Pattern, ctx.Self.ID, typeStr, bodyKey), bytesVal, opTime)
 		}
 	}
 	// ----------------------------------------------------
@@ -125,7 +129,7 @@ func GraphVertexCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 	// Set vertex body ------------------
 	ctx.Domain.Cache().SetValueKVSync(ctx.Self.ID, vertexBody.ToBytes(), opTime) // Store vertex body in KV
 	// ----------------------------------
-	indexVertexBody(ctx, opTime, vertexBody, false)
+	indexVertexBody(ctx, vertexBody, opTime, false)
 
 	addVertexOperationToOpStack(opStack, "create", ctx.Self.ID, nil, &vertexBody)
 
@@ -170,7 +174,7 @@ func GraphVertexUpdate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 	}
 
 	ctx.Domain.Cache().SetValueKVSync(ctx.Self.ID, body.ToBytes(), opTime) // Store vertex body in KV
-	indexVertexBody(ctx, opTime, body, true)
+	indexVertexBody(ctx, body, opTime, true)
 
 	addVertexOperationToOpStack(opStack, "update", ctx.Self.ID, oldBody, &body)
 
