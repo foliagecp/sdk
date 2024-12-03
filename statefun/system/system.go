@@ -15,6 +15,7 @@ import (
 	"math/rand"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -223,6 +224,11 @@ func Str2Int(s string) int64 {
 	return 0
 }
 
+func Str2Bool(boolStr string) bool {
+	s := strings.ToLower(boolStr)
+	return s == "true" || s == "1"
+}
+
 func MapsUnion[T interface{}](m1 map[string]T, m2 map[string]T) map[string]T {
 	merged := make(map[string]T)
 	for k1, v1 := range m1 {
@@ -277,6 +283,14 @@ func BytesToFloat64(b []byte) float64 {
 	err := binary.Read(buf, binary.LittleEndian, &f)
 	if err != nil {
 		return 0.0
+	}
+	return f
+}
+
+func StringToFloat(s string) float64 {
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0
 	}
 	return f
 }
