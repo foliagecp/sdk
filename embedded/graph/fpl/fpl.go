@@ -2,6 +2,7 @@ package fpl
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/foliagecp/easyjson"
@@ -15,6 +16,25 @@ import (
 type JPGQLRequestData struct {
 	request string
 	uuid    string
+}
+
+const (
+	MAX_ACK_WAIT_MS = 60 * 1000
+)
+
+func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
+	statefun.NewFunctionType(
+		runtime,
+		"functions.graph.api.query.fpl",
+		FoliageProcessingLanguage,
+		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMultipleInstancesAllowance(false).SetMsgAckWaitMs(MAX_ACK_WAIT_MS).SetMaxIdHandlers(-1),
+	)
+	statefun.NewFunctionType(
+		runtime,
+		"functions.graph.api.query.fpl.pp.vbody",
+		PostProcessorVertexBody,
+		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMultipleInstancesAllowance(false).SetMsgAckWaitMs(MAX_ACK_WAIT_MS).SetMaxIdHandlers(-1),
+	)
 }
 
 /*
@@ -32,34 +52,15 @@ type JPGQLRequestData struct {
 			],
 			...
 		],
-		"only_uuids": true,
-		"sort_by": [
-			{
-				"field": "uuid",
-				"reverse": false
-			},
-			{
-				"field": "<field name 2>",
-				"reverse": false
-			},
-			...
-		],
-		"group_by": [
-			"<field name 1>",
-			"<field name 2>",
-			...
-		]
+		"sort": "asc"|"dsc",
+		"post_processor_func": { // Arbitrary
+			name: "<statefun name>",
+			data: {
+				....
+			}
+		}
 	}
 */
-func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
-	statefun.NewFunctionType(
-		runtime,
-		"functions.graph.api.query.fpl",
-		FoliageProcessingLanguage,
-		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMultipleInstancesAllowance(false).SetMaxIdHandlers(-1),
-	)
-}
-
 func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -72,6 +73,7 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 		om.AggregateOpMsg(sfMediators.OpMsgIdle("\"jpgql_uoi\" is not an array")).Reply()
 		return
 	}
+
 	unionUUIDs := map[string]struct{}{}
 	for i := 0; i < jpgqlUoI.ArraySize(); i++ {
 		jpgqlIntersectionRequestsJSON := jpgqlUoI.ArrayElement(i)
@@ -136,7 +138,80 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 	for uuid := range unionUUIDs {
 		resultUUID = append(resultUUID, uuid)
 	}
+	uuidSortDir := strings.ToLower(ctx.Payload.GetByPath("sort").AsStringDefault(""))
+	if len(uuidSortDir) > 0 {
+		resultUUID = system.SortUUIDs(resultUUID, uuidSortDir == "asc")
+	}
 
-	resultData := easyjson.NewJSONObjectWithKeyValue("uuids", easyjson.JSONFromArray(resultUUID))
-	system.MsgOnErrorReturn(om.ReplyWithData(&resultData))
+	// Running post processing function
+	postProcessorFunc := ctx.Payload.GetByPath("post_processor_func.name").AsStringDefault("")
+	if len(postProcessorFunc) > 0 {
+		postProcessorPayload := easyjson.NewJSONObjectWithKeyValue("uuids", easyjson.JSONFromArray(resultUUID))
+		if ctx.Payload.PathExists("post_processor_func.data") {
+			postProcessorPayload.SetByPath("data", ctx.Payload.GetByPath("post_processor_func.data"))
+		}
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, postProcessorFunc, ctx.Self.ID, &postProcessorPayload, nil))).Reply()
+		return
+	}
+
+	resultJson := easyjson.NewJSONObjectWithKeyValue("uuids", easyjson.JSONFromArray(resultUUID))
+	om.ReplyWithData(&resultJson)
+}
+
+/*
+	{
+		"uuids": [...],
+		"data": {
+			"sort_by_field": [
+				"<field name 1>[:asc|:dsc]",
+				"<field name 2>[:asc|:dsc]",
+				...
+			]
+		}
+	}
+*/
+func PostProcessorVertexBody(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	om := sfMediators.NewOpMediator(ctx)
+
+	uuids := []string{}
+	if arr, ok := ctx.Payload.GetByPath("uuids").AsArrayString(); ok {
+		uuids = arr
+	}
+
+	var wg sync.WaitGroup
+	uuidDatas := make([]*easyjson.JSON, len(uuids))
+	var uuiDataMutex sync.Mutex
+	for i, uuid := range uuids {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			payload := easyjson.NewJSONObject()
+			payload.SetByPath("operation.target", easyjson.NewJSON("vertex"))
+			payload.SetByPath("operation.type", easyjson.NewJSON("read"))
+			om := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.crud", uuid, &payload, nil))
+
+			uuiDataMutex.Lock()
+			defer uuiDataMutex.Unlock()
+			if om.Status == sfMediators.SYNC_OP_STATUS_OK {
+				uuidDatas[i] = &om.Data
+			} else {
+				uuidDatas[i] = easyjson.NewJSONObject().GetPtr()
+			}
+			uuidDatas[i].SetByPath("uuid", easyjson.NewJSON(uuid))
+		}()
+		wg.Wait()
+	}
+
+	if sortFields, ok := ctx.Payload.GetByPath("data.sort_by_field").AsArrayString(); ok {
+		uuidDatas = system.SortJSONs(uuidDatas, sortFields)
+	}
+
+	resultJsonArray := easyjson.NewJSONArray()
+	for _, uuidData := range uuidDatas {
+		resultJsonArray.AddToArray(*uuidData)
+	}
+
+	resultJson := easyjson.NewJSONObjectWithKeyValue("arr", resultJsonArray)
+	om.ReplyWithData(&resultJson)
 }
