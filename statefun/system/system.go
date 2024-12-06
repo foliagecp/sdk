@@ -14,11 +14,13 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/foliagecp/easyjson"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 )
 
@@ -28,6 +30,121 @@ var (
 
 type KeyMutex struct {
 	m *sync.Map
+}
+
+func SortJSONs(jsonArray []*easyjson.JSON, fields []string) []*easyjson.JSON {
+	sorted := make([]*easyjson.JSON, len(jsonArray))
+	copy(sorted, jsonArray)
+
+	sort.Slice(sorted, func(i, j int) bool {
+		for _, field := range fields {
+			// Split the field into field name and sorting direction
+			parts := strings.Split(field, ":")
+			fieldName := parts[0]
+			direction := "asc" // Default direction is ascending
+			if len(parts) > 1 {
+				direction = strings.ToLower(parts[1])
+			}
+
+			// Get field values for comparison
+			valI := sorted[i].GetByPath(fieldName)
+			valJ := sorted[j].GetByPath(fieldName)
+
+			// Determine the types of the values
+			valIType := 0
+			if valI.IsNumeric() {
+				valIType = 1
+			}
+			if valI.IsString() {
+				valIType = 2
+			}
+			if valI.IsBool() {
+				valIType = 3
+			}
+
+			valJType := 0
+			if valJ.IsNumeric() {
+				valJType = 1
+			}
+			if valJ.IsString() {
+				valJType = 2
+			}
+			if valJ.IsBool() {
+				valJType = 3
+			}
+
+			// Treat missing values as smaller
+			if valIType == 0 || valJType == 0 {
+				if valIType != 0 {
+					return direction == "asc"
+				}
+				if valJType != 0 {
+					return direction == "dsc"
+				}
+				// If both are missing, move to the next field
+				continue
+			}
+
+			// Compare based on type
+			var less, equal bool
+			switch valIType {
+			case 1: // Numeric comparison
+				if valJType == 1 {
+					vi := valI.AsNumericDefault(0)
+					vj := valJ.AsNumericDefault(0)
+					if vi != vj {
+						less = vi < vj
+					} else {
+						equal = true
+					}
+				}
+			case 2: // String comparison
+				if valJType == 2 {
+					vi := valI.AsStringDefault("")
+					vj := valJ.AsStringDefault("")
+					if vi != vj {
+						less = vi < vj
+					} else {
+						equal = true
+					}
+				}
+			case 3: // Boolean comparison
+				if valJType == 3 {
+					vi := valI.AsBoolDefault(false)
+					vj := valJ.AsBoolDefault(false)
+					if vi != vj {
+						less = !vi && vj
+					} else {
+						equal = true
+					}
+				}
+			}
+
+			// If not equal, respect sorting direction
+			if !equal {
+				if less {
+					return direction == "asc"
+				}
+				return direction == "dsc"
+			}
+			// If equal, move to the next field
+		}
+		// If all fields are equal, maintain original order
+		return false
+	})
+
+	return sorted
+}
+
+func SortUUIDs(uuids []string, ascending bool) []string {
+	sorted := make([]string, len(uuids))
+	copy(sorted, uuids)
+	if ascending {
+		sort.Strings(sorted)
+	} else {
+		sort.Sort(sort.Reverse(sort.StringSlice(sorted)))
+	}
+	return sorted
 }
 
 func StrToBase64(xmlText string) string {
