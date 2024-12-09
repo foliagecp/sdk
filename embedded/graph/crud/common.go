@@ -6,23 +6,33 @@ import (
 )
 
 const (
-	LinkKeySuff1Pattern = "%s"
-	LinkKeySuff2Pattern = "%s.%s"
-	LinkKeySuff3Pattern = "%s.%s.%s"
-	LinkKeySuff4Pattern = "%s.%s.%s.%s"
+	KeySuff1Pattern = "%s"
+	KeySuff2Pattern = "%s.%s"
+	KeySuff3Pattern = "%s.%s.%s"
+	KeySuff4Pattern = "%s.%s.%s.%s"
 
-	// key=fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff1Pattern, <fromVertexId>, <linkName>), value=<linkType.toVertexId>
+	// Vertex related keys --------------------------------
+
+	// key=fmt.Sprintf(BodyValueIndexPrefPattern+KeySuff2Pattern, <vertexId>, <bodyKeyName>, <valueType>), value=<bodyKeyValue>
+	VertexBodyValueIndexPrefPattern = "%s.body.index."
+
+	// Link related keys ----------------------------------
+
+	// key=fmt.Sprintf(BodyValueIndexPrefPattern+KeySuff3Pattern, <fromVertexId>, <linkName>, <bodyKeyName>, <valueType>), value=<bodyKeyValue>
+	LinkBodyValueIndexPrefPattern = "%s.out.body.index."
+
+	// key=fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, <fromVertexId>, <linkName>), value=<linkType.toVertexId>
 	OutLinkTargetKeyPrefPattern = "%s.out.to."
 
-	// key=fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, <fromVertexId>, <linkName>), value=<linkBody>
+	// key=fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff2Pattern, <fromVertexId>, <linkName>), value=<linkBody>
 	OutLinkBodyKeyPrefPattern = "%s.out.body."
 
-	// key=fmt.Sprintf(OutLinkBodyKeyPrefPattern+LinkKeySuff2Pattern, <fromVertexId>, <linkType>, <toVertexId>), value=<linkName>
+	// key=fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff2Pattern, <fromVertexId>, <linkType>, <toVertexId>), value=<linkName>
 	OutLinkTypeKeyPrefPattern = "%s.ltype."
 
-	// key=fmt.Sprintf(OutLinkIndexPrefPattern+LinkKeySuff3Pattern, <fromVertexId>, <linkName>, <index_name>, <value>), value=nil
+	// key=fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff3Pattern, <fromVertexId>, <linkName>, <index_name>, <value>), value=nil
 	OutLinkIndexPrefPattern = "%s.out.index."
-	// key=fmt.Sprintf(InLinkKeyPrefPattern+LinkKeySuff2Pattern, <toVertexId>, <fromVertexId>, <linkName>), value=nil
+	// key=fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, <toVertexId>, <fromVertexId>, <linkName>), value=linkType
 	InLinkKeyPrefPattern = "%s.in."
 )
 
