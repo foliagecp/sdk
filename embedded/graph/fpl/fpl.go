@@ -155,7 +155,7 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 	}
 
 	resultJson := easyjson.NewJSONObjectWithKeyValue("uuids", easyjson.JSONFromArray(resultUUID))
-	om.ReplyWithData(&resultJson)
+	om.AggregateOpMsg(sfMediators.OpMsgOk(resultJson)).Reply()
 }
 
 /*
@@ -213,5 +213,5 @@ func PostProcessorVertexBody(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Statef
 	}
 
 	resultJson := easyjson.NewJSONObjectWithKeyValue("arr", resultJsonArray)
-	om.ReplyWithData(&resultJson)
+	om.AggregateOpMsg(sfMediators.OpMsgOk(resultJson)).Reply()
 }
