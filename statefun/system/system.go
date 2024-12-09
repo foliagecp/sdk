@@ -5,17 +5,22 @@
 package system
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"os"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/foliagecp/easyjson"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 )
 
@@ -25,6 +30,135 @@ var (
 
 type KeyMutex struct {
 	m *sync.Map
+}
+
+func SortJSONs(jsonArray []*easyjson.JSON, fields []string) []*easyjson.JSON {
+	sorted := make([]*easyjson.JSON, len(jsonArray))
+	copy(sorted, jsonArray)
+
+	sort.Slice(sorted, func(i, j int) bool {
+		for _, field := range fields {
+			// Split the field into field name and sorting direction
+			parts := strings.Split(field, ":")
+			fieldName := parts[0]
+			direction := "asc" // Default direction is ascending
+			if len(parts) > 1 {
+				direction = strings.ToLower(parts[1])
+			}
+
+			// Get field values for comparison
+			valI := sorted[i].GetByPath(fieldName)
+			valJ := sorted[j].GetByPath(fieldName)
+
+			// Determine the types of the values
+			valIType := 0
+			if valI.IsNumeric() {
+				valIType = 1
+			}
+			if valI.IsString() {
+				valIType = 2
+			}
+			if valI.IsBool() {
+				valIType = 3
+			}
+
+			valJType := 0
+			if valJ.IsNumeric() {
+				valJType = 1
+			}
+			if valJ.IsString() {
+				valJType = 2
+			}
+			if valJ.IsBool() {
+				valJType = 3
+			}
+
+			// Treat missing values as smaller
+			if valIType == 0 || valJType == 0 {
+				if valIType != 0 {
+					return direction == "asc"
+				}
+				if valJType != 0 {
+					return direction == "dsc"
+				}
+				// If both are missing, move to the next field
+				continue
+			}
+
+			// Compare based on type
+			var less, equal bool
+			switch valIType {
+			case 1: // Numeric comparison
+				if valJType == 1 {
+					vi := valI.AsNumericDefault(0)
+					vj := valJ.AsNumericDefault(0)
+					if vi != vj {
+						less = vi < vj
+					} else {
+						equal = true
+					}
+				}
+			case 2: // String comparison
+				if valJType == 2 {
+					vi := valI.AsStringDefault("")
+					vj := valJ.AsStringDefault("")
+					if vi != vj {
+						less = vi < vj
+					} else {
+						equal = true
+					}
+				}
+			case 3: // Boolean comparison
+				if valJType == 3 {
+					vi := valI.AsBoolDefault(false)
+					vj := valJ.AsBoolDefault(false)
+					if vi != vj {
+						less = !vi && vj
+					} else {
+						equal = true
+					}
+				}
+			}
+
+			// If not equal, respect sorting direction
+			if !equal {
+				if less {
+					return direction == "asc"
+				}
+				return direction == "dsc"
+			}
+			// If equal, move to the next field
+		}
+		// If all fields are equal, maintain original order
+		return false
+	})
+
+	return sorted
+}
+
+func SortUUIDs(uuids []string, ascending bool) []string {
+	sorted := make([]string, len(uuids))
+	copy(sorted, uuids)
+	if ascending {
+		sort.Strings(sorted)
+	} else {
+		sort.Sort(sort.Reverse(sort.StringSlice(sorted)))
+	}
+	return sorted
+}
+
+func StrToBase64(xmlText string) string {
+	xmlBytes := []byte(xmlText)
+	base64Encoded := base64.StdEncoding.EncodeToString(xmlBytes)
+	return base64Encoded
+}
+
+func Base64ToStr(base64Encoded string) string {
+	xmlBytes, err := base64.StdEncoding.DecodeString(base64Encoded)
+	if err != nil {
+		return ""
+	}
+	return string(xmlBytes)
 }
 
 func NewKeyMutex() KeyMutex {
@@ -120,7 +254,7 @@ func MsgOnErrorReturn(retVars ...interface{}) {
 	le := lg.GetLogger()
 	for _, retVar := range retVars {
 		if err, ok := retVar.(error); ok {
-			le.Error(context.TODO(), fmt.Sprintf("%s", err))
+			le.Error(context.TODO(), fmt.Sprintf("%s\n", err))
 		}
 	}
 }
@@ -195,12 +329,21 @@ func GetEnv[T interface{}](key string, defaultVal T) (value T, err error) {
 	return
 }
 
+func IntToStr(i int64) string {
+	return strconv.FormatInt(i, 10)
+}
+
 func Str2Int(s string) int64 {
 	value, err := strconv.ParseInt(s, 10, 64)
 	if err == nil {
 		return value
 	}
 	return 0
+}
+
+func Str2Bool(boolStr string) bool {
+	s := strings.ToLower(boolStr)
+	return s == "true" || s == "1"
 }
 
 func MapsUnion[T interface{}](m1 map[string]T, m2 map[string]T) map[string]T {
@@ -240,6 +383,47 @@ func BytesToInt64(v []byte) int64 {
 		return 0
 	}
 	return int64(binary.LittleEndian.Uint64(v))
+}
+
+func Float64ToBytes(f float64) []byte {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, f)
+	if err != nil {
+		return []byte{}
+	}
+	return buf.Bytes()
+}
+
+func BytesToFloat64(b []byte) float64 {
+	buf := bytes.NewReader(b)
+	var f float64
+	err := binary.Read(buf, binary.LittleEndian, &f)
+	if err != nil {
+		return 0.0
+	}
+	return f
+}
+
+func StringToFloat(s string) float64 {
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0
+	}
+	return f
+}
+
+func BoolToBytes(b bool) []byte {
+	if b {
+		return []byte{1}
+	}
+	return []byte{0}
+}
+
+func BytesToBool(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	return data[0] != 0
 }
 
 func GetCurrentTimeNs() int64 {
