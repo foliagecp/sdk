@@ -202,6 +202,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		oldBody = ctx.GetObjectContext()
 	}
 	ctx.Domain.Cache().DeleteValue(ctx.Self.ID, true, -1, "") // Delete vertex's body
+	indexRemoveVertexBody(ctx)
 	addVertexOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, oldBody, nil)
 
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
@@ -651,6 +652,7 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			ctx.Domain.Cache().DeleteValue(indexKey, true, -1, "")
 		}
 		// ------------------------------------------------
+		indexRemoveVertexLinkBody(ctx, linkName)
 
 		// Set link type --------------------
 		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfId, linkType, toId), true, -1, "")

@@ -96,14 +96,18 @@ func getLinkNameFromSpecifiedIdentifier(ctx *sfPlugins.StatefunContextProcessor)
 	return "", false
 }
 
+func indexRemoveVertexBody(ctx *sfPlugins.StatefunContextProcessor) {
+	// Remove all indices -----------------------------
+	indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(VertexBodyValueIndexPrefPattern+KeySuff1Pattern, ctx.Self.ID, ">"))
+	for _, indexKey := range indexKeys {
+		ctx.Domain.Cache().DeleteValue(indexKey, true, -1, "")
+	}
+	// ------------------------------------------------
+}
+
 func indexVertexBody(ctx *sfPlugins.StatefunContextProcessor, vertexBody easyjson.JSON, opTime int64, reindex bool) {
 	if reindex {
-		// Remove all indices -----------------------------
-		indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(VertexBodyValueIndexPrefPattern+KeySuff1Pattern, ctx.Self.ID, ">"))
-		for _, indexKey := range indexKeys {
-			ctx.Domain.Cache().DeleteValue(indexKey, true, -1, "")
-		}
-		// ------------------------------------------------
+		indexRemoveVertexBody(ctx)
 	}
 	// Index body keys ------------------------------------
 	for _, bodyKey := range vertexBody.ObjectKeys() {
@@ -131,14 +135,18 @@ func indexVertexBody(ctx *sfPlugins.StatefunContextProcessor, vertexBody easyjso
 	// ----------------------------------------------------
 }
 
+func indexRemoveVertexLinkBody(ctx *sfPlugins.StatefunContextProcessor, linkName string) {
+	// Remove all indices -----------------------------
+	indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(LinkBodyValueIndexPrefPattern+KeySuff2Pattern, ctx.Self.ID, linkName, ">"))
+	for _, indexKey := range indexKeys {
+		ctx.Domain.Cache().DeleteValue(indexKey, true, -1, "")
+	}
+	// ------------------------------------------------
+}
+
 func indexVertexLinkBody(ctx *sfPlugins.StatefunContextProcessor, linkName string, linkBody easyjson.JSON, opTime int64, reindex bool) {
 	if reindex {
-		// Remove all indices -----------------------------
-		indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(LinkBodyValueIndexPrefPattern+KeySuff2Pattern, ctx.Self.ID, linkName, ">"))
-		for _, indexKey := range indexKeys {
-			ctx.Domain.Cache().DeleteValue(indexKey, true, -1, "")
-		}
-		// ------------------------------------------------
+		indexRemoveVertexLinkBody(ctx, linkName)
 	}
 	// Index body keys ------------------------------------
 	for _, bodyKey := range linkBody.ObjectKeys() {
