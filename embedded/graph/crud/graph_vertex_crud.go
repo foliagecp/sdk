@@ -7,7 +7,6 @@ import (
 	"github.com/foliagecp/easyjson"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
-	"github.com/foliagecp/sdk/statefun/system"
 )
 
 func GraphVertexRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
@@ -68,45 +67,6 @@ func GraphVertexRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.Op
 	addVertexOperationToOpStack(opStack, "read", ctx.Self.ID, nil, nil)
 
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(result.GetPtr(), opStack))).Reply()
-}
-
-func indexRemoveVertexBody(ctx *sfPlugins.StatefunContextProcessor) {
-	// Remove all indices -----------------------------
-	indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(VertexBodyValueIndexPrefPattern+KeySuff1Pattern, ctx.Self.ID, ">"))
-	for _, indexKey := range indexKeys {
-		ctx.Domain.Cache().DeleteValueKVSync(indexKey, -1)
-	}
-	// ------------------------------------------------
-}
-
-func indexVertexBody(ctx *sfPlugins.StatefunContextProcessor, vertexBody easyjson.JSON, opTime int64, reindex bool) {
-	if reindex {
-		indexRemoveVertexBody(ctx)
-	}
-	// Index body keys ------------------------------------
-	for _, bodyKey := range vertexBody.ObjectKeys() {
-		value := vertexBody.GetByPath(bodyKey)
-		bytesVal := []byte{}
-
-		typeStr := ""
-		if value.IsBool() {
-			typeStr = "b"
-			bytesVal = system.BoolToBytes(value.AsBoolDefault(false))
-		}
-		if value.IsNumeric() {
-			typeStr = "n"
-			bytesVal = system.Float64ToBytes(value.AsNumericDefault(0))
-		}
-		if value.IsString() {
-			typeStr = "s"
-			bytesVal = []byte(value.AsStringDefault(""))
-		}
-
-		if len(bytesVal) > 0 {
-			ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(VertexBodyValueIndexPrefPattern+KeySuff2Pattern, ctx.Self.ID, typeStr, bodyKey), bytesVal, opTime)
-		}
-	}
-	// ----------------------------------------------------
 }
 
 func GraphVertexCreate(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {

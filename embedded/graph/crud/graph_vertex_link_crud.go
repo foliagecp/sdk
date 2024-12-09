@@ -7,7 +7,6 @@ import (
 	"github.com/foliagecp/easyjson"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
-	"github.com/foliagecp/sdk/statefun/system"
 )
 
 func GraphVertexLinkRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
@@ -54,45 +53,6 @@ func GraphVertexLinkRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediator
 	addVertexLinkOperationToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, linkTarget, linkName, linkType, nil, nil)
 
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(result.GetPtr(), opStack))).Reply()
-}
-
-func indexRemoveVertexLinkBody(ctx *sfPlugins.StatefunContextProcessor, linkName string) {
-	// Remove all indices -----------------------------
-	indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(LinkBodyValueIndexPrefPattern+KeySuff2Pattern, ctx.Self.ID, linkName, ">"))
-	for _, indexKey := range indexKeys {
-		ctx.Domain.Cache().DeleteValueKVSync(indexKey, -1)
-	}
-	// ------------------------------------------------
-}
-
-func indexVertexLinkBody(ctx *sfPlugins.StatefunContextProcessor, linkName string, linkBody easyjson.JSON, opTime int64, reindex bool) {
-	if reindex {
-		indexRemoveVertexLinkBody(ctx, linkName)
-	}
-	// Index body keys ------------------------------------
-	for _, bodyKey := range linkBody.ObjectKeys() {
-		value := linkBody.GetByPath(bodyKey)
-		bytesVal := []byte{}
-
-		typeStr := ""
-		if value.IsBool() {
-			typeStr = "b"
-			bytesVal = system.BoolToBytes(value.AsBoolDefault(false))
-		}
-		if value.IsNumeric() {
-			typeStr = "n"
-			bytesVal = system.Float64ToBytes(value.AsNumericDefault(0))
-		}
-		if value.IsString() {
-			typeStr = "s"
-			bytesVal = []byte(value.AsStringDefault(""))
-		}
-
-		if len(bytesVal) > 0 {
-			ctx.Domain.Cache().SetValueKVSync(fmt.Sprintf(LinkBodyValueIndexPrefPattern+KeySuff3Pattern, ctx.Self.ID, linkName, typeStr, bodyKey), bytesVal, opTime)
-		}
-	}
-	// ----------------------------------------------------
 }
 
 func GraphVertexLinkCreateFromVertex(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, opTime int64, data *easyjson.JSON) {
