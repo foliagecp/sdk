@@ -70,14 +70,18 @@ func GraphVertexRead(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.Op
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(result.GetPtr(), opStack))).Reply()
 }
 
+func indexRemoveVertexBody(ctx *sfPlugins.StatefunContextProcessor) {
+	// Remove all indices -----------------------------
+	indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(VertexBodyValueIndexPrefPattern+KeySuff1Pattern, ctx.Self.ID, ">"))
+	for _, indexKey := range indexKeys {
+		ctx.Domain.Cache().DeleteValueKVSync(indexKey, -1)
+	}
+	// ------------------------------------------------
+}
+
 func indexVertexBody(ctx *sfPlugins.StatefunContextProcessor, vertexBody easyjson.JSON, opTime int64, reindex bool) {
 	if reindex {
-		// Remove all indices -----------------------------
-		indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(VertexBodyValueIndexPrefPattern+KeySuff1Pattern, ctx.Self.ID, ">"))
-		for _, indexKey := range indexKeys {
-			ctx.Domain.Cache().DeleteValueKVSync(indexKey, -1)
-		}
-		// ------------------------------------------------
+		indexRemoveVertexBody(ctx)
 	}
 	// Index body keys ------------------------------------
 	for _, bodyKey := range vertexBody.ObjectKeys() {
@@ -196,6 +200,7 @@ func GraphVertexDelete(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.
 	}
 
 	ctx.Domain.Cache().DeleteValueKVSync(ctx.Self.ID, -1) // Delete vertex's body
+	indexRemoveVertexBody(ctx)
 	addVertexOperationToOpStack(opStack, "delete", ctx.Self.ID, oldBody, nil)
 
 	waiting4Aggregation := false
