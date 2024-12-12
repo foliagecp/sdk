@@ -65,12 +65,12 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 	om := sfMediators.NewOpMediator(ctx)
 
 	if !ctx.Payload.PathExists("jpgql_uoi") {
-		om.AggregateOpMsg(sfMediators.OpMsgIdle("request does not contain \"jpgql_uoi\" field")).Reply()
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("request does not contain \"jpgql_uoi\" field")).Reply()
 		return
 	}
 	jpgqlUoI := ctx.Payload.GetByPath("jpgql_uoi")
 	if !jpgqlUoI.IsArray() {
-		om.AggregateOpMsg(sfMediators.OpMsgIdle("\"jpgql_uoi\" is not an array")).Reply()
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("\"jpgql_uoi\" is not an array")).Reply()
 		return
 	}
 
@@ -78,7 +78,7 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 	for i := 0; i < jpgqlUoI.ArraySize(); i++ {
 		jpgqlIntersectionRequestsJSON := jpgqlUoI.ArrayElement(i)
 		if !jpgqlIntersectionRequestsJSON.IsArray() {
-			om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("\"jpgql_uoi\"'s element %d is not an array", i))).Reply()
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("\"jpgql_uoi\"'s element %d is not an array", i))).Reply()
 			return
 		}
 
@@ -87,12 +87,12 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 			jpgqlData := jpgqlIntersectionRequestsJSON.ArrayElement(j)
 			jpgqlRequest := jpgqlData.GetByPath("jpgql").AsStringDefault("")
 			if len(jpgqlRequest) == 0 {
-				om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("\"jpgql_uoi\"'s element [%d, %d] does not contain a valid value at \"jpgql\" field", i, j))).Reply()
+				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("\"jpgql_uoi\"'s element [%d, %d] does not contain a valid value at \"jpgql\" field", i, j))).Reply()
 				return
 			}
 			jpgqlStartUUID := jpgqlData.GetByPath("from_uuid").AsStringDefault("")
 			if len(jpgqlRequest) == 0 {
-				om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("\"jpgql_uoi\"'s element [%d, %d] does not contain a valid value at \"from_uuid\" field", i, j))).Reply()
+				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("\"jpgql_uoi\"'s element [%d, %d] does not contain a valid value at \"from_uuid\" field", i, j))).Reply()
 				return
 			}
 			req := JPGQLRequestData{request: jpgqlRequest, uuid: jpgqlStartUUID}
