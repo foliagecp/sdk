@@ -90,7 +90,7 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("\"jpgql_uoi\"'s element [%d, %d] does not contain a valid value at \"jpgql\" field", i, j))).Reply()
 				return
 			}
-			jpgqlStartUUID := jpgqlData.GetByPath("from_uuid").AsStringDefault("")
+			jpgqlStartUUID := jpgqlData.GetByPath("from_uuid").AsStringDefault(ctx.Self.ID)
 			if len(jpgqlRequest) == 0 {
 				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("\"jpgql_uoi\"'s element [%d, %d] does not contain a valid value at \"from_uuid\" field", i, j))).Reply()
 				return
