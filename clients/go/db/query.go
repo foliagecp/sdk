@@ -43,3 +43,14 @@ func (qc QuerySyncClient) JPGQLCtraQuery(id, query string) ([]string, error) {
 
 	return om.Data.ObjectKeys(), OpErrorFromOpMsg(om)
 }
+
+func (qc QuerySyncClient) FPLQuery(id, queryStringOfJSON string) (easyjson.JSON, error) {
+	if payload, ok := easyjson.JSONFromString(queryStringOfJSON); ok {
+		om := sfMediators.OpMsgFromSfReply(qc.request(sfp.AutoRequestSelect, "functions.graph.api.query.fpl", id, &payload, nil))
+		if om.Status == sfMediators.SYNC_OP_STATUS_OK {
+			return om.Data, nil
+		}
+		return easyjson.NewJSONObject(), OpErrorFromOpMsg(om)
+	}
+	return easyjson.NewJSONObject(), fmt.Errorf("cannot unmarshal json from provided query")
+}
