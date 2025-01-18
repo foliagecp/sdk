@@ -277,6 +277,8 @@ func IsLinkSatifiesFilterCreteria(cacheStore *cache.Store, fromVertexId string, 
 					}
 					if tokens[0] == "v" {
 						if tokens[1] == "has" {
+							// TODO: FIX IS NEEDED: toVertexId may live in another domain!!!!! Then nothing can be cheked!!!
+							// Probobal solution: toVertexId body' indices must be built not in its own domain, but in the domains of those vertices from which links lead to it
 							if !IsVertexBodyHasIndexValue(cacheStore, toVertexId, feature.value["key"], feature.value["value_type"], feature.value["operation"], feature.value["target_value"]) {
 								featuresFromDisjunctionFound = false
 								break
