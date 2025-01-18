@@ -116,7 +116,7 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 					defer intersectionUUIDsMutex.Unlock()
 
 					newIntersectionUUIDs := map[string]struct{}{}
-					for _, foundUUID := range om.Data.ObjectKeys() {
+					for _, foundUUID := range om.Data.GetByPath("uuids").ObjectKeys() {
 						if _, ok := intersectionUUIDs[foundUUID]; len(intersectionUUIDs) == 0 || ok {
 							newIntersectionUUIDs[foundUUID] = struct{}{}
 						}
