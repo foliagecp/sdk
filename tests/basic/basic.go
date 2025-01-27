@@ -201,6 +201,11 @@ func Start() {
 		b.SetByPath("f2", easyjson.NewJSON(119))
 		system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("test3", "typeb", b))
 
+		dbClient.CMDB.ShadowObjectCanBeRecevier = true
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeUpdate("shadow-object", body, true, true))
+		system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("otherhub#stest1", "shadow-object", b))
+		dbClient.CMDB.ShadowObjectCanBeRecevier = false
+
 		fmt.Println("Starting GraphQL")
 		graphql.StartGraphqlServer("8080", &dbClient)
 		return nil
