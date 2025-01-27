@@ -12,6 +12,10 @@ import (
 	"github.com/foliagecp/sdk/statefun/system"
 )
 
+const (
+	ShadowObjectCallParamOptionPath string = "shadow_object.can_receive"
+)
+
 func buildNatsData(callerDomain string, callerTypename string, callerID string, payload *easyjson.JSON, options *easyjson.JSON) []byte {
 	data := easyjson.NewJSONObject()
 	data.SetByPath("caller_typename", easyjson.NewJSON(callerTypename))
@@ -128,12 +132,16 @@ func (r *Runtime) functionTypeIsReadyForGoLangCommunication(targetFunctionTypeNa
 }
 
 func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) error {
+	shadowObjectCanBeReceiver := false
+	if options != nil {
+		shadowObjectCanBeReceiver = options.GetByPath(ShadowObjectCallParamOptionPath).AsBoolDefault(false)
+	}
 	jetstreamGlobalSignal := func() error {
 		go func() {
 			system.GlobalPrometrics.GetRoutinesCounter().Started("ingress-jetstreamGlobalSignal-gofunc")
 			defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("ingress-jetstreamGlobalSignal-gofunc")
 
-			if r.Domain.IsShadowObject(targetID) {
+			if !shadowObjectCanBeReceiver && r.Domain.IsShadowObject(targetID) {
 				system.MsgOnErrorReturn(r.signalShadowObject(callerTypename, callerID, targetTypename, targetID, payload, options))
 			} else {
 				// If publishing signal to the same domain
@@ -243,6 +251,10 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 }
 
 func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
+	shadowObjectCanBeReceiver := false
+	if options != nil {
+		shadowObjectCanBeReceiver = options.GetByPath(ShadowObjectCallParamOptionPath).AsBoolDefault(false)
+	}
 	requestTimeoutDuration := time.Duration(r.config.requestTimeoutSec) * time.Second
 	if len(timeout) > 0 {
 		requestTimeoutDuration = timeout[0]
@@ -253,7 +265,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 			err  error
 		)
 
-		if r.Domain.IsShadowObject(targetID) {
+		if !shadowObjectCanBeReceiver && r.Domain.IsShadowObject(targetID) {
 			resp, err = r.requestShadowObject(callerTypename, callerID, targetTypename, targetID, payload, options)
 		} else {
 			resp, err = r.nc.Request(
@@ -329,7 +341,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 		return goLangLocalRequest()
 	case sfPlugins.AutoRequestSelect:
 		selection := sfPlugins.NatsCoreGlobalRequest
-		if !r.Domain.IsShadowObject(targetID) {
+		if shadowObjectCanBeReceiver || !r.Domain.IsShadowObject(targetID) {
 			if r.functionTypeIsReadyForGoLangCommunication(targetTypename, true, targetID) == 0 {
 				selection = sfPlugins.GolangLocalRequest
 			}
