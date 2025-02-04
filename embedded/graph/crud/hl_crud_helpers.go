@@ -104,11 +104,12 @@ func getTypeTriggers(ctx *sfPlugins.StatefunContextProcessor, typeName string) *
 }
 
 func findObjectType(ctx *sfPlugins.StatefunContextProcessor, objectID string) string {
-	/*options := easyjson.NewJSONObject()
+	options := easyjson.NewJSONObject()
 	if ctx.Options != nil {
 		options = ctx.Options.Clone()
-	}*/
-	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", objectID, nil, nil))
+		options.RemoveByPath("op_stack") // Not to execute triggers in functions.cmdb.api.object.read
+	}
+	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", objectID, nil, &options))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
 		return som.Data.GetByPath("type").AsStringDefault("")
 	}
@@ -120,7 +121,7 @@ func findTypeObjects(ctx *sfPlugins.StatefunContextProcessor, typeName string) (
 	if ctx.Options != nil {
 		options = ctx.Options.Clone()
 	}*/
-	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.read", typeName, nil, nil))
+	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.read", typeName, nil, ctx.Options))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
 		if arr, ok := som.Data.GetByPath("object_ids").AsArrayString(); ok {
 			return arr, nil
@@ -137,7 +138,7 @@ func getLinkBody(ctx *sfPlugins.StatefunContextProcessor, from, linkName string)
 	if ctx.Options != nil {
 		options = ctx.Options.Clone()
 	}*/
-	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", from, &link, nil))
+	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", from, &link, ctx.Options))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
 		if som.Data.PathExists("body") {
 			return som.Data.GetByPathPtr("body"), nil
