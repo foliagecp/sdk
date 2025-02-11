@@ -86,6 +86,8 @@ type Domain interface {
 	IsShadowObject(idWithDomain string) bool
 
 	GetValidObjectId(objectId string) string
+
+	CreateCustomShadowId(storeDomain, targetDomain, uuid string) string
 }
 
 type StatefunContextProcessor struct {
