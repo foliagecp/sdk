@@ -84,6 +84,8 @@ type Domain interface {
 	* domainName1/ObjectId  -> false
 	 */
 	IsShadowObject(idWithDomain string) bool
+
+	GetValidObjectId(objectId string) string
 }
 
 type StatefunContextProcessor struct {
