@@ -120,6 +120,10 @@ func (dm *Domain) SetWeakClusterDomains(weakClusterDomains []string) {
 	}
 }
 
+func (dm *Domain) CreateCustomShadowId(storeDomain, targetDomain, uuid string) string {
+	return storeDomain + ObjectIDDomainSeparator + targetDomain + ObjectIDWeakClusteringDomainSeparator + uuid
+}
+
 /*
  * otherDomainName/ObjectId -> thisDomainName/otherDomainName#ObjectId
  * thisDomainName/ObjectId -> thisDomainName/ObjectId
