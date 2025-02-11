@@ -353,11 +353,11 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 }
 
 func (r *Runtime) Signal(signalProvider sfPlugins.SignalProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) error {
-	return r.signal(signalProvider, "ingress", "signal", typename, id, payload, options)
+	return r.signal(signalProvider, "ingress", "signal", typename, r.Domain.GetValidObjectId(id), payload, options)
 }
 
 func (r *Runtime) Request(requestProvider sfPlugins.RequestProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
-	return r.request(requestProvider, "ingress", "request", typename, id, payload, options, timeout...)
+	return r.request(requestProvider, "ingress", "request", typename, r.Domain.GetValidObjectId(id), payload, options, timeout...)
 }
 
 // ------------------------------------------------------------------------------------------------
