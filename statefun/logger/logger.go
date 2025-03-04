@@ -273,27 +273,5 @@ func Logf(ll LogLevel, format string, args ...interface{}) {
 //
 // Deprecated. Use l.Trace(), l.Debug(), l.Info(), l.Warn(), l.Error(), l.Fatal(), l.Panic() instead
 func Logln(ll LogLevel, format string, args ...interface{}) {
-	l := GetLogger()
-
-	allArgs := make([]interface{}, 0, len(args)+1)
-	allArgs = append(allArgs, format)
-	allArgs = append(allArgs, args...)
-	message := fmt.Sprintln(allArgs...)
-
-	switch ll {
-	case PanicLevel:
-		l.Panic(context.TODO(), message)
-	case FatalLevel:
-		l.Fatal(context.TODO(), message)
-	case ErrorLevel:
-		l.Error(context.TODO(), message)
-	case WarnLevel:
-		l.Warn(context.TODO(), message)
-	case InfoLevel:
-		l.Info(context.TODO(), message)
-	case DebugLevel:
-		l.Debug(context.TODO(), message)
-	case TraceLevel:
-		l.Trace(context.TODO(), message)
-	}
+	Logf(ll, format, args...)
 }

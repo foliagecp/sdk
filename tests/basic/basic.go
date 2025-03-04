@@ -66,15 +66,15 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefun
 
 	if MasterFunctionLogs {
 		lg.Logf(lg.DebugLevel, "-------> %s:%s", ctx.Self.Typename, ctx.Self.ID)
-		lg.Logln(lg.DebugLevel, "== Payload:", ctx.Payload.ToString())
-		lg.Logln(lg.DebugLevel, "== Context:", functionContext.ToString())
+		lg.Logln(lg.DebugLevel, "== Payload: %s", ctx.Payload.ToString())
+		lg.Logln(lg.DebugLevel, "== Context: %s", functionContext.ToString())
 	}
 
 	var objectContext *easyjson.JSON
 	if MasterFunctionObjectContextProcess {
 		objectContext = ctx.GetObjectContext()
 		if MasterFunctionLogs {
-			lg.Logln(lg.DebugLevel, "== Object context:", objectContext.ToString())
+			lg.Logln(lg.DebugLevel, "== Object context: %s", objectContext.ToString())
 		}
 	}
 
