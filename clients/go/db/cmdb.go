@@ -96,12 +96,14 @@ func (cmdb CMDBSyncClient) TriggerObjectSet(typeName string, triggerType Trigger
 	if len(statefunName) == 0 {
 		return fmt.Errorf("at least 1 statefun name is required")
 	}
+
 	body := easyjson.NewJSONObject()
 	body.SetByPath(fmt.Sprintf("triggers.%s", triggerType), easyjson.JSONFromArray(statefunName))
 	return cmdb.TypeUpdate(
 		typeName,
 		body,
 		false,
+		true,
 	)
 }
 
@@ -157,6 +159,7 @@ func (cmdb CMDBSyncClient) TriggerLinkSet(fromTypeName, toTypeName string, trigg
 		nil,
 		body,
 		false,
+		true,
 	)
 }
 
