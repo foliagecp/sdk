@@ -69,7 +69,3 @@ func CreateTestGraph(runtime *statefun.Runtime) {
 
 	lg.Logln(lg.DebugLevel, "<<< Test ended: simple graph creation")
 }
-
-func NewDBClient() {
-	panic("unimplemented")
-}
