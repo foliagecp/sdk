@@ -1,0 +1,18 @@
+global:
+  scrape_interval:     5s # By default, scrape targets every 5 seconds.
+
+  # Attach these labels to any time series or alerts when communicating with
+  # external systems (federation, remote storage, Alertmanager).
+  external_labels:
+    monitor: 'nats-servers'
+
+# A scrape configuration containing exactly one endpoint to scrape:
+scrape_configs:
+  # The job name is added as a label `job=<job_name>` to any timeseries scraped from this config.
+  - job_name: 'nats-servers'
+    static_configs:
+      - targets: ['nats-exporter:7777']
+
+  - job_name: 'foliage-runtimes'
+    static_configs:
+      - targets: ['runtime:9901']
