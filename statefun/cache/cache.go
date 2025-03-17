@@ -461,7 +461,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 						suffixPathsStack = append(suffixPathsStack, newSuffix)
 						depthsStack = append(depthsStack, currentDepth+1)
 
-						time.Sleep(1 * time.Millisecond)
+						time.Sleep(time.Duration(cacheConfig.lazyWriterValueProcessDelayMkS) * time.Microsecond)
 						return true
 					})
 
@@ -493,7 +493,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 					gaugeVec.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(cs.valuesInCache))
 				}
 
-				//time.Sleep(100 * time.Millisecond) // Prevents too many locks and prevents too much processor time consumption
+				time.Sleep(time.Duration(cacheConfig.lazyWriterRepeatDelayMkS) * time.Microsecond) // Prevents too many locks and prevents too much processor time consumption
 			}
 		}
 	}
