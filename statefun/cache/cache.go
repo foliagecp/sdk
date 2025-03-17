@@ -461,7 +461,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 						suffixPathsStack = append(suffixPathsStack, newSuffix)
 						depthsStack = append(depthsStack, currentDepth+1)
 
-						time.Sleep(1 * time.Microsecond)
+						time.Sleep(1 * time.Millisecond)
 						return true
 					})
 
