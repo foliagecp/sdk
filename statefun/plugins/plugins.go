@@ -1,5 +1,3 @@
-
-
 // Foliage statefun plugins package.
 // Provides unified interfaces for stateful functions plugins
 package plugins
@@ -43,9 +41,9 @@ const (
 
 type EgressProvider int
 
-type SFSignalFunc func(SignalProvider, string, string, *easyjson.JSON, *easyjson.JSON) error
-type SFRequestFunc func(RequestProvider, string, string, *easyjson.JSON, *easyjson.JSON, ...time.Duration) (*easyjson.JSON, error)
-type SFEgressFunc func(EgressProvider, *easyjson.JSON, ...string) error
+type SFSignalFunc func(signalProvider SignalProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) error
+type SFRequestFunc func(requestProvider RequestProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error)
+type SFEgressFunc func(egressProvider EgressProvider, payload *easyjson.JSON, customId ...string) error
 
 const (
 	NatsCoreEgress EgressProvider = iota
