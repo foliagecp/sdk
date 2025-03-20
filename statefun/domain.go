@@ -49,11 +49,12 @@ type Domain struct {
 	weakClusterDomainsMutex sync.Mutex
 	nc                      *nats.Conn
 	js                      nats.JetStreamContext
+	natsJsReplicasCount     int
 	kv                      nats.KeyValue
 	cache                   *cache.Store
 }
 
-func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredHubDomainName string) (dm *Domain, e error) {
+func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredHubDomainName string, natsJsReplicasCount int) (dm *Domain, e error) {
 	accInfo, err := js.AccountInfo()
 	if err != nil {
 		return nil, err
@@ -75,11 +76,12 @@ func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredHubDomainName str
 	}
 
 	domain := &Domain{
-		hubDomainName:      hubDomainName,
-		name:               thisDomainName,
-		weakClusterDomains: map[string]struct{}{thisDomainName: {}},
-		nc:                 nc,
-		js:                 js,
+		hubDomainName:       hubDomainName,
+		name:                thisDomainName,
+		weakClusterDomains:  map[string]struct{}{thisDomainName: {}},
+		nc:                  nc,
+		js:                  js,
+		natsJsReplicasCount: natsJsReplicasCount,
 	}
 
 	return domain, nil
@@ -251,7 +253,8 @@ func (dm *Domain) start(cacheConfig *cache.Config, createDomainRouters bool) err
 	if !kvExists {
 		var err error
 		dm.kv, err = kv.CreateKeyValue(dm.nc, dm.js, &nats.KeyValueConfig{
-			Bucket: bucketName,
+			Bucket:   bucketName,
+			Replicas: dm.natsJsReplicasCount,
 		})
 		if err != nil {
 			return err
@@ -320,6 +323,7 @@ func (dm *Domain) createHubSignalStream() error {
 		Name:      hubEventStreamName,
 		Subjects:  []string{SignalPrefix + ".>"},
 		Retention: nats.InterestPolicy,
+		Replicas:  dm.natsJsReplicasCount,
 	}
 	return dm.createStreamIfNotExists(sc)
 }
@@ -345,6 +349,7 @@ func (dm *Domain) createIngresSignalStream() error {
 		Name:      domainIngressStreamName,
 		Sources:   []*nats.StreamSource{ss},
 		Retention: nats.InterestPolicy,
+		Replicas:  dm.natsJsReplicasCount,
 	}
 	return dm.createStreamIfNotExists(sc)
 }
@@ -354,6 +359,7 @@ func (dm *Domain) createEgressSignalStream() error {
 		Name:      domainEgressStreamName,
 		Subjects:  []string{fmt.Sprintf(DomainEgressSubjectsTmpl, dm.name, ">")},
 		Retention: nats.InterestPolicy,
+		Replicas:  dm.natsJsReplicasCount,
 	}
 	return dm.createStreamIfNotExists(sc)
 }

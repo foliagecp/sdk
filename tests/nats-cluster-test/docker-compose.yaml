@@ -1,0 +1,88 @@
+services:
+  nats1:
+    image: nats:latest
+    command: -c /etc/nats/nats.conf
+    ports:
+      - "4222:4222"
+      - "6222:6222"
+      - "8222:8222"
+    volumes:
+      - ./configs/nats/nats1.conf/:/etc/nats/nats.conf
+      - ./data/jetstream1:/data/jetstream
+
+  nats2:
+    image: nats:latest
+    command: -c /etc/nats/nats.conf
+    ports:
+      - "4223:4222"
+      - "6223:6222"
+      - "8223:8222"
+    volumes:
+      - ./configs/nats/nats2.conf/:/etc/nats/nats.conf
+      - ./data/jetstream2:/data/jetstream
+
+  nats3:
+    image: nats:latest
+    command: -c /etc/nats/nats.conf
+    ports:
+      - "4224:4222"
+      - "6224:6222"
+      - "8224:8222"
+    volumes:
+      - ./configs/nats/nats3.conf/:/etc/nats/nats.conf
+      - ./data/jetstream3:/data/jetstream
+
+  io:
+    image: natsio/nats-box:latest
+    entrypoint:
+      - /bin/sh
+    tty: true
+    environment:
+      - NATS_URL=nats://nats1:4222,nats://nats2:4222,nats://nats3:4222
+    depends_on:
+      - nats1
+      - nats2
+      - nats3
+
+  runtime:
+    image: foliage-sdk-tests-basic:latest
+    command: sh -c "sleep 5 && /usr/bin/foliage -ll 0"
+    ports:
+      - "9901:9901"
+      - "8080:8080"
+    env_file: ./configs/.env
+    depends_on:
+      - nats1
+      - nats2
+      - nats3
+    build:
+      context: ../..
+      dockerfile: tests/basic/Dockerfile
+    volumes:
+      - .:/foliage
+
+  nats-exporter:
+    image: natsio/prometheus-nats-exporter:latest
+    depends_on:
+     - nats1
+     - nats2
+     - nats3
+    ports:
+     - '7777:7777'
+    command: -varz -jsz=all http://nats1:8222 http://nats2:8222 http://nats3:8222
+
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - 9090:9090
+    volumes:
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+
+  grafana:
+    ports:
+     - '3000:3000'
+    image: grafana/grafana-enterprise
+    volumes:
+      - ./configs/grafana/dashboards.yaml:/etc/grafana/provisioning/dashboards/main.yaml
+      - ./configs/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/main.yaml
+      - ./configs/grafana/dashboards:/var/lib/grafana/dashboards

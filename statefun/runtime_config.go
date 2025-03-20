@@ -1,5 +1,3 @@
-
-
 package statefun
 
 const (
@@ -12,11 +10,13 @@ const (
 	GCIntervalSec               = 5
 	DefaultHubDomainName        = "hub"
 	HandlesDomainRouters        = true
+	natsJetStreamReplicasCount  = 3
 )
 
 type RuntimeConfig struct {
 	name                           string
 	natsURL                        string
+	natsJsReplicasCount            int
 	kvMutexLifeTimeSec             int
 	kvMutexIsOldPollingIntervalSec int
 	functionTypeIDLifetimeMs       int
@@ -30,6 +30,7 @@ func NewRuntimeConfig() *RuntimeConfig {
 	return &RuntimeConfig{
 		name:                           RuntimeName,
 		natsURL:                        NatsURL,
+		natsJsReplicasCount:            natsJetStreamReplicasCount,
 		kvMutexLifeTimeSec:             KVMutexLifetimeSec,
 		kvMutexIsOldPollingIntervalSec: KVMutexIsOldPollingInterval,
 		functionTypeIDLifetimeMs:       FunctionTypeIDLifetimeMs,
