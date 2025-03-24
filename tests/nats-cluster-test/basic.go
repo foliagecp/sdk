@@ -28,8 +28,15 @@ import (
 )
 
 var (
-	// NatsURL - nats server url
-	NatsURL string = system.GetEnvMustProceed("NATS_URL", "nats://nats:foliage@nats1:4222,nats://nats:foliage@nats2:4222,nats://nats:foliage@nats3:4222")
+	// EnableNatsClusterMode - enable cluster jetstream
+	EnableNatsClusterMode = system.GetEnvMustProceed("NATS_CLUSTER_MODE", false)
+	// NatsReplicasCount defines the number of NATS replicas.
+	NatsReplicasCount = system.GetEnvMustProceed("NATS_REPLICAS", 3)
+	// NatsURL - nats server url. For cluster connectivity, use comma-separated values: "nats://user:pwd@host1:port,nats://user:pwd@host2:port"
+	NatsURL string = system.GetEnvMustProceed("NATS_URL", "nats://nats:foliage@nats:4222")
+)
+
+var (
 	// MasterFunctionContextIncrement - does the master stateful function do the increment operation on each call in its context
 	MasterFunctionContextIncrement bool = system.GetEnvMustProceed("MASTER_FUNC_CONTEXT_INCREMENT", true)
 	// MasterFunctionContextIncrementOption - Default increment value
@@ -211,7 +218,15 @@ func Start() {
 		return nil
 	}
 
-	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "basic").UseJSDomainAsHubDomainName()); err == nil {
+	runtimeConfig := statefun.NewRuntimeConfigSimple(NatsURL, "basic").UseJSDomainAsHubDomainName()
+	if EnableNatsClusterMode {
+		runtimeConfig.ConfigureNatsCluster(NatsReplicasCount)
+		lg.Logf(lg.InfoLevel, "NATS cluster mode enabled with %d replicas", NatsReplicasCount)
+	} else {
+		lg.Logf(lg.InfoLevel, "NATS standalone mode")
+	}
+
+	if runtime, err := statefun.NewRuntime(*runtimeConfig); err == nil {
 		RegisterFunctionTypes(runtime)
 		if TriggersTest {
 			registerTriggerFunctions(runtime)
@@ -219,7 +234,7 @@ func Start() {
 		runtime.RegisterOnAfterStartFunction(afterStart, true)
 
 		if err := runtime.Start(context.TODO(), cache.NewCacheConfig("main_cache")); err != nil {
-			lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s", err)
+			lg.Logf(lg.ErrorLevel, "Cannot start runtime due to an error: %s", err)
 		}
 	} else {
 		lg.Logf(lg.ErrorLevel, "Cannot create statefun runtime due to an error: %s", err)

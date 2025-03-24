@@ -49,24 +49,43 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		shutdown:                make(chan struct{}),
 	}
 
-	var err error
-	r.nc, err = nats.Connect(config.natsURL)
-	if err != nil {
-		return nil, err
+	const maxAttempts = 3
+	const retryDelay = 2 * time.Second
+
+	var lastError error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		lg.Logf(lg.InfoLevel, "Attempting to connect to NATS %d out of %d", attempt, maxAttempts)
+
+		var err error
+		r.nc, err = nats.Connect(config.natsURL)
+		if err == nil {
+			r.js, err = r.nc.JetStream(nats.PublishAsyncMaxPending(256))
+			if err == nil {
+				r.Domain, err = NewDomain(r.nc, r.js, config.desiredHUBDomainName, config.natsReplicasCount)
+				if err == nil {
+					r.config.desiredHUBDomainName = r.Domain.hubDomainName
+					return r, nil
+				}
+			}
+		}
+
+		lastError = err
+
+		if r.nc != nil {
+			r.nc.Close()
+			r.nc = nil
+		}
+
+		if attempt < maxAttempts {
+			lg.Logf(lg.WarnLevel, "Failed to connect to NATS: %v. Retrying in %v", err, retryDelay)
+			time.Sleep(retryDelay)
+		}
 	}
 
-	r.js, err = r.nc.JetStream(nats.PublishAsyncMaxPending(256))
-	if err != nil {
-		return nil, err
-	}
+	lg.Logf(lg.ErrorLevel, "Failed to connect to NATS after %d attempts: %v", maxAttempts, lastError)
 
-	r.Domain, err = NewDomain(r.nc, r.js, config.desiredHUBDomainName, config.natsJsReplicasCount)
-	if err != nil {
-		return nil, err
-	}
-	r.config.desiredHUBDomainName = r.Domain.hubDomainName
-
-	return r, nil
+	return nil, lastError
 }
 
 // RegisterOnAfterStartFunction registers a function to be called after the runtime starts.
@@ -141,7 +160,7 @@ func (r *Runtime) createStreams(ctx context.Context) error {
 					Name:      ft.getStreamName(),
 					Subjects:  []string{ft.subject},
 					Retention: nats.InterestPolicy,
-					Replicas:  natsJetStreamReplicasCount,
+					Replicas:  NatsReplicasCount,
 				})
 				if err != nil {
 					logger.Errorf(context.TODO(), "Failed to add stream: %v", err)

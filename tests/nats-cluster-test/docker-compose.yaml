@@ -46,7 +46,7 @@ services:
 
   runtime:
     image: foliage-sdk-tests-basic:latest
-    command: sh -c "sleep 5 && /usr/bin/foliage -ll 0"
+    command: "/usr/bin/foliage -ll 0"
     ports:
       - "9901:9901"
       - "8080:8080"

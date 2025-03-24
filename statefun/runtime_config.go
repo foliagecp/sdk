@@ -10,13 +10,15 @@ const (
 	GCIntervalSec               = 5
 	DefaultHubDomainName        = "hub"
 	HandlesDomainRouters        = true
-	natsJetStreamReplicasCount  = 3
+	EnableNatsClusterMode       = false
+	NatsReplicasCount           = 1
 )
 
 type RuntimeConfig struct {
 	name                           string
 	natsURL                        string
-	natsJsReplicasCount            int
+	enableNatsClusterMode          bool
+	natsReplicasCount              int
 	kvMutexLifeTimeSec             int
 	kvMutexIsOldPollingIntervalSec int
 	functionTypeIDLifetimeMs       int
@@ -30,7 +32,8 @@ func NewRuntimeConfig() *RuntimeConfig {
 	return &RuntimeConfig{
 		name:                           RuntimeName,
 		natsURL:                        NatsURL,
-		natsJsReplicasCount:            natsJetStreamReplicasCount,
+		enableNatsClusterMode:          EnableNatsClusterMode,
+		natsReplicasCount:              NatsReplicasCount,
 		kvMutexLifeTimeSec:             KVMutexLifetimeSec,
 		kvMutexIsOldPollingIntervalSec: KVMutexIsOldPollingInterval,
 		functionTypeIDLifetimeMs:       FunctionTypeIDLifetimeMs,
@@ -89,4 +92,18 @@ func (ro *RuntimeConfig) SetGCIntervalSec(gcIntervalSec int) *RuntimeConfig {
 func (ro *RuntimeConfig) SetDomainRoutersHandling(handlesDomainRouters bool) *RuntimeConfig {
 	ro.handlesDomainRouters = handlesDomainRouters
 	return ro
+}
+
+func (ro *RuntimeConfig) EnableNatsCluster(enableCluster bool) *RuntimeConfig {
+	ro.enableNatsClusterMode = enableCluster
+	return ro
+}
+
+func (ro *RuntimeConfig) SetNatsReplicas(replicasCount int) *RuntimeConfig {
+	ro.natsReplicasCount = replicasCount
+	return ro
+}
+
+func (ro *RuntimeConfig) ConfigureNatsCluster(replicasCount int) *RuntimeConfig {
+	return ro.EnableNatsCluster(true).SetNatsReplicas(replicasCount)
 }
