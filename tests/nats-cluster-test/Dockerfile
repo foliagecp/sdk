@@ -11,7 +11,7 @@ COPY . .
 
 RUN go mod tidy
 
-RUN cd ./tests/basic && go build -o /usr/bin/foliage
+RUN cd ./tests/nats-cluster-test && go build -o /usr/bin/foliage
 
 FROM ubuntu:22.04
 

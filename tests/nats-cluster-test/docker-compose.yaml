@@ -46,7 +46,7 @@ services:
 
   runtime:
     image: foliage-sdk-tests-basic:latest
-    command: "/usr/bin/foliage -ll 0"
+    command: "/usr/bin/foliage -ll 5"
     ports:
       - "9901:9901"
       - "8080:8080"
@@ -57,7 +57,7 @@ services:
       - nats3
     build:
       context: ../..
-      dockerfile: tests/basic/Dockerfile
+      dockerfile: tests/nats-cluster-test/Dockerfile
     volumes:
       - .:/foliage
 
