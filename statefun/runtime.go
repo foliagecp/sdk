@@ -3,6 +3,8 @@ package statefun
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -153,23 +155,51 @@ func (r *Runtime) createStreams(ctx context.Context) error {
 		existingStreams = append(existingStreams, info.Config.Name)
 	}
 
-	for _, ft := range r.registeredFunctionTypes {
-		if ft.config.IsSignalProviderAllowed(sfPlugins.JetstreamGlobalSignal) {
-			if !contains(existingStreams, ft.getStreamName()) {
-				_, err := r.js.AddStream(&nats.StreamConfig{
-					Name:      ft.getStreamName(),
-					Subjects:  []string{ft.subject},
-					Retention: nats.InterestPolicy,
-					Replicas:  NatsReplicasCount,
-				})
-				if err != nil {
+	const maxRetries = 3
+	const retryDelay = 2 * time.Second
+	for retry := 0; retry < maxRetries; retry++ {
+		failed := false
+
+		for _, ft := range r.registeredFunctionTypes {
+			if !ft.config.IsSignalProviderAllowed(sfPlugins.JetstreamGlobalSignal) {
+				continue
+			}
+
+			streamName := ft.getStreamName()
+			if contains(existingStreams, streamName) {
+				continue
+			}
+
+			_, err := r.js.AddStream(&nats.StreamConfig{
+				Name:      streamName,
+				Subjects:  []string{ft.subject},
+				Retention: nats.InterestPolicy,
+				Replicas:  r.Domain.natsJsReplicasCount,
+			})
+
+			if err != nil {
+				if strings.Contains(err.Error(), "no suitable peers for placement") {
+					logger.Warnf(context.TODO(), "Cluster is not ready (try %d/%d): %v",
+						retry+1, maxRetries, err)
+					failed = true
+					break
+				} else {
 					logger.Errorf(context.TODO(), "Failed to add stream: %v", err)
 					return err
 				}
 			}
+
+			existingStreams = append(existingStreams, streamName)
 		}
+
+		if !failed {
+			return nil // all streams are created
+		}
+
+		time.Sleep(retryDelay)
 	}
-	return nil
+
+	return fmt.Errorf("failed to create streams after %d attempts: cluster not ready", maxRetries)
 }
 
 // handleSingleInstanceFunctions manages single-instance function locks.
