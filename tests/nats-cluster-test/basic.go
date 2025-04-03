@@ -31,7 +31,7 @@ var (
 	// EnableNatsClusterMode - enable cluster jetstream
 	EnableNatsClusterMode = system.GetEnvMustProceed("NATS_CLUSTER_MODE", false)
 	// NatsReplicasCount defines the number of NATS replicas.
-	NatsReplicasCount = system.GetEnvMustProceed("NATS_REPLICAS", 3)
+	NatsReplicasCount = system.GetEnvMustProceed("NATS_REPLICAS", 1)
 	// NatsURL - nats server url. For cluster connectivity, use comma-separated values: "nats://user:pwd@host1:port,nats://user:pwd@host2:port"
 	NatsURL string = system.GetEnvMustProceed("NATS_URL", "nats://nats:foliage@nats:4222")
 )
@@ -125,34 +125,6 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefun
 	}
 }
 
-func clusterWriteTest(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	for i := 0; i < 1000; i++ {
-		if err := dbClient.CMDB.ObjectCreate(fmt.Sprintf("cluster_test%d", i), "typea",
-			easyjson.NewJSONObjectWithKeyValue("name", easyjson.NewJSON(fmt.Sprintf("test_cluster_object %d", i)))); err != nil {
-			lg.Logf(lg.ErrorLevel, "clusterTest, creating object error: %v", err)
-			break
-		} else {
-			lg.Logf(lg.InfoLevel, "clusterTest, created object: %d", i)
-		}
-	}
-}
-
-func clusterReadTest(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	time.Sleep(60 * time.Second)
-	for {
-		time.Sleep(5 * time.Second)
-
-		for i := 0; i < 1000; i++ {
-			if obj, err := dbClient.CMDB.ObjectRead(fmt.Sprintf("cluster_test%d", i)); err != nil {
-				lg.Logf(lg.ErrorLevel, "clusterTest, read object error: %v", err)
-				break
-			} else {
-				lg.Logf(lg.InfoLevel, "clusterTest, read object %d: %v", i, obj)
-			}
-		}
-	}
-}
-
 func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	// Create new typename function "functions.tests.basic.master" each stateful instance of which uses go function "MasterFunction"
 	ftOptions := easyjson.NewJSONObjectWithKeyValue("increment", easyjson.NewJSON(MasterFunctionContextIncrementOption))
@@ -168,9 +140,6 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 			lg.Logf(lg.ErrorLevel, "Could not load JS script: %v", err)
 		}
 	}
-
-	statefun.NewFunctionType(runtime, "functions.tests.basic.cluster_write", clusterWriteTest, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
-	statefun.NewFunctionType(runtime, "functions.tests.basic.cluster_read", clusterReadTest, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
 
 	graphCRUD.RegisterAllFunctionTypes(runtime)
 	graphDebug.RegisterAllFunctionTypes(runtime)
@@ -224,18 +193,6 @@ func Start() {
 		if CreateSimpleGraphTest {
 			CreateTestGraph(runtime)
 		}
-
-		go func() {
-			lg.Logf(lg.InfoLevel, "Starting clusterTestRead")
-			clusterReadTest(nil, nil)
-			lg.Logf(lg.InfoLevel, "clusterTestRead done")
-		}()
-
-		go func() {
-			lg.Logf(lg.InfoLevel, "Starting clusterTestWrite")
-			clusterWriteTest(nil, nil)
-			lg.Logf(lg.InfoLevel, "clusterTestWrite done")
-		}()
 
 		body := easyjson.NewJSONObjectWithKeyValue("search_fields", easyjson.JSONFromArray([]string{"f1.f11", "f2"}))
 		system.MsgOnErrorReturn(dbClient.CMDB.TypeUpdate("typea", body, false))
