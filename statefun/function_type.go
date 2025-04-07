@@ -1,5 +1,3 @@
-
-
 package statefun
 
 import (
@@ -163,6 +161,7 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 
 	msgRequestCallback := msg.RequestCallback
 	replyDataChannel := make(chan *easyjson.JSON, 1)
+	typenameIDContextProcessor.Reply = nil
 	if msgRequestCallback != nil {
 		typenameIDContextProcessor.Reply = &sfPlugins.SyncReply{}
 
