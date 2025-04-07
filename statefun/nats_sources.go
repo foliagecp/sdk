@@ -108,8 +108,10 @@ func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool, msgAckCha
 	}
 
 	caller := sfPlugins.StatefunAddress{}
-	if data.GetByPath("caller_typename").IsString() && data.GetByPath("caller_id").IsString() {
+	if data.GetByPath("caller_typename").IsString() {
 		caller.Typename, _ = data.GetByPath("caller_typename").AsString()
+	}
+	if data.GetByPath("caller_id").IsString() {
 		caller.ID, _ = data.GetByPath("caller_id").AsString()
 	}
 
