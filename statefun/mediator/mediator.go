@@ -266,6 +266,10 @@ func (om *OpMediator) ReplyWithData(data *easyjson.JSON) error {
 			} else {
 				if paTypename, paId, aggrId, ok := om.releaseAggPackAndGetParentSignalAggregator(aggregationPack); ok {
 					if len(paTypename) == 0 || len(paId) == 0 {
+						replyId := paId
+						if len(replyId) > 0 {
+							return om.ctx.Egress(sfPlugins.NatsCoreEgress, reply, replyId)
+						}
 						return om.ctx.Egress(sfPlugins.NatsCoreEgress, reply)
 					} else {
 						if len(aggrId) > 0 {
@@ -282,6 +286,10 @@ func (om *OpMediator) ReplyWithData(data *easyjson.JSON) error {
 				om.ctx.Reply.With(reply)
 			} else {
 				if len(om.ctx.Caller.Typename) == 0 || len(om.ctx.Caller.ID) == 0 {
+					replyId := om.ctx.Caller.ID
+					if len(replyId) > 0 {
+						return om.ctx.Egress(sfPlugins.NatsCoreEgress, reply, replyId)
+					}
 					return om.ctx.Egress(sfPlugins.NatsCoreEgress, reply)
 				} else {
 					if om.opType == WorkerIsTaskedByAggregatorOp {
