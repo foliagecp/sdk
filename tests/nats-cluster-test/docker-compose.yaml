@@ -43,6 +43,8 @@ services:
       - nats1
       - nats2
       - nats3
+    volumes:
+      - ./scripts:/scripts
 
   runtime:
     image: foliage-sdk-tests-basic:latest
