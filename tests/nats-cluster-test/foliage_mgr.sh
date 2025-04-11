@@ -52,22 +52,6 @@ nats_cmd() {
     return $?
 }
 
-check_volume_mount() {
-    debug "Checking if backup volume is mounted correctly"
-
-    echo "test" > "${BACKUP_DIR}/volume_test_file"
-
-    if docker compose -f "$COMPOSE_FILE" exec io ls -la "${CONTAINER_BACKUP_DIR}/volume_test_file" >/dev/null 2>&1; then
-        debug "Volume mount confirmed - test file is visible inside container"
-        docker compose -f "$COMPOSE_FILE" exec io rm -f "${CONTAINER_BACKUP_DIR}/volume_test_file"
-        rm -f "${BACKUP_DIR}/volume_test_file"
-        return 0
-    else
-        log "ERROR: Volume mount issue detected - test file not visible in container"
-        return 1
-    fi
-}
-
 # Backup function
 do_backup() {
     log "Starting Foliage JetStream backup"
@@ -82,11 +66,6 @@ do_backup() {
         log "Starting io container..."
         docker compose -f "$COMPOSE_FILE" up -d io
         sleep 5
-    fi
-
-    if ! check_volume_mount; then
-        log "ERROR: Volume mounting issue detected. Cannot proceed with backup."
-        exit 1
     fi
 
     timestamp=$(date +%Y%m%d_%H%M%S)
@@ -155,11 +134,6 @@ do_restore() {
 
     backup_name=$(basename "$backup_file" .tgz)
     log "Starting restore process from $backup_name..."
-
-    if ! check_volume_mount; then
-        log "ERROR: Volume mounting issue detected. Cannot proceed with restore."
-        exit 1
-    fi
 
     log "Stopping all services"
     docker compose -f "$COMPOSE_FILE" down
