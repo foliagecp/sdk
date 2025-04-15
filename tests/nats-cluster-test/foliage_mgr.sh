@@ -1,4 +1,5 @@
 #!/bin/bash
+#set -x
 # foliage_mgr.sh - Tool for Foliage NATS JetStream backup and restoration
 
 # Default configuration
@@ -6,12 +7,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKUP_DIR="${SCRIPT_DIR}/backups"
 LOG_DIR="${SCRIPT_DIR}/logs"
 LOG_FILE="${LOG_DIR}/foliage_mgr.log"
-RETENTION_DAYS=30
+RETENTION_DAYS=180
 COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yaml"
 DATA_DIR="${SCRIPT_DIR}/data"
-CRON_SCHEDULE="0 2 * * *"  # Default: 2:00 AM daily
 CONTAINER_BACKUP_DIR="/backups"
-DEBUG=false
+DEBUG=true
 
 # Load environment variables if .env file exists
 ENV_FILE="${SCRIPT_DIR}/configs/.env"
@@ -70,145 +70,214 @@ do_backup() {
 
     timestamp=$(date +%Y%m%d_%H%M%S)
     backup_name="foliage_backup_${timestamp}"
+    archive_name="fol_backup_${timestamp}"
     container_backup_path="${CONTAINER_BACKUP_DIR}/${backup_name}"
+    container_archive_path="${CONTAINER_BACKUP_DIR}/${archive_name}"
 
-    log "Creating backup directory in container"
-    docker compose -f "$COMPOSE_FILE" exec io mkdir -p "$container_backup_path" || {
-        log "ERROR: Failed to create backup directory in container"
+    log "Creating backup and archive directories in container"
+    docker compose -f "$COMPOSE_FILE" exec io \
+        sh -c "mkdir -p '${container_backup_path}' '${container_archive_path}'" || {
+        log "ERROR: Failed to create directories"
         exit 1
     }
 
-    docker compose -f "$COMPOSE_FILE" exec io chmod 755 "$container_backup_path"
+    docker compose -f "$COMPOSE_FILE" exec io chmod 755 "${container_backup_path}" "${container_archive_path}"
 
-    log "Creating backup at $container_backup_path using 'nats account backup'"
-    if ! nats_cmd "account backup" "$container_backup_path --force"; then
+    log "Creating JetStream backup"
+    if ! nats_cmd "account backup" "${container_backup_path} --force"; then
         log "ERROR: Backup command failed"
         exit 1
     fi
 
-    # Create archive of backup
-    log "Creating archive..."
-    if ! docker compose -f "$COMPOSE_FILE" exec io tar -czf "${container_backup_path}.tgz" -C "$CONTAINER_BACKUP_DIR" "$backup_name"; then
-        log "ERROR: Failed to create archive"
+    log "Archiving KV stores"
+    if ! docker compose -f "$COMPOSE_FILE" exec io sh -c \
+        "cd '${container_backup_path}' && \
+        find . -type d -name 'KV_*' | tar -czf '${container_archive_path}/kv.tgz' -T -"; then
+        log "ERROR: KV archive failed"
         exit 1
     fi
 
-    docker compose -f "$COMPOSE_FILE" exec io chmod 644 "${container_backup_path}.tgz"
-
-    if ! docker compose -f "$COMPOSE_FILE" exec io ls -la "${container_backup_path}.tgz" >/dev/null 2>&1; then
-        log "ERROR: Archive not created"
+    log "Archiving other streams"
+    if ! docker compose -f "$COMPOSE_FILE" exec io sh -c \
+        "cd '${container_backup_path}' && \
+        find . -type d -name 'KV_*' -prune -o -type f -print | tar -czf '${container_archive_path}/streams.tgz' -T -"; then
+        log "ERROR: Other streams archive failed"
         exit 1
     fi
 
-    docker compose -f "$COMPOSE_FILE" exec io rm -rf "$container_backup_path"
-
-    # Clean up old backups
-    find "$BACKUP_DIR" -name "foliage_backup_*.tgz" -type f -mtime +$RETENTION_DAYS -delete
-
-    if [ -f "${BACKUP_DIR}/${backup_name}.tgz" ]; then
-        backup_size=$(du -h "${BACKUP_DIR}/${backup_name}.tgz" | cut -f1)
-        log "Backup completed successfully. Size: $backup_size"
-    else
-        log "ERROR: Backup archive not found on host. Check volume mount configuration."
+    log "Verifying archives in target directory"
+    if ! docker compose -f "$COMPOSE_FILE" exec io sh -c \
+        "ls '${container_archive_path}/kv.tgz' '${container_archive_path}/streams.tgz'"; then
+        log "ERROR: Archives not found in target directory"
         exit 1
     fi
+
+    log "Cleaning up temporary backup directory"
+    docker compose -f "$COMPOSE_FILE" exec io sh -c \
+        "rm -rf '${container_backup_path}'"
+
+    log "Cleaning old archives"
+    find "${BACKUP_DIR}" -type d -name "fol_backup_*" -mtime +${RETENTION_DAYS} -exec rm -rf {} \;
+
+    kv_size=$(docker compose -f "$COMPOSE_FILE" exec io sh -c \
+        "du -h '${container_archive_path}/kv.tgz' | cut -f1")
+    streams_size=$(docker compose -f "$COMPOSE_FILE" exec io sh -c \
+        "du -h '${container_archive_path}/streams.tgz' | cut -f1")
+
+    log "Backup completed successfully. Archive directory: ${archive_name}, Sizes: KV=${kv_size}, Streams=${streams_size}"
 }
 
 # Restore function
 do_restore() {
-    local backup_file="$1"
-    local backup_name
+    local backup_path="$1"
+    local restore_type="all"
+    local available_backups=()
 
-    if [ -z "$backup_file" ]; then
-        backup_file=$(find "$BACKUP_DIR" -name "foliage_backup_*.tgz" -type f -printf "%T@ %p\n" | sort -n | tail -1 | cut -d' ' -f2-)
+    mapfile -t available_backups < <(find "$BACKUP_DIR" -maxdepth 1 -type d -name "fol_backup_*" | sort -r)
 
-        if [ -z "$backup_file" ]; then
-            log "No backup files found"
+    if [ -z "$backup_path" ]; then
+        if [ ${#available_backups[@]} -eq 0 ]; then
+            log "No backups found in $BACKUP_DIR"
             exit 1
         fi
-        log "Using most recent backup: $(basename "$backup_file")"
-    elif [ ! -f "$backup_file" ]; then
-        log "Backup file not found: $backup_file"
+
+        PS3="Select backup to restore: "
+        select selected_backup in "${available_backups[@]##*/}"; do
+            [ -n "$selected_backup" ] && break
+        done
+        backup_path="$BACKUP_DIR/$selected_backup"
+    fi
+
+    if [ ! -f "$backup_path/kv.tgz" ] || [ ! -f "$backup_path/streams.tgz" ]; then
+        log "Invalid backup structure in $backup_path"
         exit 1
     fi
 
-    backup_name=$(basename "$backup_file" .tgz)
-    log "Starting restore process from $backup_name..."
+    echo
+    PS3="Select restore type: "
+    select restore_type in "All" "KV-only" "Streams-only"; do
+        case $REPLY in
+            1|2|3) break ;;
+            *) echo "Invalid option" ;;
+        esac
+    done
 
-    log "Stopping all services"
+    log "Starting restore from $(basename "$backup_path") ($restore_type)"
+
+    log "Stopping services..."
     docker compose -f "$COMPOSE_FILE" down
 
-    log "Clearing existing JetStream data"
-    rm -rf "${DATA_DIR}/jetstream"*
-    mkdir -p "${DATA_DIR}/jetstream1" "${DATA_DIR}/jetstream2" "${DATA_DIR}/jetstream3"
-
-    log "Starting NATS services"
+    log "Starting NATS cluster..."
     docker compose -f "$COMPOSE_FILE" up -d nats1 nats2 nats3 io
     sleep 10
 
-    container_restore_dir="${CONTAINER_BACKUP_DIR}/restore_${backup_name}"
+    local temp_restore_dir
+    temp_restore_dir=$(docker compose -f "$COMPOSE_FILE" exec io mktemp -d)
+    trap 'docker compose -f "$COMPOSE_FILE" exec io rm -rf "$temp_restore_dir"' EXIT
 
-    docker compose -f "$COMPOSE_FILE" exec io mkdir -p "$container_restore_dir"
-    docker compose -f "$COMPOSE_FILE" exec io chmod 755 "$container_restore_dir"
+    mapfile -t streams < <(nats_cmd "stream ls -n" | grep -v "^KV_" | grep -v "^$" | grep -v "^\[" || echo "")
+    mapfile -t kv_buckets < <(nats_cmd "stream ls -n" | grep "^KV_" | grep -v "^$" || echo "")
 
-    log "Extracting backup archive"
-    if ! docker compose -f "$COMPOSE_FILE" exec io tar -xzf "${CONTAINER_BACKUP_DIR}/${backup_name}.tgz" -C "$container_restore_dir"; then
-        log "ERROR: Failed to extract backup in container"
+    debug "Streams found: ${streams[*]:-none}"
+    debug "KV buckets found: ${kv_buckets[*]:-none}"
+
+    case $restore_type in
+        "All")
+            for s in "${streams[@]}"; do
+                if [[ -z "$s" || "$s" == "null" ]]; then
+                    log "WARN: Skipping invalid stream name: '$s'"
+                    continue
+                fi
+                if ! nats_cmd "stream rm -f" "$s"; then
+                    log "ERROR: Clearing stream failed: $s"
+                    exit 1
+                fi
+            done
+
+            if [[ ${#kv_buckets[@]} -ne 0 ]]; then
+                for kv in "${kv_buckets[@]}"; do
+                    if [[ -z "$kv" || "$kv" == "null" ]]; then
+                        log "WARN: Skipping invalid KV bucket name: '$kv'"
+                        continue
+                    fi
+
+                    if ! nats_cmd "stream rm -f" "$kv"; then
+                        log "ERROR: Clearing KV bucket failed: $kv"
+                        exit 1
+                    fi
+                done
+            else
+                log "No KV buckets to remove"
+            fi
+
+
+            docker compose -f "$COMPOSE_FILE" exec io tar -xzf "$CONTAINER_BACKUP_DIR/$(basename "$backup_path")/kv.tgz" -C "$temp_restore_dir"
+            docker compose -f "$COMPOSE_FILE" exec io tar -xzf "$CONTAINER_BACKUP_DIR/$(basename "$backup_path")/streams.tgz" -C "$temp_restore_dir"
+            ;;
+        "KV-only")
+            if [[ ${#kv_buckets[@]} -ne 0 ]]; then
+                for kv in "${kv_buckets[@]}"; do
+                    if [[ -z "$kv" || "$kv" == "null" ]]; then
+                        log "WARN: Skipping invalid KV bucket name: '$kv'"
+                        continue
+                    fi
+
+                    if ! nats_cmd "stream rm -f" "$kv"; then
+                        log "ERROR: Clearing KV bucket failed: $kv"
+                        exit 1
+                    fi
+                done
+            else
+                log "No KV buckets to remove"
+            fi
+
+            docker compose -f "$COMPOSE_FILE" exec io tar -xzf "$CONTAINER_BACKUP_DIR/$(basename "$backup_path")/kv.tgz" -C "$temp_restore_dir"
+            ;;
+        "Streams-only")
+            for s in "${streams[@]}"; do
+                if [[ -z "$s" || "$s" == "null" ]]; then
+                    log "WARN: Skipping invalid stream name: '$s'"
+                    continue
+                fi
+                if ! nats_cmd "stream rm -f" "$s"; then
+                    log "ERROR: Clearing stream failed: $s"
+                    exit 1
+                fi
+            done
+
+            docker compose -f "$COMPOSE_FILE" exec io tar -xzf "$CONTAINER_BACKUP_DIR/$(basename "$backup_path")/streams.tgz" -C "$temp_restore_dir"
+            ;;
+    esac
+
+    log "Restoring JetStream data..."
+    if ! nats_cmd "account restore" "$temp_restore_dir"; then
+        log "ERROR: Restore failed"
         exit 1
     fi
 
-    backup_content_dir=$(docker compose -f "$COMPOSE_FILE" exec io find "$container_restore_dir" -type d -name "foliage_backup_*" | head -1)
-
-    if [ -z "$backup_content_dir" ]; then
-        # If we didn't find a nested directory, use the extract directory itself
-        backup_content_dir="${container_restore_dir}/${backup_name}"
-    fi
-
-    log "Restoring data from $backup_content_dir"
-    if ! nats_cmd "account restore" "$backup_content_dir"; then
-        log "ERROR: Data restore failed"
-        exit 1
-    fi
-
-    docker compose -f "$COMPOSE_FILE" exec io rm -rf "$container_restore_dir"
-
-    log "Restarting all services"
+    log "Finalizing..."
     docker compose -f "$COMPOSE_FILE" up -d
-
     log "Restore completed successfully"
-}
-
-# Schedule backup function
-schedule_backup() {
-    log "Setting up scheduled backup"
-
-    cron_cmd="$SCRIPT_DIR/$(basename "$0") --backup"
-
-    (crontab -l 2>/dev/null | grep -v "$cron_cmd") | crontab -
-
-    (crontab -l 2>/dev/null; echo "$CRON_SCHEDULE $cron_cmd") | crontab -
-
-    log "Backup scheduled: $CRON_SCHEDULE"
 }
 
 # List backups
 list_backups() {
-    log "Available backups:"
+    log "Available backup directories:"
 
     if [ ! -d "$BACKUP_DIR" ] || [ -z "$(ls -A "$BACKUP_DIR" 2>/dev/null)" ]; then
         log "No backups found."
         return
     fi
 
-    printf "\n%-30s %-15s %-20s\n" "Backup Date" "Size" "Filename"
+    printf "\n%-30s %-15s %-20s\n" "Backup Date" "Size" "Directory Name"
     printf "%-30s %-15s %-20s\n" "$(printf '%0.s-' {1..30})" "$(printf '%0.s-' {1..15})" "$(printf '%0.s-' {1..50})"
 
-    find "$BACKUP_DIR" -name "foliage_backup_*.tgz" -type f | while read backup; do
-        filename=$(basename "$backup")
-        size=$(du -h "$backup" | cut -f1)
-        date_str=$(echo "$filename" | sed -E 's/foliage_backup_([0-9]{8})_([0-9]{6})\.tgz/\1-\2/' | sed -E 's/([0-9]{4})([0-9]{2})([0-9]{2})-([0-9]{2})([0-9]{2})([0-9]{2})/\1-\2-\3 \4:\5:\6/')
+    find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -name "fol_backup_*" | sort -r | while read backup_dir; do
+        dirname=$(basename "$backup_dir")
+        size=$(du -sh "$backup_dir" | cut -f1)
+        date_str=$(echo "$dirname" | sed -E 's/fol_backup_([0-9]{8})_([0-9]{6})/\1-\2/' | sed -E 's/([0-9]{4})([0-9]{2})([0-9]{2})_([0-9]{2})([0-9]{2})([0-9]{2})/\1-\2-\3 \4:\5:\6/')
 
-        printf "%-30s %-15s %-20s\n" "$date_str" "$size" "$filename"
+        printf "%-30s %-15s %-20s\n" "$date_str" "$size" "$dirname"
     done
     printf "\n"
 }
@@ -223,9 +292,7 @@ show_help() {
     echo "  --backup              Perform a backup"
     echo "  --restore [FILE]      Restore from backup (uses latest if FILE not specified)"
     echo "  --list                List available backups"
-    echo "  --schedule            Set up scheduled backups via cron"
     echo "  --retention DAYS      Set backup retention period in days (default: $RETENTION_DAYS)"
-    echo "  --cron 'EXPR'         Set cron schedule expression (default: '$CRON_SCHEDULE')"
     echo "  --debug               Enable debug mode"
     echo "  --help                Show this help message"
 }
@@ -259,16 +326,8 @@ main() {
                 action="list"
                 shift
                 ;;
-            --schedule)
-                action="schedule"
-                shift
-                ;;
             --retention)
                 RETENTION_DAYS="$2"
-                shift 2
-                ;;
-            --cron)
-                CRON_SCHEDULE="$2"
                 shift 2
                 ;;
             --debug)
@@ -296,9 +355,6 @@ main() {
             ;;
         list)
             list_backups
-            ;;
-        schedule)
-            schedule_backup
             ;;
         *)
             log "No valid action specified"
