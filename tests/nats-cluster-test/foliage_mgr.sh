@@ -277,7 +277,7 @@ list_backups() {
         size=$(du -sh "$backup_dir" | cut -f1)
         date_str=$(echo "$dirname" | sed -E 's/fol_backup_([0-9]{8})_([0-9]{6})/\1-\2/' | sed -E 's/([0-9]{4})([0-9]{2})([0-9]{2})_([0-9]{2})([0-9]{2})([0-9]{2})/\1-\2-\3 \4:\5:\6/')
 
-        printf "%-30s %-15s %-20s\n" "$date_str" "$size" "$dirname"
+        printf "%-30s %-15s %-20s\n" "$date_str" "$size" "$dirname" | tee -a "$LOG_FILE"
     done
     printf "\n"
 }

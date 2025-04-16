@@ -37,14 +37,19 @@ services:
     entrypoint:
       - /bin/sh
     tty: true
-    environment:
-      - NATS_URL=nats://nats1:4222,nats://nats2:4222,nats://nats3:4222
+    env_file: ./configs/.env
     depends_on:
       - nats1
       - nats2
       - nats3
+    healthcheck:
+      test: [ "CMD", "/healthcheck-nats.sh" ]
+      interval: 3s
+      timeout: 3s
+      retries: 5
     volumes:
       - ./backups:/backups
+      - ./healthcheck-nats.sh:/healthcheck-nats.sh:ro
 
   runtime:
     image: foliage-sdk-tests-basic:latest
@@ -54,9 +59,8 @@ services:
       - "8080:8080"
     env_file: ./configs/.env
     depends_on:
-      - nats1
-      - nats2
-      - nats3
+      io:
+        condition: service_healthy
     build:
       context: ../..
       dockerfile: tests/nats-cluster-test/Dockerfile

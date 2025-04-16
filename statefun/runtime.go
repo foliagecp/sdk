@@ -3,8 +3,6 @@ package statefun
 import (
 	"context"
 	"errors"
-	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,43 +49,24 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		shutdown:                make(chan struct{}),
 	}
 
-	const maxAttempts = 3
-	const retryDelay = 2 * time.Second
-
-	var lastError error
-
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		lg.Logf(lg.InfoLevel, "Attempting to connect to NATS %d out of %d", attempt, maxAttempts)
-
-		var err error
-		r.nc, err = nats.Connect(config.natsURL)
-		if err == nil {
-			r.js, err = r.nc.JetStream(nats.PublishAsyncMaxPending(256))
-			if err == nil {
-				r.Domain, err = NewDomain(r.nc, r.js, config.desiredHUBDomainName, config.natsReplicasCount)
-				if err == nil {
-					r.config.desiredHUBDomainName = r.Domain.hubDomainName
-					return r, nil
-				}
-			}
-		}
-
-		lastError = err
-
-		if r.nc != nil {
-			r.nc.Close()
-			r.nc = nil
-		}
-
-		if attempt < maxAttempts {
-			lg.Logf(lg.WarnLevel, "Failed to connect to NATS: %v. Retrying in %v", err, retryDelay)
-			time.Sleep(retryDelay)
-		}
+	var err error
+	r.nc, err = nats.Connect(config.natsURL)
+	if err != nil {
+		return nil, err
 	}
 
-	lg.Logf(lg.ErrorLevel, "Failed to connect to NATS after %d attempts: %v", maxAttempts, lastError)
+	r.js, err = r.nc.JetStream(nats.PublishAsyncMaxPending(256))
+	if err != nil {
+		return nil, err
+	}
 
-	return nil, lastError
+	r.Domain, err = NewDomain(r.nc, r.js, config.desiredHUBDomainName, config.natsReplicasCount)
+	if err != nil {
+		return nil, err
+	}
+	r.config.desiredHUBDomainName = r.Domain.hubDomainName
+
+	return r, nil
 }
 
 // RegisterOnAfterStartFunction registers a function to be called after the runtime starts.
@@ -155,51 +134,23 @@ func (r *Runtime) createStreams(ctx context.Context) error {
 		existingStreams = append(existingStreams, info.Config.Name)
 	}
 
-	const maxRetries = 3
-	const retryDelay = 2 * time.Second
-	for retry := 0; retry < maxRetries; retry++ {
-		failed := false
-
-		for _, ft := range r.registeredFunctionTypes {
-			if !ft.config.IsSignalProviderAllowed(sfPlugins.JetstreamGlobalSignal) {
-				continue
-			}
-
-			streamName := ft.getStreamName()
-			if contains(existingStreams, streamName) {
-				continue
-			}
-
-			_, err := r.js.AddStream(&nats.StreamConfig{
-				Name:      streamName,
-				Subjects:  []string{ft.subject},
-				Retention: nats.InterestPolicy,
-				Replicas:  r.Domain.natsJsReplicasCount,
-			})
-
-			if err != nil {
-				if strings.Contains(err.Error(), "no suitable peers for placement") {
-					logger.Warnf(context.TODO(), "Cluster is not ready (try %d/%d): %v",
-						retry+1, maxRetries, err)
-					failed = true
-					break
-				} else {
+	for _, ft := range r.registeredFunctionTypes {
+		if ft.config.IsSignalProviderAllowed(sfPlugins.JetstreamGlobalSignal) {
+			if !contains(existingStreams, ft.getStreamName()) {
+				_, err := r.js.AddStream(&nats.StreamConfig{
+					Name:      ft.getStreamName(),
+					Subjects:  []string{ft.subject},
+					Retention: nats.InterestPolicy,
+					Replicas:  r.Domain.natsJsReplicasCount,
+				})
+				if err != nil {
 					logger.Errorf(context.TODO(), "Failed to add stream: %v", err)
 					return err
 				}
 			}
-
-			existingStreams = append(existingStreams, streamName)
 		}
-
-		if !failed {
-			return nil // all streams are created
-		}
-
-		time.Sleep(retryDelay)
 	}
-
-	return fmt.Errorf("failed to create streams after %d attempts: cluster not ready", maxRetries)
+	return nil
 }
 
 // handleSingleInstanceFunctions manages single-instance function locks.
