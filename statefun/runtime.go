@@ -49,7 +49,7 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		config:                  config,
 		registeredFunctionTypes: make(map[string]*FunctionType),
 		shutdown:                make(chan struct{}),
-		sfWorkerPool:            NewSFWorkerPool(1000, 5*time.Second, 1000*5),
+		sfWorkerPool:            NewSFWorkerPool(10, 100, 5*time.Second, 100*5),
 	}
 
 	var err error

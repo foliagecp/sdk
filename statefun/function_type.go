@@ -26,7 +26,7 @@ type FunctionType struct {
 	config       FunctionTypeConfig
 	logicHandler FunctionLogicHandler
 
-	idKeyMutex            system.KeyMutex
+	idKeyMutex            *system.KeyMutex
 	idHandlersLastMsgTime sync.Map
 	contextProcessors     map[string]*sfPlugins.StatefunContextProcessor
 

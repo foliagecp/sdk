@@ -22,6 +22,7 @@ type SFWorkerTask struct {
 // SFWorkerPool - controls the statefun pool
 type SFWorkerPool struct {
 	taskQueue   chan SFWorkerTask
+	minWorkers  int
 	maxWorkers  int
 	idleTimeout time.Duration
 
@@ -35,9 +36,10 @@ type SFWorkerPool struct {
 	wg sync.WaitGroup
 }
 
-func NewSFWorkerPool(maxWorkers int, idleTimeout time.Duration, taskQueueLen int) *SFWorkerPool {
+func NewSFWorkerPool(minWorkers, maxWorkers int, idleTimeout time.Duration, taskQueueLen int) *SFWorkerPool {
 	return &SFWorkerPool{
 		taskQueue:   make(chan SFWorkerTask, taskQueueLen),
+		minWorkers:  minWorkers,
 		maxWorkers:  maxWorkers,
 		idleTimeout: idleTimeout,
 		stopCh:      make(chan struct{}),
@@ -73,13 +75,16 @@ func (wp *SFWorkerPool) worker() {
 	defer func() {
 		wp.mu.Lock()
 		wp.workers--
+		wp.wg.Add(-1)
 		wp.mu.Unlock()
+		fmt.Println(">>>>>>>>>>>>>> ---- WP SHRINK:", wp.workers)
 	}()
 
 	timer := time.NewTimer(wp.idleTimeout)
 	defer timer.Stop()
 
-	for {
+	working := true
+	for working {
 		wp.mu.Lock()
 		wp.idleWorkers++
 		wp.mu.Unlock()
@@ -94,7 +99,7 @@ func (wp *SFWorkerPool) worker() {
 				ft := task.Ft
 				id := task.Msg.ID
 
-				ft.idKeyMutex.Lock(id) // Will be unlocked after function execution
+				ft.idKeyMutex.Lock(id)
 
 				var typenameIDContextProcessor *sfPlugins.StatefunContextProcessor
 				if v, ok := ft.contextProcessors[id]; ok {
@@ -143,11 +148,17 @@ func (wp *SFWorkerPool) worker() {
 		case <-timer.C:
 			wp.mu.Lock()
 			wp.idleWorkers--
+			if wp.workers > wp.minWorkers {
+				working = false
+			} else {
+				timer.Reset(wp.idleTimeout)
+			}
 			wp.mu.Unlock()
-			fmt.Println(">>>>>>>>>>>>>> ---- WP SHRINK:", wp.workers)
-			return
 		case <-wp.stopCh:
-			return
+			wp.mu.Lock()
+			wp.idleWorkers--
+			wp.mu.Unlock()
+			working = false
 		}
 	}
 }
