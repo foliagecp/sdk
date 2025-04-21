@@ -10,10 +10,10 @@ import (
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/foliagecp/sdk/statefun/cache"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 type OnAfterStartFunction func(ctx context.Context, runtime *Runtime) error
@@ -37,6 +37,8 @@ type Runtime struct {
 	glce int64 // Global last call ended - time of last call of last function handling id of any function type
 	gc   int64 // Global counter - max total id handlers for all function types
 
+	sfWorkerPool *SFWorkerPool
+
 	shutdown chan struct{}
 	wg       sync.WaitGroup
 }
@@ -47,6 +49,7 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		config:                  config,
 		registeredFunctionTypes: make(map[string]*FunctionType),
 		shutdown:                make(chan struct{}),
+		sfWorkerPool:            NewSFWorkerPool(1000, 5*time.Second, 1000),
 	}
 
 	var err error
