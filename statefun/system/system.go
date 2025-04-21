@@ -27,49 +27,33 @@ var (
 )
 
 type KeyMutex struct {
-	mu sync.Mutex
-	m  map[interface{}]*entry
+	m *sync.Map
 }
 
-type entry struct {
-	mutex sync.Mutex
-	refs  int
+func NewKeyMutex() KeyMutex {
+	m := sync.Map{}
+	return KeyMutex{&m}
 }
 
-func NewKeyMutex() *KeyMutex {
-	return &KeyMutex{
-		m: make(map[interface{}]*entry),
-	}
-}
-
-func (k *KeyMutex) Lock(key interface{}) {
-	k.mu.Lock()
-	e, exists := k.m[key]
-	if !exists {
-		e = &entry{}
-		k.m[key] = e
-	}
-	e.refs++
-	k.mu.Unlock()
-
-	e.mutex.Lock()
-}
-
-func (k *KeyMutex) Unlock(key interface{}) {
-	k.mu.Lock()
-	e, exists := k.m[key]
-	if !exists {
-		k.mu.Unlock()
+func (s KeyMutex) Unlock(key interface{}) {
+	l, exist := s.m.Load(key)
+	if !exist {
 		panic("kmutex: unlock of unlocked mutex")
 	}
+	l_ := l.(*sync.Mutex)
+	s.m.Delete(key)
+	l_.Unlock()
+}
 
-	e.refs--
-	if e.refs == 0 {
-		delete(k.m, key)
+func (s KeyMutex) Lock(key interface{}) {
+	m := sync.Mutex{}
+	m_, _ := s.m.LoadOrStore(key, &m)
+	mm := m_.(*sync.Mutex)
+	mm.Lock()
+	if mm != &m {
+		mm.Unlock()
+		s.Lock(key)
 	}
-	k.mu.Unlock()
-
-	e.mutex.Unlock()
 }
 
 func SortJSONs(jsonArray []*easyjson.JSON, fields []string) []*easyjson.JSON {
