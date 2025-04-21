@@ -28,6 +28,7 @@ type FunctionType struct {
 
 	idKeyMutex            system.KeyMutex
 	idHandlersLastMsgTime sync.Map
+	contextProcessors     map[string]*sfPlugins.StatefunContextProcessor
 
 	executor                *sfPlugins.TypenameExecutorPlugin
 	instancesControlChannel chan struct{}
@@ -45,6 +46,7 @@ func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHa
 		subject:                 fmt.Sprintf(DomainIngressSubjectsTmpl, runtime.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, runtime.Domain.name, name, "*")),
 		logicHandler:            logicHandler,
 		idKeyMutex:              system.NewKeyMutex(),
+		contextProcessors:       map[string]*sfPlugins.StatefunContextProcessor{},
 		config:                  config,
 		instancesControlChannel: nil,
 	}
@@ -64,8 +66,6 @@ func (ft *FunctionType) SetExecutor(alias string, content string, constructor fu
 
 func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	id := ft.runtime.Domain.CreateObjectIDWithThisDomain(originId, false)
-
-	ft.idKeyMutex.Lock(id) // Will be unlocked after function execution
 
 	ft.idHandlersLastMsgTime.Store(id, time.Now().UnixNano())
 	if ft.executor != nil {
@@ -210,6 +210,7 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 			ft.idKeyMutex.Lock(id)
 
 			ft.idHandlersLastMsgTime.Delete(id)
+			delete(ft.contextProcessors, id)
 			if ft.executor != nil {
 				ft.executor.RemoveForID(id)
 			}
