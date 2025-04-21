@@ -102,8 +102,9 @@ func (wp *SFWorkerPool) worker() {
 				ft.idKeyMutex.Lock(id)
 
 				var typenameIDContextProcessor *sfPlugins.StatefunContextProcessor
-				if v, ok := ft.contextProcessors[id]; ok {
-					typenameIDContextProcessor = v
+
+				if v, ok := ft.contextProcessors.Load(id); ok {
+					typenameIDContextProcessor = v.(*sfPlugins.StatefunContextProcessor)
 				} else {
 					v := sfPlugins.StatefunContextProcessor{
 						GetFunctionContext:        func() *easyjson.JSON { return ft.getContext(ft.name + "." + id) },
@@ -132,7 +133,7 @@ func (wp *SFWorkerPool) worker() {
 						// Options: ... // Otions from initial typename declaration will be merged and overwritten by the incoming one in message
 						// Caller: ...
 					}
-					ft.contextProcessors[id] = &v
+					ft.contextProcessors.Store(id, &v)
 					typenameIDContextProcessor = &v
 				}
 

@@ -26,9 +26,9 @@ type FunctionType struct {
 	config       FunctionTypeConfig
 	logicHandler FunctionLogicHandler
 
-	idKeyMutex            *system.KeyMutex
+	idKeyMutex            system.KeyMutex
 	idHandlersLastMsgTime sync.Map
-	contextProcessors     map[string]*sfPlugins.StatefunContextProcessor
+	contextProcessors     sync.Map
 
 	executor                *sfPlugins.TypenameExecutorPlugin
 	instancesControlChannel chan struct{}
@@ -46,7 +46,6 @@ func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHa
 		subject:                 fmt.Sprintf(DomainIngressSubjectsTmpl, runtime.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, runtime.Domain.name, name, "*")),
 		logicHandler:            logicHandler,
 		idKeyMutex:              system.NewKeyMutex(),
-		contextProcessors:       map[string]*sfPlugins.StatefunContextProcessor{},
 		config:                  config,
 		instancesControlChannel: nil,
 	}
@@ -210,7 +209,7 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 			ft.idKeyMutex.Lock(id)
 
 			ft.idHandlersLastMsgTime.Delete(id)
-			delete(ft.contextProcessors, id)
+			ft.contextProcessors.Delete(id)
 			if ft.executor != nil {
 				ft.executor.RemoveForID(id)
 			}
