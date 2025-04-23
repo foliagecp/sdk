@@ -2,6 +2,8 @@
 
 JPGQL is a lightweight asynchronous and parallel graph query language, similar to JSONPath. Currently, it is in its initial stages of development, with plans to implement additional functional features in the future.
 
+Read also about JPGQL based extension named Foliage Processing Language ([FPL](./fpl.md)).
+
 ## Functions
 
   - [functions.graph.api.query.jpgql.ctra](#Usage-of-JPGQL_CTRA-call-tree-result-aggregation)
