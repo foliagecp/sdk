@@ -9,6 +9,13 @@ import (
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
+type SFWorkerPoolConfig struct {
+	minWorkers   int
+	maxWorkers   int
+	idleTimeout  time.Duration
+	taskQueueLen int
+}
+
 type SFWorkerMessage struct {
 	ID   string
 	Data FunctionTypeMsg
@@ -36,21 +43,21 @@ type SFWorkerPool struct {
 	wg sync.WaitGroup
 }
 
-func NewSFWorkerPool(minWorkers, maxWorkers int, idleTimeout time.Duration, taskQueueLen int) *SFWorkerPool {
+func NewSFWorkerPool(conf SFWorkerPoolConfig) *SFWorkerPool {
 	return &SFWorkerPool{
-		taskQueue:   make(chan SFWorkerTask, taskQueueLen),
-		minWorkers:  minWorkers,
-		maxWorkers:  maxWorkers,
-		idleTimeout: idleTimeout,
+		taskQueue:   make(chan SFWorkerTask, conf.taskQueueLen),
+		minWorkers:  conf.minWorkers,
+		maxWorkers:  conf.maxWorkers,
+		idleTimeout: conf.idleTimeout,
 		stopCh:      make(chan struct{}),
 	}
 }
 
-func (wp *SFWorkerPool) Submit(task SFWorkerTask) {
+func (wp *SFWorkerPool) Submit(task SFWorkerTask) error {
 	wp.mu.Lock()
 	if wp.stopped {
 		wp.mu.Unlock()
-		return
+		return fmt.Errorf("worker pool is alredy stopped")
 	}
 
 	hasIdle := wp.idleWorkers > 0
@@ -67,7 +74,11 @@ func (wp *SFWorkerPool) Submit(task SFWorkerTask) {
 
 	select {
 	case wp.taskQueue <- task:
+		return nil
 	case <-wp.stopCh:
+		return fmt.Errorf("worker pool is going to stop")
+	default:
+		return fmt.Errorf("worker pool is full")
 	}
 }
 
