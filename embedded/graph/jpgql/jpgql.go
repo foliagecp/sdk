@@ -22,7 +22,7 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 		runtime,
 		"functions.graph.api.query.jpgql.ctra",
 		JPGQLCallTreeResultAggregation,
-		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMultipleInstancesAllowance(false).SetWorkerPoolLoadType(statefun.WPLoadVeryHigh),
+		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMultipleInstancesAllowance(false),
 	)
 }
 

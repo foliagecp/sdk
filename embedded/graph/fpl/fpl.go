@@ -27,13 +27,13 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 		runtime,
 		"functions.graph.api.query.fpl",
 		FoliageProcessingLanguage,
-		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMultipleInstancesAllowance(false).SetMsgAckWaitMs(MAX_ACK_WAIT_MS).SetWorkerPoolLoadType(statefun.WPLoadHigh),
+		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMultipleInstancesAllowance(false).SetMsgAckWaitMs(MAX_ACK_WAIT_MS),
 	)
 	statefun.NewFunctionType(
 		runtime,
 		"functions.graph.api.query.fpl.pp.vbody",
 		PostProcessorVertexBody,
-		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMultipleInstancesAllowance(false).SetMsgAckWaitMs(MAX_ACK_WAIT_MS).SetWorkerPoolLoadType(statefun.WPLoadHigh),
+		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMultipleInstancesAllowance(false).SetMsgAckWaitMs(MAX_ACK_WAIT_MS),
 	)
 }
 
