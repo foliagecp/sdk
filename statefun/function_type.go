@@ -12,6 +12,7 @@ import (
 
 	"github.com/foliagecp/easyjson"
 
+	"github.com/foliagecp/sdk/statefun/logger"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
@@ -30,9 +31,8 @@ type FunctionType struct {
 	idHandlersLastMsgTime sync.Map
 	contextProcessors     sync.Map
 
-	executor                *sfPlugins.TypenameExecutorPlugin
-	instancesControlChannel chan struct{}
-	resourceMutex           sync.Mutex
+	executor      *sfPlugins.TypenameExecutorPlugin
+	resourceMutex sync.Mutex
 }
 
 const (
@@ -41,16 +41,12 @@ const (
 
 func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHandler, config FunctionTypeConfig) *FunctionType {
 	ft := &FunctionType{
-		runtime:                 runtime,
-		name:                    name,
-		subject:                 fmt.Sprintf(DomainIngressSubjectsTmpl, runtime.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, runtime.Domain.name, name, "*")),
-		logicHandler:            logicHandler,
-		idKeyMutex:              system.NewKeyMutex(),
-		config:                  config,
-		instancesControlChannel: nil,
-	}
-	if config.maxIdHandlers > 0 {
-		ft.instancesControlChannel = make(chan struct{}, config.maxIdHandlers)
+		runtime:      runtime,
+		name:         name,
+		subject:      fmt.Sprintf(DomainIngressSubjectsTmpl, runtime.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, runtime.Domain.name, name, "*")),
+		logicHandler: logicHandler,
+		idKeyMutex:   system.NewKeyMutex(),
+		config:       config,
 	}
 	runtime.registeredFunctionTypes[ft.name] = ft
 	return ft
@@ -78,7 +74,10 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 			Data: msg,
 		},
 	}
-	ft.runtime.sfWorkerPool.Submit(task)
+	if err := ft.runtime.sfWorkerPool.Submit(task); err != nil {
+		logger.Logf(logger.ErrorLevel, "task refuse for statefun %s with id=%s, cannot accept message: %s", ft.name, id, err.Error())
+		msg.RefusalCallback()
+	}
 }
 
 func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameIDContextProcessor *sfPlugins.StatefunContextProcessor) {
