@@ -11,18 +11,18 @@ import (
 )
 
 type SFWorkerPoolConfig struct {
-	minWorkers   int
-	maxWorkers   int
-	idleTimeout  time.Duration
-	taskQueueLen int
+	MinWorkers   int
+	MaxWorkers   int
+	IdleTimeout  time.Duration
+	TaskQueueLen int
 }
 
 func NewSFWorkerPoolDefault() SFWorkerPoolConfig {
 	return SFWorkerPoolConfig{
-		minWorkers:   1,
-		maxWorkers:   100,
-		idleTimeout:  5000 * time.Millisecond,
-		taskQueueLen: 100,
+		MinWorkers:   1,
+		MaxWorkers:   100,
+		IdleTimeout:  5000 * time.Millisecond,
+		TaskQueueLen: 100,
 	}
 }
 
@@ -57,10 +57,10 @@ type SFWorkerPool struct {
 func NewSFWorkerPool(ft *FunctionType, conf SFWorkerPoolConfig) *SFWorkerPool {
 	return &SFWorkerPool{
 		ft:          ft,
-		taskQueue:   make(chan SFWorkerTask, conf.taskQueueLen),
-		minWorkers:  conf.minWorkers,
-		maxWorkers:  conf.maxWorkers,
-		idleTimeout: conf.idleTimeout,
+		taskQueue:   make(chan SFWorkerTask, conf.TaskQueueLen),
+		minWorkers:  conf.MinWorkers,
+		maxWorkers:  conf.MaxWorkers,
+		idleTimeout: conf.IdleTimeout,
 		stopCh:      make(chan struct{}),
 	}
 }
