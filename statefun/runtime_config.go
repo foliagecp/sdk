@@ -1,7 +1,5 @@
 package statefun
 
-import "time"
-
 const (
 	RuntimeName                 = "runtime"
 	NatsURL                     = "nats://nats:foliage@nats:4222"
@@ -12,10 +10,6 @@ const (
 	GCIntervalSec               = 5
 	DefaultHubDomainName        = "hub"
 	HandlesDomainRouters        = true
-)
-
-var (
-	FunctionWorkerPoolConfig = SFWorkerPoolConfig{minWorkers: 20, maxWorkers: 10000, idleTimeout: 5 * time.Second, taskQueueLen: 10000}
 )
 
 type RuntimeConfig struct {
@@ -38,7 +32,7 @@ func NewRuntimeConfig() *RuntimeConfig {
 		kvMutexLifeTimeSec:             KVMutexLifetimeSec,
 		kvMutexIsOldPollingIntervalSec: KVMutexIsOldPollingInterval,
 		functionTypeIDLifetimeMs:       FunctionTypeIDLifetimeMs,
-		functionWorkerPoolConfig:       FunctionWorkerPoolConfig,
+		functionWorkerPoolConfig:       NewSFWorkerPoolConfigFromEnvOrDefault(),
 		requestTimeoutSec:              RequestTimeoutSec,
 		gcIntervalSec:                  GCIntervalSec,
 		desiredHUBDomainName:           DefaultHubDomainName,

@@ -8,6 +8,7 @@ import (
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/statefun/logger"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
+	"github.com/foliagecp/sdk/statefun/system"
 )
 
 type SFWorkerPoolConfig struct {
@@ -15,6 +16,15 @@ type SFWorkerPoolConfig struct {
 	maxWorkers   int
 	idleTimeout  time.Duration
 	taskQueueLen int
+}
+
+func NewSFWorkerPoolConfigFromEnvOrDefault() SFWorkerPoolConfig {
+	return SFWorkerPoolConfig{
+		minWorkers:   system.GetEnvMustProceed[int]("WP_WORKERS_MIN", 20),
+		maxWorkers:   system.GetEnvMustProceed[int]("WP_WORKERS_MAX", 10000),
+		idleTimeout:  time.Duration(system.GetEnvMustProceed[int]("WP_WORKERS_IDLE_TIMEOUT_MS", 5000)) * time.Millisecond,
+		taskQueueLen: system.GetEnvMustProceed[int]("WP_TASK_QUEUE_LEN", 10000),
+	}
 }
 
 type SFWorkerMessage struct {
