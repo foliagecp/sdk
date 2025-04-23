@@ -174,7 +174,6 @@ func (csv *StoreValue) collectGarbage() {
 	if csv.parent != nil && canBeDeletedFromParent {
 		csv.parent.Lock("collectGarbageParent")
 		delete(csv.parent.store, csv.keyInParent)
-		//lg.Logln("____________ PURGING " + fmt.Sprintln(csv.keyInParent))
 		csv.parent.Unlock("collectGarbageParent")
 
 		go csv.parent.collectGarbage()

@@ -1,5 +1,3 @@
-
-
 // Foliage primary statefun system package.
 // Provides shared system functions for statefun packages
 package system
@@ -30,6 +28,32 @@ var (
 
 type KeyMutex struct {
 	m *sync.Map
+}
+
+func NewKeyMutex() KeyMutex {
+	m := sync.Map{}
+	return KeyMutex{&m}
+}
+
+func (s KeyMutex) Unlock(key interface{}) {
+	l, exist := s.m.Load(key)
+	if !exist {
+		panic("kmutex: unlock of unlocked mutex")
+	}
+	l_ := l.(*sync.Mutex)
+	s.m.Delete(key)
+	l_.Unlock()
+}
+
+func (s KeyMutex) Lock(key interface{}) {
+	m := sync.Mutex{}
+	m_, _ := s.m.LoadOrStore(key, &m)
+	mm := m_.(*sync.Mutex)
+	mm.Lock()
+	if mm != &m {
+		mm.Unlock()
+		s.Lock(key)
+	}
 }
 
 func SortJSONs(jsonArray []*easyjson.JSON, fields []string) []*easyjson.JSON {
@@ -159,32 +183,6 @@ func Base64ToStr(base64Encoded string) string {
 		return ""
 	}
 	return string(xmlBytes)
-}
-
-func NewKeyMutex() KeyMutex {
-	m := sync.Map{}
-	return KeyMutex{&m}
-}
-
-func (s KeyMutex) Unlock(key interface{}) {
-	l, exist := s.m.Load(key)
-	if !exist {
-		panic("kmutex: unlock of unlocked mutex")
-	}
-	l_ := l.(*sync.Mutex)
-	s.m.Delete(key)
-	l_.Unlock()
-}
-
-func (s KeyMutex) Lock(key interface{}) {
-	m := sync.Mutex{}
-	m_, _ := s.m.LoadOrStore(key, &m)
-	mm := m_.(*sync.Mutex)
-	mm.Lock()
-	if mm != &m {
-		mm.Unlock()
-		s.Lock(key)
-	}
 }
 
 func CreateDimSizeChannel[T interface{}](maxBufferElements int, onBufferOverflow func()) (in chan T, out chan T) {

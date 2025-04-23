@@ -8,12 +8,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/foliagecp/sdk/statefun/logger"
-	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/foliagecp/easyjson"
 
+	"github.com/foliagecp/sdk/statefun/logger"
+	lg "github.com/foliagecp/sdk/statefun/logger"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 )
@@ -21,18 +21,18 @@ import (
 type FunctionLogicHandler func(sfPlugins.StatefunExecutor, *sfPlugins.StatefunContextProcessor)
 
 type FunctionType struct {
-	runtime                 *Runtime
-	name                    string
-	subject                 string
-	config                  FunctionTypeConfig
-	logicHandler            FunctionLogicHandler
-	idKeyMutex              system.KeyMutex
-	idHandlersChannel       sync.Map
-	idHandlersLastMsgTime   sync.Map
-	idRunningStatus         sync.Map
-	executor                *sfPlugins.TypenameExecutorPlugin
-	instancesControlChannel chan struct{}
-	resourceMutex           sync.Mutex
+	runtime      *Runtime
+	name         string
+	subject      string
+	config       FunctionTypeConfig
+	logicHandler FunctionLogicHandler
+
+	idKeyMutex            system.KeyMutex
+	idHandlersLastMsgTime sync.Map
+	contextProcessors     sync.Map
+
+	executor      *sfPlugins.TypenameExecutorPlugin
+	resourceMutex sync.Mutex
 }
 
 const (
@@ -41,16 +41,12 @@ const (
 
 func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHandler, config FunctionTypeConfig) *FunctionType {
 	ft := &FunctionType{
-		runtime:                 runtime,
-		name:                    name,
-		subject:                 fmt.Sprintf(DomainIngressSubjectsTmpl, runtime.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, runtime.Domain.name, name, "*")),
-		logicHandler:            logicHandler,
-		idKeyMutex:              system.NewKeyMutex(),
-		config:                  config,
-		instancesControlChannel: nil,
-	}
-	if config.maxIdHandlers > 0 {
-		ft.instancesControlChannel = make(chan struct{}, config.maxIdHandlers)
+		runtime:      runtime,
+		name:         name,
+		subject:      fmt.Sprintf(DomainIngressSubjectsTmpl, runtime.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, runtime.Domain.name, name, "*")),
+		logicHandler: logicHandler,
+		idKeyMutex:   system.NewKeyMutex(),
+		config:       config,
 	}
 	runtime.registeredFunctionTypes[ft.name] = ft
 	return ft
@@ -66,99 +62,25 @@ func (ft *FunctionType) SetExecutor(alias string, content string, constructor fu
 func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	id := ft.runtime.Domain.CreateObjectIDWithThisDomain(originId, false)
 
-	ft.idKeyMutex.Lock(id)
-	defer ft.idKeyMutex.Unlock(id)
-
-	// Send msg to type id handler ------------------------------------------------------
-	var msgChannel chan FunctionTypeMsg
-
-	if value, ok := ft.idHandlersChannel.Load(id); ok {
-		msgChannel = value.(chan FunctionTypeMsg)
-	} else {
-		// Limit typename's max id handlers running -------
-		if ft.instancesControlChannel != nil {
-			select {
-			case ft.instancesControlChannel <- struct{}{}:
-			default: // Limit is reached
-				msg.RefusalCallback()
-				return
-			}
-		}
-		// ------------------------------------------------
-
-		msgChannel = make(chan FunctionTypeMsg, ft.config.msgChannelSize)
-
-		go ft.idHandlerRoutine(id, msgChannel)
-		ft.idHandlersChannel.Store(id, msgChannel)
-		if ft.executor != nil {
-			ft.executor.AddForID(id)
-		}
-	}
 	ft.idHandlersLastMsgTime.Store(id, time.Now().UnixNano())
-
-	select {
-	case msgChannel <- msg:
-		// Debug values update ----------------------------
-		gc := atomic.LoadInt64(&ft.runtime.gc)
-
-		if gc == 0 {
-			now := time.Now().UnixNano()
-			atomic.StoreInt64(&ft.runtime.glce, now)
-			atomic.StoreInt64(&ft.runtime.gt0, now)
-		}
-		atomic.AddInt64(&ft.runtime.gc, 1)
-		// ------------------------------------------------
-	default:
-		if msg.RefusalCallback != nil {
-			msg.RefusalCallback()
-		}
-	}
-	// ----------------------------------------------------------------------------------
-}
-
-func (ft *FunctionType) idHandlerRoutine(id string, msgChannel chan FunctionTypeMsg) {
-	system.GlobalPrometrics.GetRoutinesCounter().Started("functiontype-idHandlerRoutine")
-	defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("functiontype-idHandlerRoutine")
-	typenameIDContextProcessor := sfPlugins.StatefunContextProcessor{
-		GetFunctionContext:        func() *easyjson.JSON { return ft.getContext(ft.name + "." + id) },
-		SetFunctionContext:        func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
-		SetContextExpirationAfter: func(after time.Duration) { ft.setContextExpirationAfter(ft.name+"."+id, after) },
-		GetObjectContext:          func() *easyjson.JSON { return ft.getContext(id) },
-		SetObjectContext:          func(context *easyjson.JSON) { ft.setContext(id, context) },
-		Domain:                    ft.runtime.Domain,
-		Self:                      sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
-		Signal: func(signalProvider sfPlugins.SignalProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) error {
-			return ft.runtime.signal(signalProvider, ft.name, id, targetTypename, targetID, j, o)
-		},
-		Request: func(requestProvider sfPlugins.RequestProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
-			return ft.runtime.request(requestProvider, ft.name, id, targetTypename, targetID, j, o)
-		},
-		Egress: func(egressProvider sfPlugins.EgressProvider, j *easyjson.JSON, customId ...string) error {
-			egressId := id
-			if len(customId) > 0 {
-				egressId = customId[0]
-			}
-			return ft.runtime.egress(egressProvider, ft.name, egressId, j)
-		},
-		// To be assigned later:
-		// Call: ...
-		// Payload: ...
-		// Options: ... // Otions from initial typename declaration will be merged and overwritten by the incoming one in message
-		// Caller: ...
+	if ft.executor != nil {
+		ft.executor.AddForID(id)
 	}
 
-	for msg := range msgChannel {
-		ft.handleMsgForID(id, msg, &typenameIDContextProcessor)
+	task := SFWorkerTask{
+		Ft: ft,
+		Msg: SFWorkerMessage{
+			ID:   id,
+			Data: msg,
+		},
 	}
-	if ft.instancesControlChannel != nil {
-		<-ft.instancesControlChannel
+	if err := ft.runtime.sfWorkerPool.Submit(task); err != nil {
+		logger.Logf(logger.ErrorLevel, "task refuse for statefun %s with id=%s, cannot accept message: %s", ft.name, id, err.Error())
+		msg.RefusalCallback()
 	}
 }
 
 func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameIDContextProcessor *sfPlugins.StatefunContextProcessor) {
-	ft.idRunningStatus.Store(id, true)
-	defer ft.idRunningStatus.Store(id, false)
-
 	msgRequestCallback := msg.RequestCallback
 	replyDataChannel := make(chan *easyjson.JSON, 1)
 	typenameIDContextProcessor.Reply = nil
@@ -283,24 +205,10 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 		lastMsgTime := value.(int64)
 
 		if lastMsgTime+int64(typenameIDLifetimeMs)*int64(time.Millisecond) < now {
-			if v, ok := ft.idRunningStatus.Load(id); ok {
-				running, boolFine := v.(bool)
-				if !boolFine {
-					logger.Logf(logger.ErrorLevel, "Function type GC failed to get idRunningStatus in bool format ftName=%s for id=%s", ft.name, id)
-				}
-				if running {
-					return true
-				}
-			}
-
 			ft.idKeyMutex.Lock(id)
 
-			v, _ := ft.idHandlersChannel.Load(id)
-			msgChannel := v.(chan FunctionTypeMsg)
-			close(msgChannel)
-			ft.idHandlersChannel.Delete(id)
 			ft.idHandlersLastMsgTime.Delete(id)
-			ft.idRunningStatus.Delete(id)
+			ft.contextProcessors.Delete(id)
 			if ft.executor != nil {
 				ft.executor.RemoveForID(id)
 			}
