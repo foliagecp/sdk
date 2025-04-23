@@ -50,7 +50,7 @@ func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHa
 		idKeyMutex:   system.NewKeyMutex(),
 		config:       config,
 	}
-	ft.sfWorkerPool.ft = ft
+	ft.sfWorkerPool = NewSFWorkerPool(ft, config.functionWorkerPoolConfig)
 	runtime.registeredFunctionTypes[ft.name] = ft
 	return ft
 }
