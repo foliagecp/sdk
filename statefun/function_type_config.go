@@ -1,5 +1,3 @@
-
-
 package statefun
 
 import (
@@ -25,7 +23,6 @@ type FunctionTypeConfig struct {
 	mutexLifeTimeSec         int
 	options                  *easyjson.JSON
 	multipleInstancesAllowed bool
-	maxIdHandlers            int
 	allowedSignalProviders   map[sfPlugins.SignalProvider]struct{}
 	allowedRequestProviders  map[sfPlugins.RequestProvider]struct{}
 }
@@ -39,7 +36,6 @@ func NewFunctionTypeConfig() *FunctionTypeConfig {
 		mutexLifeTimeSec:         MutexLifetimeSec,
 		options:                  easyjson.NewJSONObject().GetPtr(),
 		multipleInstancesAllowed: MultipleInstancesAllowed,
-		maxIdHandlers:            MaxIdHandlers,
 		allowedSignalProviders:   map[sfPlugins.SignalProvider]struct{}{},
 		allowedRequestProviders:  map[sfPlugins.RequestProvider]struct{}{},
 	}
@@ -118,7 +114,7 @@ func (ftc *FunctionTypeConfig) SetOptions(options *easyjson.JSON) *FunctionTypeC
 	return ftc
 }
 
+// Deprecated
 func (ftc *FunctionTypeConfig) SetMaxIdHandlers(maxIdHandlers int) *FunctionTypeConfig {
-	ftc.maxIdHandlers = maxIdHandlers
 	return ftc
 }
