@@ -37,8 +37,6 @@ type Runtime struct {
 	glce int64 // Global last call ended - time of last call of last function handling id of any function type
 	gc   int64 // Global counter - max total id handlers for all function types
 
-	sfWorkerPool *SFWorkerPool
-
 	shutdown chan struct{}
 	wg       sync.WaitGroup
 }
@@ -49,7 +47,6 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		config:                  config,
 		registeredFunctionTypes: make(map[string]*FunctionType),
 		shutdown:                make(chan struct{}),
-		sfWorkerPool:            NewSFWorkerPool(config.functionWorkerPoolConfig),
 	}
 
 	var err error

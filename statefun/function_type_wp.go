@@ -8,7 +8,6 @@ import (
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/statefun/logger"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
-	"github.com/foliagecp/sdk/statefun/system"
 )
 
 type SFWorkerPoolConfig struct {
@@ -18,12 +17,12 @@ type SFWorkerPoolConfig struct {
 	taskQueueLen int
 }
 
-func NewSFWorkerPoolConfigFromEnvOrDefault() SFWorkerPoolConfig {
+func NewSFWorkerPoolDefault() SFWorkerPoolConfig {
 	return SFWorkerPoolConfig{
-		minWorkers:   system.GetEnvMustProceed[int]("WP_WORKERS_MIN", 20),
-		maxWorkers:   system.GetEnvMustProceed[int]("WP_WORKERS_MAX", 10000),
-		idleTimeout:  time.Duration(system.GetEnvMustProceed[int]("WP_WORKERS_IDLE_TIMEOUT_MS", 5000)) * time.Millisecond,
-		taskQueueLen: system.GetEnvMustProceed[int]("WP_TASK_QUEUE_LEN", 10000),
+		minWorkers:   1,
+		maxWorkers:   100,
+		idleTimeout:  5000 * time.Millisecond,
+		taskQueueLen: 100,
 	}
 }
 
@@ -33,12 +32,13 @@ type SFWorkerMessage struct {
 }
 
 type SFWorkerTask struct {
-	Ft  *FunctionType
 	Msg SFWorkerMessage
 }
 
 // SFWorkerPool - controls the statefun pool
 type SFWorkerPool struct {
+	ft *FunctionType
+
 	taskQueue   chan SFWorkerTask
 	minWorkers  int
 	maxWorkers  int
@@ -54,8 +54,9 @@ type SFWorkerPool struct {
 	wg sync.WaitGroup
 }
 
-func NewSFWorkerPool(conf SFWorkerPoolConfig) *SFWorkerPool {
+func NewSFWorkerPool(ft *FunctionType, conf SFWorkerPoolConfig) *SFWorkerPool {
 	return &SFWorkerPool{
+		ft:          ft,
 		taskQueue:   make(chan SFWorkerTask, conf.taskQueueLen),
 		minWorkers:  conf.minWorkers,
 		maxWorkers:  conf.maxWorkers,
@@ -64,7 +65,7 @@ func NewSFWorkerPool(conf SFWorkerPoolConfig) *SFWorkerPool {
 	}
 }
 
-func (wp *SFWorkerPool) Submit(task SFWorkerTask) error {
+func (wp *SFWorkerPool) Submit(task SFWorkerTask, timeout time.Duration) error {
 	wp.mu.Lock()
 	if wp.stopped {
 		wp.mu.Unlock()
@@ -77,7 +78,7 @@ func (wp *SFWorkerPool) Submit(task SFWorkerTask) error {
 		wp.workers++
 		wp.wg.Add(1)
 		wp.mu.Unlock()
-		logger.Logln(logger.DebugLevel, ">>>>>>>>>>>>>> + WP GROW: %d", wp.workers)
+		logger.Logln(logger.DebugLevel, ">>>>>>>>>>>>>> + WP %s GROW: %d", wp.ft.name, wp.workers)
 		go wp.worker()
 	} else {
 		wp.mu.Unlock()
@@ -88,8 +89,8 @@ func (wp *SFWorkerPool) Submit(task SFWorkerTask) error {
 		return nil
 	case <-wp.stopCh:
 		return fmt.Errorf("worker pool is going to stop")
-	default:
-		return fmt.Errorf("worker pool is full")
+	case <-time.After(timeout):
+		return fmt.Errorf("worker pool is full for too long")
 	}
 }
 
@@ -99,7 +100,7 @@ func (wp *SFWorkerPool) worker() {
 		wp.workers--
 		wp.wg.Add(-1)
 		wp.mu.Unlock()
-		logger.Logln(logger.DebugLevel, ">>>>>>>>>>>>>> - WP SHRINK: %d", wp.workers)
+		logger.Logln(logger.DebugLevel, ">>>>>>>>>>>>>> - WP %s SHRINK: %d", wp.ft.name, wp.workers)
 	}()
 
 	timer := time.NewTimer(wp.idleTimeout)
@@ -118,7 +119,7 @@ func (wp *SFWorkerPool) worker() {
 			wp.mu.Unlock()
 
 			{
-				ft := task.Ft
+				ft := wp.ft
 				id := task.Msg.ID
 
 				ft.idKeyMutex.Lock(id)
@@ -159,7 +160,7 @@ func (wp *SFWorkerPool) worker() {
 					typenameIDContextProcessor = &v
 				}
 
-				task.Ft.handleMsgForID(id, task.Msg.Data, typenameIDContextProcessor)
+				ft.handleMsgForID(id, task.Msg.Data, typenameIDContextProcessor)
 				ft.idKeyMutex.Unlock(id)
 			}
 

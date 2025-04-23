@@ -25,6 +25,7 @@ type FunctionTypeConfig struct {
 	multipleInstancesAllowed bool
 	allowedSignalProviders   map[sfPlugins.SignalProvider]struct{}
 	allowedRequestProviders  map[sfPlugins.RequestProvider]struct{}
+	functionWorkerPoolConfig SFWorkerPoolConfig
 }
 
 func NewFunctionTypeConfig() *FunctionTypeConfig {
@@ -38,6 +39,7 @@ func NewFunctionTypeConfig() *FunctionTypeConfig {
 		multipleInstancesAllowed: MultipleInstancesAllowed,
 		allowedSignalProviders:   map[sfPlugins.SignalProvider]struct{}{},
 		allowedRequestProviders:  map[sfPlugins.RequestProvider]struct{}{},
+		functionWorkerPoolConfig: NewSFWorkerPoolDefault(),
 	}
 	ft.allowedSignalProviders[sfPlugins.AutoSignalSelect] = struct{}{}
 	return ft
@@ -116,5 +118,10 @@ func (ftc *FunctionTypeConfig) SetOptions(options *easyjson.JSON) *FunctionTypeC
 
 // Deprecated
 func (ftc *FunctionTypeConfig) SetMaxIdHandlers(maxIdHandlers int) *FunctionTypeConfig {
+	return ftc
+}
+
+func (ftc *FunctionTypeConfig) SetWorkerPoolConfig(functionWorkerPoolConfig SFWorkerPoolConfig) *FunctionTypeConfig {
+	ftc.functionWorkerPoolConfig = functionWorkerPoolConfig
 	return ftc
 }

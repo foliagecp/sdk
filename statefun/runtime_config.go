@@ -18,7 +18,6 @@ type RuntimeConfig struct {
 	kvMutexLifeTimeSec             int
 	kvMutexIsOldPollingIntervalSec int
 	functionTypeIDLifetimeMs       int
-	functionWorkerPoolConfig       SFWorkerPoolConfig
 	requestTimeoutSec              int
 	gcIntervalSec                  int
 	desiredHUBDomainName           string
@@ -32,7 +31,6 @@ func NewRuntimeConfig() *RuntimeConfig {
 		kvMutexLifeTimeSec:             KVMutexLifetimeSec,
 		kvMutexIsOldPollingIntervalSec: KVMutexIsOldPollingInterval,
 		functionTypeIDLifetimeMs:       FunctionTypeIDLifetimeMs,
-		functionWorkerPoolConfig:       NewSFWorkerPoolConfigFromEnvOrDefault(),
 		requestTimeoutSec:              RequestTimeoutSec,
 		gcIntervalSec:                  GCIntervalSec,
 		desiredHUBDomainName:           DefaultHubDomainName,
@@ -72,11 +70,6 @@ func (ro *RuntimeConfig) SetKVMutexLifeTimeSec(kvMutexLifeTimeSec int) *RuntimeC
 
 func (ro *RuntimeConfig) SetFunctionTypeIDLifetimeMs(functionTypeIDLifetimeMs int) *RuntimeConfig {
 	ro.functionTypeIDLifetimeMs = functionTypeIDLifetimeMs
-	return ro
-}
-
-func (ro *RuntimeConfig) SetFunctionTypeWorkerPool(functionWorkerPoolConfig SFWorkerPoolConfig) *RuntimeConfig {
-	ro.functionWorkerPoolConfig = functionWorkerPoolConfig
 	return ro
 }
 

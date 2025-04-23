@@ -33,6 +33,8 @@ type FunctionType struct {
 
 	executor      *sfPlugins.TypenameExecutorPlugin
 	resourceMutex sync.Mutex
+
+	sfWorkerPool *SFWorkerPool
 }
 
 const (
@@ -48,6 +50,7 @@ func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHa
 		idKeyMutex:   system.NewKeyMutex(),
 		config:       config,
 	}
+	ft.sfWorkerPool.ft = ft
 	runtime.registeredFunctionTypes[ft.name] = ft
 	return ft
 }
@@ -68,13 +71,13 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	}
 
 	task := SFWorkerTask{
-		Ft: ft,
 		Msg: SFWorkerMessage{
 			ID:   id,
 			Data: msg,
 		},
 	}
-	if err := ft.runtime.sfWorkerPool.Submit(task); err != nil {
+
+	if err := ft.sfWorkerPool.Submit(task, time.Duration(ft.config.msgAckWaitMs)*time.Millisecond); err != nil {
 		logger.Logf(logger.ErrorLevel, "task refuse for statefun %s with id=%s, cannot accept message: %s", ft.name, id, err.Error())
 		msg.RefusalCallback()
 	}
