@@ -17,13 +17,57 @@ type SFWorkerPoolConfig struct {
 	TaskQueueLen int
 }
 
-func NewSFWorkerPoolDefault() SFWorkerPoolConfig {
-	return SFWorkerPoolConfig{
-		MinWorkers:   1,
-		MaxWorkers:   100,
-		IdleTimeout:  5000 * time.Millisecond,
-		TaskQueueLen: 100,
+type WPLoadType int
+
+const (
+	WPLoadVeryLight WPLoadType = iota
+	WPLoadLight
+	WPLoadNormal
+	WPLoadHigh
+	WPLoadVeryHigh
+)
+
+func NewSFWorkerPoolConfig(loadType WPLoadType) (config SFWorkerPoolConfig) {
+	switch loadType {
+	case WPLoadVeryLight:
+		config = SFWorkerPoolConfig{
+			MinWorkers:   0,
+			MaxWorkers:   5,
+			IdleTimeout:  5000 * time.Millisecond,
+			TaskQueueLen: 5,
+		}
+	case WPLoadLight:
+		config = SFWorkerPoolConfig{
+			MinWorkers:   2,
+			MaxWorkers:   25,
+			IdleTimeout:  5000 * time.Millisecond,
+			TaskQueueLen: 25,
+		}
+	case WPLoadHigh:
+		config = SFWorkerPoolConfig{
+			MinWorkers:   50,
+			MaxWorkers:   500,
+			IdleTimeout:  5000 * time.Millisecond,
+			TaskQueueLen: 500,
+		}
+	case WPLoadVeryHigh:
+		config = SFWorkerPoolConfig{
+			MinWorkers:   250,
+			MaxWorkers:   2500,
+			IdleTimeout:  5000 * time.Millisecond,
+			TaskQueueLen: 2500,
+		}
+	case WPLoadNormal:
+		fallthrough
+	default:
+		config = SFWorkerPoolConfig{
+			MinWorkers:   10,
+			MaxWorkers:   100,
+			IdleTimeout:  5000 * time.Millisecond,
+			TaskQueueLen: 100,
+		}
 	}
+	return
 }
 
 type SFWorkerMessage struct {

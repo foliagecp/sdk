@@ -39,7 +39,7 @@ func NewFunctionTypeConfig() *FunctionTypeConfig {
 		multipleInstancesAllowed: MultipleInstancesAllowed,
 		allowedSignalProviders:   map[sfPlugins.SignalProvider]struct{}{},
 		allowedRequestProviders:  map[sfPlugins.RequestProvider]struct{}{},
-		functionWorkerPoolConfig: NewSFWorkerPoolDefault(),
+		functionWorkerPoolConfig: NewSFWorkerPoolConfig(WPLoadNormal),
 	}
 	ft.allowedSignalProviders[sfPlugins.AutoSignalSelect] = struct{}{}
 	return ft
@@ -123,5 +123,10 @@ func (ftc *FunctionTypeConfig) SetMaxIdHandlers(maxIdHandlers int) *FunctionType
 
 func (ftc *FunctionTypeConfig) SetWorkerPoolConfig(functionWorkerPoolConfig SFWorkerPoolConfig) *FunctionTypeConfig {
 	ftc.functionWorkerPoolConfig = functionWorkerPoolConfig
+	return ftc
+}
+
+func (ftc *FunctionTypeConfig) SetWorkerPoolLoadType(wpLoadType WPLoadType) *FunctionTypeConfig {
+	ftc.functionWorkerPoolConfig = NewSFWorkerPoolConfig(wpLoadType)
 	return ftc
 }
