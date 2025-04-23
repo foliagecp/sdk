@@ -39,6 +39,8 @@ type Runtime struct {
 
 	shutdown chan struct{}
 	wg       sync.WaitGroup
+
+	sfWorkerPool *SFWorkerPool
 }
 
 // NewRuntime initializes a new Runtime instance with the given configuration.
@@ -47,6 +49,7 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		config:                  config,
 		registeredFunctionTypes: make(map[string]*FunctionType),
 		shutdown:                make(chan struct{}),
+		sfWorkerPool:            NewSFWorkerPool(config.name, NewSFWorkerPoolConfig(WPLoadHigh)),
 	}
 
 	var err error

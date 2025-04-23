@@ -77,11 +77,12 @@ type SFWorkerMessage struct {
 
 type SFWorkerTask struct {
 	Msg SFWorkerMessage
+	Ft  *FunctionType
 }
 
 // SFWorkerPool - controls the statefun pool
 type SFWorkerPool struct {
-	ft *FunctionType
+	name string
 
 	taskQueue   chan SFWorkerTask
 	minWorkers  int
@@ -98,9 +99,9 @@ type SFWorkerPool struct {
 	wg sync.WaitGroup
 }
 
-func NewSFWorkerPool(ft *FunctionType, conf SFWorkerPoolConfig) *SFWorkerPool {
+func NewSFWorkerPool(name string, conf SFWorkerPoolConfig) *SFWorkerPool {
 	return &SFWorkerPool{
-		ft:          ft,
+		name:        name,
 		taskQueue:   make(chan SFWorkerTask, conf.TaskQueueLen),
 		minWorkers:  conf.MinWorkers,
 		maxWorkers:  conf.MaxWorkers,
@@ -109,7 +110,7 @@ func NewSFWorkerPool(ft *FunctionType, conf SFWorkerPoolConfig) *SFWorkerPool {
 	}
 }
 
-func (wp *SFWorkerPool) Submit(task SFWorkerTask, timeout time.Duration) error {
+func (wp *SFWorkerPool) submit(task SFWorkerTask) error {
 	wp.mu.Lock()
 	if wp.stopped {
 		wp.mu.Unlock()
@@ -122,12 +123,32 @@ func (wp *SFWorkerPool) Submit(task SFWorkerTask, timeout time.Duration) error {
 		wp.workers++
 		wp.wg.Add(1)
 		wp.mu.Unlock()
-		logger.Logln(logger.DebugLevel, ">>>>>>>>>>>>>> + WP %s GROW: %d", wp.ft.name, wp.workers)
+		logger.Logln(logger.DebugLevel, ">>>>>>>>>>>>>> + WP %s GROW: %d", wp.name, wp.workers)
 		go wp.worker()
 	} else {
 		wp.mu.Unlock()
 	}
+	return nil
+}
 
+func (wp *SFWorkerPool) Submit(task SFWorkerTask) error {
+	if err := wp.submit(task); err != nil {
+		return err
+	}
+	select {
+	case wp.taskQueue <- task:
+		return nil
+	case <-wp.stopCh:
+		return fmt.Errorf("worker pool is going to stop")
+	default:
+		return fmt.Errorf("worker pool is full")
+	}
+}
+
+func (wp *SFWorkerPool) SubmitWithTimeout(task SFWorkerTask, timeout time.Duration) error {
+	if err := wp.submit(task); err != nil {
+		return err
+	}
 	select {
 	case wp.taskQueue <- task:
 		return nil
@@ -144,7 +165,7 @@ func (wp *SFWorkerPool) worker() {
 		wp.workers--
 		wp.wg.Add(-1)
 		wp.mu.Unlock()
-		logger.Logln(logger.DebugLevel, ">>>>>>>>>>>>>> - WP %s SHRINK: %d", wp.ft.name, wp.workers)
+		logger.Logln(logger.DebugLevel, ">>>>>>>>>>>>>> - WP %s SHRINK: %d", wp.name, wp.workers)
 	}()
 
 	timer := time.NewTimer(wp.idleTimeout)
@@ -163,7 +184,7 @@ func (wp *SFWorkerPool) worker() {
 			wp.mu.Unlock()
 
 			{
-				ft := wp.ft
+				ft := task.Ft
 				id := task.Msg.ID
 
 				ft.idKeyMutex.Lock(id)

@@ -50,7 +50,7 @@ func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHa
 		idKeyMutex:   system.NewKeyMutex(),
 		config:       config,
 	}
-	ft.sfWorkerPool = NewSFWorkerPool(ft, config.functionWorkerPoolConfig)
+	ft.sfWorkerPool = NewSFWorkerPool(ft.name, config.functionWorkerPoolConfig)
 	runtime.registeredFunctionTypes[ft.name] = ft
 	return ft
 }
@@ -75,11 +75,14 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 			ID:   id,
 			Data: msg,
 		},
+		Ft: ft,
 	}
 
-	if err := ft.sfWorkerPool.Submit(task, time.Duration(ft.config.msgAckWaitMs)*time.Millisecond); err != nil {
-		logger.Logf(logger.ErrorLevel, "task refuse for statefun %s with id=%s, cannot accept message: %s", ft.name, id, err.Error())
-		msg.RefusalCallback()
+	if err1 := ft.runtime.sfWorkerPool.Submit(task); err1 != nil {
+		if err2 := ft.sfWorkerPool.SubmitWithTimeout(task, time.Duration(ft.config.msgAckWaitMs)*time.Millisecond); err2 != nil {
+			logger.Logf(logger.ErrorLevel, "task refuse for statefun %s with id=%s, cannot accept message: (%s) & (%s)", ft.name, id, err1.Error(), err2.Error())
+			msg.RefusalCallback()
+		}
 	}
 }
 
