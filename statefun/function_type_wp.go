@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/foliagecp/easyjson"
+	"github.com/foliagecp/sdk/statefun/logger"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
@@ -66,7 +67,7 @@ func (wp *SFWorkerPool) Submit(task SFWorkerTask) error {
 		wp.workers++
 		wp.wg.Add(1)
 		wp.mu.Unlock()
-		fmt.Println(">>>>>>>>>>>>>> WP GROW:", wp.workers)
+		logger.Logln(logger.DebugLevel, ">>>>>>>>>>>>>> + WP GROW: %d", wp.workers)
 		go wp.worker()
 	} else {
 		wp.mu.Unlock()
@@ -88,7 +89,7 @@ func (wp *SFWorkerPool) worker() {
 		wp.workers--
 		wp.wg.Add(-1)
 		wp.mu.Unlock()
-		fmt.Println(">>>>>>>>>>>>>> ---- WP SHRINK:", wp.workers)
+		logger.Logln(logger.DebugLevel, ">>>>>>>>>>>>>> - WP SHRINK: %d", wp.workers)
 	}()
 
 	timer := time.NewTimer(wp.idleTimeout)
