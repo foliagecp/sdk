@@ -1,6 +1,6 @@
-
-
 package statefun
+
+import "time"
 
 const (
 	RuntimeName                 = "runtime"
@@ -14,12 +14,17 @@ const (
 	HandlesDomainRouters        = true
 )
 
+var (
+	FunctionWorkerPoolConfig = SFWorkerPoolConfig{minWorkers: 20, maxWorkers: 10000, idleTimeout: 5 * time.Second, taskQueueLen: 10000}
+)
+
 type RuntimeConfig struct {
 	name                           string
 	natsURL                        string
 	kvMutexLifeTimeSec             int
 	kvMutexIsOldPollingIntervalSec int
 	functionTypeIDLifetimeMs       int
+	functionWorkerPoolConfig       SFWorkerPoolConfig
 	requestTimeoutSec              int
 	gcIntervalSec                  int
 	desiredHUBDomainName           string
@@ -33,6 +38,7 @@ func NewRuntimeConfig() *RuntimeConfig {
 		kvMutexLifeTimeSec:             KVMutexLifetimeSec,
 		kvMutexIsOldPollingIntervalSec: KVMutexIsOldPollingInterval,
 		functionTypeIDLifetimeMs:       FunctionTypeIDLifetimeMs,
+		functionWorkerPoolConfig:       FunctionWorkerPoolConfig,
 		requestTimeoutSec:              RequestTimeoutSec,
 		gcIntervalSec:                  GCIntervalSec,
 		desiredHUBDomainName:           DefaultHubDomainName,
@@ -72,6 +78,11 @@ func (ro *RuntimeConfig) SetKVMutexLifeTimeSec(kvMutexLifeTimeSec int) *RuntimeC
 
 func (ro *RuntimeConfig) SetFunctionTypeIDLifetimeMs(functionTypeIDLifetimeMs int) *RuntimeConfig {
 	ro.functionTypeIDLifetimeMs = functionTypeIDLifetimeMs
+	return ro
+}
+
+func (ro *RuntimeConfig) SetFunctionTypeWorkerPool(functionWorkerPoolConfig SFWorkerPoolConfig) *RuntimeConfig {
+	ro.functionWorkerPoolConfig = functionWorkerPoolConfig
 	return ro
 }
 
