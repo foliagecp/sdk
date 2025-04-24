@@ -70,7 +70,7 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	if value, ok := ft.idHandlersChannel.Load(id); ok {
 		msgChannel = value.(chan FunctionTypeMsg)
 	} else {
-		msgChannel = make(chan FunctionTypeMsg, 10)
+		msgChannel = make(chan FunctionTypeMsg, ft.config.idChannelSize)
 		ft.idHandlersChannel.Store(id, msgChannel)
 	}
 

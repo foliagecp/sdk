@@ -3,10 +3,12 @@ package statefun
 import (
 	"github.com/foliagecp/easyjson"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
+	"github.com/foliagecp/sdk/statefun/system"
 )
 
 const (
 	MsgAckWaitTimeoutMs      = 10000
+	IdChannelSize            = 10
 	MsgAckChannelSize        = 64
 	BalanceNeeded            = true
 	MutexLifetimeSec         = 120
@@ -16,6 +18,7 @@ const (
 
 type FunctionTypeConfig struct {
 	msgAckWaitMs             int
+	idChannelSize            int
 	msgAckChannelSize        int
 	balanceNeeded            bool
 	mutexLifeTimeSec         int
@@ -29,6 +32,7 @@ type FunctionTypeConfig struct {
 func NewFunctionTypeConfig() *FunctionTypeConfig {
 	ft := &FunctionTypeConfig{
 		msgAckWaitMs:             MsgAckWaitTimeoutMs,
+		idChannelSize:            system.GetEnvMustProceed[int]("DEFAULT_FT_ID_CHANNEL_SIZE", IdChannelSize),
 		msgAckChannelSize:        MsgAckChannelSize,
 		balanceNeeded:            BalanceNeeded,
 		mutexLifeTimeSec:         MutexLifetimeSec,
@@ -36,7 +40,7 @@ func NewFunctionTypeConfig() *FunctionTypeConfig {
 		multipleInstancesAllowed: MultipleInstancesAllowed,
 		allowedSignalProviders:   map[sfPlugins.SignalProvider]struct{}{},
 		allowedRequestProviders:  map[sfPlugins.RequestProvider]struct{}{},
-		functionWorkerPoolConfig: NewSFWorkerPoolConfig(WPLoadNormal),
+		functionWorkerPoolConfig: NewSFWorkerPoolConfig(WPLoadDefault),
 	}
 	ft.allowedSignalProviders[sfPlugins.AutoSignalSelect] = struct{}{}
 	return ft
@@ -49,6 +53,11 @@ func (ftc *FunctionTypeConfig) SetMsgAckWaitMs(msgAckWaitMs int) *FunctionTypeCo
 
 // Deprecated
 func (ftc *FunctionTypeConfig) SetMsgChannelSize(msgChannelSize int) *FunctionTypeConfig {
+	return ftc
+}
+
+func (ftc *FunctionTypeConfig) SetIdChannelSize(idChannelSize int) *FunctionTypeConfig {
+	ftc.idChannelSize = idChannelSize
 	return ftc
 }
 
