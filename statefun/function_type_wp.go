@@ -77,12 +77,11 @@ type SFWorkerMessage struct {
 
 type SFWorkerTask struct {
 	Msg SFWorkerMessage
-	Ft  *FunctionType
 }
 
 // SFWorkerPool - controls the statefun pool
 type SFWorkerPool struct {
-	name string
+	ft *FunctionType
 
 	taskQueue   chan SFWorkerTask
 	minWorkers  int
@@ -93,69 +92,101 @@ type SFWorkerPool struct {
 	workers     int
 	idleWorkers int
 
-	stopCh  chan struct{}
-	stopped bool
+	notifyCh chan struct{}
+	stopCh   chan struct{}
+	stopped  bool
 
 	wg sync.WaitGroup
 }
 
-func NewSFWorkerPool(name string, conf SFWorkerPoolConfig) *SFWorkerPool {
-	return &SFWorkerPool{
-		name:        name,
+func NewSFWorkerPool(ft *FunctionType, conf SFWorkerPoolConfig) *SFWorkerPool {
+	wp := &SFWorkerPool{
+		ft:          ft,
 		taskQueue:   make(chan SFWorkerTask, conf.TaskQueueLen),
 		minWorkers:  conf.MinWorkers,
 		maxWorkers:  conf.MaxWorkers,
 		idleTimeout: conf.IdleTimeout,
+		notifyCh:    make(chan struct{}, 1),
 		stopCh:      make(chan struct{}),
 	}
+	go wp.manager()
+	return wp
 }
 
-func (wp *SFWorkerPool) submit(task SFWorkerTask) error {
-	wp.mu.Lock()
-	if wp.stopped {
-		wp.mu.Unlock()
-		return fmt.Errorf("worker pool is alredy stopped")
+func (wp *SFWorkerPool) manager() {
+	submit := func(task SFWorkerTask) error {
+		wp.mu.Lock()
+		if wp.stopped {
+			wp.mu.Unlock()
+			return fmt.Errorf("worker pool is alredy stopped")
+		}
+
+		hasIdle := wp.idleWorkers > 0
+		canGrow := wp.workers < wp.maxWorkers
+		if !hasIdle && canGrow {
+			wp.workers++
+			wp.wg.Add(1)
+			wp.mu.Unlock()
+			logger.Logln(logger.DebugLevel, ">>>>>>>>>>>>>> + WP %s GROW: %d", wp.ft.name, wp.workers)
+			go wp.worker()
+		} else {
+			wp.mu.Unlock()
+		}
+
+		select {
+		case wp.taskQueue <- task:
+			return nil
+		case <-wp.stopCh:
+			return fmt.Errorf("worker pool is going to stop")
+		}
+	}
+	drainFunctionTypeIDChannels := func() {
+		for {
+			var maxLen int
+			var selectedChan chan FunctionTypeMsg
+			var selectedId string
+
+			wp.ft.idHandlersChannel.Range(func(key, value any) bool {
+				id := key.(string)
+				ch := value.(chan FunctionTypeMsg)
+				if l := len(ch); l > maxLen {
+					maxLen = l
+					selectedChan = ch
+					selectedId = id
+				}
+				return true
+			})
+
+			if maxLen == 0 || selectedChan == nil {
+				return
+			}
+
+			msg := <-selectedChan
+			task := SFWorkerTask{
+				Msg: SFWorkerMessage{
+					ID:   selectedId,
+					Data: msg,
+				},
+			}
+
+			submit(task)
+		}
 	}
 
-	hasIdle := wp.idleWorkers > 0
-	canGrow := wp.workers < wp.maxWorkers
-	if !hasIdle && canGrow {
-		wp.workers++
-		wp.wg.Add(1)
-		wp.mu.Unlock()
-		logger.Logln(logger.DebugLevel, ">>>>>>>>>>>>>> + WP %s GROW: %d", wp.name, wp.workers)
-		go wp.worker()
-	} else {
-		wp.mu.Unlock()
+	for {
+		select {
+		case <-wp.notifyCh:
+			drainFunctionTypeIDChannels()
+		case <-wp.stopCh:
+			return
+		}
 	}
-	return nil
 }
 
-func (wp *SFWorkerPool) Submit(task SFWorkerTask) error {
-	if err := wp.submit(task); err != nil {
-		return err
-	}
+func (wp *SFWorkerPool) Notify() {
 	select {
-	case wp.taskQueue <- task:
-		return nil
-	case <-wp.stopCh:
-		return fmt.Errorf("worker pool is going to stop")
+	case wp.notifyCh <- struct{}{}:
 	default:
-		return fmt.Errorf("worker pool is full")
-	}
-}
-
-func (wp *SFWorkerPool) SubmitWithTimeout(task SFWorkerTask, timeout time.Duration) error {
-	if err := wp.submit(task); err != nil {
-		return err
-	}
-	select {
-	case wp.taskQueue <- task:
-		return nil
-	case <-wp.stopCh:
-		return fmt.Errorf("worker pool is going to stop")
-	case <-time.After(timeout):
-		return fmt.Errorf("worker pool is full for too long")
 	}
 }
 
@@ -165,7 +196,7 @@ func (wp *SFWorkerPool) worker() {
 		wp.workers--
 		wp.wg.Add(-1)
 		wp.mu.Unlock()
-		logger.Logln(logger.DebugLevel, ">>>>>>>>>>>>>> - WP %s SHRINK: %d", wp.name, wp.workers)
+		logger.Logln(logger.DebugLevel, ">>>>>>>>>>>>>> - WP %s SHRINK: %d", wp.ft.name, wp.workers)
 	}()
 
 	timer := time.NewTimer(wp.idleTimeout)
@@ -184,7 +215,7 @@ func (wp *SFWorkerPool) worker() {
 			wp.mu.Unlock()
 
 			{
-				ft := task.Ft
+				ft := wp.ft
 				id := task.Msg.ID
 
 				ft.idKeyMutex.Lock(id)

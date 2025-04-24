@@ -7,7 +7,6 @@ import (
 
 const (
 	MsgAckWaitTimeoutMs      = 10000
-	MsgChannelSize           = 64
 	MsgAckChannelSize        = 64
 	BalanceNeeded            = true
 	MutexLifetimeSec         = 120
@@ -17,7 +16,6 @@ const (
 
 type FunctionTypeConfig struct {
 	msgAckWaitMs             int
-	msgChannelSize           int
 	msgAckChannelSize        int
 	balanceNeeded            bool
 	mutexLifeTimeSec         int
@@ -31,7 +29,6 @@ type FunctionTypeConfig struct {
 func NewFunctionTypeConfig() *FunctionTypeConfig {
 	ft := &FunctionTypeConfig{
 		msgAckWaitMs:             MsgAckWaitTimeoutMs,
-		msgChannelSize:           MsgChannelSize,
 		msgAckChannelSize:        MsgAckChannelSize,
 		balanceNeeded:            BalanceNeeded,
 		mutexLifeTimeSec:         MutexLifetimeSec,
@@ -50,8 +47,8 @@ func (ftc *FunctionTypeConfig) SetMsgAckWaitMs(msgAckWaitMs int) *FunctionTypeCo
 	return ftc
 }
 
+// Deprecated
 func (ftc *FunctionTypeConfig) SetMsgChannelSize(msgChannelSize int) *FunctionTypeConfig {
-	ftc.msgChannelSize = msgChannelSize
 	return ftc
 }
 

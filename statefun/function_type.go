@@ -27,6 +27,7 @@ type FunctionType struct {
 	config       FunctionTypeConfig
 	logicHandler FunctionLogicHandler
 
+	idHandlersChannel     sync.Map
 	idKeyMutex            system.KeyMutex
 	idHandlersLastMsgTime sync.Map
 	contextProcessors     sync.Map
@@ -50,7 +51,7 @@ func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHa
 		idKeyMutex:   system.NewKeyMutex(),
 		config:       config,
 	}
-	ft.sfWorkerPool = NewSFWorkerPool(ft.name, config.functionWorkerPoolConfig)
+	ft.sfWorkerPool = NewSFWorkerPool(ft, config.functionWorkerPoolConfig)
 	runtime.registeredFunctionTypes[ft.name] = ft
 	return ft
 }
@@ -65,25 +66,31 @@ func (ft *FunctionType) SetExecutor(alias string, content string, constructor fu
 func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	id := ft.runtime.Domain.CreateObjectIDWithThisDomain(originId, false)
 
+	var msgChannel chan FunctionTypeMsg
+	if value, ok := ft.idHandlersChannel.Load(id); ok {
+		msgChannel = value.(chan FunctionTypeMsg)
+	} else {
+		msgChannel = make(chan FunctionTypeMsg, 10)
+		ft.idHandlersChannel.Store(id, msgChannel)
+	}
+
 	ft.idHandlersLastMsgTime.Store(id, time.Now().UnixNano())
 	if ft.executor != nil {
 		ft.executor.AddForID(id)
 	}
 
-	task := SFWorkerTask{
-		Msg: SFWorkerMessage{
-			ID:   id,
-			Data: msg,
-		},
-		Ft: ft,
+	timeout := time.Duration(ft.config.msgAckWaitMs) * time.Millisecond
+	if msg.RequestCallback != nil {
+		timeout = time.Duration(ft.runtime.config.requestTimeoutSec) * time.Second
+	}
+	select {
+	case msgChannel <- msg:
+	case <-time.After(timeout):
+		logger.Logf(logger.ErrorLevel, "task refuse for statefun %s with id=%s: queue is full", ft.name, id)
+		msg.RefusalCallback()
 	}
 
-	if err1 := ft.runtime.sfWorkerPool.Submit(task); err1 != nil {
-		if err2 := ft.sfWorkerPool.SubmitWithTimeout(task, time.Duration(ft.config.msgAckWaitMs)*time.Millisecond); err2 != nil {
-			logger.Logf(logger.ErrorLevel, "task refuse for statefun %s with id=%s, cannot accept message: (%s) & (%s)", ft.name, id, err1.Error(), err2.Error())
-			msg.RefusalCallback()
-		}
-	}
+	ft.sfWorkerPool.Notify()
 }
 
 func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameIDContextProcessor *sfPlugins.StatefunContextProcessor) {
@@ -214,6 +221,7 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 			ft.idKeyMutex.Lock(id)
 
 			ft.idHandlersLastMsgTime.Delete(id)
+			ft.idHandlersChannel.Delete(id)
 			ft.contextProcessors.Delete(id)
 			if ft.executor != nil {
 				ft.executor.RemoveForID(id)
