@@ -8,6 +8,7 @@ import (
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/statefun/logger"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
+	"github.com/foliagecp/sdk/statefun/system"
 )
 
 type SFWorkerPoolConfig struct {
@@ -20,7 +21,8 @@ type SFWorkerPoolConfig struct {
 type WPLoadType int
 
 const (
-	WPLoadVeryLight WPLoadType = iota
+	WPLoadDefault WPLoadType = iota
+	WPLoadVeryLight
 	WPLoadLight
 	WPLoadNormal
 	WPLoadHigh
@@ -58,13 +60,18 @@ func NewSFWorkerPoolConfig(loadType WPLoadType) (config SFWorkerPoolConfig) {
 			TaskQueueLen: 2500,
 		}
 	case WPLoadNormal:
-		fallthrough
-	default:
 		config = SFWorkerPoolConfig{
 			MinWorkers:   10,
 			MaxWorkers:   100,
 			IdleTimeout:  5000 * time.Millisecond,
 			TaskQueueLen: 100,
+		}
+	default:
+		config = SFWorkerPoolConfig{
+			MinWorkers:   system.GetEnvMustProceed[int]("DEFAULT_FT_WP_WORKERS_MIN", 10),
+			MaxWorkers:   system.GetEnvMustProceed[int]("DEFAULT_FT_WP_WORKERS_MAX", 100),
+			IdleTimeout:  time.Duration(system.GetEnvMustProceed[int]("DEFAULT_FT_WP_WORKERS_IDLE_TIMEOUT_MS", 5000)) * time.Millisecond,
+			TaskQueueLen: system.GetEnvMustProceed[int]("DEFAULT_FT_WP_TASK_QUEUE_LEN", 100),
 		}
 	}
 	return
