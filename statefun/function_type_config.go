@@ -9,7 +9,6 @@ import (
 const (
 	MsgAckWaitTimeoutMs      = 10000
 	IdChannelSize            = 10
-	MsgAckChannelSize        = 64
 	BalanceNeeded            = true
 	MutexLifetimeSec         = 120
 	MultipleInstancesAllowed = false
@@ -19,7 +18,6 @@ const (
 type FunctionTypeConfig struct {
 	msgAckWaitMs             int
 	idChannelSize            int
-	msgAckChannelSize        int
 	balanceNeeded            bool
 	mutexLifeTimeSec         int
 	options                  *easyjson.JSON
@@ -33,7 +31,6 @@ func NewFunctionTypeConfig() *FunctionTypeConfig {
 	ft := &FunctionTypeConfig{
 		msgAckWaitMs:             MsgAckWaitTimeoutMs,
 		idChannelSize:            system.GetEnvMustProceed[int]("DEFAULT_FT_ID_CHANNEL_SIZE", IdChannelSize),
-		msgAckChannelSize:        MsgAckChannelSize,
 		balanceNeeded:            BalanceNeeded,
 		mutexLifeTimeSec:         MutexLifetimeSec,
 		options:                  easyjson.NewJSONObject().GetPtr(),
@@ -61,8 +58,8 @@ func (ftc *FunctionTypeConfig) SetIdChannelSize(idChannelSize int) *FunctionType
 	return ftc
 }
 
+// Deprecated
 func (ftc *FunctionTypeConfig) SetMsgAckChannelSize(msgAckChannelSize int) *FunctionTypeConfig {
-	ftc.msgAckChannelSize = msgAckChannelSize
 	return ftc
 }
 
