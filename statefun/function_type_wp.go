@@ -272,6 +272,8 @@ func (wp *SFWorkerPool) worker() {
 			}
 			timer.Reset(wp.idleTimeout)
 
+			wp.ft.tokens.Release()
+
 		case <-timer.C:
 			wp.mu.Lock()
 			wp.idleWorkers--
