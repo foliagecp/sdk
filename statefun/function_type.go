@@ -70,7 +70,7 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	id := ft.runtime.Domain.CreateObjectIDWithThisDomain(originId, false)
 
 	if !ft.tokens.TryAcquire() {
-		msg.RefusalCallback()
+		msg.SkipCallback()
 		logger.Logf(logger.ErrorLevel, sendMsgFuncErrorMsg, ft.name, id, "no tokens left")
 		return
 	}
@@ -92,9 +92,9 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	case msgChannel <- msg:
 		ft.sfWorkerPool.Notify()
 	default:
-		logger.Logf(logger.ErrorLevel, sendMsgFuncErrorMsg, ft.name, id, "queue for current id is full")
 		ft.tokens.Release()
-		msg.RefusalCallback()
+		msg.SkipCallback()
+		logger.Logf(logger.ErrorLevel, sendMsgFuncErrorMsg, ft.name, id, "queue for current id is full")
 	}
 }
 

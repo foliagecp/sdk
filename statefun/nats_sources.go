@@ -116,6 +116,9 @@ func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool) (err erro
 		functionMsg.RefusalCallback = func() {
 			system.MsgOnErrorReturn(msg.Respond([]byte{}))
 		}
+		functionMsg.SkipCallback = func() {
+			system.MsgOnErrorReturn(msg.Respond([]byte{}))
+		}
 	} else {
 		functionMsg.AckCallback = func(ack bool) {
 			if ack {
@@ -126,6 +129,9 @@ func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool) (err erro
 		}
 		functionMsg.RefusalCallback = func() {
 			system.MsgOnErrorReturn(msg.Nak())
+		}
+		functionMsg.SkipCallback = func() {
+			system.MsgOnErrorReturn(msg.Ack())
 		}
 	}
 	// ------------------------------------------------

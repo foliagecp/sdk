@@ -311,6 +311,9 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 			functionMsg.RefusalCallback = func() {
 				close(resultJSONChannel)
 			}
+			functionMsg.SkipCallback = func() {
+				close(resultJSONChannel)
+			}
 
 			targetFT.sendMsg(targetID, functionMsg)
 

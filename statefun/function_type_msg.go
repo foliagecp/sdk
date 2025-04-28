@@ -8,15 +8,16 @@ import (
 
 type HandlerMsgRefusalType int
 
-type RefusalCallbackAction = func()
+type MereCallbackAction = func()
 type RequestCallbackAction = func(data *easyjson.JSON)
-type SignalCallbackAction = func(ack bool)
+type AckCallbackAction = func(ack bool)
 
 type FunctionTypeMsg struct {
 	Caller          *sfPlugins.StatefunAddress
 	Payload         *easyjson.JSON
 	Options         *easyjson.JSON
-	RefusalCallback RefusalCallbackAction
+	RefusalCallback MereCallbackAction
 	RequestCallback RequestCallbackAction
-	AckCallback     SignalCallbackAction
+	AckCallback     AckCallbackAction
+	SkipCallback    MereCallbackAction
 }
