@@ -3,12 +3,12 @@ package statefun
 import (
 	"github.com/foliagecp/easyjson"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
+	"github.com/foliagecp/sdk/statefun/system"
 )
 
 const (
 	MsgAckWaitTimeoutMs      = 10000
-	MsgChannelSize           = 64
-	MsgAckChannelSize        = 64
+	IdChannelSize            = 10
 	BalanceNeeded            = true
 	MutexLifetimeSec         = 120
 	MultipleInstancesAllowed = false
@@ -17,27 +17,27 @@ const (
 
 type FunctionTypeConfig struct {
 	msgAckWaitMs             int
-	msgChannelSize           int
-	msgAckChannelSize        int
+	idChannelSize            int
 	balanceNeeded            bool
 	mutexLifeTimeSec         int
 	options                  *easyjson.JSON
 	multipleInstancesAllowed bool
 	allowedSignalProviders   map[sfPlugins.SignalProvider]struct{}
 	allowedRequestProviders  map[sfPlugins.RequestProvider]struct{}
+	functionWorkerPoolConfig SFWorkerPoolConfig
 }
 
 func NewFunctionTypeConfig() *FunctionTypeConfig {
 	ft := &FunctionTypeConfig{
 		msgAckWaitMs:             MsgAckWaitTimeoutMs,
-		msgChannelSize:           MsgChannelSize,
-		msgAckChannelSize:        MsgAckChannelSize,
+		idChannelSize:            system.GetEnvMustProceed[int]("DEFAULT_FT_ID_CHANNEL_SIZE", IdChannelSize),
 		balanceNeeded:            BalanceNeeded,
 		mutexLifeTimeSec:         MutexLifetimeSec,
 		options:                  easyjson.NewJSONObject().GetPtr(),
 		multipleInstancesAllowed: MultipleInstancesAllowed,
 		allowedSignalProviders:   map[sfPlugins.SignalProvider]struct{}{},
 		allowedRequestProviders:  map[sfPlugins.RequestProvider]struct{}{},
+		functionWorkerPoolConfig: NewSFWorkerPoolConfig(WPLoadDefault),
 	}
 	ft.allowedSignalProviders[sfPlugins.AutoSignalSelect] = struct{}{}
 	return ft
@@ -48,13 +48,18 @@ func (ftc *FunctionTypeConfig) SetMsgAckWaitMs(msgAckWaitMs int) *FunctionTypeCo
 	return ftc
 }
 
+// Deprecated
 func (ftc *FunctionTypeConfig) SetMsgChannelSize(msgChannelSize int) *FunctionTypeConfig {
-	ftc.msgChannelSize = msgChannelSize
 	return ftc
 }
 
+func (ftc *FunctionTypeConfig) SetIdChannelSize(idChannelSize int) *FunctionTypeConfig {
+	ftc.idChannelSize = idChannelSize
+	return ftc
+}
+
+// Deprecated
 func (ftc *FunctionTypeConfig) SetMsgAckChannelSize(msgAckChannelSize int) *FunctionTypeConfig {
-	ftc.msgAckChannelSize = msgAckChannelSize
 	return ftc
 }
 
@@ -116,5 +121,15 @@ func (ftc *FunctionTypeConfig) SetOptions(options *easyjson.JSON) *FunctionTypeC
 
 // Deprecated
 func (ftc *FunctionTypeConfig) SetMaxIdHandlers(maxIdHandlers int) *FunctionTypeConfig {
+	return ftc
+}
+
+func (ftc *FunctionTypeConfig) SetWorkerPoolConfig(functionWorkerPoolConfig SFWorkerPoolConfig) *FunctionTypeConfig {
+	ftc.functionWorkerPoolConfig = functionWorkerPoolConfig
+	return ftc
+}
+
+func (ftc *FunctionTypeConfig) SetWorkerPoolLoadType(wpLoadType WPLoadType) *FunctionTypeConfig {
+	ftc.functionWorkerPoolConfig = NewSFWorkerPoolConfig(wpLoadType)
 	return ftc
 }

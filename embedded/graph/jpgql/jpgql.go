@@ -1,5 +1,3 @@
-
-
 // Foliage graph store jpgql package.
 // Provides stateful functions of json-path graph query language for the graph store
 package jpgql
@@ -24,7 +22,7 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 		runtime,
 		"functions.graph.api.query.jpgql.ctra",
 		JPGQLCallTreeResultAggregation,
-		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMultipleInstancesAllowance(false).SetMaxIdHandlers(-1),
+		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMultipleInstancesAllowance(false),
 	)
 }
 

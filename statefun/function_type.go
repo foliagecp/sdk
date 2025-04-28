@@ -27,16 +27,21 @@ type FunctionType struct {
 	config       FunctionTypeConfig
 	logicHandler FunctionLogicHandler
 
+	idHandlersChannel     sync.Map
 	idKeyMutex            system.KeyMutex
 	idHandlersLastMsgTime sync.Map
 	contextProcessors     sync.Map
 
 	executor      *sfPlugins.TypenameExecutorPlugin
 	resourceMutex sync.Mutex
+
+	sfWorkerPool *SFWorkerPool
+	tokens       system.TokenBucket
 }
 
 const (
 	contextExpirationKey = "____ctx_expires_after_ms"
+	sendMsgFuncErrorMsg  = "task refuse for statefun %s with id=%s: %s"
 )
 
 func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHandler, config FunctionTypeConfig) *FunctionType {
@@ -47,7 +52,9 @@ func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHa
 		logicHandler: logicHandler,
 		idKeyMutex:   system.NewKeyMutex(),
 		config:       config,
+		tokens:       *system.NewTokenBucket(config.functionWorkerPoolConfig.MaxWorkers + config.functionWorkerPoolConfig.TaskQueueLen),
 	}
+	ft.sfWorkerPool = NewSFWorkerPool(ft, config.functionWorkerPoolConfig)
 	runtime.registeredFunctionTypes[ft.name] = ft
 	return ft
 }
@@ -62,20 +69,31 @@ func (ft *FunctionType) SetExecutor(alias string, content string, constructor fu
 func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	id := ft.runtime.Domain.CreateObjectIDWithThisDomain(originId, false)
 
+	if !ft.tokens.TryAcquire() {
+		msg.RefusalCallback()
+		logger.Logf(logger.ErrorLevel, sendMsgFuncErrorMsg, ft.name, id, "no tokens left")
+		return
+	}
+
+	var msgChannel chan FunctionTypeMsg
+	if value, ok := ft.idHandlersChannel.Load(id); ok {
+		msgChannel = value.(chan FunctionTypeMsg)
+	} else {
+		msgChannel = make(chan FunctionTypeMsg, ft.config.idChannelSize)
+		ft.idHandlersChannel.Store(id, msgChannel)
+	}
+
 	ft.idHandlersLastMsgTime.Store(id, time.Now().UnixNano())
 	if ft.executor != nil {
 		ft.executor.AddForID(id)
 	}
 
-	task := SFWorkerTask{
-		Ft: ft,
-		Msg: SFWorkerMessage{
-			ID:   id,
-			Data: msg,
-		},
-	}
-	if err := ft.runtime.sfWorkerPool.Submit(task); err != nil {
-		logger.Logf(logger.ErrorLevel, "task refuse for statefun %s with id=%s, cannot accept message: %s", ft.name, id, err.Error())
+	select {
+	case msgChannel <- msg:
+		ft.sfWorkerPool.Notify()
+	default:
+		logger.Logf(logger.ErrorLevel, sendMsgFuncErrorMsg, ft.name, id, "queue for current id is full")
+		ft.tokens.Release()
 		msg.RefusalCallback()
 	}
 }
@@ -208,6 +226,7 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 			ft.idKeyMutex.Lock(id)
 
 			ft.idHandlersLastMsgTime.Delete(id)
+			ft.idHandlersChannel.Delete(id)
 			ft.contextProcessors.Delete(id)
 			if ft.executor != nil {
 				ft.executor.RemoveForID(id)

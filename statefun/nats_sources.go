@@ -16,7 +16,7 @@ import (
 
 func AddRequestSourceNatsCore(ft *FunctionType) error {
 	_, err := ft.runtime.nc.Subscribe(RequestPrefix+"."+ft.runtime.Domain.name+"."+ft.name+".*", func(msg *nats.Msg) {
-		system.MsgOnErrorReturn(handleNatsMsg(ft, msg, true, nil))
+		system.MsgOnErrorReturn(handleNatsMsg(ft, msg, true))
 	})
 
 	if err != nil {
@@ -53,23 +53,11 @@ func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType) error {
 	}
 	// --------------------------------------------------------------
 
-	// For auto message acking msg ----------------------------------
-	msgAcker := func(msgAckChannel chan *nats.Msg) {
-		system.GlobalPrometrics.GetRoutinesCounter().Started("AddSignalSourceJetstreamQueuePushConsumer-msgAcker")
-		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("AddSignalSourceJetstreamQueuePushConsumer-msgAcker")
-		for msg := range msgAckChannel {
-			system.MsgOnErrorReturn(msg.Ack())
-		}
-	}
-	msgAckChannel := make(chan *nats.Msg, ft.config.msgAckChannelSize)
-	go msgAcker(msgAckChannel)
-	// --------------------------------------------------------------
-
 	_, err := ft.runtime.js.QueueSubscribe(
 		ft.subject,
 		consumerGroup,
 		func(msg *nats.Msg) {
-			system.MsgOnErrorReturn(handleNatsMsg(ft, msg, false, msgAckChannel))
+			system.MsgOnErrorReturn(handleNatsMsg(ft, msg, false))
 		},
 		nats.Bind(ft.getStreamName(), consumerName),
 		nats.ManualAck(),
@@ -81,7 +69,7 @@ func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType) error {
 	return nil
 }
 
-func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool, msgAckChannel chan *nats.Msg) (err error) {
+func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool) (err error) {
 	tokens := strings.Split(msg.Subject, ".")
 	id := tokens[len(tokens)-1]
 
@@ -131,9 +119,7 @@ func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool, msgAckCha
 	} else {
 		functionMsg.AckCallback = func(ack bool) {
 			if ack {
-				if msgAckChannel != nil {
-					msgAckChannel <- msg
-				}
+				system.MsgOnErrorReturn(msg.Ack())
 			} else {
 				system.MsgOnErrorReturn(msg.Nak())
 			}
