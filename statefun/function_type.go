@@ -94,7 +94,7 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	default:
 		ft.tokens.Release()
 		msg.RefusalCallback(false) // Can try to rediliver cause free tokens still exists, system have scaling resources
-		logger.Logf(logger.ErrorLevel, sendMsgFuncErrorMsg, ft.name, id, "queue for current id is full")
+		logger.Logf(logger.WarnLevel, sendMsgFuncErrorMsg, ft.name, id, "queue for current id is full")
 	}
 }
 
