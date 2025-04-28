@@ -70,7 +70,7 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	id := ft.runtime.Domain.CreateObjectIDWithThisDomain(originId, false)
 
 	if !ft.tokens.TryAcquire() {
-		msg.RefusalCallback(true)
+		msg.RefusalCallback(true) // No redelivering cause system have no more scaling resources!
 		logger.Logf(logger.ErrorLevel, sendMsgFuncErrorMsg, ft.name, id, "no tokens left")
 		return
 	}
@@ -93,7 +93,7 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 		ft.sfWorkerPool.Notify()
 	default:
 		ft.tokens.Release()
-		msg.RefusalCallback(true)
+		msg.RefusalCallback(false) // Can try to rediliver cause free tokens still exists, system have scaling resources
 		logger.Logf(logger.ErrorLevel, sendMsgFuncErrorMsg, ft.name, id, "queue for current id is full")
 	}
 }
