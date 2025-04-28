@@ -164,6 +164,7 @@ func (r *Runtime) handleSingleInstanceFunctions(ctx context.Context, revisions m
 			if err != nil {
 				if errors.Is(err, ErrMutexLocked) {
 					lg.Logf(lg.WarnLevel, "Function type %s is already running elsewhere; skipping", ft.name)
+					revisions[ftName] = 0 // 0 means that the function is already running elsewhere
 					continue
 				}
 				return err
@@ -184,6 +185,16 @@ func (r *Runtime) handleSingleInstanceFunctions(ctx context.Context, revisions m
 // startFunctionSubscriptions starts the function subscriptions based on the configuration.
 func (r *Runtime) startFunctionSubscriptions(ctx context.Context, revisions map[string]uint64) error {
 	for _, ft := range r.registeredFunctionTypes {
+		revision, exist := revisions[ft.name]
+		if !exist {
+			lg.Logf(lg.WarnLevel, "Function type %s is not registered; skipping", ft.name)
+			continue
+		}
+		if !ft.config.multipleInstancesAllowed && revision == 0 {
+			lg.Logf(lg.WarnLevel, "Function type %s is already running; skipping", ft.name)
+			continue
+		}
+
 		if ft.config.IsSignalProviderAllowed(sfPlugins.JetstreamGlobalSignal) {
 			if err := AddSignalSourceJetstreamQueuePushConsumer(ft); err != nil {
 				return err
@@ -284,6 +295,14 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 	ticker := time.NewTicker(time.Duration(r.config.kvMutexLifeTimeSec) / 2 * time.Second)
 	defer ticker.Stop()
 
+	//release all functions
+	releaseAllLocks := func(ctx context.Context, runtime *Runtime, revisions map[string]uint64) {
+		for ftName, revID := range revisions {
+			KeyMutexUnlock(ctx, runtime, system.GetHashStr(ftName), revID)
+		}
+	}
+	defer releaseAllLocks(ctx, r, revisions)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -291,12 +310,30 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 		case <-r.shutdown:
 			return
 		case <-ticker.C:
+			subscribeRequired := false //if true, need to subscribe on all functions
 			for ftName, revID := range revisions {
-				newRevID, err := KeyMutexLockUpdate(ctx, r, system.GetHashStr(ftName), revID)
-				if err != nil {
-					lg.Logf(lg.ErrorLevel, "KeyMutexLockUpdate failed for %s: %v", ftName, err)
+				if revID != 0 {
+					newRevID, err := KeyMutexLockUpdate(ctx, r, system.GetHashStr(ftName), revID)
+					if err != nil {
+						lg.Logf(lg.ErrorLevel, "KeyMutexLockUpdate failed for %s: %v", ftName, err)
+					} else {
+						revisions[ftName] = newRevID
+					}
 				} else {
-					revisions[ftName] = newRevID
+					newRevID, err := KeyMutexLock(ctx, r, system.GetHashStr(ftName), true)
+					if err != nil {
+						lg.Logf(lg.TraceLevel, "KeyMutexLock failed for %s: %v", ftName, err) //try to take the lock
+					} else {
+						subscribeRequired = true
+						revisions[ftName] = newRevID
+						lg.Logf(lg.DebugLevel, "KeyMutexLock succeeded for %s", ftName)
+					}
+				}
+			}
+
+			if subscribeRequired {
+				if err := r.startFunctionSubscriptions(ctx, revisions); err != nil {
+					lg.Logf(lg.ErrorLevel, "function subscriptions failed: %v", err)
 				}
 			}
 		}
