@@ -113,10 +113,7 @@ func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool) (err erro
 		functionMsg.RequestCallback = func(data *easyjson.JSON) {
 			system.MsgOnErrorReturn(msg.Respond(data.ToBytes()))
 		}
-		functionMsg.RefusalCallback = func() {
-			system.MsgOnErrorReturn(msg.Respond([]byte{}))
-		}
-		functionMsg.SkipCallback = func() {
+		functionMsg.RefusalCallback = func(_ bool) {
 			system.MsgOnErrorReturn(msg.Respond([]byte{}))
 		}
 	} else {
@@ -127,11 +124,13 @@ func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool) (err erro
 				system.MsgOnErrorReturn(msg.Nak())
 			}
 		}
-		functionMsg.RefusalCallback = func() {
-			system.MsgOnErrorReturn(msg.Nak())
-		}
-		functionMsg.SkipCallback = func() {
-			system.MsgOnErrorReturn(msg.Ack())
+		functionMsg.RefusalCallback = func(skipForever bool) {
+			if skipForever {
+				system.MsgOnErrorReturn(msg.Ack())
+			} else {
+				system.MsgOnErrorReturn(msg.Nak())
+			}
+
 		}
 	}
 	// ------------------------------------------------
