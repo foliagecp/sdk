@@ -8,6 +8,7 @@ import (
 
 const (
 	MsgAckWaitTimeoutMs      = 10000
+	msgMaxDeliver            = 4
 	IdChannelSize            = 10
 	BalanceNeeded            = true
 	MutexLifetimeSec         = 120
@@ -17,6 +18,7 @@ const (
 
 type FunctionTypeConfig struct {
 	msgAckWaitMs             int
+	msgMaxDeliver            int
 	idChannelSize            int
 	balanceNeeded            bool
 	mutexLifeTimeSec         int
@@ -30,6 +32,7 @@ type FunctionTypeConfig struct {
 func NewFunctionTypeConfig() *FunctionTypeConfig {
 	ft := &FunctionTypeConfig{
 		msgAckWaitMs:             MsgAckWaitTimeoutMs,
+		msgMaxDeliver:            msgMaxDeliver,
 		idChannelSize:            system.GetEnvMustProceed[int]("DEFAULT_FT_ID_CHANNEL_SIZE", IdChannelSize),
 		balanceNeeded:            BalanceNeeded,
 		mutexLifeTimeSec:         MutexLifetimeSec,
@@ -45,6 +48,11 @@ func NewFunctionTypeConfig() *FunctionTypeConfig {
 
 func (ftc *FunctionTypeConfig) SetMsgAckWaitMs(msgAckWaitMs int) *FunctionTypeConfig {
 	ftc.msgAckWaitMs = msgAckWaitMs
+	return ftc
+}
+
+func (ftc *FunctionTypeConfig) SetMsgMaxDeliver(msgMaxDeliver int) *FunctionTypeConfig {
+	ftc.msgMaxDeliver = msgMaxDeliver
 	return ftc
 }
 

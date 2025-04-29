@@ -48,6 +48,7 @@ func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType) error {
 			FilterSubject:  ft.subject,
 			AckPolicy:      nats.AckExplicitPolicy,
 			AckWait:        time.Duration(ft.config.msgAckWaitMs) * time.Millisecond, // AckWait should be long due to async message Ack
+			MaxDeliver:     ft.config.msgMaxDeliver,
 		})
 		system.MsgOnErrorReturn(err)
 	}
