@@ -8,7 +8,7 @@ import (
 
 const (
 	MsgAckWaitTimeoutMs      = 10000
-	msgMaxDeliver            = 4
+	msgMaxDeliver            = 5
 	IdChannelSize            = 10
 	BalanceNeeded            = true
 	MutexLifetimeSec         = 120
