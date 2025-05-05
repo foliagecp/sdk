@@ -66,6 +66,17 @@ func (ft *FunctionType) SetExecutor(alias string, content string, constructor fu
 	return nil
 }
 
+func (ft *FunctionType) prometricsMeasureIdChannels() {
+	activeIDChannels := 0
+	ft.idHandlersChannel.Range(func(key, value any) bool {
+		activeIDChannels++
+		return true
+	})
+	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_active_id_channels", "", []string{"typename"}); err == nil {
+		gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(float64(activeIDChannels))
+	}
+}
+
 func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	id := ft.runtime.Domain.CreateObjectIDWithThisDomain(originId, false)
 
@@ -75,6 +86,10 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 		return
 	}
 
+	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_tokens_percentage", "", []string{"typename"}); err == nil {
+		gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(ft.tokens.GetLoadPercentage())
+	}
+
 	var msgChannel chan FunctionTypeMsg
 	if value, ok := ft.idHandlersChannel.Load(id); ok {
 		msgChannel = value.(chan FunctionTypeMsg)
@@ -82,6 +97,7 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 		msgChannel = make(chan FunctionTypeMsg, ft.config.idChannelSize)
 		ft.idHandlersChannel.Store(id, msgChannel)
 	}
+	ft.prometricsMeasureIdChannels()
 
 	ft.idHandlersLastMsgTime.Store(id, time.Now().UnixNano())
 	if ft.executor != nil {
@@ -231,6 +247,8 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 			if ft.executor != nil {
 				ft.executor.RemoveForID(id)
 			}
+
+			ft.prometricsMeasureIdChannels()
 
 			garbageCollected++
 			//lg.Logf(">>>>>>>>>>>>>> Garbage collected handler for %s:%s", ft.name, id)

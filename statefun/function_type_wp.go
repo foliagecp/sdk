@@ -9,6 +9,7 @@ import (
 	"github.com/foliagecp/sdk/statefun/logger"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 type SFWorkerPoolConfig struct {
@@ -184,6 +185,18 @@ func (wp *SFWorkerPool) manager() {
 		select {
 		case <-wp.notifyCh:
 			drainFunctionTypeIDChannels()
+
+			if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_worker_pool_task_queue_load_percentage", "", []string{"typename"}); err == nil {
+				gaugeVec.With(prometheus.Labels{"typename": wp.ft.name}).Set(wp.GetWorkerPoolLoadPercentage())
+			}
+			loadedWorkersPercent, idleWorkersPercent := wp.GetWorkerPercentage()
+			if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_worker_pool_loaded_workers_percentage", "", []string{"typename"}); err == nil {
+				gaugeVec.With(prometheus.Labels{"typename": wp.ft.name}).Set(loadedWorkersPercent)
+			}
+			if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_worker_pool_idle_workers_percentage", "", []string{"typename"}); err == nil {
+				gaugeVec.With(prometheus.Labels{"typename": wp.ft.name}).Set(idleWorkersPercent)
+			}
+
 		case <-wp.stopCh:
 			return
 		}
@@ -303,4 +316,18 @@ func (wp *SFWorkerPool) Stop() {
 	wp.mu.Unlock()
 
 	wp.wg.Wait()
+}
+
+func (wp *SFWorkerPool) GetWorkerPoolLoadPercentage() float64 {
+	return 100.0 * float64(len(wp.taskQueue)) / float64(cap(wp.taskQueue))
+}
+
+func (wp *SFWorkerPool) GetWorkerPercentage() (loadedWorkers float64, idleWorkers float64) {
+	wp.mu.Lock()
+	defer wp.mu.Unlock()
+
+	loadedWorkers = 100.0 * float64(wp.workers) / float64(wp.maxWorkers)
+	idleWorkers = 100.0 * float64(wp.idleWorkers) / float64(wp.maxWorkers)
+
+	return
 }

@@ -31,3 +31,7 @@ func (tb *TokenBucket) Release() {
 	default:
 	}
 }
+
+func (tb *TokenBucket) GetLoadPercentage() float64 {
+	return 100.0 * (1.0 - float64(len(tb.tokens))/float64(cap(tb.tokens)))
+}
