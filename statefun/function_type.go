@@ -77,6 +77,37 @@ func (ft *FunctionType) prometricsMeasureIdChannels() {
 	}
 }
 
+type MeasureMsgDeliverType string
+
+const (
+	NatsPub           MeasureMsgDeliverType = "nats_pub"
+	NatsPubRedelivery MeasureMsgDeliverType = "nats_pub_redeliver"
+	NatsReq           MeasureMsgDeliverType = "nats_req"
+	GolangReq         MeasureMsgDeliverType = "golang_req"
+)
+
+func (ft *FunctionType) prometricsMeasureMsgDeliver(deliveryType MeasureMsgDeliverType) {
+	buckets := []float64{1.0}
+	labelNames := []string{"typename", "delivery_type"}
+
+	histogram, err := system.GlobalPrometrics.EnsureHistogramVecSimple("ft_msg_delivery", "messages receive", buckets, labelNames)
+	if err != nil {
+		lg.Logf(lg.ErrorLevel, "Failed to create histogram: %s", err.Error())
+	}
+
+	histogram.WithLabelValues(ft.name, string(deliveryType)).Observe(1.0)
+
+	/*activeIDChannels := 0
+	ft.idHandlersChannel.Range(func(key, value any) bool {
+		activeIDChannels++
+		return true
+	})
+	system.GlobalPrometrics.EnsureHistogramVec()
+	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_msg_delivery", "", []string{"typename", "delivery_type"}); err == nil {
+		gaugeVec.With(prometheus.Labels{"typename": ft.name, "delivery_type": string(deliveryType)}).Set(float64(1.0))
+	}*/
+}
+
 func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	id := ft.runtime.Domain.CreateObjectIDWithThisDomain(originId, false)
 

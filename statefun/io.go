@@ -312,6 +312,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 				close(resultJSONChannel)
 			}
 
+			targetFT.prometricsMeasureMsgDeliver(GolangReq)
 			targetFT.sendMsg(targetID, functionMsg)
 
 			select {

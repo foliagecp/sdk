@@ -16,6 +16,7 @@ import (
 
 func AddRequestSourceNatsCore(ft *FunctionType) error {
 	_, err := ft.runtime.nc.Subscribe(RequestPrefix+"."+ft.runtime.Domain.name+"."+ft.name+".*", func(msg *nats.Msg) {
+		ft.prometricsMeasureMsgDeliver(NatsReq)
 		system.MsgOnErrorReturn(handleNatsMsg(ft, msg, true))
 	})
 
@@ -58,6 +59,12 @@ func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType) error {
 		ft.subject,
 		consumerGroup,
 		func(msg *nats.Msg) {
+			ft.prometricsMeasureMsgDeliver(NatsPub)
+			if meta, err := msg.Metadata(); err == nil {
+				if meta.NumDelivered > 1 {
+					ft.prometricsMeasureMsgDeliver(NatsPubRedelivery)
+				}
+			}
 			system.MsgOnErrorReturn(handleNatsMsg(ft, msg, false))
 		},
 		nats.Bind(ft.getStreamName(), consumerName),

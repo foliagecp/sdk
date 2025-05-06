@@ -186,20 +186,22 @@ func (wp *SFWorkerPool) manager() {
 		case <-wp.notifyCh:
 			drainFunctionTypeIDChannels()
 
-			if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_worker_pool_task_queue_load_percentage", "", []string{"typename"}); err == nil {
-				gaugeVec.With(prometheus.Labels{"typename": wp.ft.name}).Set(wp.GetWorkerPoolLoadPercentage())
-			}
-			loadedWorkersPercent, idleWorkersPercent := wp.GetWorkerPercentage()
-			if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_worker_pool_loaded_workers_percentage", "", []string{"typename"}); err == nil {
-				gaugeVec.With(prometheus.Labels{"typename": wp.ft.name}).Set(loadedWorkersPercent)
-			}
-			if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_worker_pool_idle_workers_percentage", "", []string{"typename"}); err == nil {
-				gaugeVec.With(prometheus.Labels{"typename": wp.ft.name}).Set(idleWorkersPercent)
-			}
-
 		case <-wp.stopCh:
 			return
 		}
+	}
+}
+
+func (wp *SFWorkerPool) prometricsMeasures() {
+	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_worker_pool_task_queue_load_percentage", "", []string{"typename"}); err == nil {
+		gaugeVec.With(prometheus.Labels{"typename": wp.ft.name}).Set(wp.GetWorkerPoolLoadPercentage())
+	}
+	loadedWorkersPercent, idleWorkersPercent := wp.GetWorkerPercentage()
+	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_worker_pool_loaded_workers_percentage", "", []string{"typename"}); err == nil {
+		gaugeVec.With(prometheus.Labels{"typename": wp.ft.name}).Set(loadedWorkersPercent)
+	}
+	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_worker_pool_idle_workers_percentage", "", []string{"typename"}); err == nil {
+		gaugeVec.With(prometheus.Labels{"typename": wp.ft.name}).Set(idleWorkersPercent)
 	}
 }
 
@@ -216,6 +218,7 @@ func (wp *SFWorkerPool) worker() {
 		wp.workers--
 		wp.wg.Add(-1)
 		wp.mu.Unlock()
+		wp.prometricsMeasures()
 		logger.Logln(logger.DebugLevel, ">>>>>>>>>>>>>> - WP %s SHRINK: %d", wp.ft.name, wp.workers)
 	}()
 
@@ -286,6 +289,7 @@ func (wp *SFWorkerPool) worker() {
 			timer.Reset(wp.idleTimeout)
 
 			wp.ft.tokens.Release()
+			wp.prometricsMeasures()
 
 		case <-timer.C:
 			wp.mu.Lock()
