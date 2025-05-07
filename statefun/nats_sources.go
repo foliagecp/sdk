@@ -50,6 +50,7 @@ func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType) error {
 			AckPolicy:      nats.AckExplicitPolicy,
 			AckWait:        time.Duration(ft.config.msgAckWaitMs) * time.Millisecond, // AckWait should be long due to async message Ack
 			MaxDeliver:     ft.config.msgMaxDeliver,
+			//MaxAckPending:  ft.TokenCapacity(),
 		})
 		system.MsgOnErrorReturn(err)
 	}
@@ -119,26 +120,33 @@ func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool) (err erro
 	}
 	if requestReply {
 		functionMsg.RequestCallback = func(data *easyjson.JSON) {
-			system.MsgOnErrorReturn(msg.Respond(data.ToBytes()))
+			go func() {
+				system.MsgOnErrorReturn(msg.Respond(data.ToBytes()))
+			}()
 		}
 		functionMsg.RefusalCallback = func(_ bool) {
-			system.MsgOnErrorReturn(msg.Respond([]byte{}))
+			go func() {
+				system.MsgOnErrorReturn(msg.Respond([]byte{}))
+			}()
 		}
 	} else {
 		functionMsg.AckCallback = func(ack bool) {
-			if ack {
-				system.MsgOnErrorReturn(msg.Ack())
-			} else {
-				system.MsgOnErrorReturn(msg.Nak())
-			}
+			go func() {
+				if ack {
+					system.MsgOnErrorReturn(msg.Ack())
+				} else {
+					system.MsgOnErrorReturn(msg.Nak())
+				}
+			}()
 		}
 		functionMsg.RefusalCallback = func(skipForever bool) {
-			if skipForever {
-				system.MsgOnErrorReturn(msg.Ack())
-			} else {
-				system.MsgOnErrorReturn(msg.Nak())
-			}
-
+			go func() {
+				if skipForever {
+					system.MsgOnErrorReturn(msg.Ack())
+				} else {
+					system.MsgOnErrorReturn(msg.Nak())
+				}
+			}()
 		}
 	}
 	// ------------------------------------------------
