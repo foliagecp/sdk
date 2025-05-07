@@ -1,13 +1,13 @@
 package system
 
 type TokenBucket struct {
-	capacity int
+	Capacity int
 	tokens   chan struct{}
 }
 
 func NewTokenBucket(cap int) *TokenBucket {
 	tb := &TokenBucket{
-		capacity: cap,
+		Capacity: cap,
 		tokens:   make(chan struct{}, cap),
 	}
 	for i := 0; i < cap; i++ {
