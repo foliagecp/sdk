@@ -3,7 +3,6 @@ package statefun
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -108,17 +107,33 @@ func (ft *FunctionType) prometricsMeasureMsgDeliver(deliveryType MeasureMsgDeliv
 	}*/
 }
 
+func (ft *FunctionType) prometricsMeasureTokensLoad() {
+	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_tokens_percentage", "", []string{"typename"}); err == nil {
+		gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(ft.tokens.GetLoadPercentage())
+	}
+}
+
+func (ft *FunctionType) TokenTryAcquire() bool {
+	defer ft.prometricsMeasureTokensLoad()
+	return ft.tokens.TryAcquire()
+}
+
+func (ft *FunctionType) TokenRelease() {
+	defer ft.prometricsMeasureTokensLoad()
+	ft.tokens.Release()
+}
+
+func (ft *FunctionType) TokenCapacity() int {
+	return ft.tokens.Capacity
+}
+
 func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	id := ft.runtime.Domain.CreateObjectIDWithThisDomain(originId, false)
 
-	if !ft.tokens.TryAcquire() {
+	if !ft.TokenTryAcquire() {
 		msg.RefusalCallback(true) // No redelivering cause system have no more scaling resources!
 		logger.Logf(logger.ErrorLevel, sendMsgFuncErrorMsg, ft.name, id, "no tokens left")
 		return
-	}
-
-	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_tokens_percentage", "", []string{"typename"}); err == nil {
-		gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(ft.tokens.GetLoadPercentage())
 	}
 
 	var msgChannel chan FunctionTypeMsg
@@ -130,19 +145,63 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	}
 	ft.prometricsMeasureIdChannels()
 
+	select {
+	case msgChannel <- msg:
+		ft.sfWorkerPool.Notify()
+	default:
+		ft.TokenRelease()
+		msg.RefusalCallback(false) // Can try to rediliver cause free tokens still exists, system have scaling resources
+		logger.Logf(logger.WarnLevel, sendMsgFuncErrorMsg, ft.name, id, "queue for current id is full")
+	}
+}
+
+func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
+	id = ft.runtime.Domain.CreateObjectIDWithThisDomain(id, false)
+	ft.idKeyMutex.Lock(id)
+
 	ft.idHandlersLastMsgTime.Store(id, time.Now().UnixNano())
 	if ft.executor != nil {
 		ft.executor.AddForID(id)
 	}
 
-	select {
-	case msgChannel <- msg:
-		ft.sfWorkerPool.Notify()
-	default:
-		ft.tokens.Release()
-		msg.RefusalCallback(false) // Can try to rediliver cause free tokens still exists, system have scaling resources
-		logger.Logf(logger.WarnLevel, sendMsgFuncErrorMsg, ft.name, id, "queue for current id is full")
+	var typenameIDContextProcessor *sfPlugins.StatefunContextProcessor
+
+	if v, ok := ft.contextProcessors.Load(id); ok {
+		typenameIDContextProcessor = v.(*sfPlugins.StatefunContextProcessor)
+	} else {
+		v := sfPlugins.StatefunContextProcessor{
+			GetFunctionContext:        func() *easyjson.JSON { return ft.getContext(ft.name + "." + id) },
+			SetFunctionContext:        func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
+			SetContextExpirationAfter: func(after time.Duration) { ft.setContextExpirationAfter(ft.name+"."+id, after) },
+			GetObjectContext:          func() *easyjson.JSON { return ft.getContext(id) },
+			SetObjectContext:          func(context *easyjson.JSON) { ft.setContext(id, context) },
+			Domain:                    ft.runtime.Domain,
+			Self:                      sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
+			Signal: func(signalProvider sfPlugins.SignalProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) error {
+				return ft.runtime.signal(signalProvider, ft.name, id, targetTypename, targetID, j, o)
+			},
+			Request: func(requestProvider sfPlugins.RequestProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
+				return ft.runtime.request(requestProvider, ft.name, id, targetTypename, targetID, j, o)
+			},
+			Egress: func(egressProvider sfPlugins.EgressProvider, j *easyjson.JSON, customId ...string) error {
+				egressId := id
+				if len(customId) > 0 {
+					egressId = customId[0]
+				}
+				return ft.runtime.egress(egressProvider, ft.name, egressId, j)
+			},
+			// To be assigned later:
+			// Call: ...
+			// Payload: ...
+			// Options: ... // Otions from initial typename declaration will be merged and overwritten by the incoming one in message
+			// Caller: ...
+		}
+		ft.contextProcessors.Store(id, &v)
+		typenameIDContextProcessor = &v
 	}
+
+	ft.handleMsgForID(id, msg, typenameIDContextProcessor)
+	ft.idKeyMutex.Unlock(id)
 }
 
 func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameIDContextProcessor *sfPlugins.StatefunContextProcessor) {
@@ -230,9 +289,8 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 	}
 	// -------------------------------------------------------
 
-	measureName := fmt.Sprintf("%s_execution_time", strings.ReplaceAll(ft.name, ".", ""))
-	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple(measureName, "", []string{"id"}); err == nil {
-		gaugeVec.With(prometheus.Labels{"id": id}).Set(float64(time.Since(start).Microseconds()))
+	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_execution_time", "", []string{"typename", "id"}); err == nil {
+		gaugeVec.With(prometheus.Labels{"typename": ft.name, "id": id}).Set(float64(time.Since(start).Microseconds()))
 	}
 
 	if msg.AckCallback != nil {
