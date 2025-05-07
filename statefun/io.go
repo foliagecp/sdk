@@ -305,15 +305,33 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 				Options: optionsCopy,
 			}
 
-			functionMsg.RequestCallback = func(data *easyjson.JSON) {
-				resultJSONChannel <- data.Clone().GetPtr() // Clone().GetPtr() prevents data to contain custom Golang types
+			/*functionMsg.RequestCallback = func(data *easyjson.JSON) {
+				go func() {
+					resultJSONChannel <- data.Clone().GetPtr() // Clone().GetPtr() prevents data to contain custom Golang types
+				}()
 			}
 			functionMsg.RefusalCallback = func(_ bool) {
-				close(resultJSONChannel)
+				go func() {
+					close(resultJSONChannel)
+				}()
 			}
 
 			targetFT.prometricsMeasureMsgDeliver(GolangReq)
-			targetFT.sendMsg(targetID, functionMsg)
+			targetFT.sendMsg(targetID, functionMsg)*/
+
+			functionMsg.RequestCallback = func(data *easyjson.JSON) {
+				go func() {
+					resultJSONChannel <- data.Clone().GetPtr() // Clone().GetPtr() prevents data to contain custom Golang types
+				}()
+			}
+			functionMsg.RefusalCallback = func(_ bool) {
+				go func() {
+					close(resultJSONChannel)
+				}()
+			}
+
+			targetFT.prometricsMeasureMsgDeliver(GolangReq)
+			targetFT.workerTaskExecutor(targetID, functionMsg)
 
 			select {
 			case resultJSON, ok := <-resultJSONChannel:
