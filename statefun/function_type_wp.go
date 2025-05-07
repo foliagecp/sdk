@@ -5,9 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/statefun/logger"
-	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -241,46 +239,7 @@ func (wp *SFWorkerPool) worker() {
 				ft := wp.ft
 				id := task.Msg.ID
 
-				ft.idKeyMutex.Lock(id)
-
-				var typenameIDContextProcessor *sfPlugins.StatefunContextProcessor
-
-				if v, ok := ft.contextProcessors.Load(id); ok {
-					typenameIDContextProcessor = v.(*sfPlugins.StatefunContextProcessor)
-				} else {
-					v := sfPlugins.StatefunContextProcessor{
-						GetFunctionContext:        func() *easyjson.JSON { return ft.getContext(ft.name + "." + id) },
-						SetFunctionContext:        func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
-						SetContextExpirationAfter: func(after time.Duration) { ft.setContextExpirationAfter(ft.name+"."+id, after) },
-						GetObjectContext:          func() *easyjson.JSON { return ft.getContext(id) },
-						SetObjectContext:          func(context *easyjson.JSON) { ft.setContext(id, context) },
-						Domain:                    ft.runtime.Domain,
-						Self:                      sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
-						Signal: func(signalProvider sfPlugins.SignalProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) error {
-							return ft.runtime.signal(signalProvider, ft.name, id, targetTypename, targetID, j, o)
-						},
-						Request: func(requestProvider sfPlugins.RequestProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
-							return ft.runtime.request(requestProvider, ft.name, id, targetTypename, targetID, j, o)
-						},
-						Egress: func(egressProvider sfPlugins.EgressProvider, j *easyjson.JSON, customId ...string) error {
-							egressId := id
-							if len(customId) > 0 {
-								egressId = customId[0]
-							}
-							return ft.runtime.egress(egressProvider, ft.name, egressId, j)
-						},
-						// To be assigned later:
-						// Call: ...
-						// Payload: ...
-						// Options: ... // Otions from initial typename declaration will be merged and overwritten by the incoming one in message
-						// Caller: ...
-					}
-					ft.contextProcessors.Store(id, &v)
-					typenameIDContextProcessor = &v
-				}
-
-				ft.handleMsgForID(id, task.Msg.Data, typenameIDContextProcessor)
-				ft.idKeyMutex.Unlock(id)
+				ft.workerTaskExecutor(id, task.Msg.Data)
 			}
 
 			if !timer.Stop() {
@@ -288,7 +247,7 @@ func (wp *SFWorkerPool) worker() {
 			}
 			timer.Reset(wp.idleTimeout)
 
-			wp.ft.tokens.Release()
+			wp.ft.TokenRelease()
 			wp.prometricsMeasures()
 
 		case <-timer.C:
