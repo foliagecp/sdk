@@ -10,6 +10,7 @@ const (
 	GCIntervalSec               = 5
 	DefaultHubDomainName        = "hub"
 	HandlesDomainRouters        = true
+	EnableTLS                   = true
 )
 
 type RuntimeConfig struct {
@@ -22,6 +23,7 @@ type RuntimeConfig struct {
 	gcIntervalSec                  int
 	desiredHUBDomainName           string
 	handlesDomainRouters           bool
+	enableTLS                      bool
 }
 
 func NewRuntimeConfig() *RuntimeConfig {
@@ -35,6 +37,7 @@ func NewRuntimeConfig() *RuntimeConfig {
 		gcIntervalSec:                  GCIntervalSec,
 		desiredHUBDomainName:           DefaultHubDomainName,
 		handlesDomainRouters:           HandlesDomainRouters,
+		enableTLS:                      EnableTLS,
 	}
 }
 
@@ -85,5 +88,10 @@ func (ro *RuntimeConfig) SetGCIntervalSec(gcIntervalSec int) *RuntimeConfig {
 
 func (ro *RuntimeConfig) SetDomainRoutersHandling(handlesDomainRouters bool) *RuntimeConfig {
 	ro.handlesDomainRouters = handlesDomainRouters
+	return ro
+}
+
+func (ro *RuntimeConfig) SetTLS(enableTLS bool) *RuntimeConfig {
+	ro.enableTLS = enableTLS
 	return ro
 }

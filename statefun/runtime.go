@@ -2,6 +2,7 @@ package statefun
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -50,7 +51,16 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 	}
 
 	var err error
-	r.nc, err = nats.Connect(config.natsURL)
+
+	if r.config.enableTLS {
+		opts := []nats.Option{
+			nats.Secure(&tls.Config{InsecureSkipVerify: true}), // for self-assigned certificates
+		}
+		r.nc, err = nats.Connect(config.natsURL, opts...)
+	} else {
+		r.nc, err = nats.Connect(config.natsURL)
+	}
+
 	if err != nil {
 		return nil, err
 	}
