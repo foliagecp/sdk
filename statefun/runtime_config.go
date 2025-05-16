@@ -10,7 +10,7 @@ const (
 	GCIntervalSec               = 5
 	DefaultHubDomainName        = "hub"
 	HandlesDomainRouters        = true
-	EnableTLS                   = true
+	EnableTLS                   = false
 )
 
 type RuntimeConfig struct {
