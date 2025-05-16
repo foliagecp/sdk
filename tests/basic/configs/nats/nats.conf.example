@@ -3,7 +3,15 @@ port: 4222
 
 websocket: {
     port: 443
-    no_tls: true
+    tls: {
+        cert_file: "/etc/nats/server-cert.pem"
+        key_file: "/etc/nats/server-key.pem"
+    }
+}
+
+tls: {
+    cert_file: "/etc/nats/server-cert.pem"
+    key_file: "/etc/nats/server-key.pem"
 }
 
 jetstream {
