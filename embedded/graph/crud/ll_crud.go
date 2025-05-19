@@ -1,5 +1,3 @@
-
-
 // Foliage graph store crud package.
 // Provides stateful functions of low-level crud operations for the graph store
 package crud
@@ -303,6 +301,7 @@ Request:
 
 	payload: json - required
 		// Initial request from caller:
+		force: bool - optional // Creates even if already exists
 		to: string - required // ID for descendant vertex.
 		name: string - required // Defines link's name which is unique among all vertex's output links.
 		type: string - required // Type of link leading to descendant.
@@ -326,6 +325,8 @@ Reply:
 */
 func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
+
+	forceCreate := ctx.Payload.GetByPath("force").AsBoolDefault(false)
 
 	selfId := strings.Split(ctx.Self.ID, "===")[0]
 	_, err := ctx.Domain.Cache().GetValue(selfId)
@@ -388,20 +389,22 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			return
 		}
 
-		// Check if link with this name already exists --------------
-		_, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfId, linkName))
-		if err == nil {
-			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s already exists", selfId, linkName))).Reply()
-			return
+		if !forceCreate {
+			// Check if link with this name already exists --------------
+			_, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfId, linkName))
+			if err == nil {
+				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s already exists", selfId, linkName))).Reply()
+				return
+			}
+			// ----------------------------------------------------------
+			// Check if link with this type "type" to "to" already exists
+			_, err = ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfId, linkType, toId))
+			if err == nil {
+				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s to=%s with type=%s already exists, two vertices can have a link with this type and direction only once", selfId, linkName, toId, linkType))).Reply()
+				return
+			}
+			// -----------------------------------------------------------
 		}
-		// ----------------------------------------------------------
-		// Check if link with this type "type" to "to" already exists
-		_, err = ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfId, linkType, toId))
-		if err == nil {
-			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s to=%s with type=%s already exists, two vertices can have a link with this type and direction only once", selfId, linkName, toId, linkType))).Reply()
-			return
-		}
-		// -----------------------------------------------------------
 
 		// Create out link on this vertex -------------------------
 		// Set link target ------------------
@@ -497,10 +500,22 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	upsert := payload.GetByPath("upsert").AsBoolDefault(false)
 
+	/*
+		// Check if link with this name already exists --------------
+			_, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfId, linkName))
+			if err == nil {
+				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s already exists", selfId, linkName))).Reply()
+				return
+			}
+			// ----------------------------------------------------------
+	*/
+
 	linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, linkName))
 	if err != nil { // Link does not exist
 		if upsert {
-			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", ctx.Self.ID, ctx.Payload, ctx.Options))).Reply()
+			p := payload.Clone()
+			p.SetByPath("force", easyjson.NewJSON(true))
+			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", ctx.Self.ID, &p, ctx.Options))).Reply()
 		} else {
 			om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 		}
