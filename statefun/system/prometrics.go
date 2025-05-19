@@ -1,6 +1,7 @@
 package system
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"runtime"
@@ -15,33 +16,59 @@ import (
 )
 
 var (
-	PrometricDifferentTypeExistsForIdError error = errors.New("metrics with a different type exists for an id")
-	PrometricInstanceIsNil                 error = errors.New("prometrics instance the method is being call against to is nil")
+	PrometricDifferentTypeExistsForIdError = errors.New("metrics with a different type exists for an id")
+	PrometricInstanceIsNil                 = errors.New("prometrics instance the method is being call against to is nil")
 )
 
 type Prometrics struct {
 	metricsMutex    *sync.Mutex
 	metrics         map[string]any
 	routinesCounter *RoutinesCounter
+	cancelFunc      context.CancelFunc
 }
 
 func NewPrometrics(pattern string, addr string) *Prometrics {
-	pm := &Prometrics{&sync.Mutex{}, map[string]any{}, &RoutinesCounter{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	pm := &Prometrics{
+		metricsMutex:    &sync.Mutex{},
+		metrics:         map[string]any{},
+		routinesCounter: &RoutinesCounter{},
+		cancelFunc:      cancel,
+	}
+
+	// Run HTTP-server with a separate ServeMux
 	go func() {
 		pm.GetRoutinesCounter().Started("prometrics-server")
 		defer pm.GetRoutinesCounter().Stopped("prometrics-server")
+
 		if len(pattern) == 0 {
 			pattern = "/"
 		}
-		http.Handle(pattern, promhttp.Handler())
-		lg.Logln(lg.FatalLevel, http.ListenAndServe(addr, nil).Error())
+
+		mux := http.NewServeMux()
+		mux.Handle(pattern, promhttp.Handler())
+		server := &http.Server{
+			Addr:    addr,
+			Handler: mux,
+		}
+
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			lg.Logln(lg.FatalLevel, err.Error())
+		}
 	}()
 
-	go pm.golangRuntimeStatsCollector()
+	go pm.golangRuntimeStatsCollector(ctx)
+
 	return pm
 }
 
-func (pm *Prometrics) golangRuntimeStatsCollector() {
+func (pm *Prometrics) Shutdown() {
+	if pm.cancelFunc != nil {
+		pm.cancelFunc()
+	}
+}
+
+func (pm *Prometrics) golangRuntimeStatsCollector(ctx context.Context) {
 	pm.GetRoutinesCounter().Started("r.statsGolangStatsCollector")
 	defer pm.GetRoutinesCounter().Stopped("r.statsGolangStatsCollector")
 
@@ -50,23 +77,30 @@ func (pm *Prometrics) golangRuntimeStatsCollector() {
 	}
 
 	mem := &runtime.MemStats{}
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
 	for {
-		runtime.ReadMemStats(mem)
-		if gaugeVec, err := pm.EnsureGaugeVecSimple("fg_runtime_mem_alloc_bytes", "", []string{}); err == nil {
-			gaugeVec.With(prometheus.Labels{}).Set(float64(mem.Alloc))
-		}
-		if gaugeVec, err := pm.EnsureGaugeVecSimple("fg_runtime_routines_counter", "", []string{}); err == nil {
-			gaugeVec.With(prometheus.Labels{}).Set(float64(runtime.NumGoroutine()))
-		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			runtime.ReadMemStats(mem)
 
-		pm.GetRoutinesCounter().Read(func(key string, counter int64) bool {
-			if gaugeVec, err := pm.EnsureGaugeVecSimple("fg_runtime_routines", "", []string{"routine_type_name"}); err == nil {
-				gaugeVec.With(prometheus.Labels{"routine_type_name": key}).Set(float64(counter))
+			if gaugeVec, err := pm.EnsureGaugeVecSimple("fg_runtime_mem_alloc_bytes", "", []string{}); err == nil {
+				gaugeVec.With(prometheus.Labels{}).Set(float64(mem.Alloc))
 			}
-			return true
-		})
+			if gaugeVec, err := pm.EnsureGaugeVecSimple("fg_runtime_routines_counter", "", []string{}); err == nil {
+				gaugeVec.With(prometheus.Labels{}).Set(float64(runtime.NumGoroutine()))
+			}
 
-		time.Sleep(1 * time.Second)
+			pm.GetRoutinesCounter().Read(func(key string, counter int64) bool {
+				if gaugeVec, err := pm.EnsureGaugeVecSimple("fg_runtime_routines", "", []string{"routine_type_name"}); err == nil {
+					gaugeVec.With(prometheus.Labels{"routine_type_name": key}).Set(float64(counter))
+				}
+				return true
+			})
+		}
 	}
 }
 
@@ -88,6 +122,7 @@ func (pm *Prometrics) Exists(id string) bool {
 }
 
 // GaugeVec ---------------------------------------------------------------------------------------
+
 func (pm *Prometrics) EnsureGaugeVecSimple(id string, help string, labelNames []string) (*prometheus.GaugeVec, error) {
 	if pm == nil {
 		return nil, PrometricInstanceIsNil
@@ -106,20 +141,29 @@ func (pm *Prometrics) EnsureGaugeVec(id string, metric *prometheus.GaugeVec) (*p
 	}
 	pm.metricsMutex.Lock()
 	defer pm.metricsMutex.Unlock()
-	if metricAny, ok := pm.metrics[id]; ok {
-		if metric, ok := metricAny.(*prometheus.GaugeVec); ok {
-			return metric, nil
-		} else {
-			return nil, PrometricDifferentTypeExistsForIdError
+
+	if existing, ok := pm.metrics[id]; ok {
+		if gaugeVec, ok := existing.(*prometheus.GaugeVec); ok {
+			return gaugeVec, nil
 		}
+		return nil, PrometricDifferentTypeExistsForIdError
 	}
+
+	if err := prometheus.Register(metric); err != nil {
+		if are, ok := err.(prometheus.AlreadyRegisteredError); ok {
+			existingMetric := are.ExistingCollector.(*prometheus.GaugeVec)
+			pm.metrics[id] = existingMetric
+			return existingMetric, nil
+		}
+		return nil, err
+	}
+
 	pm.metrics[id] = metric
-	return metric, prometheus.Register(*metric)
+	return metric, nil
 }
 
-// ------------------------------------------------------------------------------------------------
-
 // HistogramVec -----------------------------------------------------------------------------------
+
 func (pm *Prometrics) EnsureHistogramVecSimple(id string, help string, buckets []float64, labelNames []string) (*prometheus.HistogramVec, error) {
 	if pm == nil {
 		return nil, PrometricInstanceIsNil
@@ -140,15 +184,25 @@ func (pm *Prometrics) EnsureHistogramVec(id string, metric *prometheus.Histogram
 	}
 	pm.metricsMutex.Lock()
 	defer pm.metricsMutex.Unlock()
-	if metricAny, ok := pm.metrics[id]; ok {
-		if metric, ok := metricAny.(*prometheus.HistogramVec); ok {
-			return metric, nil
-		} else {
-			return nil, PrometricDifferentTypeExistsForIdError
+
+	if existing, ok := pm.metrics[id]; ok {
+		if hist, ok := existing.(*prometheus.HistogramVec); ok {
+			return hist, nil
 		}
+		return nil, PrometricDifferentTypeExistsForIdError
 	}
+
+	if err := prometheus.Register(metric); err != nil {
+		if are, ok := err.(prometheus.AlreadyRegisteredError); ok {
+			existingMetric := are.ExistingCollector.(*prometheus.HistogramVec)
+			pm.metrics[id] = existingMetric
+			return existingMetric, nil
+		}
+		return nil, err
+	}
+
 	pm.metrics[id] = metric
-	return metric, prometheus.Register(*metric)
+	return metric, nil
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -181,7 +235,6 @@ func (rc *RoutinesCounter) Stopped(routineTypeName string) {
 	if rc == nil {
 		return
 	}
-
 	if v, ok := rc.counter.Load(routineTypeName); ok {
 		rcv := v.(*RoutinesCounterValue)
 		rcv.m.Lock()
@@ -197,7 +250,7 @@ func (rc *RoutinesCounter) Read(f func(key string, value int64) bool) {
 	if rc == nil {
 		return
 	}
-	rc.counter.Range(func(k any, v any) bool {
+	rc.counter.Range(func(k, v any) bool {
 		rcv := v.(*RoutinesCounterValue)
 		rcv.m.Lock()
 		res := f(k.(string), rcv.v)
