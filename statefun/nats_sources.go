@@ -50,7 +50,7 @@ func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType) error {
 			AckPolicy:      nats.AckExplicitPolicy,
 			AckWait:        time.Duration(ft.config.msgAckWaitMs) * time.Millisecond, // AckWait should be long due to async message Ack
 			MaxDeliver:     ft.config.msgMaxDeliver,
-			//MaxAckPending:  ft.TokenCapacity(),
+			//MaxAckPending:  ft.TokenCapacity(), // Cannot do this way cause messages for some specific ID can DDoS this consumer and messages for another ID will not be processed without delaying
 		})
 		system.MsgOnErrorReturn(err)
 	}
