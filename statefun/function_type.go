@@ -27,7 +27,7 @@ type FunctionType struct {
 	logicHandler FunctionLogicHandler
 
 	idHandlersChannel     sync.Map
-	idKeyMutex            system.KeyMutex
+	idKeyMutex            *system.KeyMutex
 	idHandlersLastMsgTime sync.Map
 	contextProcessors     sync.Map
 
