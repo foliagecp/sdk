@@ -36,51 +36,57 @@ type refMutex struct {
 // KeyMutex provides per-key mutexes with automatic cleanup
 // once no goroutine holds or is waiting on a given key.
 type KeyMutex struct {
-	m sync.Map // map[key]interface{} => *refMutex
+	m  map[interface{}]*refMutex // map[key]interface{} => *refMutex
+	mx sync.Mutex
 }
 
 // NewKeyMutex constructs a new KeyMutex.
 func NewKeyMutex() *KeyMutex {
-	return &KeyMutex{}
+	return &KeyMutex{
+		m: make(map[interface{}]*refMutex),
+	}
 }
 
 // Lock acquires the mutex for the specified key.
 // It increments the reference count before locking to
 // prevent removal of the mutex while it’s in use.
 func (k *KeyMutex) Lock(key interface{}) {
-	// 1. Atomically load or create the refMutex for this key.
-	actual, _ := k.m.LoadOrStore(key, &refMutex{})
+	k.mx.Lock()
 
-	// 2. Obtain ref mutex
-	rm := actual.(*refMutex)
+	var keyRefMutex *refMutex
+	if tmx, ok := k.m[key]; ok {
+		keyRefMutex = tmx
+	} else {
+		keyRefMutex = &refMutex{}
+		k.m[key] = keyRefMutex
+	}
+	atomic.AddInt32(&keyRefMutex.refs, 1)
 
-	// 3. Bump reference count to signal active usage.
-	atomic.AddInt32(&rm.refs, 1)
+	k.mx.Unlock()
 
-	// 4. Lock the underlying mutex.
-	rm.mu.Lock()
-
-	// 5. Put again if someone managed to delete it while we were making step 2
-	k.m.Store(key, rm)
+	keyRefMutex.mu.Lock()
 }
 
 // Unlock releases the mutex for the specified key.
 // It decrements the reference count and, if it drops to zero,
 // deletes the refMutex entry to free resources.
 func (k *KeyMutex) Unlock(key interface{}) {
-	// Retrieve the stored refMutex.
-	v, ok := k.m.Load(key)
-	if !ok {
+	k.mx.Lock()
+	defer k.mx.Unlock()
+
+	var keyRefMutex *refMutex
+	if tmx, ok := k.m[key]; ok {
+		keyRefMutex = tmx
+	} else {
 		panic("KeyMutex: unlock of unlocked key")
 	}
-	rm := v.(*refMutex)
 
 	// Release the underlying mutex.
-	rm.mu.Unlock()
+	keyRefMutex.mu.Unlock()
 
 	// Decrement reference count and remove from map when unused.
-	if atomic.AddInt32(&rm.refs, -1) == 0 {
-		k.m.Delete(key)
+	if atomic.AddInt32(&keyRefMutex.refs, -1) == 0 {
+		delete(k.m, key)
 	}
 }
 
