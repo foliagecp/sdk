@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/foliagecp/easyjson"
@@ -26,33 +27,55 @@ var (
 	GlobalPrometrics *Prometrics
 )
 
+// refMutex wraps a sync.Mutex together with a reference counter.
+type refMutex struct {
+	mu   sync.Mutex
+	refs int32
+}
+
+// KeyMutex provides per-key mutexes with automatic cleanup
+// once no goroutine holds or is waiting on a given key.
 type KeyMutex struct {
-	m *sync.Map
+	m sync.Map // map[key]interface{} => *refMutex
 }
 
-func NewKeyMutex() KeyMutex {
-	m := sync.Map{}
-	return KeyMutex{&m}
+// NewKeyMutex constructs a new KeyMutex.
+func NewKeyMutex() *KeyMutex {
+	return &KeyMutex{}
 }
 
-func (s KeyMutex) Unlock(key interface{}) {
-	l, exist := s.m.Load(key)
-	if !exist {
-		panic("kmutex: unlock of unlocked mutex")
+// Lock acquires the mutex for the specified key.
+// It increments the reference count before locking to
+// prevent removal of the mutex while it’s in use.
+func (k *KeyMutex) Lock(key interface{}) {
+	// Atomically load or create the refMutex for this key.
+	actual, _ := k.m.LoadOrStore(key, &refMutex{})
+	rm := actual.(*refMutex)
+
+	// Bump reference count to signal active usage.
+	atomic.AddInt32(&rm.refs, 1)
+
+	// Lock the underlying mutex.
+	rm.mu.Lock()
+}
+
+// Unlock releases the mutex for the specified key.
+// It decrements the reference count and, if it drops to zero,
+// deletes the refMutex entry to free resources.
+func (k *KeyMutex) Unlock(key interface{}) {
+	// Retrieve the stored refMutex.
+	v, ok := k.m.Load(key)
+	if !ok {
+		panic("KeyMutex: unlock of unlocked key")
 	}
-	l_ := l.(*sync.Mutex)
-	s.m.Delete(key)
-	l_.Unlock()
-}
+	rm := v.(*refMutex)
 
-func (s KeyMutex) Lock(key interface{}) {
-	m := sync.Mutex{}
-	m_, _ := s.m.LoadOrStore(key, &m)
-	mm := m_.(*sync.Mutex)
-	mm.Lock()
-	if mm != &m {
-		mm.Unlock()
-		s.Lock(key)
+	// Release the underlying mutex.
+	rm.mu.Unlock()
+
+	// Decrement reference count and remove from map when unused.
+	if atomic.AddInt32(&rm.refs, -1) == 0 {
+		k.m.Delete(key)
 	}
 }
 
