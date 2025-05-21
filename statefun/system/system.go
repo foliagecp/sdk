@@ -48,15 +48,20 @@ func NewKeyMutex() *KeyMutex {
 // It increments the reference count before locking to
 // prevent removal of the mutex while it’s in use.
 func (k *KeyMutex) Lock(key interface{}) {
-	// Atomically load or create the refMutex for this key.
+	// 1. Atomically load or create the refMutex for this key.
 	actual, _ := k.m.LoadOrStore(key, &refMutex{})
+
+	// 2. Obtain ref mutex
 	rm := actual.(*refMutex)
 
-	// Bump reference count to signal active usage.
+	// 3. Bump reference count to signal active usage.
 	atomic.AddInt32(&rm.refs, 1)
 
-	// Lock the underlying mutex.
+	// 4. Lock the underlying mutex.
 	rm.mu.Lock()
+
+	// 5. Put again if someone managed to delete it while we were making step 2
+	k.m.Store(key, rm)
 }
 
 // Unlock releases the mutex for the specified key.
