@@ -48,6 +48,11 @@ options: json - optional
 	op_stack: bool - optional
 */
 func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
+		cmdbIdKeyMutex.Lock(ctx.Self.ID)
+		defer cmdbIdKeyMutex.Unlock(ctx.Self.ID)
+	}
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	opStack := getOpStackFromOptions(ctx.Options)
@@ -109,7 +114,8 @@ func findObjectType(ctx *sfPlugins.StatefunContextProcessor, objectID string) st
 		options = ctx.Options.Clone()
 		options.RemoveByPath("op_stack") // Not to execute triggers in functions.cmdb.api.object.read
 	}
-	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", objectID, nil, &options))
+	p := easyjson.NewJSONObject()
+	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", objectID, injectParentLockId(&p, ctx), &options))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
 		return som.Data.GetByPath("type").AsStringDefault("")
 	}
@@ -121,7 +127,8 @@ func findTypeObjects(ctx *sfPlugins.StatefunContextProcessor, typeName string) (
 	if ctx.Options != nil {
 		options = ctx.Options.Clone()
 	}*/
-	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.read", typeName, nil, ctx.Options))
+	p := easyjson.NewJSONObject()
+	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.read", typeName, injectParentLockId(&p, ctx), ctx.Options))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
 		if arr, ok := som.Data.GetByPath("object_ids").AsArrayString(); ok {
 			return arr, nil

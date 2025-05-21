@@ -19,8 +19,19 @@ const (
 )
 
 var (
-	validLinkName = regexp.MustCompile(`\A[a-zA-Z0-9\/_$#@%+=-]+\z`)
+	validLinkName                    = regexp.MustCompile(`\A[a-zA-Z0-9\/_$#@%+=-]+\z`)
+	graphIdKeyMutex *system.KeyMutex = system.NewKeyMutex()
 )
+
+func injectParentLockId(payload *easyjson.JSON, ctx *sfPlugins.StatefunContextProcessor) *easyjson.JSON {
+	parentIdLocks := ctx.Payload.GetByPath("parent_id_locks")
+	if !parentIdLocks.IsNonEmptyObject() {
+		parentIdLocks = easyjson.NewJSONObject()
+	}
+	parentIdLocks.SetByPath(ctx.Self.ID, easyjson.NewJSON(true))
+	payload.SetByPath("parent_id_locks", parentIdLocks)
+	return payload
+}
 
 /*
 Creates a vertex in the graph with an id the function being called with.
@@ -44,6 +55,11 @@ Reply:
 			op_stack: json array - optional
 */
 func LLAPIVertexCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
+		graphIdKeyMutex.Lock(ctx.Self.ID)
+		defer graphIdKeyMutex.Unlock(ctx.Self.ID)
+	}
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	_, err := ctx.Domain.Cache().GetValue(ctx.Self.ID)
@@ -92,6 +108,11 @@ Reply:
 			op_stack: json array - optional
 */
 func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
+		graphIdKeyMutex.Lock(ctx.Self.ID)
+		defer graphIdKeyMutex.Unlock(ctx.Self.ID)
+	}
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	payload := ctx.Payload
@@ -100,7 +121,7 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	_, err := ctx.Domain.Cache().GetValue(ctx.Self.ID)
 	if err != nil { // If vertex does not exist
 		if upsert {
-			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", ctx.Self.ID, ctx.Payload, ctx.Options))).Reply()
+			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", ctx.Self.ID, injectParentLockId(ctx.Payload, ctx), ctx.Options))).Reply()
 		} else {
 			om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("vertex with id=%s does not exist", ctx.Self.ID))).Reply()
 		}
@@ -150,6 +171,11 @@ Reply:
 			op_stack: json array - optional
 */
 func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
+		graphIdKeyMutex.Lock(ctx.Self.ID)
+		defer graphIdKeyMutex.Unlock(ctx.Self.ID)
+	}
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	_, err := ctx.Domain.Cache().GetValue(ctx.Self.ID)
@@ -168,7 +194,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 		deleteLinkPayload := easyjson.NewJSONObject()
 		deleteLinkPayload.SetByPath("name", easyjson.NewJSON(linkName))
-		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", ctx.Self.ID, &deleteLinkPayload, ctx.Options)))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", ctx.Self.ID, injectParentLockId(&deleteLinkPayload, ctx), ctx.Options)))
 		mergeOpStack(opStack, om.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
 			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
@@ -186,7 +212,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 		deleteLinkPayload := easyjson.NewJSONObject()
 		deleteLinkPayload.SetByPath("name", easyjson.NewJSON(linkName))
-		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", fromObjectID, &deleteLinkPayload, ctx.Options)))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", fromObjectID, injectParentLockId(&deleteLinkPayload, ctx), ctx.Options)))
 		mergeOpStack(opStack, om.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
 			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
@@ -235,6 +261,11 @@ Reply:
 			op_stack: json array - optional
 */
 func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
+		graphIdKeyMutex.Lock(ctx.Self.ID)
+		defer graphIdKeyMutex.Unlock(ctx.Self.ID)
+	}
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	_, err := ctx.Domain.Cache().GetValue(ctx.Self.ID)
@@ -324,6 +355,11 @@ Reply:
 			op_stack: json array - optional
 */
 func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
+		graphIdKeyMutex.Lock(ctx.Self.ID)
+		defer graphIdKeyMutex.Unlock(ctx.Self.ID)
+	}
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	forceCreate := ctx.Payload.GetByPath("force").AsBoolDefault(false)
@@ -440,7 +476,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if toId == ctx.Self.ID {
 			targetId = targetId + "===self_link"
 		}
-		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, targetId, &nextCallPayload, ctx.Options)))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, targetId, injectParentLockId(&nextCallPayload, ctx), ctx.Options)))
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
 			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
 			return
@@ -480,6 +516,11 @@ Reply:
 			op_stack: json array - optional
 */
 func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
+		graphIdKeyMutex.Lock(ctx.Self.ID)
+		defer graphIdKeyMutex.Unlock(ctx.Self.ID)
+	}
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	payload := ctx.Payload
@@ -515,7 +556,7 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if upsert {
 			p := payload.Clone()
 			p.SetByPath("force", easyjson.NewJSON(true))
-			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", ctx.Self.ID, &p, ctx.Options))).Reply()
+			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", ctx.Self.ID, injectParentLockId(&p, ctx), ctx.Options))).Reply()
 		} else {
 			om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 		}
@@ -608,6 +649,11 @@ Reply:
 			op_stack: json array - optional
 */
 func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
+		graphIdKeyMutex.Lock(ctx.Self.ID)
+		defer graphIdKeyMutex.Unlock(ctx.Self.ID)
+	}
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	selfId := strings.Split(ctx.Self.ID, "===")[0]
@@ -689,7 +735,7 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if toId == ctx.Self.ID {
 			targetId = targetId + "===self_link"
 		}
-		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, targetId, &nextCallPayload, ctx.Options)))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, targetId, injectParentLockId(&nextCallPayload, ctx), ctx.Options)))
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
 			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
 			return
@@ -732,6 +778,11 @@ Reply:
 			op_stack: json array - optional
 */
 func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
+		graphIdKeyMutex.Lock(ctx.Self.ID)
+		defer graphIdKeyMutex.Unlock(ctx.Self.ID)
+	}
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	opStack := getOpStackFromOptions(ctx.Options)
