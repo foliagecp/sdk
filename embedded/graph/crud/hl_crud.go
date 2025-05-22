@@ -15,12 +15,12 @@ var (
 )
 
 func cmdbIdKeyMutexLock(ctx *sfPlugins.StatefunContextProcessor) {
-	fmt.Printf("%sCMDB Key Lock >>>> %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "===="), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
+	fmt.Printf("%s [%s] CMDB Key Lock >>>> %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "===="), keyMutextGetTimeStr(), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
 	cmdbIdKeyMutex.Lock(ctx.Self.ID)
 }
 
 func cmdbIdKeyMutexUnlock(ctx *sfPlugins.StatefunContextProcessor) {
-	fmt.Printf("%sCMDB Key Unlock >>>> %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "===="), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
+	fmt.Printf("%s [%s] CMDB Key Unlock >>>> %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "===="), keyMutextGetTimeStr(), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
 	cmdbIdKeyMutex.Unlock(ctx.Self.ID)
 }
 

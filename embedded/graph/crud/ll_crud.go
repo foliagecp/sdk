@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/foliagecp/easyjson"
 
@@ -56,13 +57,26 @@ func keyMutexPrintGetParentIdLocksStr(ctx *sfPlugins.StatefunContextProcessor) s
 	return resStr
 }
 
+func keyMutextGetTimeStr() string {
+	now := time.Now()
+
+	hms := now.Format("15:04:05")
+
+	nano := now.Nanosecond()
+	ms := nano / 1_000_000
+	us := (nano / 1_000) % 1_000
+	ns := nano % 1_000
+
+	return fmt.Sprintf("%s.%03d.%03d.%03d", hms, ms, us, ns)
+}
+
 func graphIdKeyMutexLock(ctx *sfPlugins.StatefunContextProcessor) {
-	fmt.Printf("%sGraph Key Lock >>>> %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "----"), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
+	fmt.Printf("%s [%s] Graph Key Lock >>>> %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "----"), keyMutextGetTimeStr(), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
 	graphIdKeyMutex.Lock(ctx.Self.ID)
 }
 
 func graphIdKeyMutexUnlock(ctx *sfPlugins.StatefunContextProcessor) {
-	fmt.Printf("%sGraph Key Unlock <<<< %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "----"), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
+	fmt.Printf("%s [%s] Graph Key Unlock <<<< %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "----"), keyMutextGetTimeStr(), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
 	graphIdKeyMutex.Unlock(ctx.Self.ID)
 }
 
