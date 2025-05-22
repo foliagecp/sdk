@@ -54,7 +54,7 @@ func operationKeysMutexLock(ctx *sfPlugins.StatefunContextProcessor, keys []stri
 	operationMTX.Lock()
 	defer operationMTX.Unlock()
 	if !ctx.Payload.PathExists("__parent_holds_locks") {
-		fmt.Printf("---- [%s] Graph Key Locking >>>> %s prnt_lock:[%s] %s\n", keyMutextGetTimeStr(), ctx.Self.Typename, strings.Join(keys, " "), ctx.Self.ID)
+		fmt.Printf("---- [%s] Graph Key Locking >>>> %s keys:[%s] %s\n", keyMutextGetTimeStr(), ctx.Self.Typename, strings.Join(keys, " "), ctx.Self.ID)
 		keys := system.UniqueStrings(keys)
 		for _, k := range keys {
 			graphIdKeyMutex.Lock(k)
@@ -69,7 +69,7 @@ func operationKeysMutexUnlock(ctx *sfPlugins.StatefunContextProcessor) {
 	defer operationMTX.Unlock()
 	if !ctx.Payload.PathExists("__parent_holds_locks") && ctx.Payload.PathExists("__key_locks") {
 		keys := ctx.Payload.GetByPath("__key_locks").ObjectKeys()
-		fmt.Printf("---- [%s] Graph Key Unlocking <<<< %s prnt_lock:[%s] %s\n", keyMutextGetTimeStr(), ctx.Self.Typename, strings.Join(keys, " "), ctx.Self.ID)
+		fmt.Printf("---- [%s] Graph Key Unlocking <<<< %s keys:[%s] %s\n", keyMutextGetTimeStr(), ctx.Self.Typename, strings.Join(keys, " "), ctx.Self.ID)
 		for _, k := range keys {
 			graphIdKeyMutex.Unlock(k)
 		}

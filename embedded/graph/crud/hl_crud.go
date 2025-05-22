@@ -40,7 +40,7 @@ func replyWithoutOpStack(om *sfMediators.OpMediator, ctx *sfPlugins.StatefunCont
 func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	typesVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false)
 
-	operationKeysMutexLock(ctx, []string{ctx.Self.ID, typesVertexId})
+	operationKeysMutexLock(ctx, []string{ctx.Self.ID})
 
 	if typeOperationRedirectedToHub(ctx) {
 		operationKeysMutexUnlock(ctx)
@@ -211,7 +211,7 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 
 	originType = ctx.Domain.CreateObjectIDWithHubDomain(originType, true)
 	builtInObjectsVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false)
-	operationKeysMutexLock(ctx, []string{ctx.Self.ID, originType, builtInObjectsVertexId})
+	operationKeysMutexLock(ctx, []string{ctx.Self.ID, originType})
 
 	options := ctx.Options.Clone()
 	options.SetByPath("op_stack", easyjson.NewJSON(true))
