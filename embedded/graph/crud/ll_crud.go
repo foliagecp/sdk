@@ -5,6 +5,7 @@ package crud
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -52,6 +53,7 @@ func operationKeysMutexLock(ctx *sfPlugins.StatefunContextProcessor, keys []stri
 	if !ctx.Payload.PathExists("__parent_holds_locks") {
 		fmt.Printf("---- [%s] Graph Key Locking >>>> %s keys:[%s] %s\n", keyMutextGetTimeStr(), ctx.Self.Typename, strings.Join(keys, " "), ctx.Self.ID)
 		keys := system.UniqueStrings(keys)
+		sort.Strings(keys)
 		for _, k := range keys {
 			graphIdKeyMutex.Lock(k)
 			ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.%s", k), easyjson.NewJSON(true))
