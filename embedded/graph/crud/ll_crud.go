@@ -86,17 +86,19 @@ func keyMutextGetTimeStr() string {
 
 func graphIdKeyMutexLock(ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("__parent_id_locks.%s", ctx.Self.ID)) {
-		fmt.Printf("%s [%s] Graph Key Lock >>>> %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "----"), keyMutextGetTimeStr(), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
+		fmt.Printf("%s [%s] Graph Key Locking >>>> %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "----"), keyMutextGetTimeStr(), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
 		graphIdKeyMutex.Lock(ctx.Self.ID)
+		fmt.Printf("%s [%s] Graph Key Locked >>>> %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "----"), keyMutextGetTimeStr(), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
 		ctx.Payload.SetByPath("__my_id_lock", easyjson.NewJSON(ctx.Self.ID))
 	}
 }
 
 func graphIdKeyMutexUnlock(ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("__parent_id_locks.%s", ctx.Self.ID)) && ctx.Payload.PathExists("__my_id_lock") {
-		fmt.Printf("%s [%s] Graph Key Unlock <<<< %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "----"), keyMutextGetTimeStr(), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
 		ctx.Payload.RemoveByPath("__my_id_lock")
+		fmt.Printf("%s [%s] Graph Key Unlocking <<<< %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "----"), keyMutextGetTimeStr(), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
 		graphIdKeyMutex.Unlock(ctx.Self.ID)
+		fmt.Printf("%s [%s] Graph Key Unlocked <<<< %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "----"), keyMutextGetTimeStr(), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
 	}
 }
 
