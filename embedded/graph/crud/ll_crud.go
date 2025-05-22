@@ -52,6 +52,7 @@ func keyMutextGetTimeStr() string {
 func operationKeysMutexLock(ctx *sfPlugins.StatefunContextProcessor, keys []string) {
 	if !ctx.Payload.PathExists("__parent_holds_locks") {
 		fmt.Printf("---- [%s] Graph Key Locking >>>> %s keys:[%s] %s\n", keyMutextGetTimeStr(), ctx.Self.Typename, strings.Join(keys, " "), ctx.Self.ID)
+		fmt.Printf("---- caller %s:%s %s\n", ctx.Caller.Typename, ctx.Caller.ID, ctx.Payload.ToString())
 		keys := system.UniqueStrings(keys)
 		sort.Strings(keys)
 		for _, k := range keys {

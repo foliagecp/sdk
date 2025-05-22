@@ -115,8 +115,7 @@ func findObjectType(ctx *sfPlugins.StatefunContextProcessor, objectID string) (s
 		options = ctx.Options.Clone()
 		options.RemoveByPath("op_stack") // Not to execute triggers in functions.cmdb.api.object.read
 	}
-	p := easyjson.NewJSONObject()
-	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", objectID, injectParentHoldsLocks(&p), &options))
+	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", objectID, injectParentHoldsLocks(nil), &options))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
 		return som.Data.GetByPath("type").AsStringDefault(""), nil
 	}
