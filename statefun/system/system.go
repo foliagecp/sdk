@@ -90,6 +90,18 @@ func (k *KeyMutex) Unlock(key interface{}) {
 	}
 }
 
+func UniqueStrings(input []string) []string {
+	seen := make(map[string]struct{})
+	var result []string
+	for _, val := range input {
+		if _, exists := seen[val]; !exists {
+			seen[val] = struct{}{}
+			result = append(result, val)
+		}
+	}
+	return result
+}
+
 func SortJSONs(jsonArray []*easyjson.JSON, fields []string) []*easyjson.JSON {
 	sorted := make([]*easyjson.JSON, len(jsonArray))
 	copy(sorted, jsonArray)

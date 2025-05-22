@@ -48,7 +48,7 @@ options: json - optional
 	op_stack: bool - optional
 */
 func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	graphIdKeyMutexLock(ctx)
+	operationKeysMutexLock(ctx, []string{ctx.Self.ID})
 
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -56,14 +56,14 @@ func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfP
 
 	linkType, ok := ctx.Payload.GetByPath("link_type").AsString()
 	if !ok {
-		graphIdKeyMutexUnlock(ctx)
+		operationKeysMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("type is not defined")).Reply()
 		return
 	}
 
 	toObjectType, ok := ctx.Payload.GetByPath("to_object_type").AsString()
 	if !ok {
-		graphIdKeyMutexUnlock(ctx)
+		operationKeysMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("to_object_type is not defined")).Reply()
 		return
 	}
@@ -80,10 +80,10 @@ func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfP
 				objectLink.SetByPath("to", easyjson.NewJSON(to))
 				objectLink.SetByPath("type", easyjson.NewJSON(linkType))
 
-				om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", ctx.Self.ID, injectParentLockId(&objectLink, ctx), ctx.Options)))
+				om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", ctx.Self.ID, injectParentHoldsLocks(&objectLink), ctx.Options)))
 				mergeOpStack(opStack, om.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
 				if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
-					graphIdKeyMutexUnlock(ctx)
+					operationKeysMutexUnlock(ctx)
 					system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
 					return
 				}
@@ -91,7 +91,7 @@ func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfP
 		}
 	}
 
-	graphIdKeyMutexUnlock(ctx)
+	operationKeysMutexUnlock(ctx)
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
@@ -102,7 +102,7 @@ func getTypeTriggers(ctx *sfPlugins.StatefunContextProcessor, typeName string) *
 	if ctx.Options != nil {
 		options = ctx.Options.Clone()
 	}*/
-	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", typeName, injectParentLockId(nil, ctx), nil))
+	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", typeName, injectParentHoldsLocks(nil), nil))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
 		return som.Data.GetByPath("body.triggers").GetPtr()
 	}
@@ -116,7 +116,7 @@ func findObjectType(ctx *sfPlugins.StatefunContextProcessor, objectID string) (s
 		options.RemoveByPath("op_stack") // Not to execute triggers in functions.cmdb.api.object.read
 	}
 	p := easyjson.NewJSONObject()
-	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", objectID, injectParentLockId(&p, ctx), &options))
+	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", objectID, injectParentHoldsLocks(&p), &options))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
 		return som.Data.GetByPath("type").AsStringDefault(""), nil
 	}
@@ -129,7 +129,7 @@ func findTypeObjects(ctx *sfPlugins.StatefunContextProcessor, typeName string) (
 		options = ctx.Options.Clone()
 	}*/
 	p := easyjson.NewJSONObject()
-	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.read", typeName, injectParentLockId(&p, ctx), ctx.Options))
+	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.read", typeName, injectParentHoldsLocks(&p), ctx.Options))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
 		if arr, ok := som.Data.GetByPath("object_ids").AsArrayString(); ok {
 			return arr, nil
@@ -146,7 +146,7 @@ func getLinkBody(ctx *sfPlugins.StatefunContextProcessor, from, linkName string)
 	if ctx.Options != nil {
 		options = ctx.Options.Clone()
 	}*/
-	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", from, injectParentLockId(&link, ctx), ctx.Options))
+	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", from, injectParentHoldsLocks(&link), ctx.Options))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
 		if som.Data.PathExists("body") {
 			return som.Data.GetByPathPtr("body"), nil
@@ -159,7 +159,6 @@ func getLinkBody(ctx *sfPlugins.StatefunContextProcessor, from, linkName string)
 func getReferenceLinkTypeBetweenTwoObjects(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId string) (string, string, string, error) {
 	fromType, err := findObjectType(ctx, fromObjectId)
 	if err != nil {
-		fmt.Println("!!!!!!!!!!!", ctx.Self.Typename, ctx.Self.ID, ctx.Caller.Typename, ctx.Caller.ID, ctx.Payload.ToString())
 		return "", "", "", err
 	}
 	toType, err := findObjectType(ctx, toObjectId)
