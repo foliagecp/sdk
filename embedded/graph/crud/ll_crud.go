@@ -25,19 +25,33 @@ var (
 )
 
 func injectParentLockId(downstreamPayload *easyjson.JSON, ctx *sfPlugins.StatefunContextProcessor) *easyjson.JSON {
-	newDownstreamPayload := downstreamPayload.Clone()
+	var newDownstreamPayload easyjson.JSON
+	if downstreamPayload != nil && downstreamPayload.IsNonEmptyObject() {
+		newDownstreamPayload = downstreamPayload.Clone()
+	} else {
+		newDownstreamPayload = easyjson.NewJSONObject()
+	}
 
-	parentIdLocks := ctx.Payload.GetByPath("parent_id_locks")
-	if !parentIdLocks.IsNonEmptyObject() {
+	var parentIdLocks easyjson.JSON
+	if ctx.Payload.PathExists("__parent_id_locks") {
+		parentIdLocks = ctx.Payload.GetByPath("__parent_id_locks").Clone()
+	} else {
 		parentIdLocks = easyjson.NewJSONObject()
 	}
-	parentIdLocks.SetByPath(ctx.Self.ID, easyjson.NewJSON(true))
-	newDownstreamPayload.SetByPath("parent_id_locks", parentIdLocks)
+
+	myIdLock := ctx.Payload.GetByPath("__my_id_lock").AsStringDefault("")
+	if len(myIdLock) > 0 {
+		parentIdLocks.SetByPath(myIdLock, easyjson.NewJSON(true))
+	}
+	if parentIdLocks.KeysCount() > 0 {
+		newDownstreamPayload.SetByPath("__parent_id_locks", parentIdLocks)
+	}
+
 	return &newDownstreamPayload
 }
 
 func keyMutexPrintGetSpaceIndent(ctx *sfPlugins.StatefunContextProcessor, indentStr string) string {
-	keys := ctx.Payload.GetByPath("parent_id_locks").KeysCount()
+	keys := ctx.Payload.GetByPath("__parent_id_locks").KeysCount()
 	spaceIndent := ""
 	for i := 0; i < keys+1; i++ {
 		spaceIndent += indentStr
@@ -46,7 +60,7 @@ func keyMutexPrintGetSpaceIndent(ctx *sfPlugins.StatefunContextProcessor, indent
 }
 
 func keyMutexPrintGetParentIdLocksStr(ctx *sfPlugins.StatefunContextProcessor) string {
-	keys := ctx.Payload.GetByPath("parent_id_locks").ObjectKeys()
+	keys := ctx.Payload.GetByPath("__parent_id_locks").ObjectKeys()
 	resStr := ""
 	for i, k := range keys {
 		if i > 0 {
@@ -71,13 +85,19 @@ func keyMutextGetTimeStr() string {
 }
 
 func graphIdKeyMutexLock(ctx *sfPlugins.StatefunContextProcessor) {
-	fmt.Printf("%s [%s] Graph Key Lock >>>> %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "----"), keyMutextGetTimeStr(), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
-	graphIdKeyMutex.Lock(ctx.Self.ID)
+	if !ctx.Payload.PathExists(fmt.Sprintf("__parent_id_locks.%s", ctx.Self.ID)) {
+		//fmt.Printf("%s [%s] Graph Key Lock >>>> %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "----"), keyMutextGetTimeStr(), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
+		graphIdKeyMutex.Lock(ctx.Self.ID)
+		ctx.Payload.SetByPath("__my_id_lock", easyjson.NewJSON(ctx.Self.ID))
+	}
 }
 
 func graphIdKeyMutexUnlock(ctx *sfPlugins.StatefunContextProcessor) {
-	fmt.Printf("%s [%s] Graph Key Unlock <<<< %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "----"), keyMutextGetTimeStr(), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
-	graphIdKeyMutex.Unlock(ctx.Self.ID)
+	if !ctx.Payload.PathExists(fmt.Sprintf("__parent_id_locks.%s", ctx.Self.ID)) && ctx.Payload.PathExists("__my_id_lock") {
+		//fmt.Printf("%s [%s] Graph Key Unlock <<<< %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "----"), keyMutextGetTimeStr(), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
+		ctx.Payload.RemoveByPath("__my_id_lock")
+		graphIdKeyMutex.Unlock(ctx.Self.ID)
+	}
 }
 
 /*
@@ -102,15 +122,13 @@ Reply:
 			op_stack: json array - optional
 */
 func LLAPIVertexCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		graphIdKeyMutexLock(ctx)
-		defer graphIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
 
 	_, err := ctx.Domain.Cache().GetValue(ctx.Self.ID)
 	if err == nil { // If vertex already exists
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s already exists", ctx.Self.ID))).Reply()
 		return
 	}
@@ -129,6 +147,7 @@ func LLAPIVertexCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	indexVertexBody(ctx, objectBody, -1, false)
 	addVertexOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, nil, &objectBody)
 
+	graphIdKeyMutexUnlock(ctx)
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
@@ -155,10 +174,7 @@ Reply:
 			op_stack: json array - optional
 */
 func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		graphIdKeyMutexLock(ctx)
-		defer graphIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -168,8 +184,11 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	_, err := ctx.Domain.Cache().GetValue(ctx.Self.ID)
 	if err != nil { // If vertex does not exist
 		if upsert {
-			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", ctx.Self.ID, injectParentLockId(ctx.Payload, ctx), ctx.Options))).Reply()
+			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", ctx.Self.ID, injectParentLockId(ctx.Payload, ctx), ctx.Options)))
+			graphIdKeyMutexUnlock(ctx)
+			om.Reply()
 		} else {
+			graphIdKeyMutexUnlock(ctx)
 			om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("vertex with id=%s does not exist", ctx.Self.ID))).Reply()
 		}
 		return
@@ -198,6 +217,8 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	addVertexOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, oldBody, &body)
 
+	graphIdKeyMutexUnlock(ctx)
+
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
@@ -218,15 +239,13 @@ Reply:
 			op_stack: json array - optional
 */
 func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		graphIdKeyMutexLock(ctx)
-		defer graphIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
 
 	_, err := ctx.Domain.Cache().GetValue(ctx.Self.ID)
 	if err != nil { // If vertex does not exist
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("vertex with id=%s does not exist", ctx.Self.ID))).Reply()
 		return
 	}
@@ -244,6 +263,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", ctx.Self.ID, injectParentLockId(&deleteLinkPayload, ctx), ctx.Options)))
 		mergeOpStack(opStack, om.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
+			graphIdKeyMutexUnlock(ctx)
 			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
 			return
 		}
@@ -262,6 +282,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", fromObjectID, injectParentLockId(&deleteLinkPayload, ctx), ctx.Options)))
 		mergeOpStack(opStack, om.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
+			graphIdKeyMutexUnlock(ctx)
 			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
 			return
 		}
@@ -275,6 +296,8 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	ctx.Domain.Cache().DeleteValue(ctx.Self.ID, true, -1, "") // Delete vertex's body
 	indexRemoveVertexBody(ctx)
 	addVertexOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, oldBody, nil)
+
+	graphIdKeyMutexUnlock(ctx)
 
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
@@ -308,15 +331,13 @@ Reply:
 			op_stack: json array - optional
 */
 func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		graphIdKeyMutexLock(ctx)
-		defer graphIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
 
 	_, err := ctx.Domain.Cache().GetValue(ctx.Self.ID)
 	if err != nil { // If vertex does not exist
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("vertex with id=%s does not exist", ctx.Self.ID))).Reply()
 		return
 	}
@@ -369,6 +390,8 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	addVertexOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, nil, nil)
 
+	graphIdKeyMutexUnlock(ctx)
+
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(result.GetPtr(), opStack))).Reply()
 }
 
@@ -402,10 +425,7 @@ Reply:
 			op_stack: json array - optional
 */
 func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		graphIdKeyMutexLock(ctx)
-		defer graphIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -414,6 +434,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	selfId := strings.Split(ctx.Self.ID, "===")[0]
 	_, err := ctx.Domain.Cache().GetValue(selfId)
 	if err != nil { // If vertex does not exist
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s does not exist", selfId))).Reply()
 		return
 	}
@@ -425,13 +446,16 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if inLinkName, ok := payload.GetByPath("in_name").AsString(); ok && len(inLinkName) > 0 {
 			if linkFromObjectUUID := ctx.Caller.ID; len(linkFromObjectUUID) > 0 {
 				ctx.Domain.Cache().SetValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, selfId, linkFromObjectUUID, inLinkName), nil, true, -1, "")
+				graphIdKeyMutexUnlock(ctx)
 				om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONNull())).Reply()
 				return
 			} else {
+				graphIdKeyMutexUnlock(ctx)
 				om.AggregateOpMsg(sfMediators.OpMsgFailed("caller id is not defined, no source vertex id")).Reply()
 				return
 			}
 		} else {
+			graphIdKeyMutexUnlock(ctx)
 			om.AggregateOpMsg(sfMediators.OpMsgFailed("in_name is not defined")).Reply()
 			return
 		}
@@ -447,6 +471,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if s, ok := payload.GetByPath("to").AsString(); ok {
 			toId = s
 		} else {
+			graphIdKeyMutexUnlock(ctx)
 			om.AggregateOpMsg(sfMediators.OpMsgFailed("to is not defined")).Reply()
 			return
 		}
@@ -456,10 +481,12 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if s, ok := payload.GetByPath("name").AsString(); ok {
 			linkName = s
 			if !validLinkName.MatchString(linkName) {
+				graphIdKeyMutexUnlock(ctx)
 				om.AggregateOpMsg(sfMediators.OpMsgFailed("invalid link name")).Reply()
 				return
 			}
 		} else {
+			graphIdKeyMutexUnlock(ctx)
 			om.AggregateOpMsg(sfMediators.OpMsgFailed("name is not defined")).Reply()
 			return
 		}
@@ -468,6 +495,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if s, ok := payload.GetByPath("type").AsString(); ok {
 			linkType = s
 		} else {
+			graphIdKeyMutexUnlock(ctx)
 			om.AggregateOpMsg(sfMediators.OpMsgFailed("type is not defined")).Reply()
 			return
 		}
@@ -476,6 +504,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			// Check if link with this name already exists --------------
 			_, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfId, linkName))
 			if err == nil {
+				graphIdKeyMutexUnlock(ctx)
 				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s already exists", selfId, linkName))).Reply()
 				return
 			}
@@ -483,6 +512,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			// Check if link with this type "type" to "to" already exists
 			_, err = ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfId, linkType, toId))
 			if err == nil {
+				graphIdKeyMutexUnlock(ctx)
 				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s to=%s with type=%s already exists, two vertices can have a link with this type and direction only once", selfId, linkName, toId, linkType))).Reply()
 				return
 			}
@@ -523,12 +553,16 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if toId == ctx.Self.ID {
 			targetId = targetId + "===self_link"
 		}
+
 		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, targetId, injectParentLockId(&nextCallPayload, ctx), ctx.Options)))
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
+			graphIdKeyMutexUnlock(ctx)
 			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
 			return
 		}
 		// --------------------------------------------------------
+
+		graphIdKeyMutexUnlock(ctx)
 
 		om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 	}
@@ -563,10 +597,7 @@ Reply:
 			op_stack: json array - optional
 */
 func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		graphIdKeyMutexLock(ctx)
-		defer graphIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -578,10 +609,12 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	if s, ok := getLinkNameFromSpecifiedIdentifier(ctx); ok {
 		linkName = s
 	} else {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(noLinkIdentifierMsg)).Reply()
 		return
 	}
 	if !validLinkName.MatchString(linkName) {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("invalid link name")).Reply()
 		return
 	}
@@ -603,14 +636,18 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if upsert {
 			p := payload.Clone()
 			p.SetByPath("force", easyjson.NewJSON(true))
-			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", ctx.Self.ID, injectParentLockId(&p, ctx), ctx.Options))).Reply()
+			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", ctx.Self.ID, injectParentLockId(&p, ctx), ctx.Options)))
+			graphIdKeyMutexUnlock(ctx)
+			om.Reply()
 		} else {
+			graphIdKeyMutexUnlock(ctx)
 			om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 		}
 		return
 	}
 	oldLinkBody, err := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, linkName))
 	if err != nil {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s", ctx.Self.ID, linkName))).Reply()
 		return
 	}
@@ -666,6 +703,7 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	addLinkOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, toId, linkName, linkType, oldLinkBody, &linkBody)
 
+	graphIdKeyMutexUnlock(ctx)
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
@@ -696,10 +734,7 @@ Reply:
 			op_stack: json array - optional
 */
 func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		graphIdKeyMutexLock(ctx)
-		defer graphIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -712,13 +747,16 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if inLinkName, ok := payload.GetByPath("in_name").AsString(); ok && len(inLinkName) > 0 {
 			if linkFromObjectUUID := ctx.Caller.ID; len(linkFromObjectUUID) > 0 {
 				ctx.Domain.Cache().DeleteValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, selfId, linkFromObjectUUID, inLinkName), true, -1, "")
+				graphIdKeyMutexUnlock(ctx)
 				om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONNull())).Reply()
 				return
 			} else {
+				graphIdKeyMutexUnlock(ctx)
 				om.AggregateOpMsg(sfMediators.OpMsgFailed("caller id is not defined, no source vertex id")).Reply()
 				return
 			}
 		} else {
+			graphIdKeyMutexUnlock(ctx)
 			om.AggregateOpMsg(sfMediators.OpMsgFailed("in_name is not defined")).Reply()
 			return
 		}
@@ -727,21 +765,25 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if s, ok := getLinkNameFromSpecifiedIdentifier(ctx); ok {
 			linkName = s
 		} else {
+			graphIdKeyMutexUnlock(ctx)
 			om.AggregateOpMsg(sfMediators.OpMsgFailed(noLinkIdentifierMsg)).Reply()
 			return
 		}
 		if !validLinkName.MatchString(linkName) {
+			graphIdKeyMutexUnlock(ctx)
 			om.AggregateOpMsg(sfMediators.OpMsgFailed("invalid link name")).Reply()
 			return
 		}
 
 		linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, linkName))
 		if err != nil {
+			graphIdKeyMutexUnlock(ctx)
 			om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 			return
 		}
 		oldLinkBody, err := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, linkName))
 		if err != nil {
+			graphIdKeyMutexUnlock(ctx)
 			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link body from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 			return
 		}
@@ -784,11 +826,13 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		}
 		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, targetId, injectParentLockId(&nextCallPayload, ctx), ctx.Options)))
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
+			graphIdKeyMutexUnlock(ctx)
 			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
 			return
 		}
 		// --------------------------------------------------------
 
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 	}
 }
@@ -825,10 +869,7 @@ Reply:
 			op_stack: json array - optional
 */
 func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		graphIdKeyMutexLock(ctx)
-		defer graphIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -838,21 +879,25 @@ func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 	if s, ok := getLinkNameFromSpecifiedIdentifier(ctx); ok {
 		linkName = s
 	} else {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(noLinkIdentifierMsg)).Reply()
 		return
 	}
 	if !validLinkName.MatchString(linkName) {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("invalid link name")).Reply()
 		return
 	}
 
 	linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, linkName))
 	if err != nil {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 		return
 	}
 	linkBody, err := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, linkName))
 	if err != nil {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link body from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 		return
 	}
@@ -884,5 +929,6 @@ func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 
 	addLinkOpToOpStack(opStack, ctx.Self.Typename, ctx.Self.ID, toId, linkName, linkType, nil, nil)
 
+	graphIdKeyMutexUnlock(ctx)
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(result.GetPtr(), opStack))).Reply()
 }

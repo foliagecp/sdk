@@ -10,20 +10,6 @@ import (
 	"github.com/foliagecp/sdk/statefun/system"
 )
 
-var (
-	cmdbIdKeyMutex *system.KeyMutex = system.NewKeyMutex()
-)
-
-func cmdbIdKeyMutexLock(ctx *sfPlugins.StatefunContextProcessor) {
-	fmt.Printf("%s [%s] CMDB Key Lock >>>> %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "===="), keyMutextGetTimeStr(), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
-	cmdbIdKeyMutex.Lock(ctx.Self.ID)
-}
-
-func cmdbIdKeyMutexUnlock(ctx *sfPlugins.StatefunContextProcessor) {
-	fmt.Printf("%s [%s] CMDB Key Unlock >>>> %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "===="), keyMutextGetTimeStr(), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
-	cmdbIdKeyMutex.Unlock(ctx.Self.ID)
-}
-
 func replyWithoutOpStack(om *sfMediators.OpMediator, ctx *sfPlugins.StatefunContextProcessor, data ...easyjson.JSON) {
 	var res easyjson.JSON
 	if len(data) > 0 {
@@ -52,19 +38,18 @@ func replyWithoutOpStack(om *sfMediators.OpMediator, ctx *sfPlugins.StatefunCont
 	}
 */
 func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutexLock(ctx)
-		defer cmdbIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	if typeOperationRedirectedToHub(ctx) {
+		graphIdKeyMutexUnlock(ctx)
 		return
 	}
 	om := sfMediators.NewOpMediator(ctx)
 	typesVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false)
 
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", ctx.Self.ID, ctx.Payload, nil)))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", ctx.Self.ID, injectParentLockId(ctx.Payload, ctx), nil)))
 	if om.GetStatus() == sfMediators.SYNC_OP_STATUS_INCOMPLETE || om.GetStatus() == sfMediators.SYNC_OP_STATUS_FAILED {
+		graphIdKeyMutexUnlock(ctx)
 		om.Reply()
 		return
 	}
@@ -75,7 +60,9 @@ func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	link.SetByPath("name", easyjson.NewJSON(ctx.Self.ID))
 	link.SetByPath("type", easyjson.NewJSON(TO_TYPELINK))
 
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", typesVertexId, &link, nil))).Reply()
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", typesVertexId, injectParentLockId(&link, ctx), nil))).Reply()
+
+	graphIdKeyMutexUnlock(ctx)
 }
 
 /*
@@ -86,12 +73,10 @@ func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	}
 */
 func UpdateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutexLock(ctx)
-		defer cmdbIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	if typeOperationRedirectedToHub(ctx) {
+		graphIdKeyMutexUnlock(ctx)
 		return
 	}
 
@@ -101,26 +86,30 @@ func UpdateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	upsert := ctx.Payload.GetByPath("upsert").AsBoolDefault(false)
 	if upsert {
 		ctx.Payload.RemoveByPath("upsert")
-		som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", ctx.Self.ID, nil, nil))
+		som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", ctx.Self.ID, injectParentLockId(nil, ctx), nil))
 		if som.Status != sfMediators.SYNC_OP_STATUS_OK { // Type does not exist
-			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.create", ctx.Self.ID, injectParentLockId(ctx.Payload, ctx), ctx.Options))).Reply()
+			m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.create", ctx.Self.ID, injectParentLockId(ctx.Payload, ctx), ctx.Options))
+
+			graphIdKeyMutexUnlock(ctx)
+
+			om.AggregateOpMsg(m).Reply()
 			return
 		}
 	}
 	// ----------------------------------------------------
 
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.update", ctx.Self.ID, ctx.Payload, nil))).Reply()
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.update", ctx.Self.ID, injectParentLockId(ctx.Payload, ctx), nil)))
+	graphIdKeyMutexUnlock(ctx)
+	om.Reply()
 }
 
 /*
  */
 func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutexLock(ctx)
-		defer cmdbIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	if typeOperationRedirectedToHub(ctx) {
+		graphIdKeyMutexUnlock(ctx)
 		return
 	}
 
@@ -136,30 +125,33 @@ func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 		p := easyjson.NewJSONObject()
 		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.delete", toObjectID, injectParentLockId(&p, ctx), nil)))
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
+			graphIdKeyMutexUnlock(ctx)
 			om.Reply()
 			return
 		}
 	}
 
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.delete", ctx.Self.ID, nil, nil))).Reply()
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.delete", ctx.Self.ID, injectParentLockId(nil, ctx), nil)))
+
+	graphIdKeyMutexUnlock(ctx)
+
+	om.Reply()
 }
 
 /*
  */
 func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutexLock(ctx)
-		defer cmdbIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	if typeOperationRedirectedToHub(ctx) {
+		graphIdKeyMutexUnlock(ctx)
 		return
 	}
 
 	om := sfMediators.NewOpMediator(ctx)
 
 	payload := easyjson.NewJSONObjectWithKeyValue("details", easyjson.NewJSON(true))
-	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", ctx.Self.ID, &payload, ctx.Options))
+	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", ctx.Self.ID, injectParentLockId(&payload, ctx), ctx.Options))
 	om.AggregateOpMsg(m)
 
 	vertexIsType := false
@@ -171,6 +163,7 @@ func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProces
 		}
 	}
 	if !vertexIsType {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s is not a type", ctx.Self.ID)))
 		system.MsgOnErrorReturn(om.ReplyWithData(easyjson.NewJSONObject().GetPtr()))
 		return
@@ -197,6 +190,7 @@ func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProces
 	result.SetByPath("object_ids", easyjson.JSONFromArray(toObjects))
 	result.SetByPath("links", m.Data.GetByPath("links"))
 
+	graphIdKeyMutexUnlock(ctx)
 	system.MsgOnErrorReturn(om.ReplyWithData(&result))
 }
 
@@ -207,22 +201,20 @@ func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProces
 	}
 */
 func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutexLock(ctx)
-		defer cmdbIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
 
 	originType, ok := ctx.Payload.GetByPath("origin_type").AsString()
 	if !ok {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("origin_type is not defined")).Reply()
 		return
 	}
 	originType = ctx.Domain.CreateObjectIDWithHubDomain(originType, true)
 	options := ctx.Options.Clone()
 	options.SetByPath("op_stack", easyjson.NewJSON(true))
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", ctx.Self.ID, ctx.Payload, &options)))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", ctx.Self.ID, injectParentLockId(ctx.Payload, ctx), &options)))
 
 	targetReply := om.GetLastSyncOp().Data
 	var opStack *easyjson.JSON
@@ -248,12 +240,14 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 			link.SetByPath("type", easyjson.NewJSON(l.lt))
 			link.SetByPath("body", easyjson.NewJSONObject())
 
-			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", l.from, &link, ctx.Options)))
+			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", l.from, injectParentLockId(&link, ctx), ctx.Options)))
 			if om.GetStatus() == sfMediators.SYNC_OP_STATUS_INCOMPLETE {
 				break // Operation cannot be completed fully, interrupt where it is now and go to the end
 			}
 		}
 	}
+
+	graphIdKeyMutexUnlock(ctx)
 
 	if opStack != nil {
 		executeTriggersFromLLOpStack(ctx, opStack, "", "")
@@ -271,10 +265,7 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	}
 */
 func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutexLock(ctx)
-		defer cmdbIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -282,11 +273,13 @@ func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	upsert := ctx.Payload.GetByPath("upsert").AsBoolDefault(false)
 	if upsert {
 		ctx.Payload.RemoveByPath("upsert")
-		if findObjectType(ctx, ctx.Self.ID) == "" { // Object does not exist
+		if _, err := findObjectType(ctx, ctx.Self.ID); err != nil { // Object does not exist
 			if ctx.Payload.GetByPath("origin_type").IsString() {
 				om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.create", ctx.Self.ID, injectParentLockId(ctx.Payload, ctx), ctx.Options)))
+				graphIdKeyMutexUnlock(ctx)
 				replyWithoutOpStack(om, ctx)
 			} else {
+				graphIdKeyMutexUnlock(ctx)
 				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("object with id=%s does exist, upsert=true but origin_type is not specified", ctx.Self.ID))).Reply()
 			}
 			return
@@ -296,7 +289,10 @@ func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 
 	options := ctx.Options.Clone()
 	options.SetByPath("op_stack", easyjson.NewJSON(true))
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.update", ctx.Self.ID, ctx.Payload, &options)))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.update", ctx.Self.ID, injectParentLockId(ctx.Payload, ctx), &options)))
+
+	graphIdKeyMutexUnlock(ctx)
+
 	if om.GetLastSyncOp().Data.PathExists("op_stack") {
 		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), "", "")
 	}
@@ -307,18 +303,23 @@ func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 /*
  */
 func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutexLock(ctx)
-		defer cmdbIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
 
-	objectType := findObjectType(ctx, ctx.Self.ID)
+	objectType, err := findObjectType(ctx, ctx.Self.ID)
+	if err != nil {
+		graphIdKeyMutexUnlock(ctx)
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
+		return
+	}
 
 	options := ctx.Options.Clone()
 	options.SetByPath("op_stack", easyjson.NewJSON(true))
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.delete", ctx.Self.ID, nil, &options)))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.delete", ctx.Self.ID, injectParentLockId(nil, ctx), &options)))
+
+	graphIdKeyMutexUnlock(ctx)
+
 	if om.GetLastSyncOp().Data.PathExists("op_stack") {
 		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), ctx.Self.ID, objectType)
 	}
@@ -329,19 +330,21 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 /*
  */
 func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutexLock(ctx)
-		defer cmdbIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
 
 	payload := easyjson.NewJSONObjectWithKeyValue("details", easyjson.NewJSON(true))
-	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", ctx.Self.ID, &payload, ctx.Options))
+	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", ctx.Self.ID, injectParentLockId(&payload, ctx), ctx.Options))
 	om.AggregateOpMsg(m)
-	if om.GetLastSyncOp().Data.PathExists("op_stack") {
-		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), "", "")
+
+	if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_IDLE {
+		graphIdKeyMutexUnlock(ctx)
+		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("object with id=%s does not exist", ctx.Self.ID))).Reply()
+		return
 	}
+
+	executeTriggersLater := om.GetLastSyncOp().Data.PathExists("op_stack")
 
 	objectType := ""
 	toObjects := []string{}
@@ -355,7 +358,8 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 		}
 	}
 	if len(objectType) == 0 {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("objects with id=%s has no type", ctx.Self.ID)))
+		graphIdKeyMutexUnlock(ctx)
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("object with id=%s has no type", ctx.Self.ID)))
 		system.MsgOnErrorReturn(om.ReplyWithData(easyjson.NewJSONObject().GetPtr()))
 		return
 	}
@@ -373,11 +377,13 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 		}
 	}
 	if !vertexIsObject {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s is not an object, not connected to objects topology", ctx.Self.ID)))
 		system.MsgOnErrorReturn(om.ReplyWithData(easyjson.NewJSONObject().GetPtr()))
 		return
 	}
 	if !typeBidirectionalLink {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s is not an object, inlink from type is broken", ctx.Self.ID)))
 		system.MsgOnErrorReturn(om.ReplyWithData(easyjson.NewJSONObject().GetPtr()))
 		return
@@ -391,6 +397,12 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	result.SetByPath("type", easyjson.NewJSON(objectType))
 	result.SetByPath("to_objects", easyjson.JSONFromArray(toObjects))
 	result.SetByPath("links", m.Data.GetByPath("links"))
+
+	graphIdKeyMutexUnlock(ctx)
+
+	if executeTriggersLater {
+		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), "", "")
+	}
 
 	system.MsgOnErrorReturn(om.ReplyWithData(&result))
 }
@@ -406,12 +418,10 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 create type -> type link
 */
 func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutexLock(ctx)
-		defer cmdbIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	if typeOperationRedirectedToHub(ctx) {
+		graphIdKeyMutexUnlock(ctx)
 		return
 	}
 
@@ -419,12 +429,14 @@ func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	objectLinkType, ok := ctx.Payload.GetByPath("object_type").AsString()
 	if !ok {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("object_type is not defined")).Reply()
 		return
 	}
 
 	toType, ok := ctx.Payload.GetByPath("to").AsString()
 	if !ok {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
@@ -439,7 +451,11 @@ func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	}
 	link.SetByPath("body.type", easyjson.NewJSON(objectLinkType))
 
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", ctx.Self.ID, &link, ctx.Options))).Reply()
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", ctx.Self.ID, injectParentLockId(&link, ctx), ctx.Options)))
+
+	graphIdKeyMutexUnlock(ctx)
+
+	om.Reply()
 }
 
 /*
@@ -452,12 +468,10 @@ func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	}
 */
 func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutexLock(ctx)
-		defer cmdbIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	if typeOperationRedirectedToHub(ctx) {
+		graphIdKeyMutexUnlock(ctx)
 		return
 	}
 
@@ -465,6 +479,7 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	toType, ok := ctx.Payload.GetByPath("to").AsString()
 	if !ok {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
@@ -483,8 +498,9 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	if ctx.Payload.PathExists("replace") {
 		link.SetByPath("replace", ctx.Payload.GetByPath("replace"))
 	}
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.update", ctx.Self.ID, &link, ctx.Options)))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.update", ctx.Self.ID, injectParentLockId(&link, ctx), ctx.Options)))
 
+	graphIdKeyMutexUnlock(ctx)
 	om.Reply()
 }
 
@@ -494,12 +510,10 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	}
 */
 func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutexLock(ctx)
-		defer cmdbIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	if typeOperationRedirectedToHub(ctx) {
+		graphIdKeyMutexUnlock(ctx)
 		return
 	}
 
@@ -507,6 +521,7 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	toType, ok := ctx.Payload.GetByPath("to").AsString()
 	if !ok {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
@@ -514,12 +529,14 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	originLinkType, err := getObjectsLinkTypeFromTypesLink(ctx, ctx.Self.ID, toType)
 	if err != nil {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
 		return
 	}
 
 	typeObjects, err := findTypeObjects(ctx, ctx.Self.ID)
 	if err != nil {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
 		return
 	}
@@ -528,17 +545,25 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	payload.SetByPath("to_object_type", easyjson.NewJSON(toType))
 	options := ctx.Options.Clone()
 	options.SetByPath("op_stack", easyjson.NewJSON(true))
+
+	lateTriggersArr := []*easyjson.JSON{}
 	for _, objectId := range typeObjects {
 		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.delete_object_filtered_out_links", objectId, injectParentLockId(&payload, ctx), &options)))
 		if om.GetLastSyncOp().Data.PathExists("op_stack") {
-			executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), "", "")
+			lateTriggersArr = append(lateTriggersArr, om.GetLastSyncOp().Data.GetByPathPtr("op_stack").Clone().GetPtr())
 		}
 	}
 
 	objectLink := easyjson.NewJSONObject()
 	objectLink.SetByPath("to", easyjson.NewJSON(toType))
 	objectLink.SetByPath("type", easyjson.NewJSON(TO_TYPELINK))
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", ctx.Self.ID, &objectLink, ctx.Options)))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", ctx.Self.ID, injectParentLockId(&objectLink, ctx), ctx.Options)))
+
+	graphIdKeyMutexUnlock(ctx)
+
+	for _, lateTrigger := range lateTriggersArr {
+		executeTriggersFromLLOpStack(ctx, lateTrigger, "", "")
+	}
 
 	om.Reply()
 }
@@ -549,12 +574,10 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	}
 */
 func ReadTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutexLock(ctx)
-		defer cmdbIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	if typeOperationRedirectedToHub(ctx) {
+		graphIdKeyMutexUnlock(ctx)
 		return
 	}
 
@@ -562,6 +585,7 @@ func ReadTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 
 	toType, ok := ctx.Payload.GetByPath("to").AsString()
 	if !ok {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
@@ -570,8 +594,9 @@ func ReadTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 	payload.SetByPath("to", easyjson.NewJSON(toType))
 	payload.SetByPath("type", easyjson.NewJSON(TO_TYPELINK))
 	payload.SetByPath("details", easyjson.NewJSON(true))
-	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", ctx.Self.ID, &payload, ctx.Options))
-	om.AggregateOpMsg(m)
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", ctx.Self.ID, injectParentLockId(&payload, ctx), ctx.Options)))
+
+	graphIdKeyMutexUnlock(ctx)
 
 	om.Reply()
 }
@@ -587,15 +612,13 @@ func ReadTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 create object -> object link
 */
 func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutexLock(ctx)
-		defer cmdbIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
 
 	objectToID, ok := ctx.Payload.GetByPath("to").AsString()
 	if !ok {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
@@ -608,6 +631,7 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	_, _, linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, ctx.Self.ID, objectToID)
 	if err != nil {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
 		return
 	}
@@ -623,7 +647,10 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	options := ctx.Options.Clone()
 	options.SetByPath("op_stack", easyjson.NewJSON(true))
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", ctx.Self.ID, &objectLink, &options)))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", ctx.Self.ID, injectParentLockId(&objectLink, ctx), &options)))
+
+	graphIdKeyMutexUnlock(ctx)
+
 	if om.GetLastSyncOp().Data.PathExists("op_stack") {
 		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), "", "")
 	}
@@ -642,15 +669,13 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	}
 */
 func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutexLock(ctx)
-		defer cmdbIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
 
 	objectToID, ok := ctx.Payload.GetByPath("to").AsString()
 	if !ok {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
@@ -658,6 +683,7 @@ func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	_, _, linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, ctx.Self.ID, objectToID)
 	if err != nil {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
 		return
 	}
@@ -681,7 +707,10 @@ func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	options := ctx.Options.Clone()
 	options.SetByPath("op_stack", easyjson.NewJSON(true))
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.update", ctx.Self.ID, &objectLink, &options)))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.update", ctx.Self.ID, injectParentLockId(&objectLink, ctx), &options)))
+
+	graphIdKeyMutexUnlock(ctx)
+
 	if om.GetLastSyncOp().Data.PathExists("op_stack") {
 		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), "", "")
 	}
@@ -695,15 +724,13 @@ func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	}
 */
 func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutexLock(ctx)
-		defer cmdbIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
 
 	objectToID, ok := ctx.Payload.GetByPath("to").AsString()
 	if !ok {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
@@ -711,6 +738,7 @@ func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	_, _, linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, ctx.Self.ID, objectToID)
 	if err != nil {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
 		return
 	}
@@ -721,7 +749,10 @@ func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	options := ctx.Options.Clone()
 	options.SetByPath("op_stack", easyjson.NewJSON(true))
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", ctx.Self.ID, &objectLink, &options)))
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", ctx.Self.ID, injectParentLockId(&objectLink, ctx), &options)))
+
+	graphIdKeyMutexUnlock(ctx)
+
 	if om.GetLastSyncOp().Data.PathExists("op_stack") {
 		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), "", "")
 	}
@@ -735,21 +766,20 @@ func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	}
 */
 func ReadObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutexLock(ctx)
-		defer cmdbIdKeyMutexUnlock(ctx)
-	}
+	graphIdKeyMutexLock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
 
 	toObject, ok := ctx.Payload.GetByPath("to").AsString()
 	if !ok {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
 
 	fromObjectType, toObjectType, linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, ctx.Self.ID, toObject)
 	if err != nil {
+		graphIdKeyMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
 		return
 	}
@@ -758,8 +788,11 @@ func ReadObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	payload.SetByPath("to", easyjson.NewJSON(toObject))
 	payload.SetByPath("type", easyjson.NewJSON(linkType))
 	payload.SetByPath("details", easyjson.NewJSON(true))
-	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", ctx.Self.ID, &payload, ctx.Options))
+	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", ctx.Self.ID, injectParentLockId(&payload, ctx), ctx.Options))
 	om.AggregateOpMsg(m)
+
+	graphIdKeyMutexUnlock(ctx)
+
 	if om.GetLastSyncOp().Data.PathExists("op_stack") {
 		executeTriggersFromLLOpStack(ctx, om.GetLastSyncOp().Data.GetByPathPtr("op_stack"), "", "")
 	}
