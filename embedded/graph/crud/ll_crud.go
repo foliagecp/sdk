@@ -37,27 +37,6 @@ func injectParentHoldsLocks(downstreamPayload *easyjson.JSON) *easyjson.JSON {
 	return &newDownstreamPayload
 }
 
-/*func keyMutexPrintGetSpaceIndent(ctx *sfPlugins.StatefunContextProcessor, indentStr string) string {
-	keys := ctx.Payload.GetByPath("__parent_id_locks").KeysCount()
-	spaceIndent := ""
-	for i := 0; i < keys+1; i++ {
-		spaceIndent += indentStr
-	}
-	return spaceIndent
-}
-
-func keyMutexPrintGetParentIdLocksStr(ctx *sfPlugins.StatefunContextProcessor) string {
-	keys := ctx.Payload.GetByPath("__parent_id_locks").ObjectKeys()
-	resStr := ""
-	for i, k := range keys {
-		if i > 0 {
-			resStr += ", "
-		}
-		resStr += k
-	}
-	return resStr
-}*/
-
 func keyMutextGetTimeStr() string {
 	now := time.Now()
 
@@ -75,13 +54,13 @@ func operationKeysMutexLock(ctx *sfPlugins.StatefunContextProcessor, keys []stri
 	operationMTX.Lock()
 	defer operationMTX.Unlock()
 	if !ctx.Payload.PathExists("__parent_holds_locks") {
-		//fmt.Printf("---- [%s] Graph Key Locking >>>> %s prnt_lock:[%s] %s\n", keyMutextGetTimeStr(), ctx.Self.Typename, strings.Join(keys, " "), ctx.Self.ID)
+		fmt.Printf("---- [%s] Graph Key Locking >>>> %s prnt_lock:[%s] %s\n", keyMutextGetTimeStr(), ctx.Self.Typename, strings.Join(keys, " "), ctx.Self.ID)
 		keys := system.UniqueStrings(keys)
 		for _, k := range keys {
 			graphIdKeyMutex.Lock(k)
 			ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.%s", k), easyjson.NewJSON(true))
 		}
-		//fmt.Printf("---- [%s] Graph Key Locked\n", keyMutextGetTimeStr())
+		fmt.Printf("---- [%s] Graph Key Locked\n", keyMutextGetTimeStr())
 	}
 }
 
@@ -90,12 +69,12 @@ func operationKeysMutexUnlock(ctx *sfPlugins.StatefunContextProcessor) {
 	defer operationMTX.Unlock()
 	if !ctx.Payload.PathExists("__parent_holds_locks") && ctx.Payload.PathExists("__key_locks") {
 		keys := ctx.Payload.GetByPath("__key_locks").ObjectKeys()
-		//fmt.Printf("---- [%s] Graph Key Unlocking <<<< %s prnt_lock:[%s] %s\n", keyMutextGetTimeStr(), ctx.Self.Typename, strings.Join(keys, " "), ctx.Self.ID)
+		fmt.Printf("---- [%s] Graph Key Unlocking <<<< %s prnt_lock:[%s] %s\n", keyMutextGetTimeStr(), ctx.Self.Typename, strings.Join(keys, " "), ctx.Self.ID)
 		for _, k := range keys {
 			graphIdKeyMutex.Unlock(k)
 		}
 		ctx.Payload.RemoveByPath("__key_locks")
-		//fmt.Printf("---- [%s] Graph Key Unlocked\n", keyMutextGetTimeStr())
+		fmt.Printf("---- [%s] Graph Key Unlocked\n", keyMutextGetTimeStr())
 	}
 }
 
@@ -693,25 +672,6 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
-func getLinkTargetIdAndTypeBySourceIdAndLinkName(ctx *sfPlugins.StatefunContextProcessor, sourceVertexId, linkName string) (toVertexId string, linkType string, errNum int, errDetails string) {
-	linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, linkName))
-	if err != nil {
-		operationKeysMutexUnlock(ctx)
-		return "", "", 1, fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName)
-	}
-
-	linkTargetStr := string(linkTargetBytes)
-	linkTargetTokens := strings.Split(linkTargetStr, ".")
-	if len(linkTargetTokens) != 2 || len(linkTargetTokens[0]) == 0 || len(linkTargetTokens[1]) == 0 {
-
-		return "", "", 1, fmt.Sprintf("link from=%s with name=%s, has invalid target: %s", ctx.Self.ID, linkName, linkTargetStr)
-	}
-	linkType = linkTargetTokens[0]
-	toVertexId = linkTargetTokens[1]
-
-	return toVertexId, linkType, 0, ""
-}
-
 /*
 Delete a link.
 
@@ -773,25 +733,26 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			return
 		}
 
-		toId, linkType, errNum, errDetails := getLinkTargetIdAndTypeBySourceIdAndLinkName(ctx, ctx.Self.ID, linkName)
-		switch errNum {
-		case 1:
-			om.AggregateOpMsg(sfMediators.OpMsgIdle(errDetails)).Reply()
-		case 2:
-			om.AggregateOpMsg(sfMediators.OpMsgFailed(errDetails)).Reply()
-		}
-		if errNum > 0 {
+		linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, linkName))
+		if err != nil {
+			om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 			return
 		}
-
-		operationKeysMutexLock(ctx, []string{ctx.Self.ID, toId})
-
 		oldLinkBody, err := ctx.Domain.Cache().GetValueAsJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, ctx.Self.ID, linkName))
 		if err != nil {
-			operationKeysMutexUnlock(ctx)
 			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link body from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 			return
 		}
+
+		linkTargetStr := string(linkTargetBytes)
+		linkTargetTokens := strings.Split(linkTargetStr, ".")
+		if len(linkTargetTokens) != 2 || len(linkTargetTokens[0]) == 0 || len(linkTargetTokens[1]) == 0 {
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s, has invalid target: %s", ctx.Self.ID, linkName, linkTargetStr))).Reply()
+		}
+		linkType := linkTargetTokens[0]
+		toId := linkTargetTokens[1]
+
+		operationKeysMutexLock(ctx, []string{ctx.Self.ID, toId})
 
 		// Remove all indices -----------------------------
 		indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff2Pattern, ctx.Self.ID, linkName, ">"))
