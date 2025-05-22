@@ -49,8 +49,8 @@ options: json - optional
 */
 func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutex.Lock(ctx.Self.ID)
-		defer cmdbIdKeyMutex.Unlock(ctx.Self.ID)
+		cmdbIdKeyMutexLock(ctx)
+		defer cmdbIdKeyMutexUnlock(ctx)
 	}
 
 	om := sfMediators.NewOpMediator(ctx)

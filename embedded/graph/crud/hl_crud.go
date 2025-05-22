@@ -14,6 +14,16 @@ var (
 	cmdbIdKeyMutex *system.KeyMutex = system.NewKeyMutex()
 )
 
+func cmdbIdKeyMutexLock(ctx *sfPlugins.StatefunContextProcessor) {
+	fmt.Printf("%sCMDB Key Lock >>>> %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "===="), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
+	cmdbIdKeyMutex.Lock(ctx.Self.ID)
+}
+
+func cmdbIdKeyMutexUnlock(ctx *sfPlugins.StatefunContextProcessor) {
+	fmt.Printf("%sCMDB Key Unlock >>>> %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "===="), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
+	cmdbIdKeyMutex.Unlock(ctx.Self.ID)
+}
+
 func replyWithoutOpStack(om *sfMediators.OpMediator, ctx *sfPlugins.StatefunContextProcessor, data ...easyjson.JSON) {
 	var res easyjson.JSON
 	if len(data) > 0 {
@@ -43,8 +53,8 @@ func replyWithoutOpStack(om *sfMediators.OpMediator, ctx *sfPlugins.StatefunCont
 */
 func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutex.Lock(ctx.Self.ID)
-		defer cmdbIdKeyMutex.Unlock(ctx.Self.ID)
+		cmdbIdKeyMutexLock(ctx)
+		defer cmdbIdKeyMutexUnlock(ctx)
 	}
 
 	if typeOperationRedirectedToHub(ctx) {
@@ -77,8 +87,8 @@ func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 */
 func UpdateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutex.Lock(ctx.Self.ID)
-		defer cmdbIdKeyMutex.Unlock(ctx.Self.ID)
+		cmdbIdKeyMutexLock(ctx)
+		defer cmdbIdKeyMutexUnlock(ctx)
 	}
 
 	if typeOperationRedirectedToHub(ctx) {
@@ -106,8 +116,8 @@ func UpdateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
  */
 func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutex.Lock(ctx.Self.ID)
-		defer cmdbIdKeyMutex.Unlock(ctx.Self.ID)
+		cmdbIdKeyMutexLock(ctx)
+		defer cmdbIdKeyMutexUnlock(ctx)
 	}
 
 	if typeOperationRedirectedToHub(ctx) {
@@ -138,8 +148,8 @@ func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
  */
 func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutex.Lock(ctx.Self.ID)
-		defer cmdbIdKeyMutex.Unlock(ctx.Self.ID)
+		cmdbIdKeyMutexLock(ctx)
+		defer cmdbIdKeyMutexUnlock(ctx)
 	}
 
 	if typeOperationRedirectedToHub(ctx) {
@@ -198,8 +208,8 @@ func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProces
 */
 func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutex.Lock(ctx.Self.ID)
-		defer cmdbIdKeyMutex.Unlock(ctx.Self.ID)
+		cmdbIdKeyMutexLock(ctx)
+		defer cmdbIdKeyMutexUnlock(ctx)
 	}
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -262,8 +272,8 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 */
 func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutex.Lock(ctx.Self.ID)
-		defer cmdbIdKeyMutex.Unlock(ctx.Self.ID)
+		cmdbIdKeyMutexLock(ctx)
+		defer cmdbIdKeyMutexUnlock(ctx)
 	}
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -298,8 +308,8 @@ func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
  */
 func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutex.Lock(ctx.Self.ID)
-		defer cmdbIdKeyMutex.Unlock(ctx.Self.ID)
+		cmdbIdKeyMutexLock(ctx)
+		defer cmdbIdKeyMutexUnlock(ctx)
 	}
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -320,8 +330,8 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
  */
 func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutex.Lock(ctx.Self.ID)
-		defer cmdbIdKeyMutex.Unlock(ctx.Self.ID)
+		cmdbIdKeyMutexLock(ctx)
+		defer cmdbIdKeyMutexUnlock(ctx)
 	}
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -397,8 +407,8 @@ create type -> type link
 */
 func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutex.Lock(ctx.Self.ID)
-		defer cmdbIdKeyMutex.Unlock(ctx.Self.ID)
+		cmdbIdKeyMutexLock(ctx)
+		defer cmdbIdKeyMutexUnlock(ctx)
 	}
 
 	if typeOperationRedirectedToHub(ctx) {
@@ -443,8 +453,8 @@ func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 */
 func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutex.Lock(ctx.Self.ID)
-		defer cmdbIdKeyMutex.Unlock(ctx.Self.ID)
+		cmdbIdKeyMutexLock(ctx)
+		defer cmdbIdKeyMutexUnlock(ctx)
 	}
 
 	if typeOperationRedirectedToHub(ctx) {
@@ -485,8 +495,8 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 */
 func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutex.Lock(ctx.Self.ID)
-		defer cmdbIdKeyMutex.Unlock(ctx.Self.ID)
+		cmdbIdKeyMutexLock(ctx)
+		defer cmdbIdKeyMutexUnlock(ctx)
 	}
 
 	if typeOperationRedirectedToHub(ctx) {
@@ -540,8 +550,8 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 */
 func ReadTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutex.Lock(ctx.Self.ID)
-		defer cmdbIdKeyMutex.Unlock(ctx.Self.ID)
+		cmdbIdKeyMutexLock(ctx)
+		defer cmdbIdKeyMutexUnlock(ctx)
 	}
 
 	if typeOperationRedirectedToHub(ctx) {
@@ -578,8 +588,8 @@ create object -> object link
 */
 func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutex.Lock(ctx.Self.ID)
-		defer cmdbIdKeyMutex.Unlock(ctx.Self.ID)
+		cmdbIdKeyMutexLock(ctx)
+		defer cmdbIdKeyMutexUnlock(ctx)
 	}
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -633,8 +643,8 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 */
 func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutex.Lock(ctx.Self.ID)
-		defer cmdbIdKeyMutex.Unlock(ctx.Self.ID)
+		cmdbIdKeyMutexLock(ctx)
+		defer cmdbIdKeyMutexUnlock(ctx)
 	}
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -686,8 +696,8 @@ func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 */
 func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutex.Lock(ctx.Self.ID)
-		defer cmdbIdKeyMutex.Unlock(ctx.Self.ID)
+		cmdbIdKeyMutexLock(ctx)
+		defer cmdbIdKeyMutexUnlock(ctx)
 	}
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -726,8 +736,8 @@ func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 */
 func ReadObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		cmdbIdKeyMutex.Lock(ctx.Self.ID)
-		defer cmdbIdKeyMutex.Unlock(ctx.Self.ID)
+		cmdbIdKeyMutexLock(ctx)
+		defer cmdbIdKeyMutexUnlock(ctx)
 	}
 
 	om := sfMediators.NewOpMediator(ctx)

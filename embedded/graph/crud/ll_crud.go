@@ -23,14 +23,47 @@ var (
 	graphIdKeyMutex *system.KeyMutex = system.NewKeyMutex()
 )
 
-func injectParentLockId(payload *easyjson.JSON, ctx *sfPlugins.StatefunContextProcessor) *easyjson.JSON {
+func injectParentLockId(downstreamPayload *easyjson.JSON, ctx *sfPlugins.StatefunContextProcessor) *easyjson.JSON {
+	newDownstreamPayload := downstreamPayload.Clone()
+
 	parentIdLocks := ctx.Payload.GetByPath("parent_id_locks")
 	if !parentIdLocks.IsNonEmptyObject() {
 		parentIdLocks = easyjson.NewJSONObject()
 	}
 	parentIdLocks.SetByPath(ctx.Self.ID, easyjson.NewJSON(true))
-	payload.SetByPath("parent_id_locks", parentIdLocks)
-	return payload
+	newDownstreamPayload.SetByPath("parent_id_locks", parentIdLocks)
+	return &newDownstreamPayload
+}
+
+func keyMutexPrintGetSpaceIndent(ctx *sfPlugins.StatefunContextProcessor, indentStr string) string {
+	keys := ctx.Payload.GetByPath("parent_id_locks").KeysCount()
+	spaceIndent := ""
+	for i := 0; i < keys+1; i++ {
+		spaceIndent += indentStr
+	}
+	return spaceIndent
+}
+
+func keyMutexPrintGetParentIdLocksStr(ctx *sfPlugins.StatefunContextProcessor) string {
+	keys := ctx.Payload.GetByPath("parent_id_locks").ObjectKeys()
+	resStr := ""
+	for i, k := range keys {
+		if i > 0 {
+			resStr += ", "
+		}
+		resStr += k
+	}
+	return resStr
+}
+
+func graphIdKeyMutexLock(ctx *sfPlugins.StatefunContextProcessor) {
+	fmt.Printf("%sGraph Key Lock >>>> %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "----"), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
+	graphIdKeyMutex.Lock(ctx.Self.ID)
+}
+
+func graphIdKeyMutexUnlock(ctx *sfPlugins.StatefunContextProcessor) {
+	fmt.Printf("%sGraph Key Unlock <<<< %s prnt_lock:[%s] %s\n", keyMutexPrintGetSpaceIndent(ctx, "----"), ctx.Self.Typename, keyMutexPrintGetParentIdLocksStr(ctx), ctx.Self.ID)
+	graphIdKeyMutex.Unlock(ctx.Self.ID)
 }
 
 /*
@@ -56,8 +89,8 @@ Reply:
 */
 func LLAPIVertexCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		graphIdKeyMutex.Lock(ctx.Self.ID)
-		defer graphIdKeyMutex.Unlock(ctx.Self.ID)
+		graphIdKeyMutexLock(ctx)
+		defer graphIdKeyMutexUnlock(ctx)
 	}
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -109,8 +142,8 @@ Reply:
 */
 func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		graphIdKeyMutex.Lock(ctx.Self.ID)
-		defer graphIdKeyMutex.Unlock(ctx.Self.ID)
+		graphIdKeyMutexLock(ctx)
+		defer graphIdKeyMutexUnlock(ctx)
 	}
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -172,8 +205,8 @@ Reply:
 */
 func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		graphIdKeyMutex.Lock(ctx.Self.ID)
-		defer graphIdKeyMutex.Unlock(ctx.Self.ID)
+		graphIdKeyMutexLock(ctx)
+		defer graphIdKeyMutexUnlock(ctx)
 	}
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -262,8 +295,8 @@ Reply:
 */
 func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		graphIdKeyMutex.Lock(ctx.Self.ID)
-		defer graphIdKeyMutex.Unlock(ctx.Self.ID)
+		graphIdKeyMutexLock(ctx)
+		defer graphIdKeyMutexUnlock(ctx)
 	}
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -356,8 +389,8 @@ Reply:
 */
 func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		graphIdKeyMutex.Lock(ctx.Self.ID)
-		defer graphIdKeyMutex.Unlock(ctx.Self.ID)
+		graphIdKeyMutexLock(ctx)
+		defer graphIdKeyMutexUnlock(ctx)
 	}
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -517,8 +550,8 @@ Reply:
 */
 func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		graphIdKeyMutex.Lock(ctx.Self.ID)
-		defer graphIdKeyMutex.Unlock(ctx.Self.ID)
+		graphIdKeyMutexLock(ctx)
+		defer graphIdKeyMutexUnlock(ctx)
 	}
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -650,8 +683,8 @@ Reply:
 */
 func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		graphIdKeyMutex.Lock(ctx.Self.ID)
-		defer graphIdKeyMutex.Unlock(ctx.Self.ID)
+		graphIdKeyMutexLock(ctx)
+		defer graphIdKeyMutexUnlock(ctx)
 	}
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -779,8 +812,8 @@ Reply:
 */
 func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	if !ctx.Payload.PathExists(fmt.Sprintf("parent_id_locks.%s", ctx.Self.ID)) {
-		graphIdKeyMutex.Lock(ctx.Self.ID)
-		defer graphIdKeyMutex.Unlock(ctx.Self.ID)
+		graphIdKeyMutexLock(ctx)
+		defer graphIdKeyMutexUnlock(ctx)
 	}
 
 	om := sfMediators.NewOpMediator(ctx)
