@@ -82,7 +82,7 @@ func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfP
 				objectLink.SetByPath("to", easyjson.NewJSON(to))
 				objectLink.SetByPath("type", easyjson.NewJSON(linkType))
 
-				om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", makeSequenceFreeID(selfID), injectParentHoldsLocks(ctx, selfID, &objectLink), ctx.Options)))
+				om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, selfID, &objectLink), ctx.Options)))
 				mergeOpStack(opStack, om.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
 				if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
 					operationKeysMutexUnlock(ctx)
@@ -106,7 +106,7 @@ func getTypeTriggers(ctx *sfPlugins.StatefunContextProcessor, typeName string, c
 	}*/
 	indTypeName := typeName
 	if crudAPIChildOperation {
-		indTypeName = makeSequenceFreeID(indTypeName)
+		indTypeName = makeSequenceFreeParentBasedID(ctx, indTypeName)
 	}
 	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", indTypeName, injectParentHoldsLocks(ctx, typeName, nil), nil))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
@@ -123,7 +123,7 @@ func findObjectType(ctx *sfPlugins.StatefunContextProcessor, objectID string, cr
 	}
 	indObjectID := objectID
 	if crudAPIChildOperation {
-		indObjectID = makeSequenceFreeID(objectID)
+		indObjectID = makeSequenceFreeParentBasedID(ctx, objectID)
 	}
 	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", indObjectID, injectParentHoldsLocks(ctx, objectID, nil), &options))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
@@ -141,7 +141,7 @@ func findTypeObjects(ctx *sfPlugins.StatefunContextProcessor, typeName string, c
 
 	indTypeName := typeName
 	if crudAPIChildOperation {
-		indTypeName = makeSequenceFreeID(indTypeName)
+		indTypeName = makeSequenceFreeParentBasedID(ctx, indTypeName)
 	}
 	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.read", indTypeName, injectParentHoldsLocks(ctx, typeName, &p), ctx.Options))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
@@ -162,7 +162,7 @@ func getLinkBody(ctx *sfPlugins.StatefunContextProcessor, from, linkName string,
 	}*/
 	indFrom := from
 	if crudAPIChildOperation {
-		indFrom = makeSequenceFreeID(indFrom)
+		indFrom = makeSequenceFreeParentBasedID(ctx, indFrom)
 	}
 	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", indFrom, injectParentHoldsLocks(ctx, from, &link), ctx.Options))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
