@@ -3,7 +3,7 @@ package statefun
 const (
 	RuntimeName                 = "runtime"
 	NatsURL                     = "nats://nats:foliage@nats:4222"
-	KVMutexLifetimeSec          = 120
+	KVMutexLifetimeSec          = 10
 	KVMutexIsOldPollingInterval = 10
 	FunctionTypeIDLifetimeMs    = 5000
 	RequestTimeoutSec           = 60
@@ -13,6 +13,7 @@ const (
 	EnableTLS                   = false
 	EnableNatsClusterMode       = false
 	NatsReplicasCount           = 1
+	activePassiveMode           = true
 )
 
 type RuntimeConfig struct {
@@ -27,6 +28,9 @@ type RuntimeConfig struct {
 	gcIntervalSec                  int
 	desiredHUBDomainName           string
 	handlesDomainRouters           bool
+	activePassiveMode              bool
+	isActiveInstance               bool
+	activeRevID                    uint64
 	enableTLS                      bool
 }
 
@@ -44,6 +48,8 @@ func NewRuntimeConfig() *RuntimeConfig {
 		desiredHUBDomainName:           DefaultHubDomainName,
 		handlesDomainRouters:           HandlesDomainRouters,
 		enableTLS:                      EnableTLS,
+		activePassiveMode:              activePassiveMode,
+		isActiveInstance:               true,
 	}
 }
 
@@ -114,4 +120,9 @@ func (ro *RuntimeConfig) SetNatsReplicas(replicasCount int) *RuntimeConfig {
 
 func (ro *RuntimeConfig) ConfigureNatsCluster(replicasCount int) *RuntimeConfig {
 	return ro.EnableNatsCluster(true).SetNatsReplicas(replicasCount)
+}
+
+func (ro *RuntimeConfig) SetActivePassiveMode(activePassiveMode bool) *RuntimeConfig {
+	ro.activePassiveMode = activePassiveMode
+	return ro
 }
