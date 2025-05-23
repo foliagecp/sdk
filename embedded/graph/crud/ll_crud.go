@@ -25,6 +25,14 @@ var (
 	graphIdKeyMutex *system.KeyMutex = system.NewKeyMutex()
 )
 
+func getVertexBody(ctx *sfPlugins.StatefunContextProcessor, keyValueID string) *easyjson.JSON {
+	if j, err := ctx.Domain.Cache().GetValueAsJSON(keyValueID); err == nil {
+		return j
+	}
+	j := easyjson.NewJSONObject()
+	return &j
+}
+
 func injectParentHoldsLocks(ctx *sfPlugins.StatefunContextProcessor, _ string, downstreamPayload *easyjson.JSON) *easyjson.JSON {
 	var newDownstreamPayload easyjson.JSON
 	if downstreamPayload != nil && downstreamPayload.IsNonEmptyObject() {
@@ -202,7 +210,7 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	opStack := getOpStackFromOptions(ctx.Options)
 
-	oldBody := ctx.GetObjectContext()
+	oldBody := getVertexBody(ctx, selfID)
 
 	var replace bool = payload.GetByPath("replace").AsBoolDefault(false)
 
@@ -298,7 +306,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	var oldBody *easyjson.JSON = nil
 	if opStack != nil {
-		oldBody = ctx.GetObjectContext()
+		oldBody = getVertexBody(ctx, selfID)
 	}
 	ctx.Domain.Cache().DeleteValue(selfID, true, -1, "") // Delete vertex's body
 	indexRemoveVertexBody(ctx)
@@ -352,7 +360,8 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	opStack := getOpStackFromOptions(ctx.Options)
 
-	result := easyjson.NewJSONObjectWithKeyValue("body", *ctx.GetObjectContext())
+	j := getVertexBody(ctx, selfID)
+	result := easyjson.NewJSONObjectWithKeyValue("body", *j)
 
 	if ctx.Payload.GetByPath("details").AsBoolDefault(false) {
 		outLinkNames := []string{}
