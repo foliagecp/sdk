@@ -30,6 +30,8 @@ import (
 var (
 	// NatsURL - nats server url
 	NatsURL string = system.GetEnvMustProceed("NATS_URL", "nats://nats:foliage@nats:4222")
+	// TLS flag
+	EnableTLS = system.GetEnvMustProceed("ENABLE_TLS", false)
 	// MasterFunctionContextIncrement - does the master stateful function do the increment operation on each call in its context
 	MasterFunctionContextIncrement bool = system.GetEnvMustProceed("MASTER_FUNC_CONTEXT_INCREMENT", true)
 	// MasterFunctionContextIncrementOption - Default increment value
@@ -211,7 +213,7 @@ func Start() {
 		return nil
 	}
 
-	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "basic").UseJSDomainAsHubDomainName()); err == nil {
+	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "basic").UseJSDomainAsHubDomainName().SetTLS(EnableTLS)); err == nil {
 		RegisterFunctionTypes(runtime)
 		if TriggersTest {
 			registerTriggerFunctions(runtime)
