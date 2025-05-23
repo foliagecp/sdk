@@ -92,6 +92,23 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 		return err
 	}
 
+	if r.config.activePassiveMode {
+		revID, err := KeyMutexLock(ctx, r, system.GetHashStr(RuntimeName), true)
+		if err != nil {
+			if errors.Is(err, ErrMutexLocked) {
+				lg.Logf(lg.WarnLevel, "Cant lock. Another runtime is already active")
+				r.config.isActiveInstance = false
+			} else {
+				return err
+			}
+		} else {
+			r.config.activeRevID = revID
+			defer KeyMutexUnlock(ctx, r, system.GetHashStr(RuntimeName), revID)
+		}
+	} else {
+		r.config.isActiveInstance = true
+	}
+
 	// Handle single-instance functions.
 	singleInstanceFunctionRevisions := make(map[string]uint64)
 	if err := r.handleSingleInstanceFunctions(ctx, singleInstanceFunctionRevisions); err != nil {
@@ -99,8 +116,10 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 	}
 
 	// Start function subscriptions.
-	if err := r.startFunctionSubscriptions(ctx, singleInstanceFunctionRevisions); err != nil {
-		return err
+	if r.config.isActiveInstance {
+		if err := r.startFunctionSubscriptions(ctx, singleInstanceFunctionRevisions); err != nil {
+			return err
+		}
 	}
 
 	// Run after-start functions.
@@ -307,6 +326,31 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 		case <-r.shutdown:
 			return
 		case <-ticker.C:
+			if r.config.activePassiveMode {
+				if r.config.isActiveInstance {
+					newRevID, err := KeyMutexLockUpdate(ctx, r, system.GetHashStr(RuntimeName), r.config.activeRevID)
+					if err != nil {
+						lg.Logf(lg.ErrorLevel, "KeyMutexLockUpdate failed for %s: %v", RuntimeName, err)
+					} else {
+						r.config.activeRevID = newRevID
+					}
+				} else {
+					newRevID, err := KeyMutexLock(ctx, r, system.GetHashStr(RuntimeName), true)
+					if err != nil {
+						if errors.Is(err, ErrMutexLocked) {
+							lg.Logf(lg.WarnLevel, "Cant lock. Another runtime is already active")
+							continue
+						} else {
+							lg.Logf(lg.ErrorLevel, "KeyMutexLock failed for %s: %v", RuntimeName, err)
+							return
+						}
+					} else {
+						r.config.isActiveInstance = true
+						r.config.activeRevID = newRevID
+					}
+				}
+			}
+
 			subscribeRequired := false //if true, need to subscribe on all functions
 			for ftName, revID := range revisions {
 				if revID != 0 {
