@@ -11,11 +11,15 @@ const (
 	DefaultHubDomainName        = "hub"
 	HandlesDomainRouters        = true
 	EnableTLS                   = false
+	EnableNatsClusterMode       = false
+	NatsReplicasCount           = 1
 )
 
 type RuntimeConfig struct {
 	name                           string
 	natsURL                        string
+	enableNatsClusterMode          bool
+	natsReplicasCount              int
 	kvMutexLifeTimeSec             int
 	kvMutexIsOldPollingIntervalSec int
 	functionTypeIDLifetimeMs       int
@@ -30,6 +34,8 @@ func NewRuntimeConfig() *RuntimeConfig {
 	return &RuntimeConfig{
 		name:                           RuntimeName,
 		natsURL:                        NatsURL,
+		enableNatsClusterMode:          EnableNatsClusterMode,
+		natsReplicasCount:              NatsReplicasCount,
 		kvMutexLifeTimeSec:             KVMutexLifetimeSec,
 		kvMutexIsOldPollingIntervalSec: KVMutexIsOldPollingInterval,
 		functionTypeIDLifetimeMs:       FunctionTypeIDLifetimeMs,
@@ -94,4 +100,18 @@ func (ro *RuntimeConfig) SetDomainRoutersHandling(handlesDomainRouters bool) *Ru
 func (ro *RuntimeConfig) SetTLS(enableTLS bool) *RuntimeConfig {
 	ro.enableTLS = enableTLS
 	return ro
+}
+
+func (ro *RuntimeConfig) EnableNatsCluster(enableCluster bool) *RuntimeConfig {
+	ro.enableNatsClusterMode = enableCluster
+	return ro
+}
+
+func (ro *RuntimeConfig) SetNatsReplicas(replicasCount int) *RuntimeConfig {
+	ro.natsReplicasCount = replicasCount
+	return ro
+}
+
+func (ro *RuntimeConfig) ConfigureNatsCluster(replicasCount int) *RuntimeConfig {
+	return ro.EnableNatsCluster(true).SetNatsReplicas(replicasCount)
 }

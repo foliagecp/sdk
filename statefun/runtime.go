@@ -70,7 +70,7 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		return nil, err
 	}
 
-	r.Domain, err = NewDomain(r.nc, r.js, config.desiredHUBDomainName)
+	r.Domain, err = NewDomain(r.nc, r.js, config.desiredHUBDomainName, config.natsReplicasCount)
 	if err != nil {
 		return nil, err
 	}
@@ -151,6 +151,7 @@ func (r *Runtime) createStreams(ctx context.Context) error {
 					Name:      ft.getStreamName(),
 					Subjects:  []string{ft.subject},
 					Retention: nats.InterestPolicy,
+					Replicas:  r.Domain.natsJsReplicasCount,
 				})
 				if err != nil {
 					logger.Errorf(context.TODO(), "Failed to add stream: %v", err)
