@@ -505,7 +505,7 @@
           },
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "stetefun_instances{instance=\"$instance\"}",
+          "expr": "statefun_instances{instance=\"$instance\"}",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "instant": false,
@@ -619,7 +619,7 @@
     }
   ],
   "refresh": "5s",
-  "schemaVersion": 38,
+  "schemaVersion": 39,
   "tags": [],
   "templating": {
     "list": [

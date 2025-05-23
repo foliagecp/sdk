@@ -45,7 +45,7 @@ services:
     healthcheck:
       test: [ "CMD", "/healthcheck-nats.sh" ]
       interval: 3s
-      timeout: 3s
+      timeout: 5s
       retries: 5
     volumes:
       - ./backups:/backups

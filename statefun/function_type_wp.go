@@ -5,10 +5,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/statefun/logger"
-	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 type SFWorkerPoolConfig struct {
@@ -184,9 +183,23 @@ func (wp *SFWorkerPool) manager() {
 		select {
 		case <-wp.notifyCh:
 			drainFunctionTypeIDChannels()
+
 		case <-wp.stopCh:
 			return
 		}
+	}
+}
+
+func (wp *SFWorkerPool) prometricsMeasures() {
+	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_worker_pool_task_queue_load_percentage", "", []string{"typename"}); err == nil {
+		gaugeVec.With(prometheus.Labels{"typename": wp.ft.name}).Set(wp.GetWorkerPoolLoadPercentage())
+	}
+	loadedWorkersPercent, idleWorkersPercent := wp.GetWorkerPercentage()
+	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_worker_pool_loaded_workers_percentage", "", []string{"typename"}); err == nil {
+		gaugeVec.With(prometheus.Labels{"typename": wp.ft.name}).Set(loadedWorkersPercent)
+	}
+	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_worker_pool_idle_workers_percentage", "", []string{"typename"}); err == nil {
+		gaugeVec.With(prometheus.Labels{"typename": wp.ft.name}).Set(idleWorkersPercent)
 	}
 }
 
@@ -203,6 +216,7 @@ func (wp *SFWorkerPool) worker() {
 		wp.workers--
 		wp.wg.Add(-1)
 		wp.mu.Unlock()
+		wp.prometricsMeasures()
 		logger.Logln(logger.DebugLevel, ">>>>>>>>>>>>>> - WP %s SHRINK: %d", wp.ft.name, wp.workers)
 	}()
 
@@ -225,46 +239,7 @@ func (wp *SFWorkerPool) worker() {
 				ft := wp.ft
 				id := task.Msg.ID
 
-				ft.idKeyMutex.Lock(id)
-
-				var typenameIDContextProcessor *sfPlugins.StatefunContextProcessor
-
-				if v, ok := ft.contextProcessors.Load(id); ok {
-					typenameIDContextProcessor = v.(*sfPlugins.StatefunContextProcessor)
-				} else {
-					v := sfPlugins.StatefunContextProcessor{
-						GetFunctionContext:        func() *easyjson.JSON { return ft.getContext(ft.name + "." + id) },
-						SetFunctionContext:        func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
-						SetContextExpirationAfter: func(after time.Duration) { ft.setContextExpirationAfter(ft.name+"."+id, after) },
-						GetObjectContext:          func() *easyjson.JSON { return ft.getContext(id) },
-						SetObjectContext:          func(context *easyjson.JSON) { ft.setContext(id, context) },
-						Domain:                    ft.runtime.Domain,
-						Self:                      sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
-						Signal: func(signalProvider sfPlugins.SignalProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) error {
-							return ft.runtime.signal(signalProvider, ft.name, id, targetTypename, targetID, j, o)
-						},
-						Request: func(requestProvider sfPlugins.RequestProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
-							return ft.runtime.request(requestProvider, ft.name, id, targetTypename, targetID, j, o)
-						},
-						Egress: func(egressProvider sfPlugins.EgressProvider, j *easyjson.JSON, customId ...string) error {
-							egressId := id
-							if len(customId) > 0 {
-								egressId = customId[0]
-							}
-							return ft.runtime.egress(egressProvider, ft.name, egressId, j)
-						},
-						// To be assigned later:
-						// Call: ...
-						// Payload: ...
-						// Options: ... // Otions from initial typename declaration will be merged and overwritten by the incoming one in message
-						// Caller: ...
-					}
-					ft.contextProcessors.Store(id, &v)
-					typenameIDContextProcessor = &v
-				}
-
-				ft.handleMsgForID(id, task.Msg.Data, typenameIDContextProcessor)
-				ft.idKeyMutex.Unlock(id)
+				ft.workerTaskExecutor(id, task.Msg.Data)
 			}
 
 			if !timer.Stop() {
@@ -272,7 +247,8 @@ func (wp *SFWorkerPool) worker() {
 			}
 			timer.Reset(wp.idleTimeout)
 
-			wp.ft.tokens.Release()
+			wp.ft.TokenRelease()
+			wp.prometricsMeasures()
 
 		case <-timer.C:
 			wp.mu.Lock()
@@ -303,4 +279,18 @@ func (wp *SFWorkerPool) Stop() {
 	wp.mu.Unlock()
 
 	wp.wg.Wait()
+}
+
+func (wp *SFWorkerPool) GetWorkerPoolLoadPercentage() float64 {
+	return 100.0 * float64(len(wp.taskQueue)) / float64(cap(wp.taskQueue))
+}
+
+func (wp *SFWorkerPool) GetWorkerPercentage() (loadedWorkers float64, idleWorkers float64) {
+	wp.mu.Lock()
+	defer wp.mu.Unlock()
+
+	loadedWorkers = 100.0 * float64(wp.workers) / float64(wp.maxWorkers)
+	idleWorkers = 100.0 * float64(wp.idleWorkers) / float64(wp.maxWorkers)
+
+	return
 }

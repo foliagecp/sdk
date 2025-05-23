@@ -16,6 +16,7 @@ import (
 
 func AddRequestSourceNatsCore(ft *FunctionType) error {
 	_, err := ft.runtime.nc.Subscribe(RequestPrefix+"."+ft.runtime.Domain.name+"."+ft.name+".*", func(msg *nats.Msg) {
+		ft.prometricsMeasureMsgDeliver(NatsReq)
 		system.MsgOnErrorReturn(handleNatsMsg(ft, msg, true))
 	})
 
@@ -48,6 +49,8 @@ func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType) error {
 			FilterSubject:  ft.subject,
 			AckPolicy:      nats.AckExplicitPolicy,
 			AckWait:        time.Duration(ft.config.msgAckWaitMs) * time.Millisecond, // AckWait should be long due to async message Ack
+			MaxDeliver:     ft.config.msgMaxDeliver,
+			//MaxAckPending:  ft.TokenCapacity(), // Cannot do this way cause messages for some specific ID can DDoS this consumer and messages for another ID will not be processed without delaying
 		})
 		system.MsgOnErrorReturn(err)
 	}
@@ -57,6 +60,12 @@ func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType) error {
 		ft.subject,
 		consumerGroup,
 		func(msg *nats.Msg) {
+			ft.prometricsMeasureMsgDeliver(NatsPub)
+			if meta, err := msg.Metadata(); err == nil {
+				if meta.NumDelivered > 1 {
+					ft.prometricsMeasureMsgDeliver(NatsPubRedelivery)
+				}
+			}
 			system.MsgOnErrorReturn(handleNatsMsg(ft, msg, false))
 		},
 		nats.Bind(ft.getStreamName(), consumerName),
@@ -111,21 +120,33 @@ func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool) (err erro
 	}
 	if requestReply {
 		functionMsg.RequestCallback = func(data *easyjson.JSON) {
-			system.MsgOnErrorReturn(msg.Respond(data.ToBytes()))
+			go func() {
+				system.MsgOnErrorReturn(msg.Respond(data.ToBytes()))
+			}()
 		}
-		functionMsg.RefusalCallback = func() {
-			system.MsgOnErrorReturn(msg.Respond([]byte{}))
+		functionMsg.RefusalCallback = func(_ bool) {
+			go func() {
+				system.MsgOnErrorReturn(msg.Respond([]byte{}))
+			}()
 		}
 	} else {
 		functionMsg.AckCallback = func(ack bool) {
-			if ack {
-				system.MsgOnErrorReturn(msg.Ack())
-			} else {
-				system.MsgOnErrorReturn(msg.Nak())
-			}
+			go func() {
+				if ack {
+					system.MsgOnErrorReturn(msg.Ack())
+				} else {
+					system.MsgOnErrorReturn(msg.Nak())
+				}
+			}()
 		}
-		functionMsg.RefusalCallback = func() {
-			system.MsgOnErrorReturn(msg.Nak())
+		functionMsg.RefusalCallback = func(skipForever bool) {
+			go func() {
+				if skipForever {
+					system.MsgOnErrorReturn(msg.Ack())
+				} else {
+					system.MsgOnErrorReturn(msg.Nak())
+				}
+			}()
 		}
 	}
 	// ------------------------------------------------

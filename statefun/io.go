@@ -190,10 +190,10 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 					if ack {
 						ackChannel <- struct{}{}
 					} else {
-						functionMsg.RefusalCallback()
+						functionMsg.RefusalCallback(false)
 					}
 				}
-				functionMsg.RefusalCallback = func() {
+				functionMsg.RefusalCallback = func(_ bool) {
 					logger.Logf(logger.WarnLevel, "goLangLocalSignal: receiver typename=%s called on id=%s refused from msg, for safety reasons msg is being redirected to NATS Jetstream", targetTypename, targetID)
 					system.MsgOnErrorReturn(r.signal(sfPlugins.JetstreamGlobalSignal, callerTypename, callerID, targetTypename, targetID, payload, options))
 					nackChannel <- struct{}{}
@@ -305,14 +305,33 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 				Options: optionsCopy,
 			}
 
-			functionMsg.RequestCallback = func(data *easyjson.JSON) {
-				resultJSONChannel <- data.Clone().GetPtr() // Clone().GetPtr() prevents data to contain custom Golang types
+			/*functionMsg.RequestCallback = func(data *easyjson.JSON) {
+				go func() {
+					resultJSONChannel <- data.Clone().GetPtr() // Clone().GetPtr() prevents data to contain custom Golang types
+				}()
 			}
-			functionMsg.RefusalCallback = func() {
-				close(resultJSONChannel)
+			functionMsg.RefusalCallback = func(_ bool) {
+				go func() {
+					close(resultJSONChannel)
+				}()
 			}
 
-			targetFT.sendMsg(targetID, functionMsg)
+			targetFT.prometricsMeasureMsgDeliver(GolangReq)
+			targetFT.sendMsg(targetID, functionMsg)*/
+
+			functionMsg.RequestCallback = func(data *easyjson.JSON) {
+				go func() {
+					resultJSONChannel <- data.Clone().GetPtr() // Clone().GetPtr() prevents data to contain custom Golang types
+				}()
+			}
+			functionMsg.RefusalCallback = func(_ bool) {
+				go func() {
+					close(resultJSONChannel)
+				}()
+			}
+
+			targetFT.prometricsMeasureMsgDeliver(GolangReq)
+			targetFT.workerTaskExecutor(targetID, functionMsg)
 
 			select {
 			case resultJSON, ok := <-resultJSONChannel:

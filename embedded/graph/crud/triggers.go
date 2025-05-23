@@ -25,7 +25,7 @@ func executeTriggersFromLLOpStack(ctx *sfPlugins.StatefunContextProcessor, opSta
 							if j == 2 && vId == deletedObjectId {
 								objectType = deletedObjectType
 							} else {
-								objectType = findObjectType(ctx, vId)
+								objectType, _ = findObjectType(ctx, vId, false)
 							}
 							if len(objectType) > 0 {
 								var oldBody *easyjson.JSON = nil
@@ -51,12 +51,12 @@ func executeTriggersFromLLOpStack(ctx *sfPlugins.StatefunContextProcessor, opSta
 						if j == 2 && fromVId == deletedObjectId {
 							fromObjectType = deletedObjectType
 						} else {
-							fromObjectType = findObjectType(ctx, fromVId)
+							fromObjectType, _ = findObjectType(ctx, fromVId, false)
 						}
 						if j == 2 && toVId == deletedObjectId {
 							toObjectType = deletedObjectType
 						} else {
-							toObjectType = findObjectType(ctx, toVId)
+							toObjectType, _ = findObjectType(ctx, toVId, false)
 						}
 
 						if len(lType) > 0 && len(fromVId) > 0 && len(toVId) > 0 && len(fromObjectType) > 0 && len(toObjectType) > 0 {
@@ -78,7 +78,7 @@ func executeTriggersFromLLOpStack(ctx *sfPlugins.StatefunContextProcessor, opSta
 }
 
 func executeObjectTriggers(ctx *sfPlugins.StatefunContextProcessor, objectID string, objectType string, oldObjectBody, newObjectBody *easyjson.JSON, tt int /*0 - create, 1 - update, 2 - delete, 3 - read*/) {
-	triggers := getTypeTriggers(ctx, objectType)
+	triggers := getTypeTriggers(ctx, objectType, false)
 	if triggers.IsNonEmptyObject() && tt >= 0 && tt < 4 {
 		elems := []string{"create", "update", "delete", "read"}
 		var functions []string
@@ -103,7 +103,7 @@ func executeObjectTriggers(ctx *sfPlugins.StatefunContextProcessor, objectID str
 }
 
 func executeLinkTriggers(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId, fromObjectType, toObjectType, linkType string, oldLinkBody, newLinkBody *easyjson.JSON, tt int /*0 - create, 1 - update, 2 - delete, 3 - read*/) {
-	typesLinkBody, err := getLinkBody(ctx, fromObjectType, toObjectType)
+	typesLinkBody, err := getLinkBody(ctx, fromObjectType, toObjectType, false)
 	if err != nil || typesLinkBody == nil {
 		return
 	}

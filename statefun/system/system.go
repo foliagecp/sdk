@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/foliagecp/easyjson"
@@ -26,34 +27,79 @@ var (
 	GlobalPrometrics *Prometrics
 )
 
+// refMutex wraps a sync.Mutex together with a reference counter.
+type refMutex struct {
+	mu   sync.Mutex
+	refs int32
+}
+
+// KeyMutex provides per-key mutexes with automatic cleanup
+// once no goroutine holds or is waiting on a given key.
 type KeyMutex struct {
-	m *sync.Map
+	m  map[interface{}]*refMutex // map[key]interface{} => *refMutex
+	mx sync.Mutex
 }
 
-func NewKeyMutex() KeyMutex {
-	m := sync.Map{}
-	return KeyMutex{&m}
-}
-
-func (s KeyMutex) Unlock(key interface{}) {
-	l, exist := s.m.Load(key)
-	if !exist {
-		panic("kmutex: unlock of unlocked mutex")
+// NewKeyMutex constructs a new KeyMutex.
+func NewKeyMutex() *KeyMutex {
+	return &KeyMutex{
+		m: make(map[interface{}]*refMutex),
 	}
-	l_ := l.(*sync.Mutex)
-	s.m.Delete(key)
-	l_.Unlock()
 }
 
-func (s KeyMutex) Lock(key interface{}) {
-	m := sync.Mutex{}
-	m_, _ := s.m.LoadOrStore(key, &m)
-	mm := m_.(*sync.Mutex)
-	mm.Lock()
-	if mm != &m {
-		mm.Unlock()
-		s.Lock(key)
+// Lock acquires the mutex for the specified key.
+// It increments the reference count before locking to
+// prevent removal of the mutex while it’s in use.
+func (k *KeyMutex) Lock(key interface{}) {
+	k.mx.Lock()
+
+	var keyRefMutex *refMutex
+	if tmx, ok := k.m[key]; ok {
+		keyRefMutex = tmx
+	} else {
+		keyRefMutex = &refMutex{}
+		k.m[key] = keyRefMutex
 	}
+	atomic.AddInt32(&keyRefMutex.refs, 1)
+
+	k.mx.Unlock()
+
+	keyRefMutex.mu.Lock()
+}
+
+// Unlock releases the mutex for the specified key.
+// It decrements the reference count and, if it drops to zero,
+// deletes the refMutex entry to free resources.
+func (k *KeyMutex) Unlock(key interface{}) {
+	k.mx.Lock()
+	defer k.mx.Unlock()
+
+	var keyRefMutex *refMutex
+	if tmx, ok := k.m[key]; ok {
+		keyRefMutex = tmx
+	} else {
+		panic("KeyMutex: unlock of unlocked key")
+	}
+
+	// Release the underlying mutex.
+	keyRefMutex.mu.Unlock()
+
+	// Decrement reference count and remove from map when unused.
+	if atomic.AddInt32(&keyRefMutex.refs, -1) == 0 {
+		delete(k.m, key)
+	}
+}
+
+func UniqueStrings(input []string) []string {
+	seen := make(map[string]struct{})
+	var result []string
+	for _, val := range input {
+		if _, exists := seen[val]; !exists {
+			seen[val] = struct{}{}
+			result = append(result, val)
+		}
+	}
+	return result
 }
 
 func SortJSONs(jsonArray []*easyjson.JSON, fields []string) []*easyjson.JSON {

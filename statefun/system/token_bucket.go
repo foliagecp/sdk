@@ -1,13 +1,13 @@
 package system
 
 type TokenBucket struct {
-	capacity int
+	Capacity int
 	tokens   chan struct{}
 }
 
 func NewTokenBucket(cap int) *TokenBucket {
 	tb := &TokenBucket{
-		capacity: cap,
+		Capacity: cap,
 		tokens:   make(chan struct{}, cap),
 	}
 	for i := 0; i < cap; i++ {
@@ -30,4 +30,8 @@ func (tb *TokenBucket) Release() {
 	case tb.tokens <- struct{}{}:
 	default:
 	}
+}
+
+func (tb *TokenBucket) GetLoadPercentage() float64 {
+	return 100.0 * (1.0 - float64(len(tb.tokens))/float64(cap(tb.tokens)))
 }

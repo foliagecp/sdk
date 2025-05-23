@@ -88,6 +88,8 @@ github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2
 github.com/felixge/httpsnoop v1.0.4/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
 github.com/foliagecp/easyjson v0.1.0 h1:9+xUXCWMlwlgsbH3GQikfMRpRzFdDi1utFOd7l45ZvI=
 github.com/foliagecp/easyjson v0.1.0/go.mod h1:GTJFL3X3UXLq65yYiZZ6aOv6EMUtxGHhblPPvW7a5/s=
+github.com/foliagecp/easyjson v0.1.2 h1:FyWeAv5cECCSxEolh32o/ejXW1nVNPPLKQOiy605Fog=
+github.com/foliagecp/easyjson v0.1.2/go.mod h1:GTJFL3X3UXLq65yYiZZ6aOv6EMUtxGHhblPPvW7a5/s=
 github.com/fsnotify/fsnotify v1.6.0/go.mod h1:sl3t1tCWJFWoRz9R8WJCbQihKKwmorjAbSClcnxKAGw=
 github.com/go-jose/go-jose/v3 v3.0.3/go.mod h1:5b+7YgP7ZICgJDBdfjZaIt+H/9L9T/YQrVfLAMboGkQ=
 github.com/go-kit/log v0.2.1/go.mod h1:NwTd00d/i8cPZ3xOwwiv2PO5MOcx78fFErGNcVmBjv0=
