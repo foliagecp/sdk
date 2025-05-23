@@ -45,7 +45,7 @@ services:
     healthcheck:
       test: [ "CMD", "/healthcheck-nats.sh" ]
       interval: 3s
-      timeout: 3s
+      timeout: 5s
       retries: 5
     volumes:
       - ./backups:/backups
@@ -55,8 +55,8 @@ services:
     image: foliage-sdk-tests-basic:latest
     command: "/usr/bin/foliage -ll 5"
     ports:
-      - "9901:9901"
-      - "8080:8080"
+      - "9901-9903:9901"
+      - "8080-8082:8080"
     env_file: ./configs/.env
     depends_on:
       io:
@@ -66,6 +66,7 @@ services:
       dockerfile: tests/nats-cluster-test/Dockerfile
     volumes:
       - .:/foliage
+    scale: 3
 
   nats-exporter:
     image: natsio/prometheus-nats-exporter:latest
