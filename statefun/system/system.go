@@ -27,6 +27,28 @@ var (
 	GlobalPrometrics *Prometrics
 )
 
+type FinalFunc func()
+
+type FinalFunctions struct {
+	finalFuncs []FinalFunc
+}
+
+func NewFinalFunctions() *FinalFunctions {
+	return &FinalFunctions{
+		finalFuncs: []FinalFunc{},
+	}
+}
+
+func (ff *FinalFunctions) Add(f FinalFunc) {
+	ff.finalFuncs = append(ff.finalFuncs, f)
+}
+
+func (ff *FinalFunctions) Exec() {
+	for _, f := range ff.finalFuncs {
+		f()
+	}
+}
+
 // refMutex wraps a sync.Mutex together with a reference counter.
 type refMutex struct {
 	mu   sync.Mutex
