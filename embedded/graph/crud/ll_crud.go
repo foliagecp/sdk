@@ -84,8 +84,8 @@ func makeSequenceFreeParentBasedID(ctx *sfPlugins.StatefunContextProcessor, targ
 }
 
 func operationKeysMutexLock(ctx *sfPlugins.StatefunContextProcessor, keys []string) {
-	//fmt.Printf("---- [%s] Graph Key Locking >>>> %s keys:[%s] %s\n", keyMutextGetTimeStr(), ctx.Self.Typename, strings.Join(keys, " "), ctx.Self.ID)
-	//fmt.Printf("---- caller %s:%s %s\n", ctx.Caller.Typename, ctx.Caller.ID, ctx.Payload.ToString())
+	fmt.Printf("---- [%s] Graph Key Locking >>>> %s keys:[%s] %s\n", keyMutextGetTimeStr(), ctx.Self.Typename, strings.Join(keys, " "), ctx.Self.ID)
+	fmt.Printf("---- caller %s:%s %s\n", ctx.Caller.Typename, ctx.Caller.ID, ctx.Payload.ToString())
 	keys = system.UniqueStrings(keys)
 	sort.Strings(keys)
 	for _, k := range keys {
@@ -95,19 +95,19 @@ func operationKeysMutexLock(ctx *sfPlugins.StatefunContextProcessor, keys []stri
 			ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.%s", k), easyjson.NewJSON(true))
 		}
 	}
-	//fmt.Printf("---- [%s] Graph Key Locked %s\n", keyMutextGetTimeStr(), ctx.Payload.ToString())
+	fmt.Printf("---- [%s] Graph Key Locked %s\n", keyMutextGetTimeStr(), ctx.Payload.ToString())
 }
 
 func operationKeysMutexUnlock(ctx *sfPlugins.StatefunContextProcessor) {
 	if ctx.Payload.PathExists("__key_locks") {
 		keys := ctx.Payload.GetByPath("__key_locks").ObjectKeys()
-		//fmt.Printf("---- [%s] Graph Key Unlocking <<<< %s keys:[%s] %s\n", keyMutextGetTimeStr(), ctx.Self.Typename, strings.Join(keys, " "), ctx.Self.ID)
+		fmt.Printf("---- [%s] Graph Key Unlocking <<<< %s keys:[%s] %s\n", keyMutextGetTimeStr(), ctx.Self.Typename, strings.Join(keys, " "), ctx.Self.ID)
 		for _, k := range keys {
 			//fmt.Printf("-- unlocking key: %s\n", k)
 			graphIdKeyMutex.Unlock(k)
 		}
 		ctx.Payload.RemoveByPath("__key_locks")
-		//fmt.Printf("---- [%s] Graph Key Unlocked\n", keyMutextGetTimeStr())
+		fmt.Printf("---- [%s] Graph Key Unlocked\n", keyMutextGetTimeStr())
 	}
 }
 
