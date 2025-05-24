@@ -30,7 +30,8 @@ const (
 func typeOperationRedirectedToHub(ctx *sfPlugins.StatefunContextProcessor) bool {
 	if ctx.Domain.Name() != ctx.Domain.HubDomainName() {
 		om := sfMediators.NewOpMediator(ctx)
-		idOnHub := ctx.Domain.CreateObjectIDWithHubDomain(ctx.Self.ID, true)
+		selfID := getOriginalID(ctx.Self.ID)
+		idOnHub := ctx.Domain.CreateObjectIDWithHubDomain(selfID, true)
 		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, idOnHub, ctx.Payload, ctx.Options))).Reply()
 		return true
 	}
@@ -48,8 +49,9 @@ options: json - optional
 	op_stack: bool - optional
 */
 func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	crudOperationLock(ctx)
-	defer crudOperationUnlock(ctx)
+	selfID := getOriginalID(ctx.Self.ID)
+	operationKeysMutexLock(ctx, []string{selfID})
+	defer operationKeysMutexUnlock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -67,19 +69,19 @@ func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfP
 		return
 	}
 
-	pattern := fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, ctx.Self.ID, linkType, ">")
+	pattern := fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfID, linkType, ">")
 	keys := ctx.Domain.Cache().GetKeysByPattern(pattern)
 	if len(keys) > 0 {
 		for _, v := range keys {
 			split := strings.Split(v, ".")
 			to := split[len(split)-1]
 
-			if findObjectType(ctx, to) == toObjectType {
+			if tp, _ := findObjectType(ctx, to); tp == toObjectType {
 				objectLink := easyjson.NewJSONObject()
 				objectLink.SetByPath("to", easyjson.NewJSON(to))
 				objectLink.SetByPath("type", easyjson.NewJSON(linkType))
 
-				om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", ctx.Self.ID, &objectLink, ctx.Options)))
+				om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &objectLink), ctx.Options)))
 				mergeOpStack(opStack, om.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
 				if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
 					system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
@@ -99,24 +101,26 @@ func getTypeTriggers(ctx *sfPlugins.StatefunContextProcessor, typeName string) *
 	if ctx.Options != nil {
 		options = ctx.Options.Clone()
 	}*/
-	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", typeName, nil, nil))
+	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", makeSequenceFreeParentBasedID(ctx, typeName), injectParentHoldsLocks(ctx, nil), nil))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
 		return som.Data.GetByPath("body.triggers").GetPtr()
 	}
 	return easyjson.NewJSONObject().GetPtr()
 }
 
-func findObjectType(ctx *sfPlugins.StatefunContextProcessor, objectID string) string {
+func findObjectType(ctx *sfPlugins.StatefunContextProcessor, objectID string) (string, error) {
 	options := easyjson.NewJSONObject()
 	if ctx.Options != nil {
 		options = ctx.Options.Clone()
 		options.RemoveByPath("op_stack") // Not to execute triggers in functions.cmdb.api.object.read
 	}
-	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", objectID, nil, &options))
+	id := makeSequenceFreeParentBasedID(ctx, objectID)
+
+	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", id, injectParentHoldsLocks(ctx, nil), &options))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
-		return som.Data.GetByPath("type").AsStringDefault("")
+		return som.Data.GetByPath("type").AsStringDefault(""), nil
 	}
-	return ""
+	return "", fmt.Errorf(som.Details)
 }
 
 func findTypeObjects(ctx *sfPlugins.StatefunContextProcessor, typeName string) ([]string, error) {
@@ -124,7 +128,9 @@ func findTypeObjects(ctx *sfPlugins.StatefunContextProcessor, typeName string) (
 	if ctx.Options != nil {
 		options = ctx.Options.Clone()
 	}*/
-	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.read", typeName, nil, ctx.Options))
+	p := easyjson.NewJSONObject()
+
+	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.read", makeSequenceFreeParentBasedID(ctx, typeName), injectParentHoldsLocks(ctx, &p), ctx.Options))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
 		if arr, ok := som.Data.GetByPath("object_ids").AsArrayString(); ok {
 			return arr, nil
@@ -141,7 +147,7 @@ func getLinkBody(ctx *sfPlugins.StatefunContextProcessor, from, linkName string)
 	if ctx.Options != nil {
 		options = ctx.Options.Clone()
 	}*/
-	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", from, &link, ctx.Options))
+	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", makeSequenceFreeParentBasedID(ctx, from), injectParentHoldsLocks(ctx, &link), ctx.Options))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
 		if som.Data.PathExists("body") {
 			return som.Data.GetByPathPtr("body"), nil
@@ -151,14 +157,15 @@ func getLinkBody(ctx *sfPlugins.StatefunContextProcessor, from, linkName string)
 	return nil, fmt.Errorf(som.Details)
 }
 
+// fromObjectId and toObjectId must be locked by key mutex for thread safety
 func getReferenceLinkTypeBetweenTwoObjects(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId string) (string, string, string, error) {
-	fromType := findObjectType(ctx, fromObjectId)
-	if len(fromType) == 0 {
-		return "", "", "", fmt.Errorf("from object has no type")
+	fromType, err := findObjectType(ctx, fromObjectId)
+	if err != nil {
+		return "", "", "", err
 	}
-	toType := findObjectType(ctx, toObjectId)
+	toType, err := findObjectType(ctx, toObjectId)
 	if len(toType) == 0 {
-		return "", "", "", fmt.Errorf("to object has no type")
+		return "", "", "", err
 	}
 	s, e := getObjectsLinkTypeFromTypesLink(ctx, fromType, toType)
 	return fromType, toType, s, e
