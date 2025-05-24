@@ -80,14 +80,13 @@ func resultWithOpStack(existingResult *easyjson.JSON, opStack *easyjson.JSON) ea
 }
 
 func getLinkNameFromSpecifiedIdentifier(ctx *sfPlugins.StatefunContextProcessor) (string, bool) {
-	selfID := getOriginalID(ctx.Self.ID)
 	if linkName, ok := ctx.Payload.GetByPath("name").AsString(); ok {
 		return linkName, true
 	} else {
 		if toVertexId, ok := ctx.Payload.GetByPath("to").AsString(); ok {
 			toVertexId = ctx.Domain.CreateObjectIDWithThisDomain(toVertexId, false)
 			if lt, ok := ctx.Payload.GetByPath("type").AsString(); ok {
-				linkNameBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfID, lt, toVertexId))
+				linkNameBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, ctx.Self.ID, lt, toVertexId))
 				if err == nil {
 					return string(linkNameBytes), true
 				}
@@ -98,9 +97,8 @@ func getLinkNameFromSpecifiedIdentifier(ctx *sfPlugins.StatefunContextProcessor)
 }
 
 func indexRemoveVertexBody(ctx *sfPlugins.StatefunContextProcessor) {
-	selfID := getOriginalID(ctx.Self.ID)
 	// Remove all indices -----------------------------
-	indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(VertexBodyValueIndexPrefPattern+KeySuff1Pattern, selfID, ">"))
+	indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(VertexBodyValueIndexPrefPattern+KeySuff1Pattern, ctx.Self.ID, ">"))
 	for _, indexKey := range indexKeys {
 		ctx.Domain.Cache().DeleteValue(indexKey, true, -1, "")
 	}
@@ -108,7 +106,6 @@ func indexRemoveVertexBody(ctx *sfPlugins.StatefunContextProcessor) {
 }
 
 func indexVertexBody(ctx *sfPlugins.StatefunContextProcessor, vertexBody easyjson.JSON, opTime int64, reindex bool) {
-	selfID := getOriginalID(ctx.Self.ID)
 	if reindex {
 		indexRemoveVertexBody(ctx)
 	}
@@ -132,16 +129,15 @@ func indexVertexBody(ctx *sfPlugins.StatefunContextProcessor, vertexBody easyjso
 		}
 
 		if len(bytesVal) > 0 {
-			ctx.Domain.Cache().SetValue(fmt.Sprintf(VertexBodyValueIndexPrefPattern+KeySuff2Pattern, selfID, typeStr, bodyKey), bytesVal, true, opTime, "")
+			ctx.Domain.Cache().SetValue(fmt.Sprintf(VertexBodyValueIndexPrefPattern+KeySuff2Pattern, ctx.Self.ID, typeStr, bodyKey), bytesVal, true, opTime, "")
 		}
 	}
 	// ----------------------------------------------------
 }
 
 func indexRemoveVertexLinkBody(ctx *sfPlugins.StatefunContextProcessor, linkName string) {
-	selfID := getOriginalID(ctx.Self.ID)
 	// Remove all indices -----------------------------
-	indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(LinkBodyValueIndexPrefPattern+KeySuff2Pattern, selfID, linkName, ">"))
+	indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(LinkBodyValueIndexPrefPattern+KeySuff2Pattern, ctx.Self.ID, linkName, ">"))
 	for _, indexKey := range indexKeys {
 		ctx.Domain.Cache().DeleteValue(indexKey, true, -1, "")
 	}
@@ -149,7 +145,6 @@ func indexRemoveVertexLinkBody(ctx *sfPlugins.StatefunContextProcessor, linkName
 }
 
 func indexVertexLinkBody(ctx *sfPlugins.StatefunContextProcessor, linkName string, linkBody easyjson.JSON, opTime int64, reindex bool) {
-	selfID := getOriginalID(ctx.Self.ID)
 	if reindex {
 		indexRemoveVertexLinkBody(ctx, linkName)
 	}
@@ -173,7 +168,7 @@ func indexVertexLinkBody(ctx *sfPlugins.StatefunContextProcessor, linkName strin
 		}
 
 		if len(bytesVal) > 0 {
-			ctx.Domain.Cache().SetValue(fmt.Sprintf(LinkBodyValueIndexPrefPattern+KeySuff3Pattern, selfID, linkName, typeStr, bodyKey), bytesVal, true, opTime, "")
+			ctx.Domain.Cache().SetValue(fmt.Sprintf(LinkBodyValueIndexPrefPattern+KeySuff3Pattern, ctx.Self.ID, linkName, typeStr, bodyKey), bytesVal, true, opTime, "")
 		}
 	}
 	// ----------------------------------------------------
