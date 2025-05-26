@@ -51,7 +51,7 @@ var (
 // Logger wraps slog.Logger with additional functionality
 type Logger struct {
 	slogger      *slog.Logger
-	level        LogLevel
+	levelVar     *slog.LevelVar
 	reportCaller bool
 	fields       map[string]interface{}
 	mu           sync.RWMutex
@@ -109,19 +109,54 @@ func NewLogger(opts Options) *Logger {
 		opts.Output = defaultOutput
 	}
 
+	levelVar := &slog.LevelVar{}
+	levelVar.Set(opts.Level)
+
 	var handler slog.Handler
 	if opts.JSONFormat {
-		handler = slog.NewJSONHandler(opts.Output, &slog.HandlerOptions{Level: opts.Level})
+		handler = slog.NewJSONHandler(opts.Output, &slog.HandlerOptions{Level: levelVar})
 	} else {
-		handler = slog.NewTextHandler(opts.Output, &slog.HandlerOptions{Level: opts.Level})
+		handler = slog.NewTextHandler(opts.Output, &slog.HandlerOptions{Level: levelVar})
 	}
 
 	return &Logger{
 		slogger:      slog.New(handler),
-		level:        opts.Level,
+		levelVar:     levelVar,
 		reportCaller: opts.ReportCaller,
 		fields:       opts.InitialFields,
 	}
+}
+
+// SetOptions sets new options for Logger
+func (l *Logger) SetOptions(
+	output io.Writer,
+	level LogLevel,
+	reportCaller bool,
+	jsonFormat bool,
+) {
+	optionsMu.Lock()
+	defer optionsMu.Unlock()
+
+	l.levelVar.Set(level)
+	l.reportCaller = reportCaller
+
+	handlerOpts := &slog.HandlerOptions{
+		AddSource: reportCaller,
+		Level:     l.levelVar,
+	}
+
+	var handler slog.Handler
+	if jsonFormat {
+		handler = slog.NewJSONHandler(output, handlerOpts)
+	} else {
+		handler = slog.NewTextHandler(output, handlerOpts)
+	}
+
+	l.slogger = slog.New(handler)
+}
+
+func (l *Logger) SetLevel(level LogLevel) {
+	l.levelVar.Set(level)
 }
 
 // With returns a new Logger with the given fields added to its context
@@ -129,7 +164,7 @@ func NewLogger(opts Options) *Logger {
 func (l *Logger) With(fields map[string]interface{}) *Logger {
 	newLogger := &Logger{
 		slogger:      l.slogger,
-		level:        l.level,
+		levelVar:     l.levelVar,
 		reportCaller: l.reportCaller,
 		fields:       make(map[string]interface{}),
 	}
@@ -153,7 +188,7 @@ func (l *Logger) logf(ctx context.Context, level LogLevel, msg string, args ...i
 
 // log logs a message at the specified level
 func (l *Logger) log(ctx context.Context, level LogLevel, msg string, args ...interface{}) {
-	if level < l.level {
+	if level < l.levelVar.Level() {
 		return
 	}
 
