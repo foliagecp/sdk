@@ -3,18 +3,24 @@ package statefun
 const (
 	RuntimeName                 = "runtime"
 	NatsURL                     = "nats://nats:foliage@nats:4222"
-	KVMutexLifetimeSec          = 120
+	KVMutexLifetimeSec          = 10
 	KVMutexIsOldPollingInterval = 10
 	FunctionTypeIDLifetimeMs    = 5000
 	RequestTimeoutSec           = 60
 	GCIntervalSec               = 5
 	DefaultHubDomainName        = "hub"
 	HandlesDomainRouters        = true
+	EnableTLS                   = false
+	EnableNatsClusterMode       = false
+	NatsReplicasCount           = 1
+	activePassiveMode           = true
 )
 
 type RuntimeConfig struct {
 	name                           string
 	natsURL                        string
+	enableNatsClusterMode          bool
+	natsReplicasCount              int
 	kvMutexLifeTimeSec             int
 	kvMutexIsOldPollingIntervalSec int
 	functionTypeIDLifetimeMs       int
@@ -22,12 +28,18 @@ type RuntimeConfig struct {
 	gcIntervalSec                  int
 	desiredHUBDomainName           string
 	handlesDomainRouters           bool
+	activePassiveMode              bool
+	isActiveInstance               bool
+	activeRevID                    uint64
+	enableTLS                      bool
 }
 
 func NewRuntimeConfig() *RuntimeConfig {
 	return &RuntimeConfig{
 		name:                           RuntimeName,
 		natsURL:                        NatsURL,
+		enableNatsClusterMode:          EnableNatsClusterMode,
+		natsReplicasCount:              NatsReplicasCount,
 		kvMutexLifeTimeSec:             KVMutexLifetimeSec,
 		kvMutexIsOldPollingIntervalSec: KVMutexIsOldPollingInterval,
 		functionTypeIDLifetimeMs:       FunctionTypeIDLifetimeMs,
@@ -35,6 +47,9 @@ func NewRuntimeConfig() *RuntimeConfig {
 		gcIntervalSec:                  GCIntervalSec,
 		desiredHUBDomainName:           DefaultHubDomainName,
 		handlesDomainRouters:           HandlesDomainRouters,
+		enableTLS:                      EnableTLS,
+		activePassiveMode:              activePassiveMode,
+		isActiveInstance:               true,
 	}
 }
 
@@ -85,5 +100,29 @@ func (ro *RuntimeConfig) SetGCIntervalSec(gcIntervalSec int) *RuntimeConfig {
 
 func (ro *RuntimeConfig) SetDomainRoutersHandling(handlesDomainRouters bool) *RuntimeConfig {
 	ro.handlesDomainRouters = handlesDomainRouters
+	return ro
+}
+
+func (ro *RuntimeConfig) SetTLS(enableTLS bool) *RuntimeConfig {
+	ro.enableTLS = enableTLS
+	return ro
+}
+
+func (ro *RuntimeConfig) EnableNatsCluster(enableCluster bool) *RuntimeConfig {
+	ro.enableNatsClusterMode = enableCluster
+	return ro
+}
+
+func (ro *RuntimeConfig) SetNatsReplicas(replicasCount int) *RuntimeConfig {
+	ro.natsReplicasCount = replicasCount
+	return ro
+}
+
+func (ro *RuntimeConfig) ConfigureNatsCluster(replicasCount int) *RuntimeConfig {
+	return ro.EnableNatsCluster(true).SetNatsReplicas(replicasCount)
+}
+
+func (ro *RuntimeConfig) SetActivePassiveMode(activePassiveMode bool) *RuntimeConfig {
+	ro.activePassiveMode = activePassiveMode
 	return ro
 }
