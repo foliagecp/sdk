@@ -1,5 +1,3 @@
-
-
 package statefun
 
 const (

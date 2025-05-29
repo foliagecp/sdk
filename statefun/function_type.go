@@ -1,5 +1,3 @@
-
-
 package statefun
 
 import (
@@ -10,12 +8,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/foliagecp/sdk/statefun/logger"
-	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/foliagecp/easyjson"
 
+	"github.com/foliagecp/sdk/statefun/logger"
+	lg "github.com/foliagecp/sdk/statefun/logger"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 )
@@ -23,37 +21,40 @@ import (
 type FunctionLogicHandler func(sfPlugins.StatefunExecutor, *sfPlugins.StatefunContextProcessor)
 
 type FunctionType struct {
-	runtime                 *Runtime
-	name                    string
-	subject                 string
-	config                  FunctionTypeConfig
-	logicHandler            FunctionLogicHandler
-	idKeyMutex              system.KeyMutex
-	idHandlersChannel       sync.Map
-	idHandlersLastMsgTime   sync.Map
-	idRunningStatus         sync.Map
-	executor                *sfPlugins.TypenameExecutorPlugin
-	instancesControlChannel chan struct{}
-	resourceMutex           sync.Mutex
+	runtime      *Runtime
+	name         string
+	subject      string
+	config       FunctionTypeConfig
+	logicHandler FunctionLogicHandler
+
+	idHandlersChannel     sync.Map
+	idKeyMutex            system.KeyMutex
+	idHandlersLastMsgTime sync.Map
+	contextProcessors     sync.Map
+
+	executor      *sfPlugins.TypenameExecutorPlugin
+	resourceMutex sync.Mutex
+
+	sfWorkerPool *SFWorkerPool
+	tokens       system.TokenBucket
 }
 
 const (
 	contextExpirationKey = "____ctx_expires_after_ms"
+	sendMsgFuncErrorMsg  = "task refuse for statefun %s with id=%s: %s"
 )
 
 func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHandler, config FunctionTypeConfig) *FunctionType {
 	ft := &FunctionType{
-		runtime:                 runtime,
-		name:                    name,
-		subject:                 fmt.Sprintf(DomainIngressSubjectsTmpl, runtime.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, runtime.Domain.name, name, "*")),
-		logicHandler:            logicHandler,
-		idKeyMutex:              system.NewKeyMutex(),
-		config:                  config,
-		instancesControlChannel: nil,
+		runtime:      runtime,
+		name:         name,
+		subject:      fmt.Sprintf(DomainIngressSubjectsTmpl, runtime.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, runtime.Domain.name, name, "*")),
+		logicHandler: logicHandler,
+		idKeyMutex:   system.NewKeyMutex(),
+		config:       config,
+		tokens:       *system.NewTokenBucket(config.functionWorkerPoolConfig.MaxWorkers + config.functionWorkerPoolConfig.TaskQueueLen),
 	}
-	if config.maxIdHandlers > 0 {
-		ft.instancesControlChannel = make(chan struct{}, config.maxIdHandlers)
-	}
+	ft.sfWorkerPool = NewSFWorkerPool(ft, config.functionWorkerPoolConfig)
 	runtime.registeredFunctionTypes[ft.name] = ft
 	return ft
 }
@@ -68,101 +69,39 @@ func (ft *FunctionType) SetExecutor(alias string, content string, constructor fu
 func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	id := ft.runtime.Domain.CreateObjectIDWithThisDomain(originId, false)
 
-	ft.idKeyMutex.Lock(id)
-	defer ft.idKeyMutex.Unlock(id)
+	if !ft.tokens.TryAcquire() {
+		msg.RefusalCallback(true) // No redelivering cause system have no more scaling resources!
+		logger.Logf(logger.ErrorLevel, sendMsgFuncErrorMsg, ft.name, id, "no tokens left")
+		return
+	}
 
-	// Send msg to type id handler ------------------------------------------------------
 	var msgChannel chan FunctionTypeMsg
-
 	if value, ok := ft.idHandlersChannel.Load(id); ok {
 		msgChannel = value.(chan FunctionTypeMsg)
 	} else {
-		// Limit typename's max id handlers running -------
-		if ft.instancesControlChannel != nil {
-			select {
-			case ft.instancesControlChannel <- struct{}{}:
-			default: // Limit is reached
-				msg.RefusalCallback()
-				return
-			}
-		}
-		// ------------------------------------------------
-
-		msgChannel = make(chan FunctionTypeMsg, ft.config.msgChannelSize)
-
-		go ft.idHandlerRoutine(id, msgChannel)
+		msgChannel = make(chan FunctionTypeMsg, ft.config.idChannelSize)
 		ft.idHandlersChannel.Store(id, msgChannel)
-		if ft.executor != nil {
-			ft.executor.AddForID(id)
-		}
 	}
+
 	ft.idHandlersLastMsgTime.Store(id, time.Now().UnixNano())
+	if ft.executor != nil {
+		ft.executor.AddForID(id)
+	}
 
 	select {
 	case msgChannel <- msg:
-		// Debug values update ----------------------------
-		gc := atomic.LoadInt64(&ft.runtime.gc)
-
-		if gc == 0 {
-			now := time.Now().UnixNano()
-			atomic.StoreInt64(&ft.runtime.glce, now)
-			atomic.StoreInt64(&ft.runtime.gt0, now)
-		}
-		atomic.AddInt64(&ft.runtime.gc, 1)
-		// ------------------------------------------------
+		ft.sfWorkerPool.Notify()
 	default:
-		if msg.RefusalCallback != nil {
-			msg.RefusalCallback()
-		}
-	}
-	// ----------------------------------------------------------------------------------
-}
-
-func (ft *FunctionType) idHandlerRoutine(id string, msgChannel chan FunctionTypeMsg) {
-	system.GlobalPrometrics.GetRoutinesCounter().Started("functiontype-idHandlerRoutine")
-	defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("functiontype-idHandlerRoutine")
-	typenameIDContextProcessor := sfPlugins.StatefunContextProcessor{
-		GetFunctionContext:        func() *easyjson.JSON { return ft.getContext(ft.name + "." + id) },
-		SetFunctionContext:        func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
-		SetContextExpirationAfter: func(after time.Duration) { ft.setContextExpirationAfter(ft.name+"."+id, after) },
-		GetObjectContext:          func() *easyjson.JSON { return ft.getContext(id) },
-		SetObjectContext:          func(context *easyjson.JSON) { ft.setContext(id, context) },
-		Domain:                    ft.runtime.Domain,
-		Self:                      sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
-		Signal: func(signalProvider sfPlugins.SignalProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) error {
-			return ft.runtime.signal(signalProvider, ft.name, id, targetTypename, targetID, j, o)
-		},
-		Request: func(requestProvider sfPlugins.RequestProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
-			return ft.runtime.request(requestProvider, ft.name, id, targetTypename, targetID, j, o)
-		},
-		Egress: func(egressProvider sfPlugins.EgressProvider, j *easyjson.JSON, customId ...string) error {
-			egressId := id
-			if len(customId) > 0 {
-				egressId = customId[0]
-			}
-			return ft.runtime.egress(egressProvider, ft.name, egressId, j)
-		},
-		// To be assigned later:
-		// Call: ...
-		// Payload: ...
-		// Options: ... // Otions from initial typename declaration will be merged and overwritten by the incoming one in message
-		// Caller: ...
-	}
-
-	for msg := range msgChannel {
-		ft.handleMsgForID(id, msg, &typenameIDContextProcessor)
-	}
-	if ft.instancesControlChannel != nil {
-		<-ft.instancesControlChannel
+		ft.tokens.Release()
+		msg.RefusalCallback(false) // Can try to rediliver cause free tokens still exists, system have scaling resources
+		logger.Logf(logger.WarnLevel, sendMsgFuncErrorMsg, ft.name, id, "queue for current id is full")
 	}
 }
 
 func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameIDContextProcessor *sfPlugins.StatefunContextProcessor) {
-	ft.idRunningStatus.Store(id, true)
-	defer ft.idRunningStatus.Store(id, false)
-
 	msgRequestCallback := msg.RequestCallback
 	replyDataChannel := make(chan *easyjson.JSON, 1)
+	typenameIDContextProcessor.Reply = nil
 	if msgRequestCallback != nil {
 		typenameIDContextProcessor.Reply = &sfPlugins.SyncReply{}
 
@@ -284,24 +223,11 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 		lastMsgTime := value.(int64)
 
 		if lastMsgTime+int64(typenameIDLifetimeMs)*int64(time.Millisecond) < now {
-			if v, ok := ft.idRunningStatus.Load(id); ok {
-				running, boolFine := v.(bool)
-				if !boolFine {
-					logger.Logf(logger.ErrorLevel, "Function type GC failed to get idRunningStatus in bool format ftName=%s for id=%s", ft.name, id)
-				}
-				if running {
-					return true
-				}
-			}
-
 			ft.idKeyMutex.Lock(id)
 
-			v, _ := ft.idHandlersChannel.Load(id)
-			msgChannel := v.(chan FunctionTypeMsg)
-			close(msgChannel)
-			ft.idHandlersChannel.Delete(id)
 			ft.idHandlersLastMsgTime.Delete(id)
-			ft.idRunningStatus.Delete(id)
+			ft.idHandlersChannel.Delete(id)
+			ft.contextProcessors.Delete(id)
 			if ft.executor != nil {
 				ft.executor.RemoveForID(id)
 			}

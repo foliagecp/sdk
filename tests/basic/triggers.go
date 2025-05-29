@@ -91,12 +91,12 @@ func registerTriggers3(runtime *statefun.Runtime) {
 
 func triggersStatefun1(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	lg.Logf(lg.DebugLevel, "-------> %s:%s", ctx.Self.Typename, ctx.Self.ID)
-	lg.Logln(lg.DebugLevel, "== Payload:", ctx.Payload.ToString())
+	lg.Logln(lg.DebugLevel, "== Payload: %s", ctx.Payload.ToString())
 }
 
 func triggersStatefun2(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	lg.Logf(lg.DebugLevel, "-------> %s:%s", ctx.Self.Typename, ctx.Self.ID)
-	lg.Logln(lg.DebugLevel, "== Payload:", ctx.Payload.ToString())
+	lg.Logln(lg.DebugLevel, "== Payload: %s", ctx.Payload.ToString())
 }
 
 func registerTriggerFunctions(runtime *statefun.Runtime) {

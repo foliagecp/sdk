@@ -1,5 +1,3 @@
-
-
 // Foliage statefun plugins package.
 // Provides unified interfaces for stateful functions plugins
 package plugins
@@ -43,9 +41,9 @@ const (
 
 type EgressProvider int
 
-type SFSignalFunc func(SignalProvider, string, string, *easyjson.JSON, *easyjson.JSON) error
-type SFRequestFunc func(RequestProvider, string, string, *easyjson.JSON, *easyjson.JSON, ...time.Duration) (*easyjson.JSON, error)
-type SFEgressFunc func(EgressProvider, *easyjson.JSON, ...string) error
+type SFSignalFunc func(signalProvider SignalProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) error
+type SFRequestFunc func(requestProvider RequestProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error)
+type SFEgressFunc func(egressProvider EgressProvider, payload *easyjson.JSON, customId ...string) error
 
 const (
 	NatsCoreEgress EgressProvider = iota
@@ -84,6 +82,10 @@ type Domain interface {
 	* domainName1/ObjectId  -> false
 	 */
 	IsShadowObject(idWithDomain string) bool
+
+	GetValidObjectId(objectId string) string
+
+	CreateCustomShadowId(storeDomain, targetDomain, uuid string) string
 }
 
 type StatefunContextProcessor struct {
@@ -130,9 +132,11 @@ func (tnex *TypenameExecutorPlugin) AddForID(id string) {
 		lg.Logf(lg.ErrorLevel, "Cannot create new StatefunExecutor for id=%s: missing newExecutor function", id)
 		tnex.idExecutors.Store(id, nil)
 	} else {
-		lg.Logf(lg.TraceLevel, "______________ Created StatefunExecutor for id=%s", id)
-		executor := tnex.executorContructorFunction(tnex.alias, tnex.source)
-		tnex.idExecutors.Store(id, executor)
+		if _, ok := tnex.idExecutors.Load(id); !ok {
+			lg.Logf(lg.TraceLevel, "______________ Created StatefunExecutor for id=%s", id)
+			executor := tnex.executorContructorFunction(tnex.alias, tnex.source)
+			tnex.idExecutors.Store(id, executor)
+		}
 	}
 }
 

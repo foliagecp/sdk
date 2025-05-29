@@ -120,6 +120,10 @@ func (dm *Domain) SetWeakClusterDomains(weakClusterDomains []string) {
 	}
 }
 
+func (dm *Domain) CreateCustomShadowId(storeDomain, targetDomain, uuid string) string {
+	return storeDomain + ObjectIDDomainSeparator + targetDomain + ObjectIDWeakClusteringDomainSeparator + uuid
+}
+
 /*
  * otherDomainName/ObjectId -> thisDomainName/otherDomainName#ObjectId
  * thisDomainName/ObjectId -> thisDomainName/ObjectId
@@ -157,6 +161,30 @@ func (dm *Domain) GetShadowObjectDomainAndID(shadowObjectId string) (domainName,
 	objectIdWithoutDomain = tokens[1]
 
 	return
+}
+
+/*
+* thisDomainName/otherDomainName#ObjectId -> thisDomainName/otherDomainName#ObjectId
+
+* thisDomainName/thisDomainName#ObjectId -> thisDomainName/ObjectId
+* otherDomainName/thisDomainName#ObjectId -> thisDomainName/ObjectId
+* otherDomainName/otherDomainName#ObjectId -> thisDomainName/otherDomainName#ObjectId
+
+* thisDomainName/ObjectId -> thisDomainName/ObjectId
+* otherDomainName/ObjectId -> otherDomainName/ObjectId
+ */
+func (dm *Domain) GetValidObjectId(objectId string) string {
+	if targetDomainName, objectIdWithoutDomain, err := dm.GetShadowObjectDomainAndID(objectId); err == nil {
+		objectIdDomain := dm.GetDomainFromObjectID(objectId)
+		if dm.name == targetDomainName {
+			return dm.name + ObjectIDDomainSeparator + objectIdWithoutDomain
+		}
+		if objectIdDomain == targetDomainName {
+			return dm.name + ObjectIDDomainSeparator + targetDomainName + ObjectIDWeakClusteringDomainSeparator + objectIdWithoutDomain
+		}
+		return objectId
+	}
+	return objectId
 }
 
 /*

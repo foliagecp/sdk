@@ -200,3 +200,204 @@ Unless otherwise noted, the Foliage source files are distributed under the Apach
 ## Contribution
 
 Foliage welcomes contributions from the open-source community. Join us in building a collaborative application platform that empowers developers worldwide!
+
+# Foliage CMDB Client
+
+Этот клиент предоставляет удобный интерфейс для работы с Foliage Graph Store и CMDB API.
+
+## Возможности
+
+### Высокоуровневый CMDB API
+- **Типы (Types)**: Создание, обновление, удаление и чтение типов объектов
+- **Связи между типами**: Создание связей между различными типами
+- **Объекты (Objects)**: Создание экземпляров типов с произвольными данными
+- **Связи между объектами**: Создание связей между экземплярами объектов
+
+### Низкоуровневый Graph API  
+- **Вершины (Vertices)**: Прямые операции с вершинами графа
+- **Связи (Links)**: Прямые операции со связями между вершинами
+
+## Установка
+
+```bash
+go get github.com/foliagecp/sdk/clients/go/db
+```
+
+## Быстрый старт
+
+### Создание клиента
+
+```go
+import "github.com/foliagecp/sdk/clients/go/db"
+
+// Создание CMDB клиента
+client, err := db.NewCMDBClient("nats://localhost:4222", 30, "hub")
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### Создание типов
+
+```go
+// Создание типа "Server"
+serverTypeBody := easyjson.NewJSONObject()
+serverTypeBody.SetByPath("name", easyjson.NewJSON("Server"))
+serverTypeBody.SetByPath("description", easyjson.NewJSON("Physical or virtual server"))
+
+err := client.TypeCreate("server", serverTypeBody)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Создание типа "Application"  
+appTypeBody := easyjson.NewJSONObject()
+appTypeBody.SetByPath("name", easyjson.NewJSON("Application"))
+appTypeBody.SetByPath("description", easyjson.NewJSON("Software application"))
+
+err = client.TypeCreate("application", appTypeBody)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### Создание связи между типами
+
+```go
+// Создание связи "Server -> Application" с типом "hosts"
+linkBody := easyjson.NewJSONObject()
+linkBody.SetByPath("relationship", easyjson.NewJSON("hosts"))
+linkBody.SetByPath("description", easyjson.NewJSON("Server hosts application"))
+
+err := client.TypesLinkCreate("server", "application", "hosts", linkBody, []string{"hosting"})
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### Создание объектов
+
+```go
+// Создание объекта сервера
+serverBody := easyjson.NewJSONObject()
+serverBody.SetByPath("hostname", easyjson.NewJSON("web-server-01"))
+serverBody.SetByPath("ip_address", easyjson.NewJSON("192.168.1.10"))
+serverBody.SetByPath("os", easyjson.NewJSON("Ubuntu 22.04"))
+
+err := client.ObjectCreate("web-server-01", "server", serverBody)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Создание объекта приложения
+appBody := easyjson.NewJSONObject()
+appBody.SetByPath("name", easyjson.NewJSON("E-commerce Website"))
+appBody.SetByPath("version", easyjson.NewJSON("2.1.0"))
+appBody.SetByPath("language", easyjson.NewJSON("Python"))
+
+err = client.ObjectCreate("ecommerce-web", "application", appBody)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### Создание связи между объектами
+
+```go
+// Создание связи между сервером и приложением
+hostingBody := easyjson.NewJSONObject()
+hostingBody.SetByPath("deployment_date", easyjson.NewJSON("2024-01-15"))
+hostingBody.SetByPath("environment", easyjson.NewJSON("production"))
+
+err := client.ObjectsLinkCreate("web-server-01", "ecommerce-web", "hosts", hostingBody, []string{"production"})
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### Чтение данных
+
+```go
+// Чтение типа
+typeData, err := client.TypeRead("server")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("Type name: %s\n", typeData.GetByPath("body.name").AsStringDefault(""))
+
+// Чтение объекта
+objectData, err := client.ObjectRead("web-server-01")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("Server hostname: %s\n", objectData.GetByPath("body.hostname").AsStringDefault(""))
+
+// Чтение связи между объектами
+linkData, err := client.ObjectsLinkRead("web-server-01", "ecommerce-web")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("Environment: %s\n", linkData.GetByPath("body.environment").AsStringDefault(""))
+```
+
+## Полный пример
+
+См. файл `example_usage.go` для полного примера создания типов, связей и объектов.
+
+Пример демонстрирует:
+
+1. **Создание двух типов**: Server и Application
+2. **Создание связи между типами**: Server -> Application (hosts)
+3. **Создание объектов каждого типа**: 
+   - Серверы: web-server-01, db-server-01
+   - Приложения: ecommerce-web, postgresql-db
+4. **Создание связей между объектами**: следуя модели типов
+5. **Проверку созданных данных**: чтение и верификация
+
+## API Методы
+
+### Операции с типами
+- `TypeCreate(typeId, body)` - создание типа
+- `TypeUpdate(typeId, body, upsert, replace)` - обновление типа
+- `TypeDelete(typeId)` - удаление типа
+- `TypeRead(typeId)` - чтение типа
+
+### Операции со связями типов
+- `TypesLinkCreate(fromType, toType, objectType, body, tags)` - создание связи типов
+- `TypesLinkUpdate(fromType, toType, body, tags, upsert, replace)` - обновление связи типов
+- `TypesLinkDelete(fromType, toType)` - удаление связи типов
+- `TypesLinkRead(fromType, toType)` - чтение связи типов
+
+### Операции с объектами
+- `ObjectCreate(objectId, originType, body)` - создание объекта
+- `ObjectUpdate(objectId, body, originType, upsert, replace)` - обновление объекта
+- `ObjectDelete(objectId)` - удаление объекта
+- `ObjectRead(objectId)` - чтение объекта
+
+### Операции со связями объектов
+- `ObjectsLinkCreate(fromObject, toObject, name, body, tags)` - создание связи объектов
+- `ObjectsLinkUpdate(fromObject, toObject, name, body, tags, upsert, replace)` - обновление связи объектов
+- `ObjectsLinkDelete(fromObject, toObject)` - удаление связи объектов
+- `ObjectsLinkRead(fromObject, toObject)` - чтение связи объектов
+
+### Низкоуровневые операции (наследуются от GraphSyncClient)
+- `VertexCreate(id, body)` - создание вершины
+- `VertexUpdate(id, body, replace, upsert)` - обновление вершины
+- `VertexDelete(id)` - удаление вершины
+- `VertexRead(id, details)` - чтение вершины
+- `VerticesLinkCreate(from, to, linkName, linkType, tags, body)` - создание связи
+- И другие операции со связями...
+
+## Требования
+
+- Go 1.18+
+- NATS сервер
+- Foliage runtime
+
+## Запуск примера
+
+```bash
+go run example_usage.go
+```
+
+Убедитесь, что NATS сервер запущен на `localhost:4222` и Foliage runtime работает.
