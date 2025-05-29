@@ -1,5 +1,3 @@
-
-
 // Foliage graph store debug package.
 // Provides debug stateful functions for the graph store
 
@@ -7,10 +5,15 @@ package debug
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/foliagecp/easyjson"
+	"github.com/foliagecp/sdk/clients/go/db"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
+
+	lg "github.com/foliagecp/sdk/statefun/logger"
 )
 
 type gNode struct {
@@ -188,4 +191,107 @@ func getVertexBodyAndOutLinks(ctx *sfPlugins.StatefunContextProcessor, id string
 	}
 
 	return vertexBody, edges
+}
+
+/*
+format: string // "graphml"
+source: string // "file" | "payload"
+data: string // "graph data" | "file path"
+
+Example:
+nats -s nats://nats:foliage@nats:4222 pub signal.hub.functions.graph.api.import.a "{\"payload\":{\"format\":\"graphml\",\"source\":\"file\",\"data\":\"./skala-xml.graphml\"}}"
+*/
+func LLAPIImportGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	om := sfMediators.NewOpMediator(ctx)
+
+	payload := ctx.Payload
+	format := payload.GetByPath("format").AsStringDefault("dot")
+	source := payload.GetByPath("source").AsStringDefault("payload")
+
+	lg.Logln(lg.InfoLevel, "------------------ GRAPH <<< IMPORTING <<< DATA ------------------")
+
+	switch format {
+	case "graphml":
+		lg.Logln(lg.InfoLevel, "Format: graphml")
+		graph := RawGraph{}
+		switch source {
+		case "payload":
+			lg.Logln(lg.InfoLevel, "Source: payload.data")
+			reader := strings.NewReader(payload.GetByPath("data").AsStringDefault(""))
+			if g, err := ImportGraphML(reader); err != nil {
+				om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
+				lg.Logln(lg.ErrorLevel, "Termination due to an error: %s", err.Error())
+				return
+			} else {
+				graph = g
+			}
+		case "file":
+			fileName := payload.GetByPath("data").AsStringDefault("")
+			lg.Logln(lg.InfoLevel, "Source: file %s", fileName)
+			f, err := os.Open(fileName)
+			if err != nil {
+				om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
+				lg.Logln(lg.ErrorLevel, "Termination due to an error: %s", err.Error())
+				return
+			}
+			defer f.Close()
+			if g, err := ImportGraphML(f); err != nil {
+				om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
+				lg.Logln(lg.ErrorLevel, "Termination due to an error: %s", err.Error())
+				return
+			} else {
+				graph = g
+			}
+		}
+
+		dbc, err := db.NewDBSyncClientFromRequestFunction(ctx.Request)
+		if err != nil {
+			lg.Logln(lg.ErrorLevel, "Termination due to an error: %s", err.Error())
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
+			return
+		}
+
+		lg.Logln(lg.InfoLevel, "Importing vertices...")
+		for _, n := range graph.Nodes {
+			uuid := ctx.Domain.CreateObjectIDWithHubDomain(n.Id, true)
+
+			dbc.Graph.VertexDelete(uuid)
+
+			body, _ := ExtractBodyAsJSON(n.Attributes)
+			dbc.Graph.VertexCreate(uuid, body)
+		}
+		/*for _, n := range graph.Nodes {
+			uuid := ctx.Domain.CreateObjectIDWithHubDomain(n.Id, true)
+
+			body, _ := ExtractBodyAsJSON(n.Attributes)
+			dbc.Graph.VertexUpdate(uuid, body, true, true)
+		}*/
+		lg.Logln(lg.InfoLevel, "Importing edges...")
+		for _, e := range graph.Edges {
+			uuidFrom := ctx.Domain.CreateObjectIDWithHubDomain(e.Source, true)
+			uuidTo := ctx.Domain.CreateObjectIDWithHubDomain(e.Target, true)
+
+			tp, name, tags := ExtractEdgeTypeAndNameAndTags(e.Attributes)
+			body, _ := ExtractBodyAsJSON(e.Attributes)
+
+			dbc.Graph.VerticesLinkCreate(uuidFrom, uuidTo, name, tp, tags, body)
+		}
+		/*
+			for _, e := range graph.Edges {
+				uuidFrom := ctx.Domain.CreateObjectIDWithHubDomain(e.Source, true)
+				uuidTo := ctx.Domain.CreateObjectIDWithHubDomain(e.Target, true)
+
+				tp, name, tags := ExtractEdgeTypeAndNameAndTags(e.Attributes)
+				body, _ := ExtractBodyAsJSON(e.Attributes)
+
+				dbc.Graph.VerticesLinkUpdateByToAndType(uuidFrom, uuidTo, tp, tags, body, true, name)
+			}
+		*/
+		lg.Logln(lg.InfoLevel, "Import is done")
+	default:
+		msg := fmt.Sprintf("%s – unsopported format", format)
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(msg)).Reply()
+		lg.Logln(lg.ErrorLevel, "Termination due to an error: %s", msg)
+		return
+	}
 }

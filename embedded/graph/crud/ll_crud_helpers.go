@@ -5,6 +5,7 @@ import (
 
 	"github.com/foliagecp/easyjson"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
+	"github.com/foliagecp/sdk/statefun/system"
 )
 
 func getOpStackFromOptions(options *easyjson.JSON) *easyjson.JSON {
@@ -85,7 +86,7 @@ func getLinkNameFromSpecifiedIdentifier(ctx *sfPlugins.StatefunContextProcessor)
 		if toVertexId, ok := ctx.Payload.GetByPath("to").AsString(); ok {
 			toVertexId = ctx.Domain.CreateObjectIDWithThisDomain(toVertexId, false)
 			if lt, ok := ctx.Payload.GetByPath("type").AsString(); ok {
-				linkNameBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, lt, toVertexId))
+				linkNameBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, ctx.Self.ID, lt, toVertexId))
 				if err == nil {
 					return string(linkNameBytes), true
 				}
@@ -93,4 +94,82 @@ func getLinkNameFromSpecifiedIdentifier(ctx *sfPlugins.StatefunContextProcessor)
 		}
 	}
 	return "", false
+}
+
+func indexRemoveVertexBody(ctx *sfPlugins.StatefunContextProcessor) {
+	// Remove all indices -----------------------------
+	indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(VertexBodyValueIndexPrefPattern+KeySuff1Pattern, ctx.Self.ID, ">"))
+	for _, indexKey := range indexKeys {
+		ctx.Domain.Cache().DeleteValue(indexKey, true, -1, "")
+	}
+	// ------------------------------------------------
+}
+
+func indexVertexBody(ctx *sfPlugins.StatefunContextProcessor, vertexBody easyjson.JSON, opTime int64, reindex bool) {
+	if reindex {
+		indexRemoveVertexBody(ctx)
+	}
+	// Index body keys ------------------------------------
+	for _, bodyKey := range vertexBody.ObjectKeys() {
+		value := vertexBody.GetByPath(bodyKey)
+		bytesVal := []byte{}
+
+		typeStr := ""
+		if value.IsBool() {
+			typeStr = "b"
+			bytesVal = system.BoolToBytes(value.AsBoolDefault(false))
+		}
+		if value.IsNumeric() {
+			typeStr = "n"
+			bytesVal = system.Float64ToBytes(value.AsNumericDefault(0))
+		}
+		if value.IsString() {
+			typeStr = "s"
+			bytesVal = []byte(value.AsStringDefault(""))
+		}
+
+		if len(bytesVal) > 0 {
+			ctx.Domain.Cache().SetValue(fmt.Sprintf(VertexBodyValueIndexPrefPattern+KeySuff2Pattern, ctx.Self.ID, typeStr, bodyKey), bytesVal, true, opTime, "")
+		}
+	}
+	// ----------------------------------------------------
+}
+
+func indexRemoveVertexLinkBody(ctx *sfPlugins.StatefunContextProcessor, linkName string) {
+	// Remove all indices -----------------------------
+	indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(LinkBodyValueIndexPrefPattern+KeySuff2Pattern, ctx.Self.ID, linkName, ">"))
+	for _, indexKey := range indexKeys {
+		ctx.Domain.Cache().DeleteValue(indexKey, true, -1, "")
+	}
+	// ------------------------------------------------
+}
+
+func indexVertexLinkBody(ctx *sfPlugins.StatefunContextProcessor, linkName string, linkBody easyjson.JSON, opTime int64, reindex bool) {
+	if reindex {
+		indexRemoveVertexLinkBody(ctx, linkName)
+	}
+	// Index body keys ------------------------------------
+	for _, bodyKey := range linkBody.ObjectKeys() {
+		value := linkBody.GetByPath(bodyKey)
+		bytesVal := []byte{}
+
+		typeStr := ""
+		if value.IsBool() {
+			typeStr = "b"
+			bytesVal = system.BoolToBytes(value.AsBoolDefault(false))
+		}
+		if value.IsNumeric() {
+			typeStr = "n"
+			bytesVal = system.Float64ToBytes(value.AsNumericDefault(0))
+		}
+		if value.IsString() {
+			typeStr = "s"
+			bytesVal = []byte(value.AsStringDefault(""))
+		}
+
+		if len(bytesVal) > 0 {
+			ctx.Domain.Cache().SetValue(fmt.Sprintf(LinkBodyValueIndexPrefPattern+KeySuff3Pattern, ctx.Self.ID, linkName, typeStr, bodyKey), bytesVal, true, opTime, "")
+		}
+	}
+	// ----------------------------------------------------
 }

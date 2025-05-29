@@ -10,10 +10,10 @@ import (
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/foliagecp/sdk/statefun/cache"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 type OnAfterStartFunction func(ctx context.Context, runtime *Runtime) error

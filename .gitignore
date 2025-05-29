@@ -8,3 +8,5 @@ __pycahe__/*
 .vscode/
 flink/modules/main-embedded/src/target/
 .VSCodeCounter
+vendor
+tests/simple/vendor/
