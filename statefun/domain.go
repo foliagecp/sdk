@@ -33,9 +33,10 @@ const (
 
 	streamPrefix = "$JS.%s.API"
 
-	hubEventStreamName      = "hub_events"
-	domainIngressStreamName = "domain_ingress"
-	domainEgressStreamName  = "domain_egress"
+	hubEventStreamName        = "hub_events"
+	domainIngressStreamName   = "domain_ingress"
+	domainEgressStreamName    = "domain_egress"
+	deadLetterQueueStreamName = "domain_dlq"
 
 	routerConsumerMaxAckWaitMs           = 2000
 	lostConnectionSingleMsgProcessTimeMs = 700
@@ -272,6 +273,9 @@ func (dm *Domain) start(cacheConfig *cache.Config, createDomainRouters bool) err
 				return err
 			}
 		}
+		if err := dm.createDLQStream(); err != nil {
+			return err
+		}
 		if err := dm.createIngresSignalStream(); err != nil {
 			return err
 		}
@@ -364,6 +368,14 @@ func (dm *Domain) createEgressSignalStream() error {
 	return dm.createStreamIfNotExists(sc)
 }
 
+func (dm *Domain) createDLQStream() error {
+	sc := &nats.StreamConfig{
+		Name:      deadLetterQueueStreamName,
+		Retention: nats.LimitsPolicy,
+	}
+	return dm.createStreamIfNotExists(sc)
+}
+
 func (dm *Domain) createStreamIfNotExists(sc *nats.StreamConfig) error {
 	// Create streams if does not exist ------------------------------
 	/* Each stream contains a single subject (topic).
@@ -423,8 +435,23 @@ func (dm *Domain) createRouter(sourceStreamName string, subject string, tsc targ
 					system.MsgOnErrorReturn(msg.Ack())
 					return
 				} else {
+					dlqMsg := dlqMsgBuilder(msg.Subject, sourceStreamName, dm.name, err.Error(), msg.Data)
+					_, err := dm.js.PublishMsg(dlqMsg)
+					switch sourceStreamName {
+					case domainEgressStreamName:
+						// Default logic - infinite republishing
+					case domainIngressStreamName:
+						// Send message to DLQ without retry
+						if err == nil {
+							lg.Logf(lg.DebugLevel, "Domain (domain=%s) router with sourceStreamName=%s republished message to DLQ", dm.name, sourceStreamName)
+							system.MsgOnErrorReturn(msg.Ack())
+							return
+						}
+					default:
+					}
 					lg.Logf(lg.ErrorLevel, "Domain (domain=%s) router with sourceStreamName=%s cannot republish message to subject %s: %s", dm.name, sourceStreamName, targetSubject, err)
-					_, err := dm.js.Publish(msg.Subject, msg.Data)
+
+					_, err = dm.js.Publish(msg.Subject, msg.Data)
 					if err == nil {
 						system.MsgOnErrorReturn(msg.Ack())
 						return
@@ -441,4 +468,16 @@ func (dm *Domain) createRouter(sourceStreamName string, subject string, tsc targ
 		return err
 	}
 	return nil
+}
+
+func dlqMsgBuilder(subject, stream, domain, errorMsg string, data []byte) *nats.Msg {
+	dlqMsg := nats.NewMsg(deadLetterQueueStreamName)
+	dlqMsg.Data = data
+	dlqMsg.Header.Set("Original-Subject", subject)
+	dlqMsg.Header.Set("Original-Stream", stream)
+	dlqMsg.Header.Set("Domain", domain)
+	dlqMsg.Header.Set("Error", errorMsg)
+	dlqMsg.Header.Set("Timestamp", time.Now().UTC().String())
+
+	return dlqMsg
 }
