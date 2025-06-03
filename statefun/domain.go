@@ -273,9 +273,6 @@ func (dm *Domain) start(cacheConfig *cache.Config, createDomainRouters bool) err
 				return err
 			}
 		}
-		if err := dm.createDLQStream(); err != nil {
-			return err
-		}
 		if err := dm.createIngresSignalStream(); err != nil {
 			return err
 		}
@@ -364,14 +361,6 @@ func (dm *Domain) createEgressSignalStream() error {
 		Subjects:  []string{fmt.Sprintf(DomainEgressSubjectsTmpl, dm.name, ">")},
 		Retention: nats.InterestPolicy,
 		Replicas:  dm.natsJsReplicasCount,
-	}
-	return dm.createStreamIfNotExists(sc)
-}
-
-func (dm *Domain) createDLQStream() error {
-	sc := &nats.StreamConfig{
-		Name:      deadLetterQueueStreamName,
-		Retention: nats.LimitsPolicy,
 	}
 	return dm.createStreamIfNotExists(sc)
 }
