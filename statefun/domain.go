@@ -3,9 +3,7 @@ package statefun
 import (
 	"context"
 	"fmt"
-	"math"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +37,8 @@ const (
 	domainIngressStreamName   = "domain_ingress"
 	domainEgressStreamName    = "domain_egress"
 	deadLetterQueueStreamName = "domain_dlq"
+
+	maxEgressRetries = 3
 
 	routerConsumerMaxAckWaitMs           = 2000
 	lostConnectionSingleMsgProcessTimeMs = 700
@@ -437,34 +437,22 @@ func (dm *Domain) createRouter(sourceStreamName string, subject string, tsc targ
 					system.MsgOnErrorReturn(msg.Ack())
 					return
 				} else {
+					dlqMsg := dlqMsgBuilder(msg.Subject, sourceStreamName, dm.name, err.Error(), msg.Data)
+					_, err := dm.js.PublishMsg(dlqMsg)
 					switch sourceStreamName {
 					case domainEgressStreamName:
-						retryCount := 0
-						if val := msg.Header.Get("X-Retry-Count"); val != "" {
-							retryCount, _ = strconv.Atoi(val)
-						}
-						if retryCount < msgMaxDeliver {
-							msg.Header.Set("X-Retry-Count", strconv.Itoa(retryCount+1))
-							delay := time.Duration(100*math.Pow(2, float64(retryCount))) * time.Millisecond
-							system.MsgOnErrorReturn(msg.NakWithDelay(delay))
-							lg.Logf(lg.DebugLevel, "Retry %d for message %s with delay %v", retryCount, msg.Subject, delay)
+						// Default logic - infinite republishing
+					case domainIngressStreamName:
+						// Send message to DLQ without retry
+						if err == nil {
+							lg.Logf(lg.DebugLevel, "Domain (domain=%s) router with sourceStreamName=%s republished message to DLQ", dm.name, sourceStreamName)
+							system.MsgOnErrorReturn(msg.Ack())
 							return
 						}
-						lg.Logf(lg.ErrorLevel, "Max retries exceeded for message %s", msg.Subject)
-					case domainIngressStreamName:
 					default:
 					}
 					lg.Logf(lg.ErrorLevel, "Domain (domain=%s) router with sourceStreamName=%s cannot republish message to subject %s: %s", dm.name, sourceStreamName, targetSubject, err)
 
-					// Send message to DLQ
-					dlqMsg := dlqMsgBuilder(msg.Subject, sourceStreamName, dm.name, err.Error(), msg.Data)
-
-					_, err := dm.js.PublishMsg(dlqMsg)
-					if err == nil {
-						lg.Logf(lg.DebugLevel, "Domain (domain=%s) router with sourceStreamName=%s republished message to DLQ", dm.name, sourceStreamName)
-						system.MsgOnErrorReturn(msg.Ack())
-						return
-					}
 					_, err = dm.js.Publish(msg.Subject, msg.Data)
 					if err == nil {
 						system.MsgOnErrorReturn(msg.Ack())
