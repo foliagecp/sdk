@@ -67,24 +67,21 @@ func getOriginalID(ID string) string {
 func makeSequenceFreeParentBasedID(ctx *sfPlugins.StatefunContextProcessor, targetID string, arbitrarySuffix ...string) string {
 	finalId := targetID
 
-	addedKeyLockBased := false
-	if ctx.Payload.PathExists(fmt.Sprintf("__key_locks.%s", targetID)) || ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s", targetID)) {
-		tokens := strings.Split(ctx.Self.ID, "===")
-		finalId += "==="
-		addedKeyLockBased = true
-		if len(tokens) > 1 {
-			finalId += tokens[1]
-			//finalId += tokens[1] + "-" + ctx.Domain.GetObjectIDWithoutDomain(tokens[0])
-		} else {
-			lockedKeys := ctx.Payload.GetByPath("__key_locks").ObjectKeys()
-			finalId += strings.Join(lockedKeys, "-")
-			//finalId += system.GetUniqueStrID()
-			//finalId += ctx.Domain.GetObjectIDWithoutDomain(tokens[0])
+	added := false
+
+	tokens := strings.Split(ctx.Self.ID, "===")
+	if len(tokens) > 1 {
+		added = true
+		finalId += "===" + tokens[1]
+	} else {
+		if ctx.Payload.PathExists(fmt.Sprintf("__key_locks.%s", targetID)) || ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s", targetID)) {
+			added = true
+			finalId += system.GetHashStr(ctx.Self.Typename)
 		}
 	}
 
 	if len(arbitrarySuffix) > 0 {
-		if addedKeyLockBased {
+		if added {
 			finalId += arbitrarySuffix[0]
 		} else {
 			finalId += "===" + arbitrarySuffix[0]
