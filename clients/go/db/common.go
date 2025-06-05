@@ -9,7 +9,6 @@ import (
 	sf "github.com/foliagecp/sdk/statefun"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfp "github.com/foliagecp/sdk/statefun/plugins"
-	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
 )
 
@@ -66,5 +65,6 @@ func getRequestFunc(nc *nats.Conn, NatsRequestTimeoutSec int, HubDomainName stri
 }
 
 func seqFree(name string) string {
-	return name + "===" + system.GetUniqueStrID()
+	//return name + "===" + system.GetUniqueStrID()
+	return name
 }
