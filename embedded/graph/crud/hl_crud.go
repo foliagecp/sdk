@@ -131,6 +131,8 @@ func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.delete", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, nil), nil)))
 
+	UpdateTypeModelVersion(ctx)
+
 	om.Reply()
 }
 
@@ -145,6 +147,8 @@ func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProces
 
 	operationKeysMutexLock(ctx, []string{selfID})
 	defer operationKeysMutexUnlock(ctx)
+
+	RecalculateInheritanceCacheForTypeAtSelfIDIfNeeded(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
 

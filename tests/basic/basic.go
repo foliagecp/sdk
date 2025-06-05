@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"time"
 
@@ -14,7 +13,6 @@ import (
 	"github.com/foliagecp/sdk/clients/go/db"
 	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
 	"github.com/foliagecp/sdk/embedded/graph/fpl"
-	"github.com/foliagecp/sdk/embedded/graph/graphql"
 	"github.com/foliagecp/sdk/embedded/graph/search"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 
@@ -179,7 +177,23 @@ func Start() {
 		}
 		dbClient = dbc
 
-		if TriggersTest {
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeCreate("typea"))
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeCreate("typeb"))
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeCreate("typec"))
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeCreate("typed"))
+		system.MsgOnErrorReturn(dbClient.CMDB.TypesLinkCreate("typea", "typeb", "a2b", nil))
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeSetChild("typea", "typeb"))
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeSetChild("typea", "typec"))
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeSetChild("typeb", "typed"))
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeSetChild("typec", "typed"))
+
+		system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("a", "typea", easyjson.NewJSONObjectWithKeyValue("a_state", easyjson.NewJSON("created"))))
+		system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("b", "typeb", easyjson.NewJSONObjectWithKeyValue("b_state", easyjson.NewJSON("created"))))
+		system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("c", "typec", easyjson.NewJSONObjectWithKeyValue("c_state", easyjson.NewJSON("created"))))
+		system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("d", "typed", easyjson.NewJSONObjectWithKeyValue("d_state", easyjson.NewJSON("created"))))
+		system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkCreate("a", "b", "2b", nil, easyjson.NewJSONObjectWithKeyValue("ab_state", easyjson.NewJSON("created"))))
+
+		/*if TriggersTest {
 			RunTriggersTest(runtime)
 		}
 		if RequestReplyTest {
@@ -209,7 +223,7 @@ func Start() {
 		dbClient.CMDB.ShadowObjectCanBeRecevier = false
 
 		fmt.Println("Starting GraphQL")
-		graphql.StartGraphqlServer("8080", &dbClient)
+		graphql.StartGraphqlServer("8080", &dbClient)*/
 		return nil
 	}
 

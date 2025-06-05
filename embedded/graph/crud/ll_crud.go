@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/foliagecp/easyjson"
 
@@ -100,6 +101,19 @@ func operationKeysMutexUnlock(ctx *sfPlugins.StatefunContextProcessor) {
 		ctx.Payload.RemoveByPath("__key_locks")
 		//fmt.Printf("---- [%s] Graph Key Unlocked\n", keyMutextGetTimeStr())
 	}
+}
+
+func keyMutextGetTimeStr() string {
+	now := time.Now()
+
+	hms := now.Format("15:04:05")
+
+	nano := now.Nanosecond()
+	ms := nano / 1_000_000
+	us := (nano / 1_000) % 1_000
+	ns := nano % 1_000
+
+	return fmt.Sprintf("%s.%03d.%03d.%03d", hms, ms, us, ns)
 }
 
 /*
@@ -327,7 +341,7 @@ Reply:
 					types: json string array
 					ids: json string array
 				in: json string array
-					{from: string, name: string}, // from vertex id; link name
+					{from: string, name: string, type: string}, // from vertex id; link name; link type
 					...
 			op_stack: json array - optional
 */
@@ -384,8 +398,16 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			linkKeyTokens := strings.Split(inLinkKey, ".")
 			linkName := linkKeyTokens[len(linkKeyTokens)-1]
 			linkFromVId := linkKeyTokens[len(linkKeyTokens)-2]
+
+			linkType := ""
+			linkTypeBytes, err := ctx.Domain.Cache().GetValue(inLinkKey)
+			if err == nil {
+				linkType = string(linkTypeBytes)
+			}
+
 			inLinkJson := easyjson.NewJSONObjectWithKeyValue("from", easyjson.NewJSON(linkFromVId))
 			inLinkJson.SetByPath("name", easyjson.NewJSON(linkName))
+			inLinkJson.SetByPath("type", easyjson.NewJSON(linkType))
 			inLinks.AddToArray(inLinkJson)
 		}
 		result.SetByPath("links.in", inLinks)
@@ -442,8 +464,9 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	if payload.PathExists("in_name") {
 		if inLinkName, ok := payload.GetByPath("in_name").AsString(); ok && len(inLinkName) > 0 {
+			inLinkType := payload.GetByPath("in_type").AsStringDefault("")
 			if linkFromObjectUUID := getOriginalID(ctx.Caller.ID); len(linkFromObjectUUID) > 0 {
-				ctx.Domain.Cache().SetValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, selfID, linkFromObjectUUID, inLinkName), nil, true, -1, "")
+				ctx.Domain.Cache().SetValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, selfID, linkFromObjectUUID, inLinkName), []byte(inLinkType), true, -1, "")
 				//fmt.Println("create vertex in link: ", selfID, linkFromObjectUUID)
 				om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONNull())).Reply()
 				return
@@ -543,6 +566,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		// Create in link on descendant vertex --------------------
 		nextCallPayload := easyjson.NewJSONObject()
 		nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
+		nextCallPayload.SetByPath("in_type", easyjson.NewJSON(linkType))
 
 		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, makeSequenceFreeParentBasedID(ctx, toId), injectParentHoldsLocks(ctx, &nextCallPayload), ctx.Options)))
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
