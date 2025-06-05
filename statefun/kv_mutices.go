@@ -1,5 +1,3 @@
-
-
 package statefun
 
 import (
@@ -25,7 +23,7 @@ var (
 // KeyMutexLock
 // errorOnLocked - if mutex is already locked, exit with error (do not wait for unlocking)
 func KeyMutexLock(ctx context.Context, runtime *Runtime, key string, errorOnLocked bool) (uint64, error) {
-	le := lg.NewLogger(lg.Options{ReportCaller: true, Level: lg.TraceLevel})
+	le := lg.GetLogger()
 	kv := runtime.Domain.kv
 	mutexResetLock := func(keyMutex string, now int64) (uint64, error) {
 		lockRevisionID, err := kv.Put(keyMutex, system.Int64ToBytes(now))
@@ -128,7 +126,7 @@ func KeyMutexLock(ctx context.Context, runtime *Runtime, key string, errorOnLock
 }
 
 func KeyMutexLockUpdate(ctx context.Context, runtime *Runtime, key string, lockRevisionID uint64) (uint64, error) {
-	le := lg.NewLogger(lg.Options{ReportCaller: true, Level: lg.TraceLevel})
+	le := lg.GetLogger()
 	kv := runtime.Domain.kv
 
 	keyMutex := key + ".mutex"
@@ -153,7 +151,7 @@ func KeyMutexLockUpdate(ctx context.Context, runtime *Runtime, key string, lockR
 }
 
 func KeyMutexUnlock(ctx context.Context, runtime *Runtime, key string, lockRevisionID uint64) error {
-	le := lg.NewLogger(lg.Options{ReportCaller: true, Level: lg.TraceLevel})
+	le := lg.GetLogger()
 	kv := runtime.Domain.kv
 
 	//keyValueMutexOperationMutex.Lock()
