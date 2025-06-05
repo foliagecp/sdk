@@ -638,27 +638,27 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	opStack := getOpStackFromOptions(ctx.Options)
 
-	operationKeysMutexLock(ctx, []string{selfID}, true)
+	//operationKeysMutexLock(ctx, []string{selfID}, true)
 	linkType, linkName, toId, linkExists := getFullLinkInfoFromSpecifiedIdentifier(ctx)
 	if !linkExists {
 		if upsert {
 			p := payload.Clone()
 			p.SetByPath("force", easyjson.NewJSON(true))
 			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &p), ctx.Options)))
-			operationKeysMutexUnlock(ctx)
+			//operationKeysMutexUnlock(ctx)
 			om.Reply()
 		} else {
-			operationKeysMutexUnlock(ctx)
+			//operationKeysMutexUnlock(ctx)
 			om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with name=%s does not exist", selfID, linkName))).Reply()
 		}
 		return
 	}
 	if !validLinkName.MatchString(linkName) {
-		operationKeysMutexUnlock(ctx)
+		//operationKeysMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("invalid link name")).Reply()
 		return
 	}
-	operationKeysMutexUnlock(ctx)
+	//operationKeysMutexUnlock(ctx)
 
 	operationKeysMutexLock(ctx, []string{selfID, toId}, true)
 
@@ -767,19 +767,19 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			return
 		}
 	} else {
-		operationKeysMutexLock(ctx, []string{selfID}, true)
+		//operationKeysMutexLock(ctx, []string{selfID}, true)
 		linkType, linkName, toId, linkExists := getFullLinkInfoFromSpecifiedIdentifier(ctx)
 		if !linkExists {
-			operationKeysMutexUnlock(ctx)
+			//operationKeysMutexUnlock(ctx)
 			om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 			return
 		}
 		if !validLinkName.MatchString(linkName) {
-			operationKeysMutexUnlock(ctx)
+			//operationKeysMutexUnlock(ctx)
 			om.AggregateOpMsg(sfMediators.OpMsgFailed("invalid link name")).Reply()
 			return
 		}
-		operationKeysMutexUnlock(ctx)
+		//operationKeysMutexUnlock(ctx)
 
 		operationKeysMutexLock(ctx, []string{selfID, toId}, true)
 
@@ -866,19 +866,19 @@ func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 
 	opStack := getOpStackFromOptions(ctx.Options)
 
-	operationKeysMutexLock(ctx, []string{selfID}, true)
+	//operationKeysMutexLock(ctx, []string{selfID}, true)
 	linkType, linkName, toId, linkExists := getFullLinkInfoFromSpecifiedIdentifier(ctx)
 	if !linkExists {
-		operationKeysMutexUnlock(ctx)
+		//operationKeysMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 		return
 	}
 	if !validLinkName.MatchString(linkName) {
-		operationKeysMutexUnlock(ctx)
+		//operationKeysMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("invalid link name")).Reply()
 		return
 	}
-	operationKeysMutexUnlock(ctx)
+	//operationKeysMutexUnlock(ctx)
 
 	operationKeysMutexLock(ctx, []string{selfID, toId}, false)
 
