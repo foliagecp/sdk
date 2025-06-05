@@ -59,7 +59,7 @@ func TestLogLevels(t *testing.T) {
 			t.Fatalf("Failed to unmarshal log entry: %v", err)
 		}
 
-		if logEntry["level"] != tc.level.String() {
+		if logEntry["level"] != levelToString(tc.level) {
 			t.Errorf("Expected level %s, got %s", tc.level, logEntry["level"])
 		}
 
