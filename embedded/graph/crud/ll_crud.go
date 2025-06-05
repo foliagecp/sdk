@@ -39,20 +39,22 @@ func injectParentHoldsLocks(ctx *sfPlugins.StatefunContextProcessor, downstreamP
 	} else {
 		newDownstreamPayload = easyjson.NewJSONObject()
 	}
+
+	parentHoldLocks := easyjson.NewJSONObject()
+	setParentHoldLocks := false
+
 	if ctx.Payload.PathExists("__key_locks") {
-		for _, t := range ctx.Payload.GetByPath("__key_locks").ObjectKeys() {
-			for _, k := range ctx.Payload.GetByPath(fmt.Sprintf("__key_locks.%s", t)).ObjectKeys() {
-				newDownstreamPayload.SetByPath(fmt.Sprintf("__parent_holds_locks.%s.%s", t, k), easyjson.NewJSON(true))
-			}
-		}
+		parentHoldLocks.DeepMerge(ctx.Payload.GetByPath("__key_locks"))
+		setParentHoldLocks = true
 	}
 	if ctx.Payload.PathExists("__parent_holds_locks") {
-		for _, t := range ctx.Payload.GetByPath("__parent_holds_locks").ObjectKeys() {
-			for _, k := range ctx.Payload.GetByPath(fmt.Sprintf("__parent_holds_locks.%s", t)).ObjectKeys() {
-				newDownstreamPayload.SetByPath(fmt.Sprintf("__parent_holds_locks.%s.%s", t, k), easyjson.NewJSON(true))
-			}
-		}
+		parentHoldLocks.DeepMerge(ctx.Payload.GetByPath("__parent_holds_locks"))
+		setParentHoldLocks = true
 	}
+	if setParentHoldLocks {
+		newDownstreamPayload.SetByPath("__parent_holds_locks", parentHoldLocks)
+	}
+
 	newDownstreamPayload.RemoveByPath("__key_locks")
 	return &newDownstreamPayload
 }
@@ -62,17 +64,30 @@ func getOriginalID(ID string) string {
 }
 
 // All child operations must be sequence free
-func makeSequenceFreeParentBasedID(ctx *sfPlugins.StatefunContextProcessor, targetID string) string {
+func makeSequenceFreeParentBasedID(ctx *sfPlugins.StatefunContextProcessor, targetID string, arbitrarySuffix ...string) string {
 	finalId := targetID
 
-	if ctx.Payload.PathExists(fmt.Sprintf("__key_locks.w.%s", targetID)) || ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.w.%s", targetID)) ||
-		ctx.Payload.PathExists(fmt.Sprintf("__key_locks.r.%s", targetID)) || ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.r.%s", targetID)) {
+	addedKeyLockBased := false
+	if ctx.Payload.PathExists(fmt.Sprintf("__key_locks.%s", targetID)) || ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s", targetID)) {
 		tokens := strings.Split(ctx.Self.ID, "===")
 		finalId += "==="
+		addedKeyLockBased = true
 		if len(tokens) > 1 {
-			finalId += tokens[1] + "-" + ctx.Domain.GetObjectIDWithoutDomain(tokens[0])
+			finalId += tokens[1]
+			//finalId += tokens[1] + "-" + ctx.Domain.GetObjectIDWithoutDomain(tokens[0])
 		} else {
-			finalId += ctx.Domain.GetObjectIDWithoutDomain(tokens[0])
+			lockedKeys := ctx.Payload.GetByPath("__key_locks").ObjectKeys()
+			finalId += strings.Join(lockedKeys, "-")
+			//finalId += system.GetUniqueStrID()
+			//finalId += ctx.Domain.GetObjectIDWithoutDomain(tokens[0])
+		}
+	}
+
+	if len(arbitrarySuffix) > 0 {
+		if addedKeyLockBased {
+			finalId += arbitrarySuffix[0]
+		} else {
+			finalId += "===" + arbitrarySuffix[0]
 		}
 	}
 
@@ -85,18 +100,18 @@ func operationKeysMutexLock(ctx *sfPlugins.StatefunContextProcessor, keys []stri
 	keys = system.UniqueStrings(keys)
 	sort.Strings(keys)
 	for _, k := range keys {
+		k = ctx.Domain.GetObjectIDWithoutDomain(k)
 		if writeOperation {
-			if !ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.w.%s", k)) {
+			if !ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s.w", k)) {
 				//fmt.Printf("-- locking w key: %s\n", k)
 				graphIdKeyMutex.Lock(k)
-				ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.w.%s", k), easyjson.NewJSON(true))
+				ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.%s.w", k), easyjson.NewJSON(true))
 			}
 		} else {
-			if !ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.r.%s", k)) &&
-				!ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.w.%s", k)) {
+			if !ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s", k)) {
 				//fmt.Printf("-- locking r key: %s\n", k)
 				graphIdKeyMutex.RLock(k)
-				ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.r.%s", k), easyjson.NewJSON(true))
+				ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.%s.r", k), easyjson.NewJSON(true))
 			}
 		}
 	}
@@ -106,8 +121,8 @@ func operationKeysMutexLock(ctx *sfPlugins.StatefunContextProcessor, keys []stri
 func operationKeysMutexUnlock(ctx *sfPlugins.StatefunContextProcessor) {
 	if ctx.Payload.PathExists("__key_locks") {
 		//fmt.Printf("---- Graph Key Unlocking <<<< %s %s\n", ctx.Self.Typename, ctx.Self.ID)
-		for _, t := range ctx.Payload.GetByPath("__key_locks").ObjectKeys() {
-			for _, k := range ctx.Payload.GetByPath(fmt.Sprintf("__key_locks.%s", t)).ObjectKeys() {
+		for _, k := range ctx.Payload.GetByPath("__key_locks").ObjectKeys() {
+			for _, t := range ctx.Payload.GetByPath(fmt.Sprintf("__key_locks.%s", k)).ObjectKeys() {
 				switch t {
 				case "w":
 					//fmt.Printf("-- unlocking w key: %s\n", k)
@@ -565,7 +580,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		nextCallPayload := easyjson.NewJSONObject()
 		nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
 
-		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, makeSequenceFreeParentBasedID(ctx, toId), injectParentHoldsLocks(ctx, &nextCallPayload), ctx.Options)))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, makeSequenceFreeParentBasedID(ctx, toId, "inlink"), injectParentHoldsLocks(ctx, &nextCallPayload), ctx.Options)))
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
 			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
 			return
@@ -821,7 +836,7 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		nextCallPayload := easyjson.NewJSONObject()
 		nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
 
-		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, makeSequenceFreeParentBasedID(ctx, toId), injectParentHoldsLocks(ctx, &nextCallPayload), ctx.Options)))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, makeSequenceFreeParentBasedID(ctx, toId, "inlink"), injectParentHoldsLocks(ctx, &nextCallPayload), ctx.Options)))
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
 			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
 			return
