@@ -41,12 +41,12 @@ func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	selfID := getOriginalID(ctx.Self.ID)
 	typesVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false)
 
-	operationKeysMutexLock(ctx, []string{selfID, typesVertexId})
-	defer operationKeysMutexUnlock(ctx)
-
 	if typeOperationRedirectedToHub(ctx) {
 		return
 	}
+	operationKeysMutexLock(ctx, []string{selfID, typesVertexId})
+	defer operationKeysMutexUnlock(ctx)
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, ctx.Payload), nil)))
@@ -73,12 +73,13 @@ func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 */
 func UpdateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
-	operationKeysMutexLock(ctx, []string{selfID})
-	defer operationKeysMutexUnlock(ctx)
 
 	if typeOperationRedirectedToHub(ctx) {
 		return
 	}
+
+	operationKeysMutexLock(ctx, []string{selfID})
+	defer operationKeysMutexUnlock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -104,12 +105,13 @@ func UpdateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
  */
 func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
-	operationKeysMutexLock(ctx, []string{selfID})
-	defer operationKeysMutexUnlock(ctx)
 
 	if typeOperationRedirectedToHub(ctx) {
 		return
 	}
+
+	operationKeysMutexLock(ctx, []string{selfID})
+	defer operationKeysMutexUnlock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -136,12 +138,13 @@ func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
  */
 func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
-	operationKeysMutexLock(ctx, []string{selfID})
-	defer operationKeysMutexUnlock(ctx)
 
 	if typeOperationRedirectedToHub(ctx) {
 		return
 	}
+
+	operationKeysMutexLock(ctx, []string{selfID})
+	defer operationKeysMutexUnlock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
 

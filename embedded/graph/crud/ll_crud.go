@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/foliagecp/easyjson"
 
@@ -101,19 +100,6 @@ func operationKeysMutexUnlock(ctx *sfPlugins.StatefunContextProcessor) {
 		ctx.Payload.RemoveByPath("__key_locks")
 		//fmt.Printf("---- [%s] Graph Key Unlocked\n", keyMutextGetTimeStr())
 	}
-}
-
-func keyMutextGetTimeStr() string {
-	now := time.Now()
-
-	hms := now.Format("15:04:05")
-
-	nano := now.Nanosecond()
-	ms := nano / 1_000_000
-	us := (nano / 1_000) % 1_000
-	ns := nano % 1_000
-
-	return fmt.Sprintf("%s.%03d.%03d.%03d", hms, ms, us, ns)
 }
 
 /*
@@ -740,7 +726,7 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	if payload.PathExists("in_name") {
 		if inLinkName, ok := payload.GetByPath("in_name").AsString(); ok && len(inLinkName) > 0 {
-			if linkFromObjectUUID := ctx.Caller.ID; len(linkFromObjectUUID) > 0 {
+			if linkFromObjectUUID := getOriginalID(ctx.Caller.ID); len(linkFromObjectUUID) > 0 {
 				//fmt.Println("delete vertex in link: ", selfID, linkFromObjectUUID)
 				ctx.Domain.Cache().DeleteValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, selfID, linkFromObjectUUID, inLinkName), true, -1, "")
 				om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONNull())).Reply()
