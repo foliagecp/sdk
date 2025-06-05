@@ -2,6 +2,7 @@ package crud
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/foliagecp/easyjson"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
@@ -79,22 +80,32 @@ func resultWithOpStack(existingResult *easyjson.JSON, opStack *easyjson.JSON) ea
 	}
 }
 
-func getLinkNameFromSpecifiedIdentifier(ctx *sfPlugins.StatefunContextProcessor) (string, bool) {
+func getFullLinkInfoFromSpecifiedIdentifier(ctx *sfPlugins.StatefunContextProcessor) (linkType, linkName, toId string, linkExists bool) {
 	selfID := getOriginalID(ctx.Self.ID)
 	if linkName, ok := ctx.Payload.GetByPath("name").AsString(); ok {
-		return linkName, true
+		linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, selfID, linkName))
+		if err != nil {
+			return "", "", "", false
+		}
+
+		linkTargetStr := string(linkTargetBytes)
+		linkTargetTokens := strings.Split(linkTargetStr, ".")
+		linkType := linkTargetTokens[0]
+		toId := linkTargetTokens[1]
+
+		return linkType, linkName, toId, true
 	} else {
 		if toVertexId, ok := ctx.Payload.GetByPath("to").AsString(); ok {
 			toVertexId = ctx.Domain.CreateObjectIDWithThisDomain(toVertexId, false)
 			if lt, ok := ctx.Payload.GetByPath("type").AsString(); ok {
 				linkNameBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfID, lt, toVertexId))
 				if err == nil {
-					return string(linkNameBytes), true
+					return lt, string(linkNameBytes), toVertexId, true
 				}
 			}
 		}
 	}
-	return "", false
+	return "", "", "", false
 }
 
 func indexRemoveVertexBody(ctx *sfPlugins.StatefunContextProcessor) {
