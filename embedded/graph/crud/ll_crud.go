@@ -40,13 +40,17 @@ func injectParentHoldsLocks(ctx *sfPlugins.StatefunContextProcessor, downstreamP
 		newDownstreamPayload = easyjson.NewJSONObject()
 	}
 	if ctx.Payload.PathExists("__key_locks") {
-		for _, k := range ctx.Payload.GetByPath("__key_locks").ObjectKeys() {
-			newDownstreamPayload.SetByPath(fmt.Sprintf("__parent_holds_locks.%s", k), easyjson.NewJSON(true))
+		for _, t := range ctx.Payload.GetByPath("__key_locks").ObjectKeys() {
+			for _, k := range ctx.Payload.GetByPath(fmt.Sprintf("__key_locks.%s", t)).ObjectKeys() {
+				newDownstreamPayload.SetByPath(fmt.Sprintf("__parent_holds_locks.%s.%s", t, k), easyjson.NewJSON(true))
+			}
 		}
 	}
 	if ctx.Payload.PathExists("__parent_holds_locks") {
-		for _, k := range ctx.Payload.GetByPath("__parent_holds_locks").ObjectKeys() {
-			newDownstreamPayload.SetByPath(fmt.Sprintf("__parent_holds_locks.%s", k), easyjson.NewJSON(true))
+		for _, t := range ctx.Payload.GetByPath("__parent_holds_locks").ObjectKeys() {
+			for _, k := range ctx.Payload.GetByPath(fmt.Sprintf("__parent_holds_locks.%s", t)).ObjectKeys() {
+				newDownstreamPayload.SetByPath(fmt.Sprintf("__parent_holds_locks.%s.%s", t, k), easyjson.NewJSON(true))
+			}
 		}
 	}
 	newDownstreamPayload.RemoveByPath("__key_locks")
@@ -61,7 +65,8 @@ func getOriginalID(ID string) string {
 func makeSequenceFreeParentBasedID(ctx *sfPlugins.StatefunContextProcessor, targetID string) string {
 	finalId := targetID
 
-	if ctx.Payload.PathExists(fmt.Sprintf("__key_locks.%s", targetID)) || ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s", targetID)) {
+	if ctx.Payload.PathExists(fmt.Sprintf("__key_locks.w.%s", targetID)) || ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.w.%s", targetID)) ||
+		ctx.Payload.PathExists(fmt.Sprintf("__key_locks.r.%s", targetID)) || ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.r.%s", targetID)) {
 		tokens := strings.Split(ctx.Self.ID, "===")
 		finalId += "==="
 		if len(tokens) > 1 {
@@ -74,31 +79,47 @@ func makeSequenceFreeParentBasedID(ctx *sfPlugins.StatefunContextProcessor, targ
 	return finalId
 }
 
-func operationKeysMutexLock(ctx *sfPlugins.StatefunContextProcessor, keys []string) {
-	//fmt.Printf("---- [%s] Graph Key Locking >>>> %s keys:[%s] %s\n", keyMutextGetTimeStr(), ctx.Self.Typename, strings.Join(keys, " "), ctx.Self.ID)
+func operationKeysMutexLock(ctx *sfPlugins.StatefunContextProcessor, keys []string, writeOperation bool) {
+	//fmt.Printf("---- Graph Key Locking >>>> %s keys:[%s] %s\n", ctx.Self.Typename, strings.Join(keys, " "), ctx.Self.ID)
 	//fmt.Printf("---- caller %s:%s\n", ctx.Caller.Typename, ctx.Caller.ID)
 	keys = system.UniqueStrings(keys)
 	sort.Strings(keys)
 	for _, k := range keys {
-		if !ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s", k)) {
-			//fmt.Printf("-- locking key: %s\n", k)
-			graphIdKeyMutex.Lock(k)
-			ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.%s", k), easyjson.NewJSON(true))
+		if writeOperation {
+			if !ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.w.%s", k)) {
+				//fmt.Printf("-- locking w key: %s\n", k)
+				graphIdKeyMutex.Lock(k)
+				ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.w.%s", k), easyjson.NewJSON(true))
+			}
+		} else {
+			if !ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.r.%s", k)) &&
+				!ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.w.%s", k)) {
+				//fmt.Printf("-- locking r key: %s\n", k)
+				graphIdKeyMutex.RLock(k)
+				ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.r.%s", k), easyjson.NewJSON(true))
+			}
 		}
 	}
-	//fmt.Printf("---- [%s] Graph Key Locked All\n", keyMutextGetTimeStr())
+	//fmt.Printf("---- Graph Key Locked All\n")
 }
 
 func operationKeysMutexUnlock(ctx *sfPlugins.StatefunContextProcessor) {
 	if ctx.Payload.PathExists("__key_locks") {
-		keys := ctx.Payload.GetByPath("__key_locks").ObjectKeys()
-		//fmt.Printf("---- [%s] Graph Key Unlocking <<<< %s keys:[%s] %s\n", keyMutextGetTimeStr(), ctx.Self.Typename, strings.Join(keys, " "), ctx.Self.ID)
-		for _, k := range keys {
-			//fmt.Printf("-- unlocking key: %s\n", k)
-			graphIdKeyMutex.Unlock(k)
+		//fmt.Printf("---- Graph Key Unlocking <<<< %s %s\n", ctx.Self.Typename, ctx.Self.ID)
+		for _, t := range ctx.Payload.GetByPath("__key_locks").ObjectKeys() {
+			for _, k := range ctx.Payload.GetByPath(fmt.Sprintf("__key_locks.%s", t)).ObjectKeys() {
+				switch t {
+				case "w":
+					//fmt.Printf("-- unlocking w key: %s\n", k)
+					graphIdKeyMutex.Unlock(k)
+				case "r":
+					//fmt.Printf("-- unlocking r key: %s\n", k)
+					graphIdKeyMutex.RUnlock(k)
+				}
+			}
 		}
 		ctx.Payload.RemoveByPath("__key_locks")
-		//fmt.Printf("---- [%s] Graph Key Unlocked\n", keyMutextGetTimeStr())
+		//fmt.Printf("---- Graph Key Unlocked\n")
 	}
 }
 
@@ -125,7 +146,7 @@ Reply:
 */
 func LLAPIVertexCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
-	operationKeysMutexLock(ctx, []string{selfID})
+	operationKeysMutexLock(ctx, []string{selfID}, true)
 	defer operationKeysMutexUnlock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -178,7 +199,7 @@ Reply:
 */
 func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
-	operationKeysMutexLock(ctx, []string{selfID})
+	operationKeysMutexLock(ctx, []string{selfID}, true)
 	defer operationKeysMutexUnlock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -251,7 +272,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	opStack := getOpStackFromOptions(ctx.Options)
 
-	operationKeysMutexLock(ctx, []string{selfID})
+	operationKeysMutexLock(ctx, []string{selfID}, true)
 	defer operationKeysMutexUnlock(ctx)
 
 	// Delete all out links -------------------------------
@@ -333,7 +354,7 @@ Reply:
 */
 func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
-	operationKeysMutexLock(ctx, []string{selfID})
+	operationKeysMutexLock(ctx, []string{selfID}, false)
 	defer operationKeysMutexUnlock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -492,7 +513,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			return
 		}
 
-		operationKeysMutexLock(ctx, []string{selfID, toId})
+		operationKeysMutexLock(ctx, []string{selfID, toId}, true)
 		defer operationKeysMutexUnlock(ctx)
 
 		if !forceCreate {
@@ -641,7 +662,7 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	linkType := linkTargetTokens[0]
 	toId := linkTargetTokens[1]
 
-	operationKeysMutexLock(ctx, []string{selfID, toId})
+	operationKeysMutexLock(ctx, []string{selfID, toId}, true)
 	defer operationKeysMutexUnlock(ctx)
 
 	var replace bool = payload.GetByPath("replace").AsBoolDefault(false)
@@ -771,7 +792,7 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		linkType := linkTargetTokens[0]
 		toId := linkTargetTokens[1]
 
-		operationKeysMutexLock(ctx, []string{selfID, toId})
+		operationKeysMutexLock(ctx, []string{selfID, toId}, true)
 		defer operationKeysMutexUnlock(ctx)
 
 		// Remove all indices -----------------------------
@@ -881,7 +902,7 @@ func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 	linkType := linkTargetTokens[0]
 	toId := linkTargetTokens[1]
 
-	operationKeysMutexLock(ctx, []string{selfID, toId})
+	operationKeysMutexLock(ctx, []string{selfID, toId}, false)
 	defer operationKeysMutexUnlock(ctx)
 
 	if ctx.Payload.GetByPath("details").AsBoolDefault(false) {

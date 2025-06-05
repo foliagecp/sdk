@@ -49,17 +49,17 @@ func (ff *FinalFunctions) Exec() {
 	}
 }
 
-// refMutex wraps a sync.Mutex together with a reference counter.
+// refMutex wraps a sync.RWMutex together with a reference counter.
 type refMutex struct {
-	mu   sync.Mutex
+	mu   sync.RWMutex
 	refs int32
 }
 
-// KeyMutex provides per-key mutexes with automatic cleanup
-// once no goroutine holds or is waiting on a given key.
+// KeyMutex provides per-key read-write mutexes with automatic cleanup.
+// Multiple readers can access a key concurrently if no writer holds the lock.
 type KeyMutex struct {
-	m  map[interface{}]*refMutex // map[key]interface{} => *refMutex
-	mx sync.Mutex
+	m  map[interface{}]*refMutex // map[key] => *refMutex
+	mx sync.Mutex                // protects access to the map
 }
 
 // NewKeyMutex constructs a new KeyMutex.
@@ -69,47 +69,60 @@ func NewKeyMutex() *KeyMutex {
 	}
 }
 
-// Lock acquires the mutex for the specified key.
-// It increments the reference count before locking to
-// prevent removal of the mutex while it’s in use.
+// Lock acquires exclusive (write) lock for the specified key.
 func (k *KeyMutex) Lock(key interface{}) {
 	k.mx.Lock()
-
-	var keyRefMutex *refMutex
-	if tmx, ok := k.m[key]; ok {
-		keyRefMutex = tmx
-	} else {
-		keyRefMutex = &refMutex{}
-		k.m[key] = keyRefMutex
+	rm, ok := k.m[key]
+	if !ok {
+		rm = &refMutex{}
+		k.m[key] = rm
 	}
-	atomic.AddInt32(&keyRefMutex.refs, 1)
-
+	atomic.AddInt32(&rm.refs, 1)
 	k.mx.Unlock()
 
-	keyRefMutex.mu.Lock()
+	rm.mu.Lock()
 }
 
-// Unlock releases the mutex for the specified key.
-// It decrements the reference count and, if it drops to zero,
-// deletes the refMutex entry to free resources.
+// Unlock releases an exclusive (write) lock for the specified key.
 func (k *KeyMutex) Unlock(key interface{}) {
 	k.mx.Lock()
-	defer k.mx.Unlock()
-
-	var keyRefMutex *refMutex
-	if tmx, ok := k.m[key]; ok {
-		keyRefMutex = tmx
-	} else {
+	rm, ok := k.m[key]
+	if !ok {
 		panic("KeyMutex: unlock of unlocked key")
 	}
-
-	// Release the underlying mutex.
-	keyRefMutex.mu.Unlock()
-
-	// Decrement reference count and remove from map when unused.
-	if atomic.AddInt32(&keyRefMutex.refs, -1) == 0 {
+	rm.mu.Unlock()
+	if atomic.AddInt32(&rm.refs, -1) == 0 {
 		delete(k.m, key)
 	}
+	k.mx.Unlock()
+}
+
+// RLock acquires a shared (read) lock for the specified key.
+func (k *KeyMutex) RLock(key interface{}) {
+	k.mx.Lock()
+	rm, ok := k.m[key]
+	if !ok {
+		rm = &refMutex{}
+		k.m[key] = rm
+	}
+	atomic.AddInt32(&rm.refs, 1)
+	k.mx.Unlock()
+
+	rm.mu.RLock()
+}
+
+// RUnlock releases a shared (read) lock for the specified key.
+func (k *KeyMutex) RUnlock(key interface{}) {
+	k.mx.Lock()
+	rm, ok := k.m[key]
+	if !ok {
+		panic("KeyMutex: runlock of unlocked key")
+	}
+	rm.mu.RUnlock()
+	if atomic.AddInt32(&rm.refs, -1) == 0 {
+		delete(k.m, key)
+	}
+	k.mx.Unlock()
 }
 
 func UniqueStrings(input []string) []string {

@@ -44,7 +44,7 @@ func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	if typeOperationRedirectedToHub(ctx) {
 		return
 	}
-	operationKeysMutexLock(ctx, []string{selfID, typesVertexId})
+	operationKeysMutexLock(ctx, []string{selfID, typesVertexId}, true)
 	defer operationKeysMutexUnlock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -78,7 +78,7 @@ func UpdateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 		return
 	}
 
-	operationKeysMutexLock(ctx, []string{selfID})
+	operationKeysMutexLock(ctx, []string{selfID}, true)
 	defer operationKeysMutexUnlock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -110,7 +110,7 @@ func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 		return
 	}
 
-	operationKeysMutexLock(ctx, []string{selfID})
+	operationKeysMutexLock(ctx, []string{selfID}, true)
 	defer operationKeysMutexUnlock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -143,7 +143,7 @@ func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProces
 		return
 	}
 
-	operationKeysMutexLock(ctx, []string{selfID})
+	operationKeysMutexLock(ctx, []string{selfID}, false)
 	defer operationKeysMutexUnlock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -209,7 +209,7 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	originType = ctx.Domain.CreateObjectIDWithHubDomain(originType, true)
 	builtInObjectsVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false)
 
-	operationKeysMutexLock(ctx, []string{builtInObjectsVertexId, selfID, originType})
+	operationKeysMutexLock(ctx, []string{builtInObjectsVertexId, selfID, originType}, true)
 	ff := system.NewFinalFunctions()
 	defer ff.Exec()
 	ff.Add(func() {
@@ -272,7 +272,7 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 */
 func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
-	operationKeysMutexLock(ctx, []string{selfID})
+	operationKeysMutexLock(ctx, []string{selfID}, true)
 	ff := system.NewFinalFunctions()
 	defer ff.Exec()
 	ff.Add(func() {
@@ -316,7 +316,7 @@ func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
 
-	operationKeysMutexLock(ctx, []string{selfID})
+	operationKeysMutexLock(ctx, []string{selfID}, true)
 	ff := system.NewFinalFunctions()
 	defer ff.Exec()
 	ff.Add(func() {
@@ -349,7 +349,7 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
  */
 func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
-	operationKeysMutexLock(ctx, []string{selfID})
+	operationKeysMutexLock(ctx, []string{selfID}, false)
 	ff := system.NewFinalFunctions()
 	defer ff.Exec()
 	ff.Add(func() {
@@ -459,7 +459,7 @@ func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	}
 	toType = ctx.Domain.CreateObjectIDWithHubDomain(toType, true)
 
-	operationKeysMutexLock(ctx, []string{selfID, toType})
+	operationKeysMutexLock(ctx, []string{selfID, toType}, true)
 	defer operationKeysMutexUnlock(ctx)
 
 	link := easyjson.NewJSONObject()
@@ -500,7 +500,7 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	}
 	toType = ctx.Domain.CreateObjectIDWithHubDomain(toType, true)
 
-	operationKeysMutexLock(ctx, []string{selfID, toType})
+	operationKeysMutexLock(ctx, []string{selfID, toType}, true)
 	defer operationKeysMutexUnlock(ctx)
 
 	link := ctx.Payload.Clone()
@@ -541,7 +541,7 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	}
 	toType = ctx.Domain.CreateObjectIDWithHubDomain(toType, true)
 
-	operationKeysMutexLock(ctx, []string{selfID, toType})
+	operationKeysMutexLock(ctx, []string{selfID, toType}, true)
 	ff := system.NewFinalFunctions()
 	defer ff.Exec()
 	ff.Add(func() {
@@ -607,7 +607,7 @@ func ReadTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 	}
 	toType = ctx.Domain.CreateObjectIDWithHubDomain(toType, true)
 
-	operationKeysMutexLock(ctx, []string{selfID, toType})
+	operationKeysMutexLock(ctx, []string{selfID, toType}, false)
 	defer operationKeysMutexUnlock(ctx)
 
 	payload := easyjson.NewJSONObject()
@@ -640,7 +640,7 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	}
 	objectToID = ctx.Domain.CreateObjectIDWithThisDomain(objectToID, false)
 
-	operationKeysMutexLock(ctx, []string{selfID, objectToID})
+	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true)
 	ff := system.NewFinalFunctions()
 	defer ff.Exec()
 	ff.Add(func() {
@@ -702,7 +702,7 @@ func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	}
 	objectToID = ctx.Domain.CreateObjectIDWithThisDomain(objectToID, false)
 
-	operationKeysMutexLock(ctx, []string{selfID, objectToID})
+	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true)
 	ff := system.NewFinalFunctions()
 	defer ff.Exec()
 	ff.Add(func() {
@@ -762,7 +762,7 @@ func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	}
 	objectToID = ctx.Domain.CreateObjectIDWithThisDomain(objectToID, false)
 
-	operationKeysMutexLock(ctx, []string{selfID, objectToID})
+	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true)
 	ff := system.NewFinalFunctions()
 	defer ff.Exec()
 	ff.Add(func() {
@@ -810,7 +810,7 @@ func ReadObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	}
 	objectToID = ctx.Domain.CreateObjectIDWithThisDomain(objectToID, false)
 
-	operationKeysMutexLock(ctx, []string{selfID, objectToID})
+	operationKeysMutexLock(ctx, []string{selfID, objectToID}, false)
 	ff := system.NewFinalFunctions()
 	defer ff.Exec()
 	ff.Add(func() {

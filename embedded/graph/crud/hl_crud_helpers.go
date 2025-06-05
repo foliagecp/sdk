@@ -50,7 +50,7 @@ options: json - optional
 */
 func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
-	operationKeysMutexLock(ctx, []string{selfID})
+	operationKeysMutexLock(ctx, []string{selfID}, true)
 	defer operationKeysMutexUnlock(ctx)
 
 	om := sfMediators.NewOpMediator(ctx)
