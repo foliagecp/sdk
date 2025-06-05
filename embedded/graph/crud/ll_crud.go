@@ -76,7 +76,7 @@ func makeSequenceFreeParentBasedID(ctx *sfPlugins.StatefunContextProcessor, targ
 	} else {
 		if ctx.Payload.PathExists(fmt.Sprintf("__key_locks.%s", targetID)) || ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s", targetID)) {
 			added = true
-			finalId += system.GetHashStr(ctx.Self.Typename)
+			finalId += system.GetHashStr(ctx.Self.Typename + ctx.Self.ID)
 		}
 	}
 
