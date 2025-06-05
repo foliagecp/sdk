@@ -64,27 +64,16 @@ func getOriginalID(ID string) string {
 }
 
 // All child operations must be sequence free
-func makeSequenceFreeParentBasedID(ctx *sfPlugins.StatefunContextProcessor, targetID string, arbitrarySuffix ...string) string {
+func makeSequenceFreeParentBasedID(ctx *sfPlugins.StatefunContextProcessor, targetID string) string {
 	finalId := targetID
 
-	added := false
-
-	tokens := strings.Split(ctx.Self.ID, "===")
-	if len(tokens) > 1 {
-		added = true
-		finalId += "===" + tokens[1]
-	} else {
-		if ctx.Payload.PathExists(fmt.Sprintf("__key_locks.%s", targetID)) || ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s", targetID)) {
-			added = true
-			finalId += system.GetHashStr(ctx.Self.Typename + ctx.Self.ID)
-		}
-	}
-
-	if len(arbitrarySuffix) > 0 {
-		if added {
-			finalId += arbitrarySuffix[0]
+	if ctx.Payload.PathExists(fmt.Sprintf("__key_locks.%s", targetID)) || ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s", targetID)) {
+		tokens := strings.Split(ctx.Self.ID, "===")
+		finalId += "==="
+		if len(tokens) > 1 {
+			finalId += tokens[1] + "-" + ctx.Domain.GetObjectIDWithoutDomain(tokens[0])
 		} else {
-			finalId += "===" + arbitrarySuffix[0]
+			finalId += ctx.Domain.GetObjectIDWithoutDomain(tokens[0])
 		}
 	}
 
@@ -577,7 +566,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		nextCallPayload := easyjson.NewJSONObject()
 		nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
 
-		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, makeSequenceFreeParentBasedID(ctx, toId, "inlink"), injectParentHoldsLocks(ctx, &nextCallPayload), ctx.Options)))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, makeSequenceFreeParentBasedID(ctx, toId), injectParentHoldsLocks(ctx, &nextCallPayload), ctx.Options)))
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
 			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
 			return
@@ -833,7 +822,7 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		nextCallPayload := easyjson.NewJSONObject()
 		nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
 
-		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, makeSequenceFreeParentBasedID(ctx, toId, "inlink"), injectParentHoldsLocks(ctx, &nextCallPayload), ctx.Options)))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, makeSequenceFreeParentBasedID(ctx, toId), injectParentHoldsLocks(ctx, &nextCallPayload), ctx.Options)))
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
 			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
 			return
