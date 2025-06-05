@@ -358,10 +358,3 @@ func levelToString(level slog.Level) string {
 		return level.String()
 	}
 }
-
-func D(groups []string, a slog.Attr) slog.Attr {
-	if a.Key == slog.LevelKey {
-		return slog.String(a.Key, levelToString(a.Value.Any().(slog.Level)))
-	}
-	return a
-}
