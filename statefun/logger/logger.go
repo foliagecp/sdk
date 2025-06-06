@@ -116,12 +116,9 @@ func NewLogger(opts Options) *Logger {
 		Level:     levelVar,
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 			if a.Key == slog.LevelKey {
-				level, ok := a.Value.Any().(slog.Level)
-				if !ok {
-					fmt.Printf("Error: value is not slog.Level: %v\n", a.Value)
-					return a
+				if level, ok := a.Value.Any().(slog.Level); ok {
+					return slog.String(a.Key, levelToString(level))
 				}
-				return slog.String(a.Key, levelToString(level))
 			}
 			return a
 		},
@@ -160,12 +157,9 @@ func (l *Logger) SetOptions(
 		Level:     l.levelVar,
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 			if a.Key == slog.LevelKey {
-				level, ok := a.Value.Any().(slog.Level)
-				if !ok {
-					fmt.Printf("Error: value is not slog.Level: %v\n", a.Value)
-					return a
+				if level, ok := a.Value.Any().(slog.Level); ok {
+					return slog.String(a.Key, levelToString(level))
 				}
-				return slog.String(a.Key, levelToString(level))
 			}
 			return a
 		},
