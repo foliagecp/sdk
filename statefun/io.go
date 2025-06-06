@@ -287,7 +287,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 		switch r.functionTypeIsReadyForGoLangCommunication(targetTypename, true, targetID) {
 		case 0:
 			targetFT := r.registeredFunctionTypes[targetTypename]
-			resultJSONChannel := make(chan *easyjson.JSON)
+			resultJSONChannel := make(chan *easyjson.JSON, 1)
 
 			// Do not send original data, prevents same data concurrent access from different functions
 			var payloadCopy *easyjson.JSON = nil
@@ -320,14 +320,16 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 			targetFT.sendMsg(targetID, functionMsg)*/
 
 			functionMsg.RequestCallback = func(data *easyjson.JSON) {
-				go func() {
-					resultJSONChannel <- data.Clone().GetPtr() // Clone().GetPtr() prevents data to contain custom Golang types
-				}()
+				select {
+				case resultJSONChannel <- data.Clone().GetPtr():
+				default: // channel is ether closed or already has a value
+				}
 			}
 			functionMsg.RefusalCallback = func(_ bool) {
-				go func() {
-					close(resultJSONChannel)
+				defer func() {
+					recover() // in case channel is already closed
 				}()
+				close(resultJSONChannel)
 			}
 
 			targetFT.prometricsMeasureMsgDeliver(GolangReq)
