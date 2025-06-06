@@ -33,7 +33,6 @@ const (
 )
 
 var (
-	//
 	defaultOptions = Options{
 		Output:       os.Stdout,
 		Level:        InfoLevel,
@@ -112,11 +111,24 @@ func NewLogger(opts Options) *Logger {
 	levelVar := &slog.LevelVar{}
 	levelVar.Set(opts.Level)
 
+	handlerOpts := &slog.HandlerOptions{
+		AddSource: opts.ReportCaller,
+		Level:     levelVar,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.LevelKey {
+				if level, ok := a.Value.Any().(slog.Level); ok {
+					return slog.String(a.Key, levelToString(level))
+				}
+			}
+			return a
+		},
+	}
+
 	var handler slog.Handler
 	if opts.JSONFormat {
-		handler = slog.NewJSONHandler(opts.Output, &slog.HandlerOptions{Level: levelVar})
+		handler = slog.NewJSONHandler(opts.Output, handlerOpts)
 	} else {
-		handler = slog.NewTextHandler(opts.Output, &slog.HandlerOptions{Level: levelVar})
+		handler = slog.NewTextHandler(opts.Output, handlerOpts)
 	}
 
 	return &Logger{
@@ -143,6 +155,14 @@ func (l *Logger) SetOptions(
 	handlerOpts := &slog.HandlerOptions{
 		AddSource: reportCaller,
 		Level:     l.levelVar,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.LevelKey {
+				if level, ok := a.Value.Any().(slog.Level); ok {
+					return slog.String(a.Key, levelToString(level))
+				}
+			}
+			return a
+		},
 	}
 
 	var handler slog.Handler
@@ -309,4 +329,26 @@ func Logf(ll LogLevel, format string, args ...interface{}) {
 // Deprecated. Use l.Trace(), l.Debug(), l.Info(), l.Warn(), l.Error(), l.Fatal(), l.Panic() instead
 func Logln(ll LogLevel, format string, args ...interface{}) {
 	Logf(ll, format, args...)
+}
+
+// levelToString converts a slog.Level to a human-readable string representation
+func levelToString(level slog.Level) string {
+	switch level {
+	case TraceLevel:
+		return "TRACE"
+	case DebugLevel:
+		return "DEBUG"
+	case InfoLevel:
+		return "INFO"
+	case WarnLevel:
+		return "WARN"
+	case ErrorLevel:
+		return "ERROR"
+	case FatalLevel:
+		return "FATAL"
+	case PanicLevel:
+		return "PANIC"
+	default:
+		return level.String()
+	}
 }
