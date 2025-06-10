@@ -102,6 +102,8 @@ type SFWorkerPool struct {
 	stopCh   chan struct{}
 	stopped  bool
 
+	prometricsUpdatedTime time.Time
+
 	wg sync.WaitGroup
 }
 
@@ -180,6 +182,11 @@ func (wp *SFWorkerPool) manager() {
 	}
 
 	for {
+		if time.Since(wp.prometricsUpdatedTime) > 1*time.Second {
+			wp.prometricsUpdatedTime = time.Now()
+			wp.prometricsMeasures()
+		}
+
 		select {
 		case <-wp.notifyCh:
 			drainFunctionTypeIDChannels()
@@ -214,9 +221,8 @@ func (wp *SFWorkerPool) worker() {
 	defer func() {
 		wp.mu.Lock()
 		wp.workers--
-		wp.wg.Add(-1)
+		wp.wg.Done()
 		wp.mu.Unlock()
-		wp.prometricsMeasures()
 		logger.Logln(logger.DebugLevel, ">>>>>>>>>>>>>> - WP %s SHRINK: %d", wp.ft.name, wp.workers)
 	}()
 
@@ -248,7 +254,6 @@ func (wp *SFWorkerPool) worker() {
 			timer.Reset(wp.idleTimeout)
 
 			wp.ft.TokenRelease()
-			wp.prometricsMeasures()
 
 		case <-timer.C:
 			wp.mu.Lock()
