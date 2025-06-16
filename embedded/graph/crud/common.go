@@ -38,7 +38,7 @@ const (
 
 func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 	// High-Level Type Inheritance
-	statefun.NewFunctionType(runtime, "functions.cmdb.api.inherit.type.set.child", TypeSetChild, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
+	statefun.NewFunctionType(runtime, "functions.cmdb.api.inherit.type.add.child", TypeSetChild, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
 	statefun.NewFunctionType(runtime, "functions.cmdb.api.inherit.type.remove.child", TypeRemoveChild, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
 
 	// High-Level API Helpers
