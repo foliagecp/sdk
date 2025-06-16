@@ -168,6 +168,9 @@ func (wp *SFWorkerPool) manager() {
 			if maxLen == 0 || selectedChan == nil {
 				return
 			}
+			if len(wp.taskQueue) >= cap(wp.taskQueue) {
+				return
+			}
 
 			msg := <-selectedChan
 			task := SFWorkerTask{
@@ -181,16 +184,18 @@ func (wp *SFWorkerPool) manager() {
 		}
 	}
 
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
 	for {
 		if time.Since(wp.prometricsUpdatedTime) > 1*time.Second {
 			wp.prometricsUpdatedTime = time.Now()
 			wp.prometricsMeasures()
 		}
-
 		select {
 		case <-wp.notifyCh:
 			drainFunctionTypeIDChannels()
-
+		case <-ticker.C:
+			drainFunctionTypeIDChannels()
 		case <-wp.stopCh:
 			return
 		}
@@ -254,6 +259,7 @@ func (wp *SFWorkerPool) worker() {
 			timer.Reset(wp.idleTimeout)
 
 			wp.ft.TokenRelease()
+			wp.Notify()
 
 		case <-timer.C:
 			wp.mu.Lock()
