@@ -113,6 +113,12 @@ func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	operationKeysMutexLock(ctx, []string{selfID})
 	defer operationKeysMutexUnlock(ctx)
 
+	goal := InheritanceCascadeDeleteGoalType{
+		reason: ParentTypeDeleteChild,
+		target: "",
+	}
+	inheritData := InheritaceGoalPrepare(ctx, goal)
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	// Vertice's out links are stored in the same domain with the vertex
@@ -131,7 +137,7 @@ func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.delete", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, nil), nil)))
 
-	UpdateTypeModelVersion(ctx)
+	InheritaceGoalFinalize(ctx, inheritData)
 
 	om.Reply()
 }
@@ -536,6 +542,12 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		return
 	}
 
+	goal := InheritanceCascadeDeleteGoalType{
+		reason: ParentTypeDeleteOutTypeObjectLink,
+		target: "",
+	}
+	inheritData := InheritaceGoalPrepare(ctx, goal)
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	toType, ok := ctx.Payload.GetByPath("to").AsString()
@@ -581,6 +593,8 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	objectLink.SetByPath("to", easyjson.NewJSON(toType))
 	objectLink.SetByPath("type", easyjson.NewJSON(TO_TYPELINK))
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &objectLink), ctx.Options)))
+
+	InheritaceGoalFinalize(ctx, inheritData)
 
 	for _, lateTrigger := range lateTriggersArr {
 		ff.Add(func() {

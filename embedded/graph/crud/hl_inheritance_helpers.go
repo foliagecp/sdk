@@ -1,6 +1,8 @@
 package crud
 
 import (
+	"strings"
+
 	"github.com/foliagecp/easyjson"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
@@ -51,22 +53,76 @@ func gatherTypes4CascadeObjectLinkRefreshStartingFromTypeWithID(ctx *sfPlugins.S
 	return keys
 }
 
-func deleteObjectOutLinkIfInvalidByInheritance(ctx *sfPlugins.StatefunContextProcessor, objectId string, outLinkName string) {
+func getObjectAllTypesBaseAndParents(ctx *sfPlugins.StatefunContextProcessor, objectId string) (result map[string]struct{}) {
+	result = map[string]struct{}{}
 
+	targetObjectType, err := findObjectType(ctx, objectId)
+	if err != nil {
+		lg.Logln(lg.ErrorLevel, "getObjectAllTypesBaseAndParents findObjectType for id=%s: %s", objectId, err.Error())
+		return
+	}
+
+	result[targetObjectType] = struct{}{}
+
+	om := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.read", targetObjectType, nil, nil))
+	if om.Data.PathExists("body.cache.parent_types") {
+		parentTypes := om.Data.GetByPath("body.cache.parent_types")
+		for i := 0; i < parentTypes.ArraySize(); i++ {
+			parentType := parentTypes.ArrayElement(i).AsStringDefault("")
+			if len(parentType) > 0 {
+				result[parentType] = struct{}{}
+			}
+		}
+	}
+
+	return
+}
+
+func isObjectLinkPermittedForClaimedTypes(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId, fromObjectClaimType, toObjectClaimType string) string {
+	fromObjectAllTypes := getObjectAllTypesBaseAndParents(ctx, fromObjectId)
+	toObjectAllTypes := getObjectAllTypesBaseAndParents(ctx, toObjectId)
+
+	if _, ok := fromObjectAllTypes[fromObjectClaimType]; !ok {
+		return ""
+	}
+	if _, ok := toObjectAllTypes[toObjectClaimType]; !ok {
+		return ""
+	}
+	s, err := getObjectsLinkTypeFromTypesLink(ctx, fromObjectClaimType, toObjectClaimType)
+	if len(s) == 0 || err != nil {
+		return ""
+	}
+
+	return s
+}
+
+func deleteObjectOutLinkIfInvalidByInheritance(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, outLinkType, toObjectId string) {
+	tokens := strings.Split(outLinkType, "#")
+	if len(tokens) == 3 {
+		fromParentType := tokens[0]
+		toParentType := tokens[1]
+		if len(isObjectLinkPermittedForClaimedTypes(ctx, fromObjectId, toObjectId, fromParentType, toParentType)) == 0 {
+			objectLink := easyjson.NewJSONObject()
+			objectLink.SetByPath("to", easyjson.NewJSON(toObjectId))
+			objectLink.SetByPath("type", easyjson.NewJSON(outLinkType))
+			ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", makeSequenceFreeParentBasedID(ctx, fromObjectId), injectParentHoldsLocks(ctx, &objectLink), ctx.Options)
+		}
+	}
 }
 
 func runInvalidateObjectLinks(ctx *sfPlugins.StatefunContextProcessor, objectId string) {
 	var outLinks *easyjson.JSON
 
 	payload := easyjson.NewJSONObjectWithKeyValue("details", easyjson.NewJSON(true))
-	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", makeSequenceFreeParentBasedID(ctx, typeName), injectParentHoldsLocks(ctx, &payload), nil))
+	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", makeSequenceFreeParentBasedID(ctx, objectId), injectParentHoldsLocks(ctx, &payload), nil))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
 		outLinks = som.Data.GetByPath("links.out").GetPtr()
 	}
 	if outLinks != nil {
 		for i := 0; i < outLinks.GetByPath("names").ArraySize(); i++ {
-			linkName := outLinks.GetByPath("names").ArrayElement(i).AsStringDefault("")
-			deleteObjectOutLinkIfInvalidByInheritance(ctx, objectId, linkName)
+			linkType := outLinks.GetByPath("types").ArrayElement(i).AsStringDefault("")
+			targetObjectId := outLinks.GetByPath("ids").ArrayElement(i).AsStringDefault("")
+			deleteObjectOutLinkIfInvalidByInheritance(ctx, objectId, linkType, targetObjectId)
 		}
 	}
 }
@@ -83,65 +139,31 @@ func runCascadeObjectLinkRefreshStartingForTypeWithID(ctx *sfPlugins.StatefunCon
 	}
 }
 
-func CascadeDeleteInvalidObjectLinksPermittedByInheritanceFromTypeAtSelfIDIfNeeded(ctx *sfPlugins.StatefunContextProcessor, goal InheritanceCascadeDeleteGoalType) {
-	/*
-		func gatherTypes4CascadeObjectLinkRefreshStartingFromTypeWithID(ctx *sfPlugins.StatefunContextProcessor, typeId string, includeTypeId bool) []string {
-		}
-	*/
-	/*
-		func runCascadeObjectLinkRefreshStartingForTypeWithID(ctx *sfPlugins.StatefunContextProcessor, typeId string) {
-		}
-	*/
-	/*
-		typesToRefresh := []string{}
-		if goal.reason == ParentTypeDeleteOutTypeObjectLink {
-			delete_out_object_link_2_type(goal.target)
-
-			typesToRefresh = gatherTypes4CascadeObjectLinkRefreshStartingFromTypeWithID(ctx, self.ID, false)
-		}
-
-		if goal.reason == ParentTypeDeleteChild {
-			delete_child_type(goal.target)
-
-			typesToRefresh = gatherTypes4CascadeObjectLinkRefreshStartingFromTypeWithID(ctx, goal.target, true)
-		}
-
-		if goal.reason == ParentTypeDeleteType {
-			typesToRefresh := gatherTypes4CascadeObjectLinkRefreshStartingFromTypeWithID(ctx, self.ID, false)
-
-			delete_type(self.ID)
-		}
-
-		for typeId := range typesToRefresh {
-			runCascadeObjectLinkRefreshStartingForTypeWithID(ctx, typeId)
-		}
-	*/
-
+func InheritaceGoalPrepare(ctx *sfPlugins.StatefunContextProcessor, goal InheritanceCascadeDeleteGoalType) []string {
 	typesToRefresh := []string{}
 	switch goal.reason {
 	case ParentTypeDeleteType:
 		{
-			typesToRefresh = gatherTypes4CascadeObjectLinkRefreshStartingFromTypeWithID(ctx, ctx.Self.ID, false) // Parent type ctx.Self.ID is not needed
-			ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.delete", ctx.Self.ID, nil, nil)
+			typesToRefresh = gatherTypes4CascadeObjectLinkRefreshStartingFromTypeWithID(ctx, ctx.Self.ID, false) // ctx.Self.ID is parent type
+			// Delete type after
 		}
 	case ParentTypeDeleteChild:
 		{
-			payload := easyjson.NewJSONObjectWithKeyValue("child_type", easyjson.NewJSON(goal.target))
-			ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.inherit.type.remove.child", ctx.Self.ID, &payload, nil)
-
-			typesToRefresh = gatherTypes4CascadeObjectLinkRefreshStartingFromTypeWithID(ctx, goal.target, true) // Child type ctx.Self.ID is needed
+			// Unlink child type first
+			typesToRefresh = gatherTypes4CascadeObjectLinkRefreshStartingFromTypeWithID(ctx, goal.target, true) // goal.target is child type
 		}
 	case ParentTypeDeleteOutTypeObjectLink:
 		{
-			payload := easyjson.NewJSONObject()
-			payload.SetByPath("to", easyjson.NewJSON(goal.target))
-			ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.objects.link.delete", ctx.Self.ID, &payload, nil)
-
-			typesToRefresh = gatherTypes4CascadeObjectLinkRefreshStartingFromTypeWithID(ctx, goal.target, false) // Parent type ctx.Self.ID is not needed
+			// Delete types' object link first
+			typesToRefresh = gatherTypes4CascadeObjectLinkRefreshStartingFromTypeWithID(ctx, ctx.Self.ID, false) // ctx.Self.ID is parent type
 		}
 	}
+	return typesToRefresh
+}
 
-	for typeId := range typesToRefresh {
+func InheritaceGoalFinalize(ctx *sfPlugins.StatefunContextProcessor, typesToRefresh []string) {
+	UpdateTypeModelVersion(ctx)
+	for _, typeId := range typesToRefresh {
 		runCascadeObjectLinkRefreshStartingForTypeWithID(ctx, typeId)
 	}
 }
