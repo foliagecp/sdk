@@ -275,7 +275,7 @@ func (om *OpMediator) ReplyWithData(data *easyjson.JSON) error {
 						if len(aggrId) > 0 {
 							reply.SetByPath("__mAggregationIdReply", easyjson.NewJSON(aggrId))
 						}
-						return om.ctx.Signal(sfPlugins.JetstreamGlobalSignal, paTypename, paId, reply, nil)
+						return om.ctx.Signal(sfPlugins.JetstreamGlobalSignal, paTypename, paId, reply, nil, om.ctx.TraceContext())
 					}
 				}
 			}
@@ -295,7 +295,7 @@ func (om *OpMediator) ReplyWithData(data *easyjson.JSON) error {
 					if om.opType == WorkerIsTaskedByAggregatorOp {
 						reply.SetByPath("__mAggregationIdReply", easyjson.NewJSON(om.meta1))
 					}
-					return om.ctx.Signal(sfPlugins.JetstreamGlobalSignal, om.ctx.Caller.Typename, om.ctx.Caller.ID, reply, nil)
+					return om.ctx.Signal(sfPlugins.JetstreamGlobalSignal, om.ctx.Caller.Typename, om.ctx.Caller.ID, reply, nil, om.ctx.TraceContext())
 				}
 			}
 		}
@@ -315,7 +315,7 @@ func (om *OpMediator) SignalWithAggregation(provider sfPlugins.SignalProvider, t
 	}
 	payload.SetByPath("__mAggregationId", easyjson.NewJSON(om.mediatorId))
 	// ----------------------------------------------------
-	if err := om.ctx.Signal(provider, typename, id, payload, options); err != nil {
+	if err := om.ctx.Signal(provider, typename, id, payload, options, nil); err != nil {
 		return err
 	}
 

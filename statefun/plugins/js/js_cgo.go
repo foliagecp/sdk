@@ -1,5 +1,3 @@
-
-
 //go:build cgo
 
 package js
@@ -237,6 +235,7 @@ func StatefunExecutorPluginJSContructor(alias string, source string) sfPlugins.S
 					info.Args()[2].String(),
 					&j,
 					options,
+					nil,
 				))
 				v, _ := v8.NewValue(sfejs.vw, int32(0))
 				return v

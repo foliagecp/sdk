@@ -16,6 +16,7 @@ type FunctionTypeMsg struct {
 	Caller          *sfPlugins.StatefunAddress
 	Payload         *easyjson.JSON
 	Options         *easyjson.JSON
+	TraceContext    *easyjson.JSON
 	RefusalCallback RefuseCallbackAction
 	RequestCallback RequestCallbackAction
 	AckCallback     AckCallbackAction

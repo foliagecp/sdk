@@ -41,7 +41,7 @@ const (
 
 type EgressProvider int
 
-type SFSignalFunc func(signalProvider SignalProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) error
+type SFSignalFunc func(signalProvider SignalProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON, traceCtx *easyjson.JSON) error
 type SFRequestFunc func(requestProvider RequestProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error)
 type SFEgressFunc func(egressProvider EgressProvider, payload *easyjson.JSON, customId ...string) error
 
@@ -98,14 +98,44 @@ type StatefunContextProcessor struct {
 	ObjectMutexUnlock         func(objectId string) error
 	Domain                    Domain
 	// TODO: DownstreamSignal(<function type>, <links filters>, <payload>, <options>)
-	Signal  SFSignalFunc
-	Request SFRequestFunc
-	Egress  SFEgressFunc
-	Self    StatefunAddress
-	Caller  StatefunAddress
-	Payload *easyjson.JSON
-	Options *easyjson.JSON
-	Reply   *SyncReply // when requested in function: nil - function was signaled, !nil - function was requested
+	Signal       SFSignalFunc
+	Request      SFRequestFunc
+	Egress       SFEgressFunc
+	Self         StatefunAddress
+	Caller       StatefunAddress
+	Payload      *easyjson.JSON
+	Options      *easyjson.JSON
+	traceContext *easyjson.JSON
+	Reply        *SyncReply // when requested in function: nil - function was signaled, !nil - function was requested
+}
+
+func (scp *StatefunContextProcessor) SetTraceContext(tc *easyjson.JSON) {
+	scp.traceContext = tc
+}
+
+func (scp *StatefunContextProcessor) TraceContext() *easyjson.JSON {
+	return scp.traceContext
+}
+
+func (scp *StatefunContextProcessor) TraceID() string {
+	if scp.traceContext != nil {
+		return scp.traceContext.GetByPath("trace_id").AsStringDefault("")
+	}
+	return ""
+}
+
+func (scp *StatefunContextProcessor) SpanID() string {
+	if scp.traceContext != nil {
+		return scp.traceContext.GetByPath("span_id").AsStringDefault("")
+	}
+	return ""
+}
+
+func (scp *StatefunContextProcessor) ParentSpanID() string {
+	if scp.traceContext != nil {
+		return scp.traceContext.GetByPath("parent_span_id").AsStringDefault("")
+	}
+	return ""
 }
 
 type StatefunExecutor interface {

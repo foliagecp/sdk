@@ -177,8 +177,21 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 			SetObjectContext:          func(context *easyjson.JSON) { ft.setContext(id, context) },
 			Domain:                    ft.runtime.Domain,
 			Self:                      sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
-			Signal: func(signalProvider sfPlugins.SignalProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) error {
-				return ft.runtime.signal(signalProvider, ft.name, id, targetTypename, targetID, j, o)
+			Signal: func(signalProvider sfPlugins.SignalProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON, tc *easyjson.JSON) error {
+				if tc == nil && msg.TraceContext != nil {
+					lg.Logf(lg.TraceLevel, "=== Creating child trace from parent: %s", msg.TraceContext.ToString())
+					currentTrace := TraceContextFromJSON(msg.TraceContext)
+					if currentTrace != nil {
+						newChildTrace := NewTraceContext(currentTrace.TraceID, currentTrace.SpanID)
+						tc = newChildTrace.ToJSON()
+						lg.Logf(lg.TraceLevel, "=== Child trace created: %s", tc.ToString())
+
+					} else {
+						lg.Logf(lg.TraceLevel, "=== Signal: tc=%v, msg.TraceContext exists=%v", tc != nil, msg.TraceContext != nil)
+
+					}
+				}
+				return ft.runtime.signal(signalProvider, ft.name, id, targetTypename, targetID, j, o, tc)
 			},
 			Request: func(requestProvider sfPlugins.RequestProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
 				return ft.runtime.request(requestProvider, ft.name, id, targetTypename, targetID, j, o)
@@ -249,6 +262,8 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 		typenameIDContextProcessor.Options.DeepMerge(*msg.Options)
 	}
 	typenameIDContextProcessor.Caller = *msg.Caller
+
+	typenameIDContextProcessor.SetTraceContext(msg.TraceContext)
 
 	typenameIDContextProcessor.ObjectMutexLock = func(objectId string, errorOnLocked bool) error {
 		lockId := fmt.Sprintf("%s-lock", objectId)

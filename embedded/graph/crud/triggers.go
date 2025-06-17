@@ -97,7 +97,7 @@ func executeObjectTriggers(ctx *sfPlugins.StatefunContextProcessor, objectID str
 		payload.SetByPath(fmt.Sprintf("trigger.object.%s", elems[tt]), triggerData)
 
 		for _, f := range functions {
-			system.MsgOnErrorReturn(ctx.Signal(sfPlugins.JetstreamGlobalSignal, f, objectID, &payload, nil))
+			system.MsgOnErrorReturn(ctx.Signal(sfPlugins.JetstreamGlobalSignal, f, objectID, &payload, nil, ctx.TraceContext()))
 		}
 	}
 }
@@ -134,7 +134,7 @@ func executeLinkTriggers(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, 
 		payload.SetByPath(fmt.Sprintf("trigger.link.%s", elems[tt]), triggerData)
 
 		for _, f := range functions {
-			system.MsgOnErrorReturn(ctx.Signal(sfPlugins.JetstreamGlobalSignal, f, fromObjectId, &payload, nil))
+			system.MsgOnErrorReturn(ctx.Signal(sfPlugins.JetstreamGlobalSignal, f, fromObjectId, &payload, nil, ctx.TraceContext()))
 		}
 	}
 }

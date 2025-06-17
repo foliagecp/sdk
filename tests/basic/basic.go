@@ -141,6 +141,9 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	jpgql.RegisterAllFunctionTypes(runtime)
 	fpl.RegisterAllFunctionTypes(runtime)
 	search.RegisterAllFunctionTypes(runtime)
+
+	statefun.NewFunctionType(runtime, "functions.tests.trace.chain", TestTraceChainFunction, *statefun.NewFunctionTypeConfig())
+
 }
 
 func RunRequestReplyTest(runtime *statefun.Runtime) {
@@ -166,6 +169,23 @@ func RunRequestReplyTest(runtime *statefun.Runtime) {
 	}
 
 	lg.Logln(lg.DebugLevel, "<<< Test ended: request reply calls")
+}
+
+func TestTraceChainFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	lg.Logf(lg.InfoLevel, "=== Chain Test: TraceID=%s, SpanID=%s, ParentSpanID=%s",
+		ctx.TraceID(), ctx.SpanID(), ctx.ParentSpanID())
+
+	err := ctx.Signal(
+		sfPlugins.JetstreamGlobalSignal,
+		"functions.tests.basic.master",
+		"child-span-test",
+		easyjson.NewJSONObject().GetPtr(),
+		nil,
+		nil,
+	)
+	if err != nil {
+		lg.Logf(lg.ErrorLevel, "Signal failed: %v", err)
+	}
 }
 
 func Start() {
@@ -210,6 +230,9 @@ func Start() {
 
 		fmt.Println("Starting GraphQL")
 		graphql.StartGraphqlServer("8080", &dbClient)
+
+		runtime.Signal(sfPlugins.JetstreamGlobalSignal, "functions.tests.trace.chain", "test", nil, nil, nil)
+
 		return nil
 	}
 

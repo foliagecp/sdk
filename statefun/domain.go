@@ -37,6 +37,8 @@ const (
 	domainIngressStreamName   = "domain_ingress"
 	domainEgressStreamName    = "domain_egress"
 	deadLetterQueueStreamName = "domain_dlq"
+	domainTraceStreamName     = "domain_trace"
+	domainTraceSubjectsTmpl   = "trace.%s.events.>"
 
 	routerConsumerMaxAckWaitMs           = 2000
 	lostConnectionSingleMsgProcessTimeMs = 700
@@ -288,6 +290,9 @@ func (dm *Domain) start(cacheConfig *cache.Config, createDomainRouters bool) err
 		if err := dm.createEgressRouter(); err != nil {
 			return err
 		}
+		if err := dm.createTraceStream(); err != nil {
+			return err
+		}
 	}
 
 	lg.Logln(lg.TraceLevel, "Initializing the cache store...")
@@ -371,6 +376,15 @@ func (dm *Domain) createEgressSignalStream() error {
 func (dm *Domain) createDLQStream() error {
 	sc := &nats.StreamConfig{
 		Name:      deadLetterQueueStreamName,
+		Retention: nats.LimitsPolicy,
+	}
+	return dm.createStreamIfNotExists(sc)
+}
+
+func (dm *Domain) createTraceStream() error {
+	sc := &nats.StreamConfig{
+		Name:      domainTraceStreamName,
+		Subjects:  []string{fmt.Sprintf(domainTraceSubjectsTmpl, dm.name)},
 		Retention: nats.LimitsPolicy,
 	}
 	return dm.createStreamIfNotExists(sc)
