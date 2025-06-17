@@ -100,7 +100,7 @@ func (som OpMsg) ToJson() *easyjson.JSON {
 		reply.SetByPath("details", easyjson.NewJSON(som.Details))
 	}
 	if len(som.Meta) > 0 {
-		reply.SetByPath("meta", easyjson.NewJSON(som.Details))
+		reply.SetByPath("meta", easyjson.NewJSON(som.Meta))
 	}
 	if !som.Data.IsNull() {
 		reply.SetByPath("data", som.Data)
