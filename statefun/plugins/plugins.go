@@ -41,7 +41,7 @@ const (
 
 type EgressProvider int
 
-type SFSignalFunc func(signalProvider SignalProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON, traceCtx *easyjson.JSON) error
+type SFSignalFunc func(signalProvider SignalProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) error
 type SFRequestFunc func(requestProvider RequestProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error)
 type SFEgressFunc func(egressProvider EgressProvider, payload *easyjson.JSON, customId ...string) error
 

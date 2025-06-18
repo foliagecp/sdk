@@ -181,7 +181,6 @@ func TestTraceChainFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.
 		"child-span-test",
 		easyjson.NewJSONObject().GetPtr(),
 		nil,
-		nil,
 	)
 	if err != nil {
 		lg.Logf(lg.ErrorLevel, "Signal failed: %v", err)

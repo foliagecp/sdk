@@ -56,7 +56,6 @@ func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 				ctx.Domain.CreateObjectIDWithDomain("leaf", ctx.Self.ID+"A", true),
 				ctx.Payload,
 				ctx.Options,
-				nil,
 			))
 		} else { // Function on LEAF
 			if callerDomain == hubDomain { // from HUB
@@ -66,7 +65,6 @@ func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 					ctx.Domain.CreateObjectIDWithDomain("leaf", ctx.Self.ID+"B", true),
 					ctx.Payload,
 					ctx.Options,
-					nil,
 				))
 			} else { // from LEAF
 				system.MsgOnErrorReturn(ctx.Request(
@@ -127,7 +125,7 @@ func TestWeakClusteringShadowObjectFunction(executor sfPlugins.StatefunExecutor,
 
 	if functionDomain == hubDomain { // Function on HUB
 		fmt.Println("Weak clustering shadow object SIGNAL")
-		system.MsgOnErrorReturn(ctx.Signal(sfPlugins.JetstreamGlobalSignal, "domains.so.test", "leaf#bar", easyjson.NewJSONObject().GetPtr(), nil, nil))
+		system.MsgOnErrorReturn(ctx.Signal(sfPlugins.JetstreamGlobalSignal, "domains.so.test", "leaf#bar", easyjson.NewJSONObject().GetPtr(), nil))
 
 		time.Sleep(1 * time.Second)
 
