@@ -108,25 +108,28 @@ func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool) (err erro
 	if data.GetByPath("trace_context").IsObject() {
 		tc := data.GetByPath("trace_context")
 		traceCtx = &tc
-	} else if !requestReply {
+	} else {
 		newTraceID := NewTraceID()
 		newTraceCtx := NewTraceContext(newTraceID, "")
 		traceCtx = newTraceCtx.ToJSON()
 	}
 
-	if traceCtx != nil {
-		tc := TraceContextFromJSON(traceCtx)
-		if tc != nil {
-			event := &TraceEvent{
-				TraceID:      tc.TraceID,
-				SpanID:       tc.SpanID,
-				ParentSpanID: tc.ParentSpanID,
-				EventType:    "span_start",
-				FuncTypename: ft.name,
-				VertexID:     id,
-				Timestamp:    system.GetCurrentTimeNs(),
+	publishSpanEnd := func() {
+		if traceCtx != nil {
+			tc := TraceContextFromJSON(traceCtx)
+			if tc != nil {
+				event := &TraceEvent{
+					TraceID:      tc.TraceID,
+					SpanID:       tc.SpanID,
+					ParentSpanID: tc.ParentSpanID,
+					EventType:    "span_end",
+					FuncTypename: ft.name,
+					VertexID:     id,
+					Timestamp:    system.GetCurrentTimeNs(),
+					Duration:     time.Duration(system.GetCurrentTimeNs() - tc.StartTime),
+				}
+				PublishTraceEvent(ft.runtime.nc, ft.runtime.Domain.name, event)
 			}
-			PublishTraceEvent(ft.runtime.nc, ft.runtime.Domain.name, event)
 		}
 	}
 
@@ -148,6 +151,7 @@ func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool) (err erro
 	if requestReply {
 		functionMsg.RequestCallback = func(data *easyjson.JSON) {
 			go func() {
+				publishSpanEnd()
 				system.MsgOnErrorReturn(msg.Respond(data.ToBytes()))
 			}()
 		}
@@ -159,22 +163,7 @@ func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool) (err erro
 	} else {
 		functionMsg.AckCallback = func(ack bool) {
 			go func() {
-				if ack && traceCtx != nil {
-					tc := TraceContextFromJSON(traceCtx)
-					if tc != nil {
-						event := &TraceEvent{
-							TraceID:      tc.TraceID,
-							SpanID:       tc.SpanID,
-							ParentSpanID: tc.ParentSpanID,
-							EventType:    "span_end",
-							FuncTypename: ft.name,
-							VertexID:     id,
-							Timestamp:    system.GetCurrentTimeNs(),
-							Duration:     time.Duration(system.GetCurrentTimeNs() - tc.StartTime),
-						}
-						PublishTraceEvent(ft.runtime.nc, ft.runtime.Domain.name, event)
-					}
-				}
+				publishSpanEnd()
 				if ack {
 					system.MsgOnErrorReturn(msg.Ack())
 				} else {

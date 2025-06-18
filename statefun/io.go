@@ -253,7 +253,7 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 	}
 }
 
-func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
+func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON, traceCtx *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
 	shadowObjectCanBeReceiver := false
 	if options != nil {
 		shadowObjectCanBeReceiver = options.GetByPath(ShadowObjectCallParamOptionPath).AsBoolDefault(false)
@@ -273,7 +273,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 		} else {
 			resp, err = r.nc.Request(
 				fmt.Sprintf("%s.%s.%s.%s", RequestPrefix, r.Domain.GetDomainFromObjectID(targetID), targetTypename, targetID),
-				buildNatsData(r.Domain.name, callerTypename, callerID, payload, options, nil),
+				buildNatsData(r.Domain.name, callerTypename, callerID, payload, options, traceCtx),
 				requestTimeoutDuration,
 			)
 		}
@@ -370,7 +370,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 				selection = sfPlugins.GolangLocalRequest
 			}
 		}
-		return r.request(selection, callerTypename, callerID, targetTypename, targetID, payload, options)
+		return r.request(selection, callerTypename, callerID, targetTypename, targetID, payload, options, traceCtx)
 	default:
 		return nil, fmt.Errorf("unknown request provider: %d", requestProvider)
 	}
@@ -381,7 +381,7 @@ func (r *Runtime) Signal(signalProvider sfPlugins.SignalProvider, typename strin
 }
 
 func (r *Runtime) Request(requestProvider sfPlugins.RequestProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
-	return r.request(requestProvider, "ingress", "request", typename, r.Domain.GetValidObjectId(id), payload, options, timeout...)
+	return r.request(requestProvider, "ingress", "request", typename, r.Domain.GetValidObjectId(id), payload, options, nil, timeout...)
 }
 
 // ------------------------------------------------------------------------------------------------
