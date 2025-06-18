@@ -8,7 +8,6 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/foliagecp/sdk/statefun/logger"
-	lg "github.com/foliagecp/sdk/statefun/logger"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 )
@@ -22,10 +21,7 @@ func buildNatsData(callerDomain string, callerTypename string, callerID string, 
 	data.SetByPath("caller_typename", easyjson.NewJSON(callerTypename))
 	data.SetByPath("caller_id", easyjson.NewJSON(callerID))
 	if traceCtx != nil {
-		lg.Logf(lg.TraceLevel, "=== Adding trace_context to NATS message: %s", traceCtx.ToString())
 		data.SetByPath("trace_context", *traceCtx)
-	} else {
-		lg.Logf(lg.TraceLevel, "=== No trace_context in NATS message")
 	}
 	if payload != nil {
 		data.SetByPath("payload", *payload)

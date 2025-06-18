@@ -179,7 +179,6 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 			Self:                      sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
 			Signal: func(signalProvider sfPlugins.SignalProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) error {
 				var tc *easyjson.JSON
-
 				if msg.TraceContext != nil {
 					currentTrace := TraceContextFromJSON(msg.TraceContext)
 					if currentTrace != nil {
@@ -187,7 +186,6 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 						tc = newChildTrace.ToJSON()
 					}
 				}
-
 				return ft.runtime.signal(signalProvider, ft.name, id, targetTypename, targetID, j, o, tc)
 			},
 			Request: func(requestProvider sfPlugins.RequestProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
