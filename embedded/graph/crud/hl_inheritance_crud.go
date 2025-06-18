@@ -95,8 +95,8 @@ func TypeRemoveChild(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 /*
 	{
 		"to": string,
-		"from_object_claim_type": string,
-		"to_object_claim_type": string,
+		"from_claim_type": string,
+		"to_claim_type": string,
 		"name": string, // optional, "to" will be used if not defined
 		"body": json
 		"tags": []string
@@ -104,7 +104,7 @@ func TypeRemoveChild(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 create object -> object link
 */
-func CreateObjectsLinkByClaimTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+func CreateObjectsLinkFromClaimedTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -120,8 +120,8 @@ func CreateObjectsLinkByClaimTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.
 		linkName = objectToID
 	}
 
-	fromObjectClaimType := ctx.Payload.GetByPath("from_object_claim_type").AsStringDefault("")
-	toObjectClaimType := ctx.Payload.GetByPath("to_object_claim_type").AsStringDefault("")
+	fromObjectClaimType := ctx.Payload.GetByPath("from_claim_type").AsStringDefault("")
+	toObjectClaimType := ctx.Payload.GetByPath("to_claim_type").AsStringDefault("")
 
 	objectLinkType := isObjectLinkPermittedForClaimedTypes(ctx, selfID, objectToID, fromObjectClaimType, toObjectClaimType)
 	if len(objectLinkType) == 0 {
@@ -152,11 +152,11 @@ func CreateObjectsLinkByClaimTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.
 /*
 	{
 		"to": string,
-		"from_object_claim_type": string,
-		"to_object_claim_type": string
+		"from_claim_type": string,
+		"to_claim_type": string
 	}
 */
-func DeleteObjectsLinkByClaimTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+func DeleteObjectsLinkFromClaimedTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -169,8 +169,8 @@ func DeleteObjectsLinkByClaimTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.
 
 	operationKeysMutexLock(ctx, []string{selfID, objectToID})
 
-	fromObjectClaimType := ctx.Payload.GetByPath("from_object_claim_type").AsStringDefault("")
-	toObjectClaimType := ctx.Payload.GetByPath("to_object_claim_type").AsStringDefault("")
+	fromObjectClaimType := ctx.Payload.GetByPath("from_claim_type").AsStringDefault("")
+	toObjectClaimType := ctx.Payload.GetByPath("to_claim_type").AsStringDefault("")
 
 	objectLinkType := isObjectLinkPermittedForClaimedTypes(ctx, selfID, objectToID, fromObjectClaimType, toObjectClaimType)
 	if len(objectLinkType) == 0 {
