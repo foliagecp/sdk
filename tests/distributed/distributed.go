@@ -164,10 +164,10 @@ func Start() {
 				CreateTestGraph(runtime)
 			}
 			time.Sleep(1 * time.Second)
-			system.MsgOnErrorReturn(runtime.Signal(sfPlugins.JetstreamGlobalSignal, "domains.test", "foo", easyjson.NewJSONObject().GetPtr(), nil, nil))
+			system.MsgOnErrorReturn(runtime.Signal(sfPlugins.JetstreamGlobalSignal, "domains.test", "foo", easyjson.NewJSONObject().GetPtr(), nil))
 
 			time.Sleep(1 * time.Second)
-			system.MsgOnErrorReturn(runtime.Signal(sfPlugins.JetstreamGlobalSignal, "domains.so.test", "foo", easyjson.NewJSONObject().GetPtr(), nil, nil))
+			system.MsgOnErrorReturn(runtime.Signal(sfPlugins.JetstreamGlobalSignal, "domains.so.test", "foo", easyjson.NewJSONObject().GetPtr(), nil))
 		}
 		return nil
 	}
