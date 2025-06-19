@@ -136,6 +136,9 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 		return
 	}
 
+	ft.idKeyMutex.Lock(id)
+	defer ft.idKeyMutex.Unlock(id)
+
 	var msgChannel chan FunctionTypeMsg
 	if value, ok := ft.idHandlersChannel.Load(id); ok {
 		msgChannel = value.(chan FunctionTypeMsg)
@@ -147,6 +150,7 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 
 	select {
 	case msgChannel <- msg:
+		ft.idHandlersLastMsgTime.Store(id, time.Now().UnixNano())
 		ft.sfWorkerPool.Notify()
 	default:
 		ft.TokenRelease()
@@ -158,8 +162,13 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 	id = ft.runtime.Domain.CreateObjectIDWithThisDomain(id, false)
 	ft.idKeyMutex.Lock(id)
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Logf(logger.ErrorLevel, "panic in workerTaskExecutor for %s:%s: %v", ft.name, id, r)
+		}
+		ft.idKeyMutex.Unlock(id)
+	}()
 
-	ft.idHandlersLastMsgTime.Store(id, time.Now().UnixNano())
 	if ft.executor != nil {
 		ft.executor.AddForID(id)
 	}
@@ -201,7 +210,6 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 	}
 
 	ft.handleMsgForID(id, msg, typenameIDContextProcessor)
-	ft.idKeyMutex.Unlock(id)
 }
 
 func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameIDContextProcessor *sfPlugins.StatefunContextProcessor) {
@@ -330,17 +338,25 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 		if lastMsgTime+int64(typenameIDLifetimeMs)*int64(time.Millisecond) < now {
 			ft.idKeyMutex.Lock(id)
 
-			ft.idHandlersLastMsgTime.Delete(id)
-			ft.idHandlersChannel.Delete(id)
-			ft.contextProcessors.Delete(id)
-			if ft.executor != nil {
-				ft.executor.RemoveForID(id)
+			remove := true
+			if chRaw, ok := ft.idHandlersChannel.Load(id); ok {
+				ch := chRaw.(chan FunctionTypeMsg)
+				if len(ch) > 0 {
+					remove = false
+				}
 			}
-
-			ft.prometricsMeasureIdChannels()
-
-			garbageCollected++
-			//lg.Logf(">>>>>>>>>>>>>> Garbage collected handler for %s:%s", ft.name, id)
+			if remove {
+				ft.idHandlersLastMsgTime.Delete(id)
+				ft.idHandlersChannel.Delete(id)
+				ft.contextProcessors.Delete(id)
+				if ft.executor != nil {
+					ft.executor.RemoveForID(id)
+				}
+				ft.prometricsMeasureIdChannels()
+				garbageCollected++
+			} else {
+				handlersRunning++
+			}
 
 			ft.idKeyMutex.Unlock(id)
 		} else {
