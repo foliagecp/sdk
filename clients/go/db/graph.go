@@ -88,6 +88,7 @@ func (gc GraphSyncClient) VerticesLinkUpdate(from, linkName string, tags []strin
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("name", easyjson.NewJSON(linkName))
 	payload.SetByPath("body", body)
+	payload.SetByPath("replace", easyjson.NewJSON(replace))
 	if len(tags) > 0 {
 		payload.SetByPath("tags", easyjson.JSONFromArray(tags))
 	}
