@@ -15,9 +15,9 @@ import (
 	"github.com/foliagecp/sdk/statefun/system"
 )
 
-const (
+/*const (
 	noLinkIdentifierMsg = "link identifier is not defined, or link does not exist"
-)
+)*/
 
 var (
 	validLinkName                    = regexp.MustCompile(`\A[a-zA-Z0-9\/_$#@%+=-]+\z`)

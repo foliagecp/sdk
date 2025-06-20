@@ -12,6 +12,7 @@ import (
 	"github.com/foliagecp/sdk/clients/go/db"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
+	"github.com/foliagecp/sdk/statefun/system"
 
 	lg "github.com/foliagecp/sdk/statefun/logger"
 )
@@ -255,10 +256,10 @@ func LLAPIImportGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statef
 		for _, n := range graph.Nodes {
 			uuid := ctx.Domain.CreateObjectIDWithHubDomain(n.Id, true)
 
-			dbc.Graph.VertexDelete(uuid)
+			system.MsgOnErrorReturn(dbc.Graph.VertexDelete(uuid))
 
 			body, _ := ExtractBodyAsJSON(n.Attributes)
-			dbc.Graph.VertexCreate(uuid, body)
+			system.MsgOnErrorReturn(dbc.Graph.VertexCreate(uuid, body))
 		}
 		/*for _, n := range graph.Nodes {
 			uuid := ctx.Domain.CreateObjectIDWithHubDomain(n.Id, true)
@@ -274,7 +275,7 @@ func LLAPIImportGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statef
 			tp, name, tags := ExtractEdgeTypeAndNameAndTags(e.Attributes)
 			body, _ := ExtractBodyAsJSON(e.Attributes)
 
-			dbc.Graph.VerticesLinkCreate(uuidFrom, uuidTo, name, tp, tags, body)
+			system.MsgOnErrorReturn(dbc.Graph.VerticesLinkCreate(uuidFrom, uuidTo, name, tp, tags, body))
 		}
 		/*
 			for _, e := range graph.Edges {

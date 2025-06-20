@@ -113,7 +113,9 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 			}
 		} else {
 			r.config.activeRevID = revID
-			defer KeyMutexUnlock(ctx, r, system.GetHashStr(RuntimeName), revID)
+			defer func() {
+				system.MsgOnErrorReturn(KeyMutexUnlock(ctx, r, system.GetHashStr(RuntimeName), revID))
+			}()
 		}
 	} else {
 		r.config.isActiveInstance = true
@@ -324,7 +326,7 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 	//release all functions
 	releaseAllLocks := func(ctx context.Context, runtime *Runtime, revisions map[string]uint64) {
 		for ftName, revID := range revisions {
-			KeyMutexUnlock(ctx, runtime, system.GetHashStr(ftName), revID)
+			system.MsgOnErrorReturn(KeyMutexUnlock(ctx, runtime, system.GetHashStr(ftName), revID))
 		}
 	}
 	defer releaseAllLocks(ctx, r, revisions)
