@@ -157,8 +157,8 @@ Use SDK To develop applications with Foliage:
 go get github.com/foliagecp/sdk
 ```
 
-- Learn to work with the graph [here](./docs/graph_crud.md)
-- Learn to work with the object object [here](./docs/object_crud.md)
+- Learn to work with the graph model [here](./docs/graph_crud.md)
+- Learn to work with the object model [here](./docs/object_crud.md)
 - Explore Foliage's JSON Path Graph Query Language (JPGQL) [here](./docs/jpgql.md)
 - See how to visually debug your graph [here](./docs/graph_debug.md)
 - Find out how to write your own application [here](./docs/how_to_write_an_application.md)
