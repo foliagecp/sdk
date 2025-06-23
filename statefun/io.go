@@ -12,6 +12,10 @@ import (
 	"github.com/foliagecp/sdk/statefun/system"
 )
 
+const (
+	ShadowObjectCallParamOptionPath string = "shadow_object.can_receive"
+)
+
 func buildNatsData(callerDomain string, callerTypename string, callerID string, payload *easyjson.JSON, options *easyjson.JSON) []byte {
 	data := easyjson.NewJSONObject()
 	data.SetByPath("caller_typename", easyjson.NewJSON(callerTypename))
@@ -128,12 +132,16 @@ func (r *Runtime) functionTypeIsReadyForGoLangCommunication(targetFunctionTypeNa
 }
 
 func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) error {
+	shadowObjectCanBeReceiver := false
+	if options != nil {
+		shadowObjectCanBeReceiver = options.GetByPath(ShadowObjectCallParamOptionPath).AsBoolDefault(false)
+	}
 	jetstreamGlobalSignal := func() error {
 		go func() {
 			system.GlobalPrometrics.GetRoutinesCounter().Started("ingress-jetstreamGlobalSignal-gofunc")
 			defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("ingress-jetstreamGlobalSignal-gofunc")
 
-			if r.Domain.IsShadowObject(targetID) {
+			if !shadowObjectCanBeReceiver && r.Domain.IsShadowObject(targetID) {
 				system.MsgOnErrorReturn(r.signalShadowObject(callerTypename, callerID, targetTypename, targetID, payload, options))
 			} else {
 				// If publishing signal to the same domain
@@ -182,10 +190,10 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 					if ack {
 						ackChannel <- struct{}{}
 					} else {
-						functionMsg.RefusalCallback()
+						functionMsg.RefusalCallback(false)
 					}
 				}
-				functionMsg.RefusalCallback = func() {
+				functionMsg.RefusalCallback = func(_ bool) {
 					logger.Logf(logger.WarnLevel, "goLangLocalSignal: receiver typename=%s called on id=%s refused from msg, for safety reasons msg is being redirected to NATS Jetstream", targetTypename, targetID)
 					system.MsgOnErrorReturn(r.signal(sfPlugins.JetstreamGlobalSignal, callerTypename, callerID, targetTypename, targetID, payload, options))
 					nackChannel <- struct{}{}
@@ -243,6 +251,10 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 }
 
 func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
+	shadowObjectCanBeReceiver := false
+	if options != nil {
+		shadowObjectCanBeReceiver = options.GetByPath(ShadowObjectCallParamOptionPath).AsBoolDefault(false)
+	}
 	requestTimeoutDuration := time.Duration(r.config.requestTimeoutSec) * time.Second
 	if len(timeout) > 0 {
 		requestTimeoutDuration = timeout[0]
@@ -253,7 +265,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 			err  error
 		)
 
-		if r.Domain.IsShadowObject(targetID) {
+		if !shadowObjectCanBeReceiver && r.Domain.IsShadowObject(targetID) {
 			resp, err = r.requestShadowObject(callerTypename, callerID, targetTypename, targetID, payload, options)
 		} else {
 			resp, err = r.nc.Request(
@@ -275,7 +287,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 		switch r.functionTypeIsReadyForGoLangCommunication(targetTypename, true, targetID) {
 		case 0:
 			targetFT := r.registeredFunctionTypes[targetTypename]
-			resultJSONChannel := make(chan *easyjson.JSON)
+			resultJSONChannel := make(chan *easyjson.JSON, 1)
 
 			// Do not send original data, prevents same data concurrent access from different functions
 			var payloadCopy *easyjson.JSON = nil
@@ -293,14 +305,37 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 				Options: optionsCopy,
 			}
 
-			functionMsg.RequestCallback = func(data *easyjson.JSON) {
-				resultJSONChannel <- data.Clone().GetPtr() // Clone().GetPtr() prevents data to contain custom Golang types
+			/*functionMsg.RequestCallback = func(data *easyjson.JSON) {
+				go func() {
+					resultJSONChannel <- data.Clone().GetPtr() // Clone().GetPtr() prevents data to contain custom Golang types
+				}()
 			}
-			functionMsg.RefusalCallback = func() {
+			functionMsg.RefusalCallback = func(_ bool) {
+				go func() {
+					close(resultJSONChannel)
+				}()
+			}
+
+			targetFT.prometricsMeasureMsgDeliver(GolangReq)
+			targetFT.sendMsg(targetID, functionMsg)*/
+
+			functionMsg.RequestCallback = func(data *easyjson.JSON) {
+				select {
+				case resultJSONChannel <- data.Clone().GetPtr():
+				default: // channel is ether closed or already has a value
+				}
+			}
+			functionMsg.RefusalCallback = func(_ bool) {
+				defer func() {
+					if r := recover(); r != nil { // in case channel is already closed
+						logger.Logf(logger.ErrorLevel, "panic in request functionMsg.RefusalCallback close(resultJSONChannel) caller:%s:%s target:%s:%s: %v", callerTypename, callerID, targetTypename, targetID, r)
+					}
+				}()
 				close(resultJSONChannel)
 			}
 
-			targetFT.sendMsg(targetID, functionMsg)
+			targetFT.prometricsMeasureMsgDeliver(GolangReq)
+			targetFT.workerTaskExecutor(targetID, functionMsg)
 
 			select {
 			case resultJSON, ok := <-resultJSONChannel:
@@ -329,7 +364,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 		return goLangLocalRequest()
 	case sfPlugins.AutoRequestSelect:
 		selection := sfPlugins.NatsCoreGlobalRequest
-		if !r.Domain.IsShadowObject(targetID) {
+		if shadowObjectCanBeReceiver || !r.Domain.IsShadowObject(targetID) {
 			if r.functionTypeIsReadyForGoLangCommunication(targetTypename, true, targetID) == 0 {
 				selection = sfPlugins.GolangLocalRequest
 			}
@@ -341,11 +376,11 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 }
 
 func (r *Runtime) Signal(signalProvider sfPlugins.SignalProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) error {
-	return r.signal(signalProvider, "ingress", "signal", typename, id, payload, options)
+	return r.signal(signalProvider, "ingress", "signal", typename, r.Domain.GetValidObjectId(id), payload, options)
 }
 
 func (r *Runtime) Request(requestProvider sfPlugins.RequestProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
-	return r.request(requestProvider, "ingress", "request", typename, id, payload, options, timeout...)
+	return r.request(requestProvider, "ingress", "request", typename, r.Domain.GetValidObjectId(id), payload, options, timeout...)
 }
 
 // ------------------------------------------------------------------------------------------------

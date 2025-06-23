@@ -16,7 +16,8 @@ import (
 
 func AddRequestSourceNatsCore(ft *FunctionType) error {
 	_, err := ft.runtime.nc.Subscribe(RequestPrefix+"."+ft.runtime.Domain.name+"."+ft.name+".*", func(msg *nats.Msg) {
-		system.MsgOnErrorReturn(handleNatsMsg(ft, msg, true, nil))
+		ft.prometricsMeasureMsgDeliver(NatsReq)
+		system.MsgOnErrorReturn(handleNatsMsg(ft, msg, true))
 	})
 
 	if err != nil {
@@ -48,28 +49,24 @@ func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType) error {
 			FilterSubject:  ft.subject,
 			AckPolicy:      nats.AckExplicitPolicy,
 			AckWait:        time.Duration(ft.config.msgAckWaitMs) * time.Millisecond, // AckWait should be long due to async message Ack
+			MaxDeliver:     ft.config.msgMaxDeliver,
+			//MaxAckPending:  ft.TokenCapacity(), // Cannot do this way cause messages for some specific ID can DDoS this consumer and messages for another ID will not be processed without delaying
 		})
 		system.MsgOnErrorReturn(err)
 	}
-	// --------------------------------------------------------------
-
-	// For auto message acking msg ----------------------------------
-	msgAcker := func(msgAckChannel chan *nats.Msg) {
-		system.GlobalPrometrics.GetRoutinesCounter().Started("AddSignalSourceJetstreamQueuePushConsumer-msgAcker")
-		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("AddSignalSourceJetstreamQueuePushConsumer-msgAcker")
-		for msg := range msgAckChannel {
-			system.MsgOnErrorReturn(msg.Ack())
-		}
-	}
-	msgAckChannel := make(chan *nats.Msg, ft.config.msgAckChannelSize)
-	go msgAcker(msgAckChannel)
 	// --------------------------------------------------------------
 
 	_, err := ft.runtime.js.QueueSubscribe(
 		ft.subject,
 		consumerGroup,
 		func(msg *nats.Msg) {
-			system.MsgOnErrorReturn(handleNatsMsg(ft, msg, false, msgAckChannel))
+			ft.prometricsMeasureMsgDeliver(NatsPub)
+			if meta, err := msg.Metadata(); err == nil {
+				if meta.NumDelivered > 1 {
+					ft.prometricsMeasureMsgDeliver(NatsPubRedelivery)
+				}
+			}
+			system.MsgOnErrorReturn(handleNatsMsg(ft, msg, false))
 		},
 		nats.Bind(ft.getStreamName(), consumerName),
 		nats.ManualAck(),
@@ -81,7 +78,7 @@ func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType) error {
 	return nil
 }
 
-func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool, msgAckChannel chan *nats.Msg) (err error) {
+func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool) (err error) {
 	tokens := strings.Split(msg.Subject, ".")
 	id := tokens[len(tokens)-1]
 
@@ -108,8 +105,10 @@ func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool, msgAckCha
 	}
 
 	caller := sfPlugins.StatefunAddress{}
-	if data.GetByPath("caller_typename").IsString() && data.GetByPath("caller_id").IsString() {
+	if data.GetByPath("caller_typename").IsString() {
 		caller.Typename, _ = data.GetByPath("caller_typename").AsString()
+	}
+	if data.GetByPath("caller_id").IsString() {
 		caller.ID, _ = data.GetByPath("caller_id").AsString()
 	}
 
@@ -121,23 +120,33 @@ func handleNatsMsg(ft *FunctionType, msg *nats.Msg, requestReply bool, msgAckCha
 	}
 	if requestReply {
 		functionMsg.RequestCallback = func(data *easyjson.JSON) {
-			system.MsgOnErrorReturn(msg.Respond(data.ToBytes()))
+			go func() {
+				system.MsgOnErrorReturn(msg.Respond(data.ToBytes()))
+			}()
 		}
-		functionMsg.RefusalCallback = func() {
-			system.MsgOnErrorReturn(msg.Respond([]byte{}))
+		functionMsg.RefusalCallback = func(_ bool) {
+			go func() {
+				system.MsgOnErrorReturn(msg.Respond([]byte{}))
+			}()
 		}
 	} else {
 		functionMsg.AckCallback = func(ack bool) {
-			if ack {
-				if msgAckChannel != nil {
-					msgAckChannel <- msg
+			go func() {
+				if ack {
+					system.MsgOnErrorReturn(msg.Ack())
+				} else {
+					system.MsgOnErrorReturn(msg.Nak())
 				}
-			} else {
-				system.MsgOnErrorReturn(msg.Nak())
-			}
+			}()
 		}
-		functionMsg.RefusalCallback = func() {
-			system.MsgOnErrorReturn(msg.Nak())
+		functionMsg.RefusalCallback = func(skipForever bool) {
+			go func() {
+				if skipForever {
+					system.MsgOnErrorReturn(msg.Ack())
+				} else {
+					system.MsgOnErrorReturn(msg.Nak())
+				}
+			}()
 		}
 	}
 	// ------------------------------------------------

@@ -25,7 +25,7 @@ func executeTriggersFromLLOpStack(ctx *sfPlugins.StatefunContextProcessor, opSta
 							if j == 2 && vId == deletedObjectId {
 								objectType = deletedObjectType
 							} else {
-								objectType = findObjectType(ctx, vId)
+								objectType, _ = findObjectType(ctx, vId)
 							}
 							if len(objectType) > 0 {
 								var oldBody *easyjson.JSON = nil
@@ -51,12 +51,12 @@ func executeTriggersFromLLOpStack(ctx *sfPlugins.StatefunContextProcessor, opSta
 						if j == 2 && fromVId == deletedObjectId {
 							fromObjectType = deletedObjectType
 						} else {
-							fromObjectType = findObjectType(ctx, fromVId)
+							fromObjectType, _ = findObjectType(ctx, fromVId)
 						}
 						if j == 2 && toVId == deletedObjectId {
 							toObjectType = deletedObjectType
 						} else {
-							toObjectType = findObjectType(ctx, toVId)
+							toObjectType, _ = findObjectType(ctx, toVId)
 						}
 
 						if len(lType) > 0 && len(fromVId) > 0 && len(toVId) > 0 && len(fromObjectType) > 0 && len(toObjectType) > 0 {

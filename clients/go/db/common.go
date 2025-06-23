@@ -63,3 +63,8 @@ func getRequestFunc(nc *nats.Conn, NatsRequestTimeoutSec int, HubDomainName stri
 		return nil, err
 	}
 }
+
+func seqFree(name string) string {
+	//return name + "===" + system.GetUniqueStrID()
+	return name
+}

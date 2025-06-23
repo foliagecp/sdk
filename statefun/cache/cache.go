@@ -1,5 +1,3 @@
-
-
 // Foliage statefun cache package.
 // Provides cache system that lives between stateful functions and NATS key/value
 package cache
@@ -176,7 +174,6 @@ func (csv *StoreValue) collectGarbage() {
 	if csv.parent != nil && canBeDeletedFromParent {
 		csv.parent.Lock("collectGarbageParent")
 		delete(csv.parent.store, csv.keyInParent)
-		//lg.Logln("____________ PURGING " + fmt.Sprintln(csv.keyInParent))
 		csv.parent.Unlock("collectGarbageParent")
 
 		go csv.parent.collectGarbage()
@@ -462,6 +459,8 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 						cacheStoreValueStack = append(cacheStoreValueStack, value.(*StoreValue))
 						suffixPathsStack = append(suffixPathsStack, newSuffix)
 						depthsStack = append(depthsStack, currentDepth+1)
+
+						time.Sleep(time.Duration(cacheConfig.lazyWriterValueProcessDelayMkS) * time.Microsecond)
 						return true
 					})
 
@@ -493,7 +492,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 					gaugeVec.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(cs.valuesInCache))
 				}
 
-				time.Sleep(100 * time.Millisecond) // Prevents too many locks and prevents too much processor time consumption
+				time.Sleep(time.Duration(cacheConfig.lazyWriterRepeatDelayMkS) * time.Microsecond) // Prevents too many locks and prevents too much processor time consumption
 			}
 		}
 	}

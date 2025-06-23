@@ -1,78 +1,278 @@
 # Graph CRUD
 
-1. Subscribe and listen for result: 
-```sh
-nats sub -s nats://nats:foliage@nats:4222 functions.graph.query.QUERYID
-```
-2. Call one of the [functions](#functions)
-3. To log object with all its links use: `functions.graph.api.object.debug.print.<object_id>`, example:
-```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.object.debug.print.root "{}"
-```
-4. Inspect nats KV store via `io` container: 
-```sh
-nats -s nats://nats:foliage@nats:4222 kv ls -v --display-value common_kv_store
-```
+This document describes the low-level CRUD LLAPI functions for vertices and links in the Foliage graph store.
+
+## Setup and Debug
+
+1. **Subscribe to results:**
+
+   ```sh
+   nats sub -s nats://nats:foliage@nats:4222 functions.graph.query.QUERYID
+   ```
+2. **Invoke one of the functions** (see [Functions](#functions)).
+3. **Log an object with all its links:**
+
+   ```sh
+   nats pub --count=1 -s nats://nats:foliage@nats:4222 signal.<domain>.functions.graph.api.object.debug.print.<object_id> "{}"
+   ```
+4. **Inspect the common KV store:**
+
+   ```sh
+   nats -s nats://nats:foliage@nats:4222 kv ls -v --display-value common_kv_store
+   ```
+
+---
 
 ## Functions
 
-- [functions.graph.api.vertex.create](#functionsgraphllapiobjectcreateobject_id) <!-- omit in toc -->
-- [functions.graph.api.vertex.update](#functionsgraphllapiobjectupdateobject_id)
-- [functions.graph.api.vertex.delete](#functionsgraphllapiobjectdeleteobject_id)
-- [functions.graph.api.link.create](#functionsgraphllapilinkcreateobject_id)
-- [functions.graph.api.link.update](#functionsgraphllapilinkupdateobject_id)
-- [functions.graph.api.link.delete](#functionsgraphllapilinkdeleteobject_id)
+* [Vertex Create](#functionsgraphapivertexcreateobject_id)
+* [Vertex Update](#functionsgraphapivertexupdateobject_id)
+* [Vertex Delete](#functionsgraphapivertexdeleteobject_id)
+* [Vertex Read](#functionsgraphapivertexreadobject_id)
+* [Link Create](#functionsgraphapilinkcreateobject_id)
+* [Link Update](#functionsgraphapilinkupdateobject_id)
+* [Link Delete](#functionsgraphapilinkdeleteobject_id)
+* [Link Read](#functionsgraphapilinkreadobject_id)
 
-### functions.graph.api.vertex.create.<object_id>
+---
 
-[Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPIVertexCreate)
+### functions.graph.api.vertex.create.\<object\_id>
 
-Example:  
-```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.vertex.create.root "{\"payload\":{\"query_id\":\"QUERYID\", \"body\":{\"name\":\"root\"}}}"
+**Function:** LLAPIVertexCreate
+
+**Request:**
+
+```json
+{
+  "payload": {
+    "query_id": "<string>",   // required
+    "body": { /* optional JSON object */ }
+  },
+  "options": {
+    "op_stack": <bool>         // optional
+  }
+}
 ```
 
-### functions.graph.api.vertex.update.<object_id>
+**Reply:**
 
-[Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPIVertexUpdate)
-
-Example:  
-```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.vertex.update.root "{\"payload\":{\"query_id\":\"QUERYID\", \"body\":{\"label\":\"some\"}}}"
+```json
+{
+  "payload": {
+    "status": "<string>",
+    "details": "<string>",
+    "data": {
+      "op_stack": [ /* optional array */ ]
+    }
+  }
+}
 ```
 
-### functions.graph.api.vertex.delete.<object_id>
+---
 
-[Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPIVertexDelete)
+### functions.graph.api.vertex.update.\<object\_id>
 
-Example:  
-```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.vertex.delete.root "{\"payload\":{\"query_id\":\"QUERYID\"}}"
+**Function:** LLAPIVertexUpdate
+
+**Request:**
+
+```json
+{
+  "payload": {
+    "query_id": "<string>",       // required
+    "body": { /* optional JSON object */ },
+    "upsert": <bool>,               // optional, default false
+    "replace": <bool>               // optional, default false
+  },
+  "options": {
+    "op_stack": <bool>             // optional
+  }
+}
 ```
 
-### functions.graph.api.link.create.<object_id>
+**Behavior:**
 
-[Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPILinkCreate)
+* If `upsert=true`, creates vertex if missing.
+* If `replace=true`, replaces the full body; otherwise merges.
 
-Example:  
-```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.link.create.root "{\"payload\":{\"query_id\":\"QUERYID\", \"to\":\"a\", \"type\": \"type1\", \"body\":{\"tags\":[\"t1\", \"t2\"]}}}"
+---
+
+### functions.graph.api.vertex.delete.\<object\_id>
+
+**Function:** LLAPIVertexDelete
+
+**Request:**
+
+```json
+{
+  "payload": {
+    "query_id": "<string>"     // required
+  },
+  "options": {
+    "op_stack": <bool>           // optional
+  }
+}
 ```
 
-### functions.graph.api.link.update.<object_id>
+**Behavior:**
+Deletes the vertex and all its incoming and outgoing links.
 
-[Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPILinkUpdate)
+---
 
-Example:  
-```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.link.update.root "{\"payload\":{\"query_id\":\"QUERYID\", \"to\":\"a\", \"type\": \"type1\", \"body\":{\"tags\":[\"t4\"]}}}"
+### functions.graph.api.vertex.read.\<object\_id>
+
+**Function:** LLAPIVertexRead
+
+**Request:**
+
+```json
+{
+  "payload": {
+    "query_id": "<string>",   // required
+    "details": <bool>           // optional, default false
+  },
+  "options": {
+    "op_stack": <bool>         // optional
+  }
+}
 ```
 
-### functions.graph.api.link.delete.<object_id>
+**Response Data:**
 
-[Description](https://pkg.go.dev/github.com/foliagecp/sdk/embedded/graph/crud/#LLAPILinkDelete)
+* `body`: the vertex’s JSON body
+* if `details=true`, also:
 
-Example:  
-```sh
-nats pub --count=1 -s nats://nats:foliage@nats:4222 functions.graph.api.link.delete.root "{\"payload\":{\"query_id\":\"QUERYID\", \"to\":\"a\", \"type\": \"type1\"}}"
+  * `links.out.names`: array of outgoing link names
+  * `links.out.types`: array of outgoing link types
+  * `links.out.ids`: array of target vertex IDs
+  * `links.in`: array of `{ from: <vertex_id>, name: <link_name> }`
+
+---
+
+### functions.graph.api.link.create.\<object\_id>
+
+**Function:** LLAPILinkCreate
+
+**Request (outgoing):**
+
+```json
+{
+  "payload": {
+    "query_id": "<string>",   // required
+    "to": "<string>",         // required: target vertex ID
+    "name": "<string>",       // required: unique among this vertex’s out-links
+    "type": "<string>",       // required: type label
+    "tags": ["<string>"],     // optional: any list of tags
+    "body": { /* optional JSON */ }
+  },
+  "options": {
+    "op_stack": <bool>         // optional
+  }
+}
 ```
+
+**Request (incoming self-request):**
+
+```json
+{
+  "payload": {
+    "in_name": "<string>"      // required: link name to register on this vertex
+  },
+  "options": { "op_stack": <bool> }
+}
+```
+
+---
+
+### functions.graph.api.link.update.\<object\_id>
+
+**Function:** LLAPILinkUpdate
+
+**Request:**
+
+```json
+{
+  "payload": {
+    "query_id": "<string>",     // required
+    // identify link via either:
+    "name": "<string>",         // optional if to+type are provided
+    "to": "<string>",           // optional if name provided
+    "type": "<string>",         // optional if name provided
+    "tags": ["<string>"],       // optional: tags to merge/replace
+    "body": { /* optional JSON */ },
+    "upsert": <bool>,             // optional, default false
+    "replace": <bool>             // optional, default false
+  },
+  "options": { "op_stack": <bool> }
+}
+```
+
+**Behavior:**
+
+* If `link` not found and `upsert=true`, falls back to create.
+* If `replace=true`, clears existing tag/type indices before reindexing.
+
+---
+
+### functions.graph.api.link.delete.\<object\_id>
+
+**Function:** LLAPILinkDelete
+
+**Request (outgoing):**
+
+```json
+{
+  "payload": {
+    "query_id": "<string>",     // required for initial caller
+    "name": "<string>"          // required: out-link name
+    // OR if name omitted:
+    "to": "<string>",           // required if name not provided
+    "type": "<string>"          // required if name not provided
+  },
+  "options": { "op_stack": <bool> }
+}
+```
+
+**Request (incoming self-request):**
+
+```json
+{
+  "payload": {
+    "in_name": "<string>"        // required: in-link name
+  },
+  "options": { "op_stack": <bool> }
+}
+```
+
+**Behavior:**
+
+* Removes link body, target, type, and all indices.
+
+---
+
+### functions.graph.api.link.read.\<object\_id>
+
+**Function:** LLAPILinkRead
+
+**Request:**
+
+```json
+{
+  "payload": {
+    "query_id": "<string>",     // required
+    "name": "<string>",         // required: out-link name
+    "details": <bool>             // optional, default false
+  },
+  "options": { "op_stack": <bool> }
+}
+```
+
+**Response Data:**
+
+* `body`: link’s JSON body
+* if `details=true`, also:
+
+  * `name`, `type`, `from`, `to`
+  * `tags`: array of tag strings
+
+---

@@ -2,9 +2,11 @@ package crud
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/foliagecp/easyjson"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
+	"github.com/foliagecp/sdk/statefun/system"
 )
 
 func getOpStackFromOptions(options *easyjson.JSON) *easyjson.JSON {
@@ -78,19 +80,112 @@ func resultWithOpStack(existingResult *easyjson.JSON, opStack *easyjson.JSON) ea
 	}
 }
 
-func getLinkNameFromSpecifiedIdentifier(ctx *sfPlugins.StatefunContextProcessor) (string, bool) {
+func getFullLinkInfoFromSpecifiedIdentifier(ctx *sfPlugins.StatefunContextProcessor) (linkType, linkName, toId string, linkExists bool) {
+	selfID := getOriginalID(ctx.Self.ID)
 	if linkName, ok := ctx.Payload.GetByPath("name").AsString(); ok {
-		return linkName, true
+		linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, selfID, linkName))
+		if err != nil {
+			return "", "", "", false
+		}
+
+		linkTargetStr := string(linkTargetBytes)
+		linkTargetTokens := strings.Split(linkTargetStr, ".")
+		linkType := linkTargetTokens[0]
+		toId := linkTargetTokens[1]
+
+		return linkType, linkName, toId, true
 	} else {
 		if toVertexId, ok := ctx.Payload.GetByPath("to").AsString(); ok {
 			toVertexId = ctx.Domain.CreateObjectIDWithThisDomain(toVertexId, false)
 			if lt, ok := ctx.Payload.GetByPath("type").AsString(); ok {
-				linkNameBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+LinkKeySuff2Pattern, ctx.Self.ID, lt, toVertexId))
+				linkNameBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfID, lt, toVertexId))
 				if err == nil {
-					return string(linkNameBytes), true
+					return lt, string(linkNameBytes), toVertexId, true
 				}
 			}
 		}
 	}
-	return "", false
+	return "", "", "", false
+}
+
+func indexRemoveVertexBody(ctx *sfPlugins.StatefunContextProcessor) {
+	selfID := getOriginalID(ctx.Self.ID)
+	// Remove all indices -----------------------------
+	indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(VertexBodyValueIndexPrefPattern+KeySuff1Pattern, selfID, ">"))
+	for _, indexKey := range indexKeys {
+		ctx.Domain.Cache().DeleteValue(indexKey, true, -1, "")
+	}
+	// ------------------------------------------------
+}
+
+func indexVertexBody(ctx *sfPlugins.StatefunContextProcessor, vertexBody easyjson.JSON, opTime int64, reindex bool) {
+	selfID := getOriginalID(ctx.Self.ID)
+	if reindex {
+		indexRemoveVertexBody(ctx)
+	}
+	// Index body keys ------------------------------------
+	for _, bodyKey := range vertexBody.ObjectKeys() {
+		value := vertexBody.GetByPath(bodyKey)
+		bytesVal := []byte{}
+
+		typeStr := ""
+		if value.IsBool() {
+			typeStr = "b"
+			bytesVal = system.BoolToBytes(value.AsBoolDefault(false))
+		}
+		if value.IsNumeric() {
+			typeStr = "n"
+			bytesVal = system.Float64ToBytes(value.AsNumericDefault(0))
+		}
+		if value.IsString() {
+			typeStr = "s"
+			bytesVal = []byte(value.AsStringDefault(""))
+		}
+
+		if len(bytesVal) > 0 {
+			ctx.Domain.Cache().SetValue(fmt.Sprintf(VertexBodyValueIndexPrefPattern+KeySuff2Pattern, selfID, typeStr, bodyKey), bytesVal, true, opTime, "")
+		}
+	}
+	// ----------------------------------------------------
+}
+
+func indexRemoveVertexLinkBody(ctx *sfPlugins.StatefunContextProcessor, linkName string) {
+	selfID := getOriginalID(ctx.Self.ID)
+	// Remove all indices -----------------------------
+	indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(LinkBodyValueIndexPrefPattern+KeySuff2Pattern, selfID, linkName, ">"))
+	for _, indexKey := range indexKeys {
+		ctx.Domain.Cache().DeleteValue(indexKey, true, -1, "")
+	}
+	// ------------------------------------------------
+}
+
+func indexVertexLinkBody(ctx *sfPlugins.StatefunContextProcessor, linkName string, linkBody easyjson.JSON, opTime int64, reindex bool) {
+	selfID := getOriginalID(ctx.Self.ID)
+	if reindex {
+		indexRemoveVertexLinkBody(ctx, linkName)
+	}
+	// Index body keys ------------------------------------
+	for _, bodyKey := range linkBody.ObjectKeys() {
+		value := linkBody.GetByPath(bodyKey)
+		bytesVal := []byte{}
+
+		typeStr := ""
+		if value.IsBool() {
+			typeStr = "b"
+			bytesVal = system.BoolToBytes(value.AsBoolDefault(false))
+		}
+		if value.IsNumeric() {
+			typeStr = "n"
+			bytesVal = system.Float64ToBytes(value.AsNumericDefault(0))
+		}
+		if value.IsString() {
+			typeStr = "s"
+			bytesVal = []byte(value.AsStringDefault(""))
+		}
+
+		if len(bytesVal) > 0 {
+			ctx.Domain.Cache().SetValue(fmt.Sprintf(LinkBodyValueIndexPrefPattern+KeySuff3Pattern, selfID, linkName, typeStr, bodyKey), bytesVal, true, opTime, "")
+		}
+	}
+	// ----------------------------------------------------
 }

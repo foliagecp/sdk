@@ -13,6 +13,7 @@ import (
 
 	"github.com/foliagecp/sdk/clients/go/db"
 	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
+	"github.com/foliagecp/sdk/embedded/graph/fpl"
 	"github.com/foliagecp/sdk/embedded/graph/graphql"
 	"github.com/foliagecp/sdk/embedded/graph/search"
 	lg "github.com/foliagecp/sdk/statefun/logger"
@@ -29,6 +30,8 @@ import (
 var (
 	// NatsURL - nats server url
 	NatsURL string = system.GetEnvMustProceed("NATS_URL", "nats://nats:foliage@nats:4222")
+	// TLS flag
+	EnableTLS = system.GetEnvMustProceed("ENABLE_TLS", false)
 	// MasterFunctionContextIncrement - does the master stateful function do the increment operation on each call in its context
 	MasterFunctionContextIncrement bool = system.GetEnvMustProceed("MASTER_FUNC_CONTEXT_INCREMENT", true)
 	// MasterFunctionContextIncrementOption - Default increment value
@@ -65,15 +68,15 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefun
 
 	if MasterFunctionLogs {
 		lg.Logf(lg.DebugLevel, "-------> %s:%s", ctx.Self.Typename, ctx.Self.ID)
-		lg.Logln(lg.DebugLevel, "== Payload:", ctx.Payload.ToString())
-		lg.Logln(lg.DebugLevel, "== Context:", functionContext.ToString())
+		lg.Logln(lg.DebugLevel, "== Payload: %s", ctx.Payload.ToString())
+		lg.Logln(lg.DebugLevel, "== Context: %s", functionContext.ToString())
 	}
 
 	var objectContext *easyjson.JSON
 	if MasterFunctionObjectContextProcess {
 		objectContext = ctx.GetObjectContext()
 		if MasterFunctionLogs {
-			lg.Logln(lg.DebugLevel, "== Object context:", objectContext.ToString())
+			lg.Logln(lg.DebugLevel, "== Object context: %s", objectContext.ToString())
 		}
 	}
 
@@ -136,6 +139,7 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	graphCRUD.RegisterAllFunctionTypes(runtime)
 	graphDebug.RegisterAllFunctionTypes(runtime)
 	jpgql.RegisterAllFunctionTypes(runtime)
+	fpl.RegisterAllFunctionTypes(runtime)
 	search.RegisterAllFunctionTypes(runtime)
 }
 
@@ -199,12 +203,17 @@ func Start() {
 		b.SetByPath("f2", easyjson.NewJSON(119))
 		system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("test3", "typeb", b))
 
+		dbClient.CMDB.ShadowObjectCanBeRecevier = true
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeUpdate("shadow-object", body, true, true))
+		system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("otherhub#stest1", "shadow-object", b))
+		dbClient.CMDB.ShadowObjectCanBeRecevier = false
+
 		fmt.Println("Starting GraphQL")
 		graphql.StartGraphqlServer("8080", &dbClient)
 		return nil
 	}
 
-	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "basic").UseJSDomainAsHubDomainName()); err == nil {
+	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "basic").UseJSDomainAsHubDomainName().SetTLS(EnableTLS)); err == nil {
 		RegisterFunctionTypes(runtime)
 		if TriggersTest {
 			registerTriggerFunctions(runtime)

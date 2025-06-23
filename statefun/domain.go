@@ -33,9 +33,10 @@ const (
 
 	streamPrefix = "$JS.%s.API"
 
-	hubEventStreamName      = "hub_events"
-	domainIngressStreamName = "domain_ingress"
-	domainEgressStreamName  = "domain_egress"
+	hubEventStreamName        = "hub_events"
+	domainIngressStreamName   = "domain_ingress"
+	domainEgressStreamName    = "domain_egress"
+	deadLetterQueueStreamName = "domain_dlq"
 
 	routerConsumerMaxAckWaitMs           = 2000
 	lostConnectionSingleMsgProcessTimeMs = 700
@@ -49,11 +50,12 @@ type Domain struct {
 	weakClusterDomainsMutex sync.Mutex
 	nc                      *nats.Conn
 	js                      nats.JetStreamContext
+	natsJsReplicasCount     int
 	kv                      nats.KeyValue
 	cache                   *cache.Store
 }
 
-func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredHubDomainName string) (dm *Domain, e error) {
+func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredHubDomainName string, natsJsReplicasCount int) (dm *Domain, e error) {
 	accInfo, err := js.AccountInfo()
 	if err != nil {
 		return nil, err
@@ -75,11 +77,12 @@ func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredHubDomainName str
 	}
 
 	domain := &Domain{
-		hubDomainName:      hubDomainName,
-		name:               thisDomainName,
-		weakClusterDomains: map[string]struct{}{thisDomainName: {}},
-		nc:                 nc,
-		js:                 js,
+		hubDomainName:       hubDomainName,
+		name:                thisDomainName,
+		weakClusterDomains:  map[string]struct{}{thisDomainName: {}},
+		nc:                  nc,
+		js:                  js,
+		natsJsReplicasCount: natsJsReplicasCount,
 	}
 
 	return domain, nil
@@ -120,6 +123,10 @@ func (dm *Domain) SetWeakClusterDomains(weakClusterDomains []string) {
 	}
 }
 
+func (dm *Domain) CreateCustomShadowId(storeDomain, targetDomain, uuid string) string {
+	return storeDomain + ObjectIDDomainSeparator + targetDomain + ObjectIDWeakClusteringDomainSeparator + uuid
+}
+
 /*
  * otherDomainName/ObjectId -> thisDomainName/otherDomainName#ObjectId
  * thisDomainName/ObjectId -> thisDomainName/ObjectId
@@ -157,6 +164,30 @@ func (dm *Domain) GetShadowObjectDomainAndID(shadowObjectId string) (domainName,
 	objectIdWithoutDomain = tokens[1]
 
 	return
+}
+
+/*
+* thisDomainName/otherDomainName#ObjectId -> thisDomainName/otherDomainName#ObjectId
+
+* thisDomainName/thisDomainName#ObjectId -> thisDomainName/ObjectId
+* otherDomainName/thisDomainName#ObjectId -> thisDomainName/ObjectId
+* otherDomainName/otherDomainName#ObjectId -> thisDomainName/otherDomainName#ObjectId
+
+* thisDomainName/ObjectId -> thisDomainName/ObjectId
+* otherDomainName/ObjectId -> otherDomainName/ObjectId
+ */
+func (dm *Domain) GetValidObjectId(objectId string) string {
+	if targetDomainName, objectIdWithoutDomain, err := dm.GetShadowObjectDomainAndID(objectId); err == nil {
+		objectIdDomain := dm.GetDomainFromObjectID(objectId)
+		if dm.name == targetDomainName {
+			return dm.name + ObjectIDDomainSeparator + objectIdWithoutDomain
+		}
+		if objectIdDomain == targetDomainName {
+			return dm.name + ObjectIDDomainSeparator + targetDomainName + ObjectIDWeakClusteringDomainSeparator + objectIdWithoutDomain
+		}
+		return objectId
+	}
+	return objectId
 }
 
 /*
@@ -223,7 +254,8 @@ func (dm *Domain) start(cacheConfig *cache.Config, createDomainRouters bool) err
 	if !kvExists {
 		var err error
 		dm.kv, err = kv.CreateKeyValue(dm.nc, dm.js, &nats.KeyValueConfig{
-			Bucket: bucketName,
+			Bucket:   bucketName,
+			Replicas: dm.natsJsReplicasCount,
 		})
 		if err != nil {
 			return err
@@ -240,6 +272,9 @@ func (dm *Domain) start(cacheConfig *cache.Config, createDomainRouters bool) err
 			if err := dm.createHubSignalStream(); err != nil {
 				return err
 			}
+		}
+		if err := dm.createDLQStream(); err != nil {
+			return err
 		}
 		if err := dm.createIngresSignalStream(); err != nil {
 			return err
@@ -292,6 +327,7 @@ func (dm *Domain) createHubSignalStream() error {
 		Name:      hubEventStreamName,
 		Subjects:  []string{SignalPrefix + ".>"},
 		Retention: nats.InterestPolicy,
+		Replicas:  dm.natsJsReplicasCount,
 	}
 	return dm.createStreamIfNotExists(sc)
 }
@@ -317,6 +353,7 @@ func (dm *Domain) createIngresSignalStream() error {
 		Name:      domainIngressStreamName,
 		Sources:   []*nats.StreamSource{ss},
 		Retention: nats.InterestPolicy,
+		Replicas:  dm.natsJsReplicasCount,
 	}
 	return dm.createStreamIfNotExists(sc)
 }
@@ -326,6 +363,15 @@ func (dm *Domain) createEgressSignalStream() error {
 		Name:      domainEgressStreamName,
 		Subjects:  []string{fmt.Sprintf(DomainEgressSubjectsTmpl, dm.name, ">")},
 		Retention: nats.InterestPolicy,
+		Replicas:  dm.natsJsReplicasCount,
+	}
+	return dm.createStreamIfNotExists(sc)
+}
+
+func (dm *Domain) createDLQStream() error {
+	sc := &nats.StreamConfig{
+		Name:      deadLetterQueueStreamName,
+		Retention: nats.LimitsPolicy,
 	}
 	return dm.createStreamIfNotExists(sc)
 }
@@ -389,8 +435,23 @@ func (dm *Domain) createRouter(sourceStreamName string, subject string, tsc targ
 					system.MsgOnErrorReturn(msg.Ack())
 					return
 				} else {
+					dlqMsg := dlqMsgBuilder(msg.Subject, sourceStreamName, dm.name, err.Error(), msg.Data)
+					_, err := dm.js.PublishMsg(dlqMsg)
+					switch sourceStreamName {
+					case domainEgressStreamName:
+						// Default logic - infinite republishing
+					case domainIngressStreamName:
+						// Send message to DLQ without retryAdd commentMore actions
+						if err == nil {
+							lg.Logf(lg.DebugLevel, "Domain (domain=%s) router with sourceStreamName=%s republished message to DLQ", dm.name, sourceStreamName)
+							system.MsgOnErrorReturn(msg.Ack())
+							return
+						}
+					default:
+					}
+
 					lg.Logf(lg.ErrorLevel, "Domain (domain=%s) router with sourceStreamName=%s cannot republish message to subject %s: %s", dm.name, sourceStreamName, targetSubject, err)
-					_, err := dm.js.Publish(msg.Subject, msg.Data)
+					_, err = dm.js.Publish(msg.Subject, msg.Data)
 					if err == nil {
 						system.MsgOnErrorReturn(msg.Ack())
 						return
@@ -407,4 +468,16 @@ func (dm *Domain) createRouter(sourceStreamName string, subject string, tsc targ
 		return err
 	}
 	return nil
+}
+
+func dlqMsgBuilder(subject, stream, domain, errorMsg string, data []byte) *nats.Msg {
+	dlqMsg := nats.NewMsg(deadLetterQueueStreamName)
+	dlqMsg.Data = data
+	dlqMsg.Header.Set("Original-Subject", subject)
+	dlqMsg.Header.Set("Original-Stream", stream)
+	dlqMsg.Header.Set("Domain", domain)
+	dlqMsg.Header.Set("Error", errorMsg)
+	dlqMsg.Header.Set("Timestamp", time.Now().UTC().String())
+
+	return dlqMsg
 }
