@@ -123,6 +123,9 @@ func CreateObjectsLinkFromClaimedTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlug
 	fromObjectClaimType := ctx.Payload.GetByPath("from_claim_type").AsStringDefault("")
 	toObjectClaimType := ctx.Payload.GetByPath("to_claim_type").AsStringDefault("")
 
+	fromObjectClaimType = ctx.Domain.CreateObjectIDWithHubDomain(fromObjectClaimType, true)
+	toObjectClaimType = ctx.Domain.CreateObjectIDWithHubDomain(toObjectClaimType, true)
+
 	objectLinkType := isObjectLinkPermittedForClaimedTypes(ctx, selfID, objectToID, fromObjectClaimType, toObjectClaimType)
 	if len(objectLinkType) == 0 {
 		operationKeysMutexUnlock(ctx)
@@ -130,7 +133,7 @@ func CreateObjectsLinkFromClaimedTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlug
 		return
 	}
 
-	finalLinkType := fromObjectClaimType + "#" + toObjectClaimType + "#" + objectLinkType
+	finalLinkType := ctx.Domain.GetObjectIDWithoutDomain(fromObjectClaimType) + "#" + ctx.Domain.GetObjectIDWithoutDomain(toObjectClaimType) + "#" + objectLinkType
 
 	objectLink := easyjson.NewJSONObject()
 	objectLink.SetByPath("to", easyjson.NewJSON(objectToID))
@@ -172,6 +175,9 @@ func DeleteObjectsLinkFromClaimedTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlug
 	fromObjectClaimType := ctx.Payload.GetByPath("from_claim_type").AsStringDefault("")
 	toObjectClaimType := ctx.Payload.GetByPath("to_claim_type").AsStringDefault("")
 
+	fromObjectClaimType = ctx.Domain.CreateObjectIDWithHubDomain(fromObjectClaimType, true)
+	toObjectClaimType = ctx.Domain.CreateObjectIDWithHubDomain(toObjectClaimType, true)
+
 	objectLinkType := isObjectLinkPermittedForClaimedTypes(ctx, selfID, objectToID, fromObjectClaimType, toObjectClaimType)
 	if len(objectLinkType) == 0 {
 		operationKeysMutexUnlock(ctx)
@@ -179,7 +185,7 @@ func DeleteObjectsLinkFromClaimedTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlug
 		return
 	}
 
-	finalLinkType := fromObjectClaimType + "#" + toObjectClaimType + "#" + objectLinkType
+	finalLinkType := ctx.Domain.GetObjectIDWithoutDomain(fromObjectClaimType) + "#" + ctx.Domain.GetObjectIDWithoutDomain(toObjectClaimType) + "#" + objectLinkType
 
 	objectLink := easyjson.NewJSONObject()
 	objectLink.SetByPath("to", easyjson.NewJSON(objectToID))

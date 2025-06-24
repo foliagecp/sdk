@@ -114,7 +114,7 @@ func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	defer operationKeysMutexUnlock(ctx)
 
 	goal := InheritanceCascadeDeleteGoalType{
-		reason: ParentTypeDeleteChild,
+		reason: ParentTypeDeleteType,
 		target: "",
 	}
 	inheritData := InheritaceGoalPrepare(ctx, goal)
