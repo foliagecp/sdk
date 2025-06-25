@@ -87,6 +87,7 @@ func TypeRemoveChild(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		target: childTypeWithDomain,
 	}
 	data := InheritaceGoalPrepare(ctx, goal)
+	fmt.Println("     TypeRemoveChild:", data)
 	InheritaceGoalFinalize(ctx, data)
 
 	om.Reply()
