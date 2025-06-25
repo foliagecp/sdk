@@ -24,17 +24,17 @@ type InheritanceCascadeDeleteGoalType struct {
 	target string
 }
 
-func gatherTypes4CascadeObjectLinkRefreshStartingFromTypeWithID(ctx *sfPlugins.StatefunContextProcessor, typeId string, includeTypeId bool) []string {
+func gatherTypes4CascadeObjectLinkRefreshStartingFromTypeID(ctx *sfPlugins.StatefunContextProcessor, typeId string, includeTypeId bool) []string {
 	foundChildTypes := map[string]struct{}{}
 
-	queue := []string{ctx.Self.ID}
+	queue := []string{typeId}
 	for len(queue) > 0 {
 		currentType := queue[0]
 		queue = queue[1:]
 
-		parentTypes := getTypeChildren(ctx, currentType)
+		childrenTypes := getTypeChildren(ctx, currentType)
 
-		for _, childType := range parentTypes {
+		for _, childType := range childrenTypes {
 			if _, ok := foundChildTypes[childType]; !ok {
 				foundChildTypes[childType] = struct{}{}
 				queue = append(queue, childType)
@@ -161,18 +161,18 @@ func InheritaceGoalPrepare(ctx *sfPlugins.StatefunContextProcessor, goal Inherit
 	switch goal.reason {
 	case ParentTypeDeleteType:
 		{
-			typesToRefresh = gatherTypes4CascadeObjectLinkRefreshStartingFromTypeWithID(ctx, ctx.Self.ID, false) // ctx.Self.ID is parent type
+			typesToRefresh = gatherTypes4CascadeObjectLinkRefreshStartingFromTypeID(ctx, ctx.Self.ID, false) // ctx.Self.ID is parent type
 			// Delete type after
 		}
 	case ParentTypeDeleteChild:
 		{
 			// Unlink child type first
-			typesToRefresh = gatherTypes4CascadeObjectLinkRefreshStartingFromTypeWithID(ctx, goal.target, true) // goal.target is child type
+			typesToRefresh = gatherTypes4CascadeObjectLinkRefreshStartingFromTypeID(ctx, goal.target, true) // goal.target is child type
 		}
 	case ParentTypeDeleteOutTypeObjectLink:
 		{
 			// Delete types' object link first
-			typesToRefresh = gatherTypes4CascadeObjectLinkRefreshStartingFromTypeWithID(ctx, ctx.Self.ID, false) // ctx.Self.ID is parent type
+			typesToRefresh = gatherTypes4CascadeObjectLinkRefreshStartingFromTypeID(ctx, ctx.Self.ID, false) // ctx.Self.ID is parent type
 		}
 	}
 	fmt.Println("--- 2", typesToRefresh)
