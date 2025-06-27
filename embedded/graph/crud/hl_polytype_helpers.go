@@ -1,7 +1,6 @@
 package crud
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/foliagecp/easyjson"
@@ -11,16 +10,16 @@ import (
 	"github.com/foliagecp/sdk/statefun/system"
 )
 
-type InheritanceCascadeDeleteReasonType int
+type PolyTypeCascadeDeleteReasonType int
 
 const (
-	ParentTypeDeleteType InheritanceCascadeDeleteReasonType = iota
-	ParentTypeDeleteChild
-	ParentTypeDeleteOutTypeObjectLink
+	SuperTypeDelete PolyTypeCascadeDeleteReasonType = iota
+	SuperTypeDeleteSubType
+	SuperTypeDeleteOutTypeObjectLink
 )
 
-type InheritanceCascadeDeleteGoalType struct {
-	reason InheritanceCascadeDeleteReasonType
+type PolyTypeCascadeDeleteGoalType struct {
+	reason PolyTypeCascadeDeleteReasonType
 	target string
 }
 
@@ -48,7 +47,6 @@ func gatherTypes4CascadeObjectLinkRefreshStartingFromTypeID(ctx *sfPlugins.State
 
 	keys := make([]string, 0, len(foundChildTypes))
 	for k := range foundChildTypes {
-		fmt.Println(">>>>>>>>>> \"", k, "\"")
 		keys = append(keys, k)
 	}
 
@@ -105,22 +103,16 @@ func deleteObjectOutLinkIfInvalidByInheritance(ctx *sfPlugins.StatefunContextPro
 	if len(tokens) == 3 {
 		fromParentType := tokens[0]
 		toParentType := tokens[1]
-		fmt.Println("--- 4.3.2.1", fromObjectId, toObjectId, fromParentType, toParentType)
 		if len(isObjectLinkPermittedForClaimedTypes(ctx, fromObjectId, toObjectId, fromParentType, toParentType)) == 0 {
-			fmt.Println("--- 4.3.2.2")
 			objectLink := easyjson.NewJSONObject()
 			objectLink.SetByPath("to", easyjson.NewJSON(toObjectId))
 			objectLink.SetByPath("type", easyjson.NewJSON(outLinkType))
 			ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", makeSequenceFreeParentBasedID(ctx, fromObjectId), injectParentHoldsLocks(ctx, &objectLink), ctx.Options)
-			fmt.Println("--- 4.3.2.3")
 		}
-		fmt.Println("--- 4.3.2.4")
 	}
 }
 
 func runInvalidateObjectLinks(ctx *sfPlugins.StatefunContextProcessor, objectId string) {
-	fmt.Println("--- 4.3.1", objectId)
-
 	var outLinks *easyjson.JSON
 
 	payload := easyjson.NewJSONObjectWithKeyValue("details", easyjson.NewJSON(true))
@@ -132,61 +124,50 @@ func runInvalidateObjectLinks(ctx *sfPlugins.StatefunContextProcessor, objectId 
 		for i := 0; i < outLinks.GetByPath("names").ArraySize(); i++ {
 			linkType := outLinks.GetByPath("types").ArrayElement(i).AsStringDefault("")
 			targetObjectId := outLinks.GetByPath("ids").ArrayElement(i).AsStringDefault("")
-			fmt.Println("--- 4.3.2", objectId, linkType, targetObjectId)
 			deleteObjectOutLinkIfInvalidByInheritance(ctx, objectId, linkType, targetObjectId)
 		}
 	}
 }
 
 func runCascadeObjectLinkRefreshStartingForTypeWithID(ctx *sfPlugins.StatefunContextProcessor, typeId string) {
-	fmt.Println("--- 4.1", typeId)
 	typeObjects, err := findTypeObjects(ctx, typeId)
-	fmt.Println("--- 4.2")
 	if err != nil {
 		lg.Logln(lg.ErrorLevel, "runCascadeObjectLinkRefreshStartingForTypeWithID: %s", err.Error())
 		return
 	}
 
-	fmt.Println("--- 4.3")
 	for _, objectId := range typeObjects {
 		runInvalidateObjectLinks(ctx, objectId)
 	}
-
-	fmt.Println("--- 4.4")
 }
 
-func InheritaceGoalPrepare(ctx *sfPlugins.StatefunContextProcessor, goal InheritanceCascadeDeleteGoalType) []string {
-	fmt.Println("--- 1")
+func PolyTypeGoalPrepare(ctx *sfPlugins.StatefunContextProcessor, goal PolyTypeCascadeDeleteGoalType) []string {
 	typesToRefresh := []string{}
 	switch goal.reason {
-	case ParentTypeDeleteType:
+	case SuperTypeDelete:
 		{
 			typesToRefresh = gatherTypes4CascadeObjectLinkRefreshStartingFromTypeID(ctx, ctx.Self.ID, false) // ctx.Self.ID is parent type
 			// Delete type after
 		}
-	case ParentTypeDeleteChild:
+	case SuperTypeDeleteSubType:
 		{
 			// Unlink child type first
 			typesToRefresh = gatherTypes4CascadeObjectLinkRefreshStartingFromTypeID(ctx, goal.target, true) // goal.target is child type
 		}
-	case ParentTypeDeleteOutTypeObjectLink:
+	case SuperTypeDeleteOutTypeObjectLink:
 		{
 			// Delete types' object link first
 			typesToRefresh = gatherTypes4CascadeObjectLinkRefreshStartingFromTypeID(ctx, ctx.Self.ID, false) // ctx.Self.ID is parent type
 		}
 	}
-	fmt.Println("--- 2", typesToRefresh)
 	return typesToRefresh
 }
 
-func InheritaceGoalFinalize(ctx *sfPlugins.StatefunContextProcessor, typesToRefresh []string) {
-	fmt.Println("--- 3")
+func PolyTypeGoalFinalize(ctx *sfPlugins.StatefunContextProcessor, typesToRefresh []string) {
 	UpdateTypeModelVersion(ctx)
-	fmt.Println("--- 4")
 	for _, typeId := range typesToRefresh {
 		runCascadeObjectLinkRefreshStartingForTypeWithID(ctx, typeId)
 	}
-	fmt.Println("--- 5")
 }
 
 func UpdateTypeModelVersion(ctx *sfPlugins.StatefunContextProcessor) {
@@ -273,7 +254,7 @@ func getTypeParents(ctx *sfPlugins.StatefunContextProcessor, typeName string) []
 		inLink := inLinks.ArrayElement(i)
 		from := inLink.GetByPath("from").AsStringDefault("")
 		linkType := inLink.GetByPath("type").AsStringDefault("")
-		if linkType == TYPES_CHILDLINK {
+		if linkType == TYPES_SUBTYPELINK {
 			result = append(result, from)
 		}
 	}
@@ -298,11 +279,10 @@ func getTypeChildren(ctx *sfPlugins.StatefunContextProcessor, typeName string) [
 	for i := 0; i < outLinks.GetByPath("names").ArraySize(); i++ {
 		linkType := outLinks.GetByPath("types").ArrayElement(i).AsStringDefault("")
 		to := outLinks.GetByPath("ids").ArrayElement(i).AsStringDefault("")
-		if linkType == TYPES_CHILDLINK {
+		if linkType == TYPES_SUBTYPELINK {
 			result = append(result, to)
 		}
 	}
 
-	fmt.Println("^^^^^^^^^", result)
 	return result
 }

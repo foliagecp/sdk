@@ -4,13 +4,22 @@ import (
 	"fmt"
 
 	"github.com/foliagecp/easyjson"
+	"github.com/foliagecp/sdk/statefun"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
 const (
-	TYPES_CHILDLINK = "__child"
+	TYPES_SUBTYPELINK = "__sub"
 )
+
+func RegisterPolyTypeFunctions(runtime *statefun.Runtime) {
+	// High-Level Type Inheritance
+	statefun.NewFunctionType(runtime, "functions.cmdb.api.objects.link.supertype.create", CreateObjectsLinkFromSuperTypes, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
+	statefun.NewFunctionType(runtime, "functions.cmdb.api.objects.link.supertype.delete", DeleteObjectsLinkFromSuperTypes, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
+	statefun.NewFunctionType(runtime, "functions.cmdb.api.type.subtype.set", TypeSetSubType, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
+	statefun.NewFunctionType(runtime, "functions.cmdb.api.type.subtype.remove", TypeRemoveSubType, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
+}
 
 /*var (
 	currentTypeGraphVersion int64 = 0
@@ -22,10 +31,10 @@ func increaseTypeGraphVersion() {
 
 /*
 	{
-		"child_type": string
+		"sub_type": string
 	}
 */
-func TypeSetChild(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+func TypeSetSubType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
 	if typeOperationRedirectedToHub(ctx) {
 		return
@@ -33,9 +42,9 @@ func TypeSetChild(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 
 	om := sfMediators.NewOpMediator(ctx)
 
-	childType, ok := ctx.Payload.GetByPath("child_type").AsString()
+	childType, ok := ctx.Payload.GetByPath("sub_type").AsString()
 	if !ok {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed("'child_type' undefined")).Reply()
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("'sub_type' undefined")).Reply()
 		return
 	}
 	childTypeWithDomain := ctx.Domain.CreateObjectIDWithHubDomain(childType, true)
@@ -46,7 +55,7 @@ func TypeSetChild(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	link := easyjson.NewJSONObject()
 	link.SetByPath("to", easyjson.NewJSON(childTypeWithDomain))
 	link.SetByPath("name", easyjson.NewJSON("child_"+childType))
-	link.SetByPath("type", easyjson.NewJSON(TYPES_CHILDLINK))
+	link.SetByPath("type", easyjson.NewJSON(TYPES_SUBTYPELINK))
 
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &link), ctx.Options)))
 
@@ -57,10 +66,10 @@ func TypeSetChild(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 
 /*
 	{
-		"child_type": string
+		"sub_type": string
 	}
 */
-func TypeRemoveChild(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+func TypeRemoveSubType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
 	if typeOperationRedirectedToHub(ctx) {
 		return
@@ -68,9 +77,9 @@ func TypeRemoveChild(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	om := sfMediators.NewOpMediator(ctx)
 
-	childType, ok := ctx.Payload.GetByPath("child_type").AsString()
+	childType, ok := ctx.Payload.GetByPath("sub_type").AsString()
 	if !ok {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed("'child_type' undefined")).Reply()
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("'sub_type' undefined")).Reply()
 		return
 	}
 	childTypeWithDomain := ctx.Domain.CreateObjectIDWithHubDomain(childType, true)
@@ -82,13 +91,13 @@ func TypeRemoveChild(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	link.SetByPath("name", easyjson.NewJSON("child_"+childType))
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &link), ctx.Options)))
 
-	goal := InheritanceCascadeDeleteGoalType{
-		reason: ParentTypeDeleteChild,
+	goal := PolyTypeCascadeDeleteGoalType{
+		reason: SuperTypeDeleteSubType,
 		target: childTypeWithDomain,
 	}
-	data := InheritaceGoalPrepare(ctx, goal)
-	fmt.Println("     TypeRemoveChild:", data)
-	InheritaceGoalFinalize(ctx, data)
+	data := PolyTypeGoalPrepare(ctx, goal)
+	fmt.Println("     TypeRemoveSubType:", data)
+	PolyTypeGoalFinalize(ctx, data)
 
 	om.Reply()
 }
@@ -96,8 +105,8 @@ func TypeRemoveChild(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 /*
 	{
 		"to": string,
-		"from_claim_type": string,
-		"to_claim_type": string,
+		"from_super_type": string,
+		"to_super_type": string,
 		"name": string, // optional, "to" will be used if not defined
 		"body": json
 		"tags": []string
@@ -105,7 +114,7 @@ func TypeRemoveChild(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 create object -> object link
 */
-func CreateObjectsLinkFromClaimedTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+func CreateObjectsLinkFromSuperTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -121,8 +130,8 @@ func CreateObjectsLinkFromClaimedTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlug
 		linkName = objectToID
 	}
 
-	fromObjectClaimType := ctx.Payload.GetByPath("from_claim_type").AsStringDefault("")
-	toObjectClaimType := ctx.Payload.GetByPath("to_claim_type").AsStringDefault("")
+	fromObjectClaimType := ctx.Payload.GetByPath("from_super_type").AsStringDefault("")
+	toObjectClaimType := ctx.Payload.GetByPath("to_super_type").AsStringDefault("")
 
 	fromObjectClaimType = ctx.Domain.CreateObjectIDWithHubDomain(fromObjectClaimType, true)
 	toObjectClaimType = ctx.Domain.CreateObjectIDWithHubDomain(toObjectClaimType, true)
@@ -156,11 +165,11 @@ func CreateObjectsLinkFromClaimedTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlug
 /*
 	{
 		"to": string,
-		"from_claim_type": string,
-		"to_claim_type": string
+		"from_super_type": string,
+		"to_super_type": string
 	}
 */
-func DeleteObjectsLinkFromClaimedTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+func DeleteObjectsLinkFromSuperTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -173,8 +182,8 @@ func DeleteObjectsLinkFromClaimedTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlug
 
 	operationKeysMutexLock(ctx, []string{selfID, objectToID})
 
-	fromObjectClaimType := ctx.Payload.GetByPath("from_claim_type").AsStringDefault("")
-	toObjectClaimType := ctx.Payload.GetByPath("to_claim_type").AsStringDefault("")
+	fromObjectClaimType := ctx.Payload.GetByPath("from_super_type").AsStringDefault("")
+	toObjectClaimType := ctx.Payload.GetByPath("to_super_type").AsStringDefault("")
 
 	fromObjectClaimType = ctx.Domain.CreateObjectIDWithHubDomain(fromObjectClaimType, true)
 	toObjectClaimType = ctx.Domain.CreateObjectIDWithHubDomain(toObjectClaimType, true)
