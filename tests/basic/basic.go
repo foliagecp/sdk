@@ -177,15 +177,15 @@ func Start() {
 		}
 		dbClient = dbc
 
-		system.MsgOnErrorReturn(dbClient.CMDB.TypeCreate("typea"))
+		/*system.MsgOnErrorReturn(dbClient.CMDB.TypeCreate("typea"))
 		system.MsgOnErrorReturn(dbClient.CMDB.TypeCreate("typeb"))
 		system.MsgOnErrorReturn(dbClient.CMDB.TypeCreate("typec"))
 		system.MsgOnErrorReturn(dbClient.CMDB.TypeCreate("typed"))
 		system.MsgOnErrorReturn(dbClient.CMDB.TypesLinkCreate("typea", "typeb", "a2b", nil))
-		system.MsgOnErrorReturn(dbClient.CMDB.TypeAddChild("typea", "typeb"))
-		system.MsgOnErrorReturn(dbClient.CMDB.TypeAddChild("typea", "typec"))
-		system.MsgOnErrorReturn(dbClient.CMDB.TypeAddChild("typeb", "typed"))
-		system.MsgOnErrorReturn(dbClient.CMDB.TypeAddChild("typec", "typed"))
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeSetSubType("typea", "typeb"))
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeSetSubType("typea", "typec"))
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeSetSubType("typeb", "typed"))
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeSetSubType("typec", "typed"))
 
 		system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("a", "typea", easyjson.NewJSONObjectWithKeyValue("a_state", easyjson.NewJSON("created"))))
 		system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("b", "typeb", easyjson.NewJSONObjectWithKeyValue("b_state", easyjson.NewJSON("created"))))
@@ -193,9 +193,9 @@ func Start() {
 		system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("d", "typed", easyjson.NewJSONObjectWithKeyValue("d_state", easyjson.NewJSON("created"))))
 		system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkCreate("a", "b", "2b", nil, easyjson.NewJSONObjectWithKeyValue("ab_state", easyjson.NewJSON("created"))))
 
-		system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkFromClaimedTypesCreate("c", "b", "typea", "typeb", "2b", nil, easyjson.NewJSONObjectWithKeyValue("cb_state", easyjson.NewJSON("created"))))
-
-		/*system.MsgOnErrorReturn(dbClient.CMDB.TypeCreate("typea"))
+		system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkSuperTypeCreate("c", "b", "typea", "typeb", "2b", nil, easyjson.NewJSONObjectWithKeyValue("cb_state", easyjson.NewJSON("created"))))
+		*/
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeCreate("typea"))
 		system.MsgOnErrorReturn(dbClient.CMDB.TypeCreate("typeb"))
 		system.MsgOnErrorReturn(dbClient.CMDB.TypeCreate("typec"))
 		system.MsgOnErrorReturn(dbClient.CMDB.TypeCreate("typed"))
@@ -204,16 +204,15 @@ func Start() {
 
 		system.MsgOnErrorReturn(dbClient.CMDB.TypesLinkCreate("typea", "typeb", "a2b", nil))
 
-		system.MsgOnErrorReturn(dbClient.CMDB.TypeAddChild("typea", "typec"))
-		system.MsgOnErrorReturn(dbClient.CMDB.TypeAddChild("typec", "typee"))
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeSetSubType("typea", "typec"))
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeSetSubType("typec", "typee"))
 
-		system.MsgOnErrorReturn(dbClient.CMDB.TypeAddChild("typeb", "typed"))
-		system.MsgOnErrorReturn(dbClient.CMDB.TypeAddChild("typed", "typef"))
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeSetSubType("typeb", "typed"))
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeSetSubType("typed", "typef"))
 
 		system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("e", "typee", easyjson.NewJSONObjectWithKeyValue("e_state", easyjson.NewJSON("created"))))
 		system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("f", "typef", easyjson.NewJSONObjectWithKeyValue("f_state", easyjson.NewJSON("created"))))
-		system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkFromClaimedTypesCreate("e", "f", "typea", "typeb", "2f", nil, easyjson.NewJSONObjectWithKeyValue("ef_state", easyjson.NewJSON("created"))))
-		*/
+		system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkSuperTypeCreate("e", "f", "typea", "typeb", "2f", nil, easyjson.NewJSONObjectWithKeyValue("ef_state", easyjson.NewJSON("created"))))
 
 		/*if TriggersTest {
 			RunTriggersTest(runtime)
