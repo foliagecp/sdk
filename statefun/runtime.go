@@ -106,7 +106,7 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 		revID, err := KeyMutexLock(ctx, r, system.GetHashStr(RuntimeName), true)
 		if err != nil {
 			if errors.Is(err, ErrMutexLocked) {
-				lg.Logf(lg.WarnLevel, "Cant lock. Another runtime is already active")
+				lg.Logf(lg.DebugLevel, "Cant lock. Another runtime is already active")
 				r.config.isActiveInstance = false
 			} else {
 				return err
@@ -348,7 +348,7 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 					newRevID, err := KeyMutexLock(ctx, r, system.GetHashStr(RuntimeName), true)
 					if err != nil {
 						if errors.Is(err, ErrMutexLocked) {
-							lg.Logf(lg.WarnLevel, "Cant lock. Another runtime is already active")
+							lg.Logf(lg.DebugLevel, "Cant lock. Another runtime is already active")
 							continue
 						} else {
 							lg.Logf(lg.ErrorLevel, "KeyMutexLock failed for %s: %v", RuntimeName, err)
