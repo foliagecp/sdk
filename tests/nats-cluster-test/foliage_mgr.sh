@@ -298,18 +298,21 @@ list_backups() {
 set_write_barrier() {
     local barrier_timestamp=$(date +%s%N)
     local bucket="hub_main_cache_cache_bucket"
-    local barrier_json="{\"barrier_timestamp\":${barrier_timestamp},\"status\":1,\"created_by\":\"foliage_mgr\"}"
+    local barrier_json
+    barrier_json="{\"barrier_timestamp\":${barrier_timestamp},\"status\":1,\"created_by\":\"foliage_mgr\"}"
 
     log "Setting write barrier..."
-    nats_cmd "kv put" "$bucket __backup_lock_ '$barrier_json'"
+    docker compose -f "$COMPOSE_FILE" exec io nats kv put "$bucket" "__backup_lock_" "$barrier_json" \
+        --server="nats://${NATS_USER}:${NATS_PASSWORD}@nats1:4222,nats://${NATS_USER}:${NATS_PASSWORD}@nats2:4222,nats://${NATS_USER}:${NATS_PASSWORD}@nats3:4222"
 }
 
 remove_write_barrier() {
     local bucket="hub_main_cache_cache_bucket"
-    local barrier_json="{\"status\":0}"
+    local barrier_json='{"status":0}'
 
     log "Removing write barrier..."
-    nats_cmd "kv put" "$bucket __backup_lock_ '$barrier_json'"
+    docker compose -f "$COMPOSE_FILE" exec io nats kv put "$bucket" "__backup_lock_" "$barrier_json" \
+        --server="nats://${NATS_USER}:${NATS_PASSWORD}@nats1:4222,nats://${NATS_USER}:${NATS_PASSWORD}@nats2:4222,nats://${NATS_USER}:${NATS_PASSWORD}@nats3:4222"
 }
 
 # Show help
