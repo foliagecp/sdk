@@ -1,12 +1,10 @@
 package cache
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"github.com/foliagecp/easyjson"
 	customNatsKv "github.com/foliagecp/sdk/embedded/nats/kv"
-	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
 	"sync/atomic"
@@ -38,55 +36,6 @@ func (cs *Store) getBackupBarrierInfo() (*easyjson.JSON, error) {
 	}
 
 	return nil, fmt.Errorf("failed to parse backup barrier JSON")
-}
-
-func (cs *Store) waitForBackupBarrierRemoval() error {
-	le := lg.GetLogger()
-	le.Debug(context.TODO(), "Write operation blocked by backup barrier")
-
-	ticker := time.NewTicker(BarrierCheckInterval)
-	defer ticker.Stop()
-
-	//TODO add timeout?
-	for {
-		select {
-		case <-cs.ctx.Done():
-			return nil
-
-		case <-ticker.C:
-			barrier, err := cs.getBackupBarrierInfo()
-			if err != nil {
-				le.Errorf(context.TODO(), "failed to get backup barrier info: %v", err)
-				continue
-			}
-			if int32(barrier.GetByPath("status").AsNumericDefault(BarrierStatusUnlocked)) == BarrierStatusUnlocked {
-				return nil
-			}
-		}
-	}
-}
-
-func (cs *Store) checkStoreValueBeforeBarrierSynced(sv *StoreValue, barrierTs int64) bool {
-	if sv == nil {
-		return true
-	}
-
-	sv.Lock("checkStoreValueBeforeBarrierSynced")
-	defer sv.Unlock("checkStoreValueBeforeBarrierSynced")
-
-	if sv.valueExists && sv.valueUpdateTime <= barrierTs {
-		if sv.syncNeeded || !sv.syncedWithKV {
-			return false
-		}
-	}
-
-	for _, childSv := range sv.store {
-		if !cs.checkStoreValueBeforeBarrierSynced(childSv, barrierTs) {
-			return false
-		}
-	}
-
-	return true
 }
 
 func (cs *Store) checkBarrierInfoBeforeWrite(opTime int64) error {
