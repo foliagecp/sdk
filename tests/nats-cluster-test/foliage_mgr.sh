@@ -83,6 +83,11 @@ do_backup() {
 
     docker compose -f "$COMPOSE_FILE" exec io chmod 755 "${container_backup_path}" "${container_archive_path}"
 
+    set_write_barrier
+
+    log "Waiting for cache synchronization..."
+    sleep 10
+
     log "Creating JetStream backup"
     if ! nats_cmd "account backup" "${container_backup_path} --force"; then
         log "ERROR: Backup command failed"
@@ -124,6 +129,8 @@ do_backup() {
     streams_size=$(docker compose -f "$COMPOSE_FILE" exec io sh -c \
         "du -h '${container_archive_path}/streams.tgz' | cut -f1")
 
+    remove_write_barrier
+
     log "Backup completed successfully. Archive directory: ${archive_name}, Sizes: KV=${kv_size}, Streams=${streams_size}"
 }
 
@@ -138,6 +145,7 @@ do_restore() {
     if [ -z "$backup_path" ]; then
         if [ ${#available_backups[@]} -eq 0 ]; then
             log "No backups found in $BACKUP_DIR"
+            remove_write_barrier
             exit 1
         fi
 
@@ -190,6 +198,7 @@ do_restore() {
                 fi
                 if ! nats_cmd "stream rm -f" "$s"; then
                     log "ERROR: Clearing stream failed: $s"
+                    remove_write_barrier
                     exit 1
                 fi
             done
@@ -203,6 +212,7 @@ do_restore() {
 
                     if ! nats_cmd "stream rm -f" "$kv"; then
                         log "ERROR: Clearing KV bucket failed: $kv"
+                        remove_write_barrier
                         exit 1
                     fi
                 done
@@ -224,6 +234,7 @@ do_restore() {
 
                     if ! nats_cmd "stream rm -f" "$kv"; then
                         log "ERROR: Clearing KV bucket failed: $kv"
+                        remove_write_barrier
                         exit 1
                     fi
                 done
@@ -241,6 +252,7 @@ do_restore() {
                 fi
                 if ! nats_cmd "stream rm -f" "$s"; then
                     log "ERROR: Clearing stream failed: $s"
+                    remove_write_barrier
                     exit 1
                 fi
             done
@@ -282,6 +294,24 @@ list_backups() {
     printf "\n"
 }
 
+# Write barrier
+set_write_barrier() {
+    local barrier_timestamp=$(date +%s%N)
+    local bucket="hub_main_cache_cache_bucket"
+    local barrier_json="{\"barrier_timestamp\":${barrier_timestamp},\"status\":1,\"created_by\":\"foliage_mgr\"}"
+
+    log "Setting write barrier..."
+    nats_cmd "kv put" "$bucket __backup_lock_ '$barrier_json'"
+}
+
+remove_write_barrier() {
+    local bucket="hub_main_cache_cache_bucket"
+    local barrier_json="{\"status\":0}"
+
+    log "Removing write barrier..."
+    nats_cmd "kv put" "$bucket __backup_lock_ '$barrier_json'"
+}
+
 # Show help
 show_help() {
     echo "Foliage NATS JetStream Backup & Restore Tool"
@@ -295,6 +325,8 @@ show_help() {
     echo "  --retention DAYS      Set backup retention period in days (default: $RETENTION_DAYS)"
     echo "  --debug               Enable debug mode"
     echo "  --help                Show this help message"
+    echo "  --set-barrier         Set write barrier"
+    echo "  --remove-barrier      Remove write barrier"
 }
 
 # Main function
@@ -334,6 +366,14 @@ main() {
                 DEBUG=true
                 shift
                 ;;
+             --set-barrier)
+                set_write_barrier
+                exit $?
+                ;;
+            --remove-barrier)
+                remove_write_barrier
+                exit $?
+                ;;
             --help)
                 show_help
                 exit 0
@@ -359,6 +399,7 @@ main() {
         *)
             log "No valid action specified"
             show_help
+            remove_write_barrier
             exit 1
             ;;
     esac

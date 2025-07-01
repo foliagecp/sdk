@@ -271,6 +271,11 @@ type Store struct {
 	transactions                sync.Map
 	transactionsMutex           *sync.Mutex
 	getKeysByPatternFromKVMutex *sync.Mutex
+
+	//write barrier state
+	barrierTimestamp   int64
+	barrierStatus      int32 // 0=unlocked, 1=locked
+	barrierLastChecked int64
 }
 
 func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamContext, kv nats.KeyValue) *Store {
@@ -295,9 +300,16 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 		valuesInCache:               0,
 		transactionsMutex:           &sync.Mutex{},
 		getKeysByPatternFromKVMutex: &sync.Mutex{},
+
+		//barrier init
+		barrierTimestamp:   0,
+		barrierStatus:      BarrierStatusUnlocked,
+		barrierLastChecked: 0,
 	}
 
 	cs.ctx, cs.cancel = context.WithCancel(ctx)
+
+	cs.refreshBarrierFromKV()
 
 	storeUpdatesHandler := func(cs *Store) {
 		system.GlobalPrometrics.GetRoutinesCounter().Started("cache.storeUpdatesHandler")
@@ -442,6 +454,12 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 						if csvChild.syncNeeded {
 							keyStr := key.(string)
 							///_, putErr := kv.Put(cs.toStoreKey(newSuffix), finalBytes)
+
+							if err := cs.checkBarrierInfoBeforeWrite(valueUpdateTime); err != nil {
+								lg.Logf(lg.DebugLevel, "Skipping write for key=%s due to barrier: %v", keyStr, err)
+
+								return true
+							}
 
 							_, putErr := customNatsKv.KVPut(cs.js, kv, cs.toStoreKey(newSuffix), finalBytes)
 							if putErr == nil {
