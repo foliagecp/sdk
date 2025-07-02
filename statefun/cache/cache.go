@@ -273,9 +273,9 @@ type Store struct {
 	getKeysByPatternFromKVMutex *sync.Mutex
 
 	//write barrier state
-	barrierTimestamp   int64
-	barrierStatus      int32 // 0=unlocked, 1=locked
-	barrierLastChecked int64
+	backupBarrierTimestamp   int64
+	backupBarrierStatus      int32 // 0=unlocked, 1=locking, 2=locked
+	backupBarrierLastChecked int64
 }
 
 func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamContext, kv nats.KeyValue) *Store {
@@ -302,14 +302,14 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 		getKeysByPatternFromKVMutex: &sync.Mutex{},
 
 		//barrier init
-		barrierTimestamp:   0,
-		barrierStatus:      BarrierStatusUnlocked,
-		barrierLastChecked: 0,
+		backupBarrierTimestamp:   0,
+		backupBarrierStatus:      BackupBarrierStatusUnlocked,
+		backupBarrierLastChecked: 0,
 	}
 
 	cs.ctx, cs.cancel = context.WithCancel(ctx)
 
-	cs.refreshBarrierFromKV()
+	cs.clearBackupBarrier()
 
 	storeUpdatesHandler := func(cs *Store) {
 		system.GlobalPrometrics.GetRoutinesCounter().Started("cache.storeUpdatesHandler")
@@ -390,6 +390,16 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 			select {
 			case <-cs.ctx.Done():
 			default:
+				backupBarrierTimestamp, backupBarrierStatus := cs.getBackupBarrierState()
+				if backupBarrierStatus == BackupBarrierStatusLocking {
+					if backupBarrierTimestamp == 0 {
+						backupBarrierTimestamp = system.GetCurrentTimeNs()
+						system.MsgOnErrorReturn(cs.updateBackupBarrierWithTimestamp(backupBarrierTimestamp))
+						lg.Logf(lg.DebugLevel, "Backup requested, set barrier timestamp: %d", backupBarrierTimestamp)
+					}
+				}
+				allBeforeBuckupBarrierSynced := true
+
 				cacheStoreValueStack := []*StoreValue{cs.rootValue}
 				suffixPathsStack := []string{""}
 				depthsStack := []int{0}
@@ -426,6 +436,15 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 						var finalBytes []byte = nil
 
 						csvChild := value.(*StoreValue)
+
+						if backupBarrierStatus == BackupBarrierStatusLocking {
+							if csvChild.valueExists && csvChild.valueUpdateTime > 0 && csvChild.valueUpdateTime <= backupBarrierTimestamp {
+								if csvChild.syncNeeded || !csvChild.syncedWithKV {
+									allBeforeBuckupBarrierSynced = false
+								}
+							}
+						}
+
 						var valueUpdateTime int64 = 0
 						csvChild.Lock("kvLazyWriter")
 						if csvChild.syncNeeded {
@@ -455,9 +474,8 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 							keyStr := key.(string)
 							///_, putErr := kv.Put(cs.toStoreKey(newSuffix), finalBytes)
 
-							if err := cs.checkBarrierInfoBeforeWrite(valueUpdateTime); err != nil {
+							if err := cs.checkBackupBarrierInfoBeforeWrite(valueUpdateTime); err != nil {
 								lg.Logf(lg.DebugLevel, "Skipping write for key=%s due to barrier: %v", keyStr, err)
-
 								return true
 							}
 
@@ -485,6 +503,10 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 					if noChildred {
 						currentStoreValue.collectGarbage()
 					}
+				}
+
+				if backupBarrierStatus == BackupBarrierStatusLocking && allBeforeBuckupBarrierSynced {
+					cs.markCacheReadyForBackup()
 				}
 
 				sort.Slice(lruTimes, func(i, j int) bool { return lruTimes[i] > lruTimes[j] })

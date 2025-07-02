@@ -84,9 +84,8 @@ do_backup() {
     docker compose -f "$COMPOSE_FILE" exec io chmod 755 "${container_backup_path}" "${container_archive_path}"
 
     set_write_barrier
-
-    log "Waiting for cache synchronization..."
-    sleep 10
+    
+    wait_for_cache_ready
 
     log "Creating JetStream backup"
     if ! nats_cmd "account backup" "${container_backup_path} --force"; then
@@ -296,10 +295,9 @@ list_backups() {
 
 # Write barrier
 set_write_barrier() {
-    local barrier_timestamp=$(date +%s%N)
     local bucket="hub_main_cache_cache_bucket"
     local barrier_json
-    barrier_json="{\"barrier_timestamp\":${barrier_timestamp},\"status\":1,\"created_by\":\"foliage_mgr\"}"
+    barrier_json="{\"status\":1,\"created_by\":\"foliage_mgr\"}"
 
     log "Setting write barrier..."
     docker compose -f "$COMPOSE_FILE" exec io nats kv put "$bucket" "__backup_lock_" "$barrier_json" \
@@ -313,6 +311,27 @@ remove_write_barrier() {
     log "Removing write barrier..."
     docker compose -f "$COMPOSE_FILE" exec io nats kv put "$bucket" "__backup_lock_" "$barrier_json" \
         --server="nats://${NATS_USER}:${NATS_PASSWORD}@nats1:4222,nats://${NATS_USER}:${NATS_PASSWORD}@nats2:4222,nats://${NATS_USER}:${NATS_PASSWORD}@nats3:4222"
+}
+
+wait_for_cache_ready() {
+    local bucket="hub_main_cache_cache_bucket"
+    local timeout_sec=600
+    local elapsed=0
+
+    log "Waiting for cache to be ready for backup..."
+
+    until nats_cmd "kv get" "$bucket __backup_lock_" | grep -q '"status":2'; do
+        if [ $elapsed -ge $timeout_sec ]; then
+            log "ERROR: Timeout waiting for cache readiness"
+            return 1
+        fi
+
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+
+    log "Cache is ready for backup!"
+    return 0
 }
 
 # Show help
