@@ -7,6 +7,7 @@ require (
 	github.com/PaesslerAG/gval v1.2.2
 	github.com/emicklei/dot v1.6.1
 	github.com/foliagecp/easyjson v0.1.3
+	github.com/google/pprof v0.0.0-20200229191704-1ebb73c60ed3
 	github.com/nats-io/nats-server/v2 v2.10.12
 	github.com/nats-io/nats.go v1.37.0
 	github.com/prometheus/client_golang v1.17.0

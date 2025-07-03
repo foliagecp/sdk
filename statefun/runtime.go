@@ -90,6 +90,10 @@ func (r *Runtime) RegisterOnAfterStartFunction(f OnAfterStartFunction, async boo
 // Start initializes streams and starts function subscriptions.
 // It also handles graceful shutdown via context.Context.
 func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
+	if intervalMins := system.GetEnvMustProceed("HEAP_WATCHER_INTERVAL_MINS", 0); intervalMins > 0 {
+		go system.StartHeapWatcher(float32(intervalMins))
+	}
+
 	logger := lg.NewLogger(lg.Options{ReportCaller: true, Level: lg.InfoLevel})
 
 	// Create streams if they do not exist.
