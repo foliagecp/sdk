@@ -7,6 +7,7 @@ import (
 	"github.com/foliagecp/sdk/statefun"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfp "github.com/foliagecp/sdk/statefun/plugins"
+	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
 )
 
@@ -219,6 +220,7 @@ func (cmdb CMDBSyncClient) TriggerLinkDrop(fromTypeName, toTypeName string, trig
 
 func (cmdb CMDBSyncClient) TypeCreate(name string, body ...easyjson.JSON) error {
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	payload.SetByPath("body", easyjson.NewJSONObject())
 	if len(body) > 0 {
 		payload.SetByPath("body", body[0])
@@ -231,6 +233,7 @@ func (cmdb CMDBSyncClient) TypeCreate(name string, body ...easyjson.JSON) error 
 
 func (cmdb CMDBSyncClient) TypeUpdate(name string, body easyjson.JSON, replace bool, upsert ...bool) error {
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	if len(upsert) > 0 {
 		payload.SetByPath("upsert", easyjson.NewJSON(upsert[0]))
 	}
@@ -243,9 +246,11 @@ func (cmdb CMDBSyncClient) TypeUpdate(name string, body easyjson.JSON, replace b
 }
 
 func (cmdb CMDBSyncClient) TypeDelete(name string) error {
+	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	options := easyjson.NewJSONObject()
 	options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
-	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.type.delete", seqFree(name), nil, &options)))
+	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.type.delete", seqFree(name), &payload, &options)))
 }
 
 func (cmdb CMDBSyncClient) TypeRead(name string) (easyjson.JSON, error) {
@@ -257,6 +262,7 @@ func (cmdb CMDBSyncClient) TypeRead(name string) (easyjson.JSON, error) {
 
 func (cmdb CMDBSyncClient) ObjectCreate(objectID, originType string, body ...easyjson.JSON) error {
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	payload.SetByPath("origin_type", easyjson.NewJSON(originType))
 	payload.SetByPath("body", easyjson.NewJSONObject())
 	if len(body) > 0 {
@@ -270,6 +276,7 @@ func (cmdb CMDBSyncClient) ObjectCreate(objectID, originType string, body ...eas
 
 func (cmdb CMDBSyncClient) ObjectUpdate(objectID string, body easyjson.JSON, replace bool, originType4Upsert ...string) error {
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	if len(originType4Upsert) > 0 {
 		payload.SetByPath("upsert", easyjson.NewJSON(true))
 		payload.SetByPath("origin_type", easyjson.NewJSON(originType4Upsert[0]))
@@ -284,6 +291,7 @@ func (cmdb CMDBSyncClient) ObjectUpdate(objectID string, body easyjson.JSON, rep
 
 func (cmdb CMDBSyncClient) ObjectUpdateWithDetails(objectID string, body easyjson.JSON, replace bool, originType4Upsert ...string) (easyjson.JSON, error) {
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	if len(originType4Upsert) > 0 {
 		payload.SetByPath("upsert", easyjson.NewJSON(true))
 		payload.SetByPath("origin_type", easyjson.NewJSON(originType4Upsert[0]))
@@ -298,22 +306,28 @@ func (cmdb CMDBSyncClient) ObjectUpdateWithDetails(objectID string, body easyjso
 }
 
 func (cmdb CMDBSyncClient) ObjectDelete(id string) error {
+	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	options := easyjson.NewJSONObject()
 	options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
-	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.object.delete", seqFree(id), nil, &options)))
+	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.object.delete", seqFree(id), &payload, &options)))
 }
 
 func (cmdb CMDBSyncClient) ObjectDeleteWithDetails(id string) (easyjson.JSON, error) {
+	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	options := easyjson.NewJSONObjectWithKeyValue("op_stack", easyjson.NewJSON(true))
 	options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
-	msg := sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.object.delete", seqFree(id), nil, &options))
+	msg := sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.object.delete", seqFree(id), &payload, &options))
 	return msg.Data, OpErrorFromOpMsg(msg)
 }
 
 func (cmdb CMDBSyncClient) ObjectRead(name string) (easyjson.JSON, error) {
+	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	options := easyjson.NewJSONObject()
 	options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
-	om := sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.object.read", seqFree(name), nil, &options))
+	om := sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.object.read", seqFree(name), &payload, &options))
 	return om.Data, OpErrorFromOpMsg(om)
 }
 
@@ -321,6 +335,7 @@ func (cmdb CMDBSyncClient) ObjectRead(name string) (easyjson.JSON, error) {
 
 func (cmdb CMDBSyncClient) TypesLinkCreate(from, to, objectLinkType string, tags []string, body ...easyjson.JSON) error {
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	payload.SetByPath("to", easyjson.NewJSON(to))
 	payload.SetByPath("body", easyjson.NewJSONObject())
 	if len(body) > 0 {
@@ -338,6 +353,7 @@ func (cmdb CMDBSyncClient) TypesLinkCreate(from, to, objectLinkType string, tags
 
 func (cmdb CMDBSyncClient) TypesLinkUpdate(from, to string, tags []string, body easyjson.JSON, replace bool, upsert ...bool) error {
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	if len(upsert) > 0 {
 		payload.SetByPath("upsert", easyjson.NewJSON(upsert[0]))
 	}
@@ -355,6 +371,7 @@ func (cmdb CMDBSyncClient) TypesLinkUpdate(from, to string, tags []string, body 
 
 func (cmdb CMDBSyncClient) TypesLinkDelete(from, to string) error {
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	payload.SetByPath("to", easyjson.NewJSON(to))
 
 	options := easyjson.NewJSONObject()
@@ -374,6 +391,7 @@ func (cmdb CMDBSyncClient) TypesLinkRead(from, to string) (easyjson.JSON, error)
 
 func (cmdb CMDBSyncClient) ObjectsLinkCreate(from, to, name string, tags []string, body ...easyjson.JSON) error {
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	payload.SetByPath("to", easyjson.NewJSON(to))
 	payload.SetByPath("name", easyjson.NewJSON(name))
 	payload.SetByPath("body", easyjson.NewJSONObject())
@@ -391,6 +409,7 @@ func (cmdb CMDBSyncClient) ObjectsLinkCreate(from, to, name string, tags []strin
 
 func (cmdb CMDBSyncClient) ObjectsLinkUpdate(from, to string, tags []string, body easyjson.JSON, replace bool, name4Upsert ...string) error {
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	if len(name4Upsert) > 0 {
 		payload.SetByPath("upsert", easyjson.NewJSON(true))
 		payload.SetByPath("name", easyjson.NewJSON(name4Upsert[0]))
@@ -409,6 +428,7 @@ func (cmdb CMDBSyncClient) ObjectsLinkUpdate(from, to string, tags []string, bod
 
 func (cmdb CMDBSyncClient) ObjectsLinkUpdateWithDetails(from, to string, tags []string, body easyjson.JSON, replace bool, name4Upsert ...string) (easyjson.JSON, error) {
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	if len(name4Upsert) > 0 {
 		payload.SetByPath("upsert", easyjson.NewJSON(true))
 		payload.SetByPath("name", easyjson.NewJSON(name4Upsert[0]))
@@ -428,6 +448,7 @@ func (cmdb CMDBSyncClient) ObjectsLinkUpdateWithDetails(from, to string, tags []
 
 func (cmdb CMDBSyncClient) ObjectsLinkDelete(from, to string) error {
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	payload.SetByPath("to", easyjson.NewJSON(to))
 
 	options := easyjson.NewJSONObject()
@@ -437,6 +458,7 @@ func (cmdb CMDBSyncClient) ObjectsLinkDelete(from, to string) error {
 
 func (cmdb CMDBSyncClient) ObjectsLinkDeleteWithDetails(from, to string) (easyjson.JSON, error) {
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	payload.SetByPath("to", easyjson.NewJSON(to))
 
 	options := easyjson.NewJSONObjectWithKeyValue("op_stack", easyjson.NewJSON(true))

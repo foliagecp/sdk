@@ -177,7 +177,7 @@ func LLAPIVertexCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		objectBody = easyjson.NewJSONObject()
 	}
 
-	opTime := getOpTimeFromPayload(ctx.Payload)
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
 
 	ctx.Domain.Cache().SetValue(selfID, objectBody.ToBytes(), true, opTime, "")
 	indexVertexBody(ctx, objectBody, opTime, false)
@@ -250,7 +250,7 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		body = *newBody
 	}
 
-	opTime := getOpTimeFromPayload(ctx.Payload)
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
 
 	ctx.Domain.Cache().SetValue(selfID, body.ToBytes(), true, opTime, "")
 	indexVertexBody(ctx, body, opTime, true)
@@ -336,7 +336,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		oldBody = getVertexBody(ctx, selfID)
 	}
 
-	opTime := getOpTimeFromPayload(ctx.Payload)
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
 
 	ctx.Domain.Cache().DeleteValue(selfID, true, opTime, "") // Delete vertex's body
 	indexRemoveVertexBody(ctx)
@@ -489,7 +489,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	payload := ctx.Payload
 	opStack := getOpStackFromOptions(ctx.Options)
-	opTime := getOpTimeFromPayload(ctx.Payload)
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
 
 	if payload.PathExists("in_name") {
 		if inLinkName, ok := payload.GetByPath("in_name").AsString(); ok && len(inLinkName) > 0 {
@@ -645,7 +645,7 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	upsert := payload.GetByPath("upsert").AsBoolDefault(false)
 
 	opStack := getOpStackFromOptions(ctx.Options)
-	opTime := getOpTimeFromPayload(ctx.Payload)
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
 
 	//operationKeysMutexLock(ctx, []string{selfID}, true)
 	linkType, linkName, toId, linkExists := getFullLinkInfoFromSpecifiedIdentifier(ctx)
@@ -759,7 +759,7 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	payload := ctx.Payload
 
 	opStack := getOpStackFromOptions(ctx.Options)
-	opTime := getOpTimeFromPayload(ctx.Payload)
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
 
 	if payload.PathExists("in_name") {
 		if inLinkName, ok := payload.GetByPath("in_name").AsString(); ok && len(inLinkName) > 0 {

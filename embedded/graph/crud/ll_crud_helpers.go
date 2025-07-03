@@ -21,10 +21,11 @@ func getOpStackFromOptions(options *easyjson.JSON) *easyjson.JSON {
 	return opStack
 }
 
-func getOpTimeFromPayload(payload *easyjson.JSON) int64 {
+func getOpTimeFromPayloadIfExist(payload *easyjson.JSON) int64 {
 	opTime := int64(payload.GetByPath("op_time").AsNumericDefault(-1))
 	if opTime < 0 {
 		opTime = system.GetCurrentTimeNs()
+		payload.SetByPath("op_time", easyjson.NewJSON(opTime))
 	}
 	return opTime
 }
@@ -118,7 +119,7 @@ func getFullLinkInfoFromSpecifiedIdentifier(ctx *sfPlugins.StatefunContextProces
 
 func indexRemoveVertexBody(ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
-	opTime := getOpTimeFromPayload(ctx.Payload)
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
 
 	// Remove all indices -----------------------------
 	indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(VertexBodyValueIndexPrefPattern+KeySuff1Pattern, selfID, ">"))
@@ -161,7 +162,7 @@ func indexVertexBody(ctx *sfPlugins.StatefunContextProcessor, vertexBody easyjso
 
 func indexRemoveVertexLinkBody(ctx *sfPlugins.StatefunContextProcessor, linkName string) {
 	selfID := getOriginalID(ctx.Self.ID)
-	opTime := getOpTimeFromPayload(ctx.Payload)
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
 
 	// Remove all indices -----------------------------
 	indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(LinkBodyValueIndexPrefPattern+KeySuff2Pattern, selfID, linkName, ">"))

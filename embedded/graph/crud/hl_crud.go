@@ -46,6 +46,10 @@ func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	}
 	operationKeysMutexLock(ctx, []string{selfID, typesVertexId}, true)
 
+	if opTime := ctx.Payload.GetByPath("op_time").AsNumericDefault(-1); opTime < 0 {
+		ctx.Payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
+	}
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, ctx.Payload), nil)))
@@ -82,6 +86,10 @@ func UpdateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 
 	operationKeysMutexLock(ctx, []string{selfID}, true)
 
+	if opTime := ctx.Payload.GetByPath("op_time").AsNumericDefault(-1); opTime < 0 {
+		ctx.Payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
+	}
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	// Handle upsert request ------------------------------
@@ -116,6 +124,10 @@ func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	}
 
 	operationKeysMutexLock(ctx, []string{selfID}, true)
+
+	if opTime := ctx.Payload.GetByPath("op_time").AsNumericDefault(-1); opTime < 0 {
+		ctx.Payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
+	}
 
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -217,6 +229,10 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	originType = ctx.Domain.CreateObjectIDWithHubDomain(originType, true)
 	builtInObjectsVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false)
 
+	if opTime := ctx.Payload.GetByPath("op_time").AsNumericDefault(-1); opTime < 0 {
+		ctx.Payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
+	}
+
 	options := ctx.Options.Clone()
 	options.SetByPath("op_stack", easyjson.NewJSON(true))
 
@@ -276,6 +292,10 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
 
+	if opTime := ctx.Payload.GetByPath("op_time").AsNumericDefault(-1); opTime < 0 {
+		ctx.Payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
+	}
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	// Handle upsert request ------------------------------
@@ -317,6 +337,10 @@ func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
  */
 func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
+
+	if opTime := ctx.Payload.GetByPath("op_time").AsNumericDefault(-1); opTime < 0 {
+		ctx.Payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
+	}
 
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -435,6 +459,10 @@ func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		return
 	}
 
+	if opTime := ctx.Payload.GetByPath("op_time").AsNumericDefault(-1); opTime < 0 {
+		ctx.Payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
+	}
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	objectLinkType, ok := ctx.Payload.GetByPath("object_type").AsString()
@@ -481,6 +509,10 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		return
 	}
 
+	if opTime := ctx.Payload.GetByPath("op_time").AsNumericDefault(-1); opTime < 0 {
+		ctx.Payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
+	}
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	toType, ok := ctx.Payload.GetByPath("to").AsString()
@@ -520,6 +552,10 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	selfID := getOriginalID(ctx.Self.ID)
 	if typeOperationRedirectedToHub(ctx) {
 		return
+	}
+
+	if opTime := ctx.Payload.GetByPath("op_time").AsNumericDefault(-1); opTime < 0 {
+		ctx.Payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	}
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -617,6 +653,11 @@ create object -> object link
 */
 func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
+
+	if opTime := ctx.Payload.GetByPath("op_time").AsNumericDefault(-1); opTime < 0 {
+		ctx.Payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
+	}
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	objectToID, ok := ctx.Payload.GetByPath("to").AsString()
@@ -673,6 +714,11 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 */
 func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
+
+	if opTime := ctx.Payload.GetByPath("op_time").AsNumericDefault(-1); opTime < 0 {
+		ctx.Payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
+	}
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	objectToID, ok := ctx.Payload.GetByPath("to").AsString()
@@ -727,6 +773,11 @@ func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 */
 func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
+
+	if opTime := ctx.Payload.GetByPath("op_time").AsNumericDefault(-1); opTime < 0 {
+		ctx.Payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
+	}
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	objectToID, ok := ctx.Payload.GetByPath("to").AsString()

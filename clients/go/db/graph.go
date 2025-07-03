@@ -6,6 +6,7 @@ import (
 	"github.com/foliagecp/easyjson"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfp "github.com/foliagecp/sdk/statefun/plugins"
+	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
 )
 
@@ -37,6 +38,7 @@ func NewGraphSyncClientFromRequestFunction(request sfp.SFRequestFunc) (GraphSync
 
 func (gc GraphSyncClient) VertexCreate(id string, body ...easyjson.JSON) error {
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	payload.SetByPath("body", easyjson.NewJSONObject())
 	if len(body) > 0 {
 		payload.SetByPath("body", body[0])
@@ -46,6 +48,7 @@ func (gc GraphSyncClient) VertexCreate(id string, body ...easyjson.JSON) error {
 
 func (gc GraphSyncClient) VertexUpdate(id string, body easyjson.JSON, replace bool, upsert ...bool) error {
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	if len(upsert) > 0 {
 		payload.SetByPath("upsert", easyjson.NewJSON(upsert[0]))
 	}
@@ -56,7 +59,9 @@ func (gc GraphSyncClient) VertexUpdate(id string, body easyjson.JSON, replace bo
 }
 
 func (gc GraphSyncClient) VertexDelete(id string) error {
-	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.vertex.delete", seqFree(id), nil, nil)))
+	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
+	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.vertex.delete", seqFree(id), &payload, nil)))
 }
 
 func (gc GraphSyncClient) VertexRead(id string, details ...bool) (easyjson.JSON, error) {
@@ -70,6 +75,7 @@ func (gc GraphSyncClient) VertexRead(id string, details ...bool) (easyjson.JSON,
 
 func (gc GraphSyncClient) VerticesLinkCreate(from, to, linkName, linkType string, tags []string, body ...easyjson.JSON) error {
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	payload.SetByPath("to", easyjson.NewJSON(to))
 	payload.SetByPath("name", easyjson.NewJSON(linkName))
 	payload.SetByPath("type", easyjson.NewJSON(linkType))
@@ -86,6 +92,7 @@ func (gc GraphSyncClient) VerticesLinkCreate(from, to, linkName, linkType string
 
 func (gc GraphSyncClient) VerticesLinkUpdate(from, linkName string, tags []string, body easyjson.JSON, replace bool, toAndType4Upsert ...string) error {
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	payload.SetByPath("name", easyjson.NewJSON(linkName))
 	payload.SetByPath("body", body)
 	payload.SetByPath("replace", easyjson.NewJSON(replace))
@@ -107,6 +114,7 @@ func (gc GraphSyncClient) VerticesLinkUpdate(from, linkName string, tags []strin
 
 func (gc GraphSyncClient) VerticesLinkUpdateByToAndType(from, to, linkType string, tags []string, body easyjson.JSON, replace bool, name4Upsert ...string) error {
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	payload.SetByPath("to", easyjson.NewJSON(to))
 	payload.SetByPath("type", easyjson.NewJSON(linkType))
 
@@ -124,6 +132,7 @@ func (gc GraphSyncClient) VerticesLinkUpdateByToAndType(from, to, linkType strin
 
 func (gc GraphSyncClient) VerticesLinkDelete(from, linkName string) error {
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	payload.SetByPath("name", easyjson.NewJSON(linkName))
 
 	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.link.delete", seqFree(from), &payload, nil)))
@@ -131,6 +140,7 @@ func (gc GraphSyncClient) VerticesLinkDelete(from, linkName string) error {
 
 func (gc GraphSyncClient) VerticesLinkDeleteByToAndType(from, to, linkType string) error {
 	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	payload.SetByPath("to", easyjson.NewJSON(to))
 	payload.SetByPath("type", easyjson.NewJSON(linkType))
 
