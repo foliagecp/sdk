@@ -42,7 +42,7 @@ func (cs *Store) getBackupBarrierInfo() (*easyjson.JSON, error) {
 func (cs *Store) checkBackupBarrierInfoBeforeWrite(opTime int64) error {
 	barrierTime, status := cs.getBackupBarrierState()
 	if status == BackupBarrierStatusLocked || status == BackupBarrierStatusLocking {
-		if opTime > barrierTime {
+		if opTime > barrierTime && barrierTime != 0 {
 			return fmt.Errorf("operation blocked by barrier: %d > %d", opTime, barrierTime)
 		}
 	}
