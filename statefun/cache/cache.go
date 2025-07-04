@@ -395,7 +395,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 					if backupBarrierTimestamp == 0 {
 						backupBarrierTimestamp = system.GetCurrentTimeNs()
 						system.MsgOnErrorReturn(cs.updateBackupBarrierWithTimestamp(backupBarrierTimestamp))
-						lg.Logf(lg.DebugLevel, "Backup requested, set barrier timestamp: %d", backupBarrierTimestamp)
+						lg.Logf(lg.InfoLevel, "Backup requested, set barrier timestamp: %d", backupBarrierTimestamp)
 					}
 				}
 				allBeforeBuckupBarrierSynced := true
@@ -475,7 +475,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 							///_, putErr := kv.Put(cs.toStoreKey(newSuffix), finalBytes)
 
 							if err := cs.checkBackupBarrierInfoBeforeWrite(valueUpdateTime); err != nil {
-								lg.Logf(lg.DebugLevel, "Skipping write for key=%s due to barrier: %v", keyStr, err)
+								lg.Logf(lg.TraceLevel, "==============skipping write for key=%s due to barrier: %v", keyStr, err)
 								return true
 							}
 
