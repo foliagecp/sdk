@@ -16,11 +16,11 @@ import (
 
 func AddRequestSourceNatsCore(ft *FunctionType) error {
 	_, err := ft.runtime.nc.Subscribe(RequestPrefix+"."+ft.runtime.Domain.name+"."+ft.name+".*", func(msg *nats.Msg) {
-		defer func() {
+		/*defer func() {
 			if r := recover(); r != nil {
 				lg.Logf(lg.ErrorLevel, "Recovered panic in request handler of function %s: %v", ft.name, r)
 			}
-		}()
+		}()*/
 
 		ft.prometricsMeasureMsgDeliver(NatsReq)
 		system.MsgOnErrorReturn(handleNatsMsg(ft, msg, true))
@@ -66,11 +66,11 @@ func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType) error {
 		ft.subject,
 		consumerGroup,
 		func(msg *nats.Msg) {
-			defer func() {
+			/*defer func() {
 				if r := recover(); r != nil {
 					lg.Logf(lg.ErrorLevel, "Recovered panic in signal handler of function %s: %v", ft.name, r)
 				}
-			}()
+			}()*/
 
 			ft.prometricsMeasureMsgDeliver(NatsPub)
 			if meta, err := msg.Metadata(); err == nil {
