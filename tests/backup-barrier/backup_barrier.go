@@ -43,6 +43,8 @@ func runBackupBarrierTest() {
 	body := easyjson.NewJSONObject()
 	system.MsgOnErrorReturn(dbClient.CMDB.TypeUpdate("typea", body, true, true))
 
+	time.Sleep(2 * time.Second)
+
 	initialKVCount := countKVKeys()
 	initialTestObjectsCount := countTestObjectsInKV()
 	le.Infof(context.TODO(), "Initial state - Total KV keys: %d, Test objects: %d",
@@ -57,7 +59,7 @@ func runBackupBarrierTest() {
 		body.SetByPath("object_index", easyjson.NewJSON(i))
 
 		system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate(fmt.Sprintf("test_%d", i), "typea", body))
-		le.Tracef(context.TODO(), "object %d created", i)
+		le.Debugf(context.TODO(), "object %d created", i)
 		time.Sleep(10 * time.Millisecond)
 	}
 
