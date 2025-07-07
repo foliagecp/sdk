@@ -145,6 +145,7 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	} else {
 		msgChannel = make(chan FunctionTypeMsg, ft.config.idChannelSize)
 		ft.idHandlersChannel.Store(id, msgChannel)
+		ft.idHandlersLastMsgTime.Store(id, 0) // no time yet
 	}
 	ft.prometricsMeasureIdChannels()
 
