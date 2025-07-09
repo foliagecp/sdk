@@ -70,7 +70,26 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		return nil, err
 	}
 
-	r.Domain, err = NewDomain(r.nc, r.js, config.desiredHUBDomainName, config.natsReplicasCount)
+	ftStreamConfig := streamConfig{
+		replicasCount: config.natsReplicasCount,
+		maxMsgs:       config.ftStreamMaxMsgs,
+		maxBytes:      config.ftStreamMaxBytes,
+		maxAge:        config.ftStreamMaxAge,
+	}
+	sysStreamConfig := streamConfig{
+		replicasCount: config.natsReplicasCount,
+		maxMsgs:       config.sysStreamMaxMsgs,
+		maxBytes:      config.sysStreamMaxBytes,
+		maxAge:        config.sysStreamMaxAge,
+	}
+	kvStreamConfig := streamConfig{
+		replicasCount: config.natsReplicasCount,
+		maxMsgs:       config.kvStreamMaxMsgs,
+		maxBytes:      config.kvStreamMaxBytes,
+		maxAge:        config.kvStreamMaxAge,
+	}
+
+	r.Domain, err = NewDomain(r.nc, r.js, config.desiredHUBDomainName, ftStreamConfig, sysStreamConfig, kvStreamConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +195,10 @@ func (r *Runtime) createStreams(ctx context.Context) error {
 					Name:      ft.getStreamName(),
 					Subjects:  []string{ft.subject},
 					Retention: nats.InterestPolicy,
-					Replicas:  r.Domain.natsJsReplicasCount,
+					Replicas:  r.Domain.ftSC.replicasCount,
+					MaxMsgs:   r.Domain.ftSC.maxMsgs,
+					MaxBytes:  r.Domain.ftSC.maxBytes,
+					MaxAge:    r.Domain.ftSC.maxAge,
 				})
 				if err != nil {
 					logger.Errorf(context.TODO(), "Failed to add stream: %v", err)
