@@ -163,9 +163,8 @@ func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProces
 
 	payload := easyjson.NewJSONObjectWithKeyValue("details", easyjson.NewJSON(true))
 
+	RecalculateInheritanceCacheForTypeAtSelfIDIfNeeded(ctx) // Will try to do operationKeysMutexLock(ctx, []string{selfID}, true) that's why it is before operationKeysMutexLock(ctx, []string{selfID}, false), otherwise deadlock appears
 	operationKeysMutexLock(ctx, []string{selfID}, false)
-
-	RecalculateInheritanceCacheForTypeAtSelfIDIfNeeded(ctx)
 
 	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &payload), ctx.Options))
 	operationKeysMutexUnlock(ctx)
