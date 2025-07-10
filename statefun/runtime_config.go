@@ -23,7 +23,7 @@ const (
 	SysStreamMaxAge             = 12 * time.Hour
 	KVStreamMaxMsgs             = -1 //unlimited
 	KVStreamMaxBytes            = -1 //unlimited
-	KVStreamMaxAge              = -1 //unlimited
+	KVStreamMaxAge              = 0  //unlimited
 	activePassiveMode           = true
 )
 
