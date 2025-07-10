@@ -117,6 +117,12 @@ func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 
 	operationKeysMutexLock(ctx, []string{selfID}, true)
 
+	goal := PolyTypeCascadeDeleteGoalType{
+		reason: SuperTypeDelete,
+		target: "",
+	}
+	polyTypeData := PolyTypeGoalPrepare(ctx, goal)
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	// Vertice's out links are stored in the same domain with the vertex
@@ -138,6 +144,9 @@ func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	operationKeysMutexUnlock(ctx)
 
 	om.AggregateOpMsg(m)
+
+	PolyTypeGoalFinalize(ctx, polyTypeData)
+
 	om.Reply()
 }
 
@@ -155,6 +164,9 @@ func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProces
 	payload := easyjson.NewJSONObjectWithKeyValue("details", easyjson.NewJSON(true))
 
 	operationKeysMutexLock(ctx, []string{selfID}, false)
+
+	RecalculateInheritanceCacheForTypeAtSelfIDIfNeeded(ctx)
+
 	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &payload), ctx.Options))
 	operationKeysMutexUnlock(ctx)
 
@@ -522,6 +534,12 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		return
 	}
 
+	goal := PolyTypeCascadeDeleteGoalType{
+		reason: SuperTypeDeleteOutTypeObjectLink,
+		target: "",
+	}
+	polyTypeData := PolyTypeGoalPrepare(ctx, goal)
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	toType, ok := ctx.Payload.GetByPath("to").AsString()
@@ -565,6 +583,8 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	objectLink.SetByPath("type", easyjson.NewJSON(TO_TYPELINK))
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &objectLink), ctx.Options)))
 	operationKeysMutexUnlock(ctx)
+
+	PolyTypeGoalFinalize(ctx, polyTypeData)
 
 	for _, lateTrigger := range lateTriggersArr {
 		executeTriggersFromLLOpStack(ctx, lateTrigger, "", "")
