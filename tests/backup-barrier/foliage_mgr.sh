@@ -44,11 +44,11 @@ nats_cmd() {
 
     [ -n "$NATS_USER" ] && [ -n "$NATS_PASSWORD" ] && auth_str="${NATS_USER}:${NATS_PASSWORD}@"
 
-    local server_urls="nats://${auth_str}nats1:4222,nats://${auth_str}nats2:4222,nats://${auth_str}nats3:4222"
+    local server_url="nats://${auth_str}nats:4222"
 
     debug "Executing NATS command: nats $cmd $args --server=[URLs]"
 
-    docker compose -f "$COMPOSE_FILE" exec io nats $cmd $args --server="$server_urls"
+    docker compose -f "$COMPOSE_FILE" exec io nats $cmd $args --server="$server_url"
     return $?
 }
 
@@ -56,9 +56,9 @@ nats_cmd() {
 do_backup() {
     log "Starting Foliage JetStream backup"
 
-    if ! docker compose -f "$COMPOSE_FILE" ps | grep -q "nats[1-3].*Up"; then
+    if ! docker compose -f "$COMPOSE_FILE" ps | grep -q "nats.*Up"; then
         log "Starting NATS services..."
-        docker compose -f "$COMPOSE_FILE" up -d nats1 nats2 nats3 io
+        docker compose -f "$COMPOSE_FILE" up -d nats io
         sleep 10
     fi
 
@@ -84,7 +84,7 @@ do_backup() {
     docker compose -f "$COMPOSE_FILE" exec io chmod 755 "${container_backup_path}" "${container_archive_path}"
 
     set_write_barrier
-    
+
     wait_for_cache_ready
 
     log "Creating JetStream backup"
@@ -175,7 +175,7 @@ do_restore() {
     docker compose -f "$COMPOSE_FILE" down
 
     log "Starting NATS cluster..."
-    docker compose -f "$COMPOSE_FILE" up -d nats1 nats2 nats3 io
+    docker compose -f "$COMPOSE_FILE" up -d nats io
     sleep 10
 
     local temp_restore_dir
@@ -301,7 +301,7 @@ set_write_barrier() {
 
     log "Setting write barrier..."
     docker compose -f "$COMPOSE_FILE" exec io nats kv put "$bucket" "__backup_lock_" "$barrier_json" \
-        --server="nats://${NATS_USER}:${NATS_PASSWORD}@nats1:4222,nats://${NATS_USER}:${NATS_PASSWORD}@nats2:4222,nats://${NATS_USER}:${NATS_PASSWORD}@nats3:4222"
+        --server="nats://${NATS_USER}:${NATS_PASSWORD}@nats:4222"
 }
 
 remove_write_barrier() {
@@ -310,7 +310,7 @@ remove_write_barrier() {
 
     log "Removing write barrier..."
     docker compose -f "$COMPOSE_FILE" exec io nats kv put "$bucket" "__backup_lock_" "$barrier_json" \
-        --server="nats://${NATS_USER}:${NATS_PASSWORD}@nats1:4222,nats://${NATS_USER}:${NATS_PASSWORD}@nats2:4222,nats://${NATS_USER}:${NATS_PASSWORD}@nats3:4222"
+        --server="nats://${NATS_USER}:${NATS_PASSWORD}@nats:4222"
 }
 
 wait_for_cache_ready() {
