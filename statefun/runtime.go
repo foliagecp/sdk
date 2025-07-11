@@ -90,6 +90,10 @@ func (r *Runtime) RegisterOnAfterStartFunction(f OnAfterStartFunction, async boo
 // Start initializes streams and starts function subscriptions.
 // It also handles graceful shutdown via context.Context.
 func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
+	if intervalMins := system.GetEnvMustProceed("HEAP_WATCHER_INTERVAL_MINS", 0); intervalMins > 0 {
+		go system.StartHeapWatcher(float32(intervalMins))
+	}
+
 	logger := lg.NewLogger(lg.Options{ReportCaller: true, Level: lg.InfoLevel})
 
 	// Create streams if they do not exist.
@@ -113,7 +117,9 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 			}
 		} else {
 			r.config.activeRevID = revID
-			defer KeyMutexUnlock(ctx, r, system.GetHashStr(RuntimeName), revID)
+			defer func() {
+				system.MsgOnErrorReturn(KeyMutexUnlock(ctx, r, system.GetHashStr(RuntimeName), revID))
+			}()
 		}
 	} else {
 		r.config.isActiveInstance = true
@@ -324,7 +330,7 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 	//release all functions
 	releaseAllLocks := func(ctx context.Context, runtime *Runtime, revisions map[string]uint64) {
 		for ftName, revID := range revisions {
-			KeyMutexUnlock(ctx, runtime, system.GetHashStr(ftName), revID)
+			system.MsgOnErrorReturn(KeyMutexUnlock(ctx, runtime, system.GetHashStr(ftName), revID))
 		}
 	}
 	defer releaseAllLocks(ctx, r, revisions)

@@ -180,7 +180,7 @@ func (wp *SFWorkerPool) manager() {
 				},
 			}
 
-			submit(task)
+			system.MsgOnErrorReturn(submit(task))
 		}
 	}
 

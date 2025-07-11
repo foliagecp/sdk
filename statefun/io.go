@@ -327,7 +327,9 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 			}
 			functionMsg.RefusalCallback = func(_ bool) {
 				defer func() {
-					recover() // in case channel is already closed
+					if r := recover(); r != nil { // in case channel is already closed
+						logger.Logf(logger.ErrorLevel, "panic in request functionMsg.RefusalCallback close(resultJSONChannel) caller:%s:%s target:%s:%s: %v", callerTypename, callerID, targetTypename, targetID, r)
+					}
 				}()
 				close(resultJSONChannel)
 			}

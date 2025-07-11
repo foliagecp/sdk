@@ -145,6 +145,7 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	} else {
 		msgChannel = make(chan FunctionTypeMsg, ft.config.idChannelSize)
 		ft.idHandlersChannel.Store(id, msgChannel)
+		ft.idHandlersLastMsgTime.Store(id, 0) // no time yet
 	}
 	ft.prometricsMeasureIdChannels()
 
@@ -297,8 +298,8 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 	}
 	// -------------------------------------------------------
 
-	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_execution_time", "", []string{"typename", "id"}); err == nil {
-		gaugeVec.With(prometheus.Labels{"typename": ft.name, "id": id}).Set(float64(time.Since(start).Microseconds()))
+	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_execution_time", "", []string{"typename"}); err == nil {
+		gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(float64(time.Since(start).Microseconds()))
 	}
 
 	if msg.AckCallback != nil {

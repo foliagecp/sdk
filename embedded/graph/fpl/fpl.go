@@ -124,8 +124,8 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 					intersectionUUIDs = newIntersectionUUIDs
 				}
 			}()
-			wg.Wait()
 		}
+		wg.Wait()
 
 		// Append result into finalUUIDs ------------------
 		for uuid := range intersectionUUIDs {
