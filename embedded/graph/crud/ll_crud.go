@@ -213,6 +213,9 @@ Reply:
 func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
 
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	ctx.Payload.SetByPath("op_time", easyjson.NewJSON(opTime))
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	payload := ctx.Payload
@@ -250,8 +253,6 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		body = *newBody
 	}
 
-	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
-
 	ctx.Domain.Cache().SetValue(selfID, body.ToBytes(), true, opTime, "")
 	indexVertexBody(ctx, body, opTime, true)
 
@@ -280,6 +281,9 @@ Reply:
 */
 func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
+
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	_, err := ctx.Domain.Cache().GetValue(selfID)
@@ -300,6 +304,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 		deleteLinkPayload := easyjson.NewJSONObject()
 		deleteLinkPayload.SetByPath("name", easyjson.NewJSON(linkName))
+		deleteLinkPayload.SetByPath("op_time", easyjson.NewJSON(opTime))
 		//fmt.Println("             Deleting OUT link:", selfID, linkName)
 		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &deleteLinkPayload), ctx.Options)))
 		mergeOpStack(opStack, om.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
@@ -320,6 +325,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 		deleteLinkPayload := easyjson.NewJSONObject()
 		deleteLinkPayload.SetByPath("name", easyjson.NewJSON(linkName))
+		deleteLinkPayload.SetByPath("op_time", easyjson.NewJSON(opTime))
 		//fmt.Println("             Deleting IN link:", fromObjectID, linkName)
 		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", makeSequenceFreeParentBasedID(ctx, fromObjectID), injectParentHoldsLocks(ctx, &deleteLinkPayload), ctx.Options)))
 		mergeOpStack(opStack, om.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
@@ -335,8 +341,6 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	if opStack != nil {
 		oldBody = getVertexBody(ctx, selfID)
 	}
-
-	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
 
 	ctx.Domain.Cache().DeleteValue(selfID, true, opTime, "") // Delete vertex's body
 	indexRemoveVertexBody(ctx)
@@ -485,6 +489,9 @@ Reply:
 */
 func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
+
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	forceCreate := ctx.Payload.GetByPath("force").AsBoolDefault(false)
@@ -497,7 +504,6 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	payload := ctx.Payload
 	opStack := getOpStackFromOptions(ctx.Options)
-	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
 
 	if payload.PathExists("in_name") {
 		if inLinkName, ok := payload.GetByPath("in_name").AsString(); ok && len(inLinkName) > 0 {
@@ -605,6 +611,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		nextCallPayload := easyjson.NewJSONObject()
 		nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
 		nextCallPayload.SetByPath("in_type", easyjson.NewJSON(linkType))
+		nextCallPayload.SetByPath("op_time", easyjson.NewJSON(opTime))
 
 		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, makeSequenceFreeParentBasedID(ctx, toId, "inlink"), injectParentHoldsLocks(ctx, &nextCallPayload), ctx.Options)))
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
@@ -649,13 +656,15 @@ Reply:
 */
 func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
+
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	payload := ctx.Payload
 	upsert := payload.GetByPath("upsert").AsBoolDefault(false)
 
 	opStack := getOpStackFromOptions(ctx.Options)
-	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
 
 	//operationKeysMutexLock(ctx, []string{selfID}, true)
 	linkType, linkName, toId, linkExists := getFullLinkInfoFromSpecifiedIdentifier(ctx)
@@ -663,6 +672,7 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if upsert {
 			p := payload.Clone()
 			p.SetByPath("force", easyjson.NewJSON(true))
+			p.SetByPath("op_time", easyjson.NewJSON(opTime))
 			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &p), ctx.Options)))
 			//operationKeysMutexUnlock(ctx)
 			om.Reply()
@@ -764,12 +774,14 @@ Reply:
 */
 func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
+
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	payload := ctx.Payload
 
 	opStack := getOpStackFromOptions(ctx.Options)
-	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
 
 	if payload.PathExists("in_name") {
 		if inLinkName, ok := payload.GetByPath("in_name").AsString(); ok && len(inLinkName) > 0 {
@@ -835,6 +847,7 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		// Delete in link on descendant vertex --------------------
 		nextCallPayload := easyjson.NewJSONObject()
 		nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
+		nextCallPayload.SetByPath("op_time", easyjson.NewJSON(opTime))
 
 		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, makeSequenceFreeParentBasedID(ctx, toId, "inlink"), injectParentHoldsLocks(ctx, &nextCallPayload), ctx.Options)))
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
