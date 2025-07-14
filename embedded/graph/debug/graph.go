@@ -31,6 +31,11 @@ type gEdge struct {
 	body easyjson.JSON // link's body
 }
 
+type exportConfig struct {
+	excludeVertexFields []string
+	excludeEdgeFields   []string
+}
+
 /*
 Print Graph from certain id using Graphviz
 
@@ -38,7 +43,12 @@ Algorithm: Sync BFS
 
 	Payload: {
 		"depth": uint // optional, default: -1
-		"format": string // optional, default: "dot"
+		"format": string // "dot" | "graphml" - optional, default: "dot"
+		"json2xml": bool // whether to export bodies as json or xml (graphml only) - optional, default false
+		"exclude": { // Fields to exclude during export, optional
+			"vertex": ["__meta", "fieldX.fieldY" ...] // optional
+			"edge": ["field1", ...] // optional
+		}
 	}
 */
 func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
@@ -46,6 +56,14 @@ func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 	payload := ctx.Payload
 
 	maxDepth := int(payload.GetByPath("depth").AsNumericDefault(-1))
+
+	var conf exportConfig
+	if arr, ok := payload.GetByPath("exclude.vertex").AsArrayString(); ok {
+		conf.excludeVertexFields = arr
+	}
+	if arr, ok := payload.GetByPath("exclude.edge").AsArrayString(); ok {
+		conf.excludeEdgeFields = arr
+	}
 
 	nodes := map[string]*easyjson.JSON{}
 	uniqueEdges := map[string]struct{}{}
@@ -90,7 +108,7 @@ func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 	format := payload.GetByPath("format").AsStringDefault("dot")
 	switch format {
 	case "graphml":
-		fileData = createGraphML(ctx.Self.ID, ctx.Domain, nodes, edges, payload.GetByPath("json2xml").AsBoolDefault(false))
+		fileData = createGraphML(ctx.Self.ID, ctx.Domain, nodes, edges, conf, payload.GetByPath("json2xml").AsBoolDefault(false))
 	case "dot":
 		fileData = createGraphViz(ctx.Self.ID, ctx.Domain, nodes, edges)
 	default:

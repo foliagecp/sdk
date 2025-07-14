@@ -137,7 +137,21 @@ func ConvertToXML(name string, value interface{}) []Element {
 	}
 }
 
-func createGraphML(sourceVertex string, domain sfPlugins.Domain, nodes map[string]*easyjson.JSON, edges []gEdge, json2xml bool) string {
+func excludeFieldsFromBody(in *easyjson.JSON, fields2Exclude []string) (out *easyjson.JSON) {
+	if in == nil {
+		return
+	}
+	if fields2Exclude == nil {
+		return in
+	}
+	out = in.Clone().GetPtr()
+	for _, v := range fields2Exclude {
+		out.RemoveByPath(v)
+	}
+	return
+}
+
+func createGraphML(sourceVertex string, domain sfPlugins.Domain, nodes map[string]*easyjson.JSON, edges []gEdge, conf exportConfig, json2xml bool) string {
 	outNodes := []Node{}
 	nodeIds := make([]string, 0, len(nodes))
 	for nodeId := range nodes {
@@ -146,6 +160,7 @@ func createGraphML(sourceVertex string, domain sfPlugins.Domain, nodes map[strin
 	sort.Strings(nodeIds)
 	for _, nodeId := range nodeIds {
 		body := nodes[nodeId]
+		body = excludeFieldsFromBody(body, conf.excludeVertexFields)
 		outNode := Node{
 			Id:         nodeId,
 			Attributes: []interface{}{},
@@ -175,6 +190,8 @@ func createGraphML(sourceVertex string, domain sfPlugins.Domain, nodes map[strin
 	outEdges := []Edge{}
 	for _, edgeId := range edgeIds {
 		edge := edges[edgesMap[edgeId]]
+		body := edge.body.GetPtr()
+		body = excludeFieldsFromBody(body, conf.excludeEdgeFields)
 		outEdge := Edge{
 			Source: edge.from,
 			Target: edge.to,
@@ -183,13 +200,13 @@ func createGraphML(sourceVertex string, domain sfPlugins.Domain, nodes map[strin
 				AttributeInnerXML{Key: LINK_TYPE_STRING_ATTR_ID, Data: edge.tp},
 			},
 		}
-		if edge.body.IsNonEmptyObject() {
+		if body.IsNonEmptyObject() {
 			if json2xml {
-				if b, ok := edge.body.AsObject(); ok {
+				if b, ok := body.AsObject(); ok {
 					outEdge.Attributes = append(outEdge.Attributes, AttributeInnerXML{Key: BODY_XML_ATTR_ID, Data: ConvertToXML("body", b)})
 				}
 			} else {
-				outEdge.Attributes = append(outEdge.Attributes, AttributeCharData{Key: BODY_JSON_ATTR_ID, Data: edge.body.ToString()})
+				outEdge.Attributes = append(outEdge.Attributes, AttributeCharData{Key: BODY_JSON_ATTR_ID, Data: body.ToString()})
 			}
 		}
 		for _, tag := range edge.tags {
