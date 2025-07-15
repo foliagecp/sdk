@@ -7,7 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get upgrade -y && apt-get install -y \
       build-essential gcc
 
-COPY . .
+COPY ../nats-cluster-test .
 
 RUN go mod tidy
 

@@ -63,7 +63,7 @@ services:
         condition: service_healthy
     build:
       context: ../..
-      dockerfile: tests/nats-cluster-test/Dockerfile
+      dockerfile: Dockerfile
     volumes:
       - .:/foliage
     scale: 3
