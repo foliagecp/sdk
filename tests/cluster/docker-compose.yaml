@@ -52,7 +52,7 @@ services:
       - ./healthcheck-nats.sh:/healthcheck-nats.sh:ro
 
   runtime:
-    image: foliage-sdk-tests-basic:latest
+    image: foliage-sdk-tests-cluster:latest
     command: "/usr/bin/foliage -ll 5"
     ports:
       - "9901-9903:9901"
@@ -63,7 +63,7 @@ services:
         condition: service_healthy
     build:
       context: ../..
-      dockerfile: Dockerfile
+      dockerfile: tests/cluster/Dockerfile
     volumes:
       - .:/foliage
     scale: 3

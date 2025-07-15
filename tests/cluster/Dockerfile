@@ -7,11 +7,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get upgrade -y && apt-get install -y \
       build-essential gcc
 
-COPY ../nats-cluster-test .
+COPY . .
 
 RUN go mod tidy
 
-RUN cd ./tests/nats-cluster-test && go build -o /usr/bin/foliage
+RUN cd ./tests/cluster && go build -o /usr/bin/foliage
 
 FROM ubuntu:22.04
 
