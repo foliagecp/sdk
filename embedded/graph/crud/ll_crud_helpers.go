@@ -21,13 +21,14 @@ func getOpStackFromOptions(options *easyjson.JSON) *easyjson.JSON {
 	return opStack
 }
 
+// getOpTimeFromPayloadIfExist return operation time from payload or current time if operation time does not exist
 func getOpTimeFromPayloadIfExist(payload *easyjson.JSON) int64 {
-	opTime := int64(payload.GetByPath("op_time").AsNumericDefault(-1))
-	if opTime < 0 {
-		opTime = system.GetCurrentTimeNs()
-		payload.SetByPath("op_time", easyjson.NewJSON(opTime))
+	if payload != nil {
+		if opTime := int64(payload.GetByPath("op_time").AsNumericDefault(-1)); opTime > 0 {
+			return opTime
+		}
 	}
-	return opTime
+	return system.GetCurrentTimeNs()
 }
 
 func addVertexOpToOpStack(opStack *easyjson.JSON, opName string, vertexId string, oldBody *easyjson.JSON, newBody *easyjson.JSON) bool {
