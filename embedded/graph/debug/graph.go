@@ -307,6 +307,7 @@ func LLAPIImportGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statef
 			}
 		*/
 		lg.Logln(lg.InfoLevel, "Import is done")
+		om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONObject())).Reply()
 	default:
 		msg := fmt.Sprintf("%s – unsopported format", format)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(msg)).Reply()
