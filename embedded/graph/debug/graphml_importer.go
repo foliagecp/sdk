@@ -114,14 +114,14 @@ func ExtractBodyAsJSON(attrs []RawAttributeInnerXML) (easyjson.JSON, error) {
 		}
 	}
 
-	// Попробуем JSON-строку
+	// Try JSON body decoding
 	if bdjRaw != "" {
 		if js, ok := easyjson.JSONFromString(bdjRaw); ok {
 			return js, nil
 		}
 	}
 
-	// Попробуем XML-декодинг тела
+	// Try XML body decoding
 	if bdxRaw != "" {
 		var elements []Element
 		if err := xml.Unmarshal([]byte(bdxRaw), &elements); err == nil {
