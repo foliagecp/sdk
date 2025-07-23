@@ -35,17 +35,6 @@ func testObjectCall(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContext
 	system.MsgOnErrorReturn(statefun.ObjectCall(ctx, query, "function.tests.object.reader", nil, nil))
 }
 
-//func testObjectSignal(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-//	le := lg.GetLogger()
-//	le.Info(context.TODO(), "====================> TestObjectSignal")
-//	query := statefun.NewLinkQuery("datacenter-rack")
-//	err := statefun.ObjectSignal(ctx, query, "function.tests.object.reader", nil, nil)
-//	if err != nil {
-//		le.Errorf(context.TODO(), "Failed to send object signal: %v", err)
-//		return
-//	}
-//}
-
 func testReader(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	le := lg.GetLogger()
 	objectCtx := ctx.GetObjectContext()
