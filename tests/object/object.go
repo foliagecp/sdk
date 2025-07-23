@@ -30,8 +30,8 @@ var (
 
 func testObjectCall(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	le := lg.GetLogger()
-	le.Info(context.TODO(), "====================> TestObjectRequest")
-	query := statefun.NewLinkQuery("datacenter-rack")
+	le.Info(context.TODO(), "====================> TestObjectCall")
+	query := statefun.NewLinkQuery("rack-server")
 	system.MsgOnErrorReturn(statefun.ObjectCall(ctx, query, "function.tests.object.reader", nil, nil))
 }
 
@@ -43,7 +43,7 @@ func testReader(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 		if !ok {
 			return
 		}
-		le.Infof(context.TODO(), "====================> Object context: %+v", body)
+		le.Infof(context.TODO(), "====================> Object %v context: %+v", ctx.Self.ID, body)
 	} else {
 		le.Infof(context.TODO(), "====================> Object context is nil")
 	}
