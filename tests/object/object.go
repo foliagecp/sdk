@@ -23,7 +23,7 @@ import (
 
 var (
 	// NatsURL - nats server url
-	NatsURL string = system.GetEnvMustProceed("NATS_URL", "nats://nats:foliage@nats:4222")
+	NatsURL = system.GetEnvMustProceed("NATS_URL", "nats://nats:foliage@nats:4222")
 
 	dbClient db.DBSyncClient
 )
@@ -62,13 +62,6 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 		testObjectCall,
 		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect),
 	)
-
-	//statefun.NewFunctionType(
-	//	runtime,
-	//	"functions.tests.object.request",
-	//	testObjectRequest,
-	//	*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect),
-	//)
 
 	statefun.NewFunctionType(
 		runtime,
