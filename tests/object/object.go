@@ -31,42 +31,32 @@ var (
 func testObjectRequest(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	le := lg.GetLogger()
 	le.Info(context.TODO(), "====================> TestObjectRequest")
-	query := sfPlugins.NewLinkQuery("rack-rack")
-	//TODO call urself
-	res, err := ctx.ObjectRequest(sfPlugins.AutoRequestSelect, query, "functions.tests.object.reader", ctx.Self.ID, nil, nil)
+	query := sfPlugins.NewLinkQuery("datacenter-rack")
+	res, err := ctx.ObjectRequest(sfPlugins.AutoRequestSelect, query, "functions.cmdb.api.object.read", ctx.Self.ID, nil, nil)
 	if err != nil {
 		le.Errorf(context.TODO(), "====================> failed to call: %v", err)
 		return
 	}
 
-	le.Infof(context.TODO(), "====================> Object %v response: %+v", ctx.Self.ID, res)
+	for k, v := range res {
+		if v.ReqError == nil && v.ReqReply != nil {
+			le.Infof(context.TODO(), "====================> TestObjectRequest on %v response: %+v", k, v.ReqReply)
+		}
+	}
 }
 
 func testObjectSignal(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	le := lg.GetLogger()
 	le.Info(context.TODO(), "====================> TestObjectSignal")
-	query := sfPlugins.NewLinkQuery("rack-rack")
-	//TODO call urself
-	res, err := ctx.ObjectSignal(sfPlugins.AutoSignalSelect, query, "functions.tests.object.reader", ctx.Self.ID, nil, nil)
+	query := sfPlugins.NewLinkQuery("datacenter-rack")
+	res, err := ctx.ObjectSignal(sfPlugins.AutoSignalSelect, query, "functions.cmdb.api.object.read", ctx.Self.ID, nil, nil)
 	if err != nil {
 		le.Errorf(context.TODO(), "====================> failed to call: %v", err)
 		return
 	}
 
-	le.Infof(context.TODO(), "====================> Object %v response: %+v", ctx.Self.ID, res)
-}
-
-func testReader(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	le := lg.GetLogger()
-	objectCtx := ctx.GetObjectContext()
-	if objectCtx != nil {
-		body, ok := objectCtx.AsObject()
-		if !ok {
-			return
-		}
-		le.Infof(context.TODO(), "====================> Object %v context: %+v", ctx.Self.ID, body)
-	} else {
-		le.Infof(context.TODO(), "====================> Object context is nil")
+	for k, v := range res {
+		le.Infof(context.TODO(), "====================> TestObjectSignal on %v error: %+v", k, v)
 	}
 }
 
@@ -79,24 +69,18 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 
 	statefun.NewFunctionType(
 		runtime,
-		"functions.tests.object.signal",
+		"functions.tests.objectsignal",
 		testObjectSignal,
 		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect),
 	)
 
 	statefun.NewFunctionType(
 		runtime,
-		"functions.tests.object.request",
+		"functions.tests.objectrequest",
 		testObjectRequest,
 		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect),
 	)
 
-	statefun.NewFunctionType(
-		runtime,
-		"functions.tests.object.reader",
-		testReader,
-		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect),
-	)
 }
 
 func Start() {
