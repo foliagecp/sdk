@@ -193,6 +193,12 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 			Request: func(requestProvider sfPlugins.RequestProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
 				return ft.runtime.request(requestProvider, ft.name, id, targetTypename, targetID, j, o)
 			},
+			ObjectSignal: func(signalProvider sfPlugins.SignalProvider, query sfPlugins.LinkQuery, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) (map[string]error, error) {
+				return ft.runtime.ObjectCallSignal(signalProvider, query, typename, id, payload, options)
+			},
+			ObjectRequest: func(requestProvider sfPlugins.RequestProvider, query sfPlugins.LinkQuery, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (map[string]*sfPlugins.ObjectRequestReply, error) {
+				return ft.runtime.ObjectCallRequest(requestProvider, query, typename, id, payload, options, timeout...)
+			},
 			Egress: func(egressProvider sfPlugins.EgressProvider, j *easyjson.JSON, customId ...string) error {
 				egressId := id
 				if len(customId) > 0 {
@@ -203,7 +209,7 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 			// To be assigned later:
 			// Call: ...
 			// Payload: ...
-			// Options: ... // Otions from initial typename declaration will be merged and overwritten by the incoming one in message
+			// Options: ... // Options from initial typename declaration will be merged and overwritten by the incoming one in message
 			// Caller: ...
 		}
 		ft.contextProcessors.Store(id, &v)
