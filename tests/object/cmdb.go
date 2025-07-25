@@ -209,6 +209,7 @@ func CreateTestCMDB() {
 
 	system.MsgOnErrorReturn(dbClient.CMDB.TypesLinkCreate("datacenter", "rack", "datacenter-rack", []string{"physical"}))
 	system.MsgOnErrorReturn(dbClient.CMDB.TypesLinkCreate("rack", "server", "rack-server", []string{"physical"}))
+	system.MsgOnErrorReturn(dbClient.CMDB.TypesLinkCreate("rack", "rack", "rack-rack", []string{"physical"}))
 	system.MsgOnErrorReturn(dbClient.CMDB.TypesLinkCreate("rack", "storage", "rack-storage", []string{"physical"}))
 	system.MsgOnErrorReturn(dbClient.CMDB.TypesLinkCreate("rack", "network", "rack-network", []string{"physical"}))
 	system.MsgOnErrorReturn(dbClient.CMDB.TypesLinkCreate("server", "storage", "server-storage", []string{"logical"}))
@@ -216,6 +217,11 @@ func CreateTestCMDB() {
 	system.MsgOnErrorReturn(dbClient.CMDB.TypesLinkCreate("network", "network", "network-network", []string{"logical"}))
 	system.MsgOnErrorReturn(dbClient.CMDB.TypesLinkCreate("sensor", "datacenter", "sensor-datacenter", []string{"monitoring"}))
 	system.MsgOnErrorReturn(dbClient.CMDB.TypesLinkCreate("sensor", "rack", "sensor-rack", []string{"monitoring"}))
+
+	containsBody := easyjson.NewJSONObject()
+	containsBody.SetByPath("zone", easyjson.NewJSON("A"))
+	containsBody.SetByPath("floor", easyjson.NewJSON(1))
+	system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkCreate("rack1", "rack1", "rack", []string{"physical"}, containsBody))
 
 	containsBody1 := easyjson.NewJSONObject()
 	containsBody1.SetByPath("zone", easyjson.NewJSON("A"))

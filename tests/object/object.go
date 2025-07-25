@@ -28,11 +28,32 @@ var (
 	dbClient db.DBSyncClient
 )
 
-func testObjectCall(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+func testObjectRequest(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	le := lg.GetLogger()
-	le.Info(context.TODO(), "====================> TestObjectCall")
-	query := statefun.NewLinkQuery("rack-server")
-	system.MsgOnErrorReturn(statefun.ObjectCall(ctx, query, "function.tests.object.reader", nil, nil))
+	le.Info(context.TODO(), "====================> TestObjectRequest")
+	query := sfPlugins.NewLinkQuery("rack-rack")
+	//TODO call urself
+	res, err := ctx.ObjectRequest(sfPlugins.AutoRequestSelect, query, "functions.tests.object.reader", ctx.Self.ID, nil, nil)
+	if err != nil {
+		le.Errorf(context.TODO(), "====================> failed to call: %v", err)
+		return
+	}
+
+	le.Infof(context.TODO(), "====================> Object %v response: %+v", ctx.Self.ID, res)
+}
+
+func testObjectSignal(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	le := lg.GetLogger()
+	le.Info(context.TODO(), "====================> TestObjectSignal")
+	query := sfPlugins.NewLinkQuery("rack-rack")
+	//TODO call urself
+	res, err := ctx.ObjectSignal(sfPlugins.AutoSignalSelect, query, "functions.tests.object.reader", ctx.Self.ID, nil, nil)
+	if err != nil {
+		le.Errorf(context.TODO(), "====================> failed to call: %v", err)
+		return
+	}
+
+	le.Infof(context.TODO(), "====================> Object %v response: %+v", ctx.Self.ID, res)
 }
 
 func testReader(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
@@ -58,14 +79,21 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 
 	statefun.NewFunctionType(
 		runtime,
-		"functions.tests.object.call",
-		testObjectCall,
+		"functions.tests.object.signal",
+		testObjectSignal,
 		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect),
 	)
 
 	statefun.NewFunctionType(
 		runtime,
-		"function.tests.object.reader",
+		"functions.tests.object.request",
+		testObjectRequest,
+		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect),
+	)
+
+	statefun.NewFunctionType(
+		runtime,
+		"functions.tests.object.reader",
 		testReader,
 		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect),
 	)
