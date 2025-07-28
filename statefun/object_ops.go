@@ -86,18 +86,14 @@ func queryBuilder(query sfPlugins.LinkQuery) string {
 	qb.WriteString(".")
 
 	if lName := query.GetName(); lName != "" {
-		qb.WriteString(fmt.Sprintf("%s", lName))
+		qb.WriteString(lName)
 	} else {
 		qb.WriteString("*")
 	}
 	qb.WriteString(fmt.Sprintf("[l:type('%s')", query.GetType()))
 
 	if len(query.GetTags()) > 0 {
-		tagsList := make([]string, len(query.GetTags()))
-		for i, tag := range query.GetTags() {
-			tagsList[i] = fmt.Sprintf("%s", tag)
-		}
-		qb.WriteString(fmt.Sprintf(" && l:tags('%s')", strings.Join(tagsList, ", ")))
+		qb.WriteString(fmt.Sprintf(" && l:tags('%s')", strings.Join(query.GetTags(), ", ")))
 	}
 
 	qb.WriteString("]")
