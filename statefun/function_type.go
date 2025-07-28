@@ -191,7 +191,7 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 				return ft.runtime.signal(signalProvider, ft.name, id, targetTypename, targetID, j, o)
 			},
 			Request: func(requestProvider sfPlugins.RequestProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
-				return ft.runtime.request(requestProvider, ft.name, id, targetTypename, targetID, j, o)
+				return ft.runtime.request(requestProvider, ft.name, id, targetTypename, targetID, j, o, timeout...)
 			},
 			Egress: func(egressProvider sfPlugins.EgressProvider, j *easyjson.JSON, customId ...string) error {
 				egressId := id
