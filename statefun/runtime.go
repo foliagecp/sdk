@@ -70,7 +70,26 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		return nil, err
 	}
 
-	r.Domain, err = NewDomain(r.nc, r.js, config.desiredHUBDomainName, config.natsReplicasCount)
+	ftStreamConfig := streamConfig{
+		replicasCount: config.natsReplicasCount,
+		maxMsgs:       config.ftStreamMaxMsgs,
+		maxBytes:      config.ftStreamMaxBytes,
+		maxAge:        config.ftStreamMaxAge,
+	}
+	sysStreamConfig := streamConfig{
+		replicasCount: config.natsReplicasCount,
+		maxMsgs:       config.sysStreamMaxMsgs,
+		maxBytes:      config.sysStreamMaxBytes,
+		maxAge:        config.sysStreamMaxAge,
+	}
+	kvStreamConfig := streamConfig{
+		replicasCount: config.natsReplicasCount,
+		maxMsgs:       config.kvStreamMaxMsgs,
+		maxBytes:      config.kvStreamMaxBytes,
+		maxAge:        config.kvStreamMaxAge,
+	}
+
+	r.Domain, err = NewDomain(r.nc, r.js, config.desiredHUBDomainName, ftStreamConfig, sysStreamConfig, kvStreamConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -90,6 +109,10 @@ func (r *Runtime) RegisterOnAfterStartFunction(f OnAfterStartFunction, async boo
 // Start initializes streams and starts function subscriptions.
 // It also handles graceful shutdown via context.Context.
 func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
+	if intervalMins := system.GetEnvMustProceed("HEAP_WATCHER_INTERVAL_MINS", 0); intervalMins > 0 {
+		go system.StartHeapWatcher(float32(intervalMins))
+	}
+
 	logger := lg.NewLogger(lg.Options{ReportCaller: true, Level: lg.InfoLevel})
 
 	// Create streams if they do not exist.
@@ -106,7 +129,7 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 		revID, err := KeyMutexLock(ctx, r, system.GetHashStr(RuntimeName), true)
 		if err != nil {
 			if errors.Is(err, ErrMutexLocked) {
-				lg.Logf(lg.WarnLevel, "Cant lock. Another runtime is already active")
+				lg.Logf(lg.DebugLevel, "Cant lock. Another runtime is already active")
 				r.config.isActiveInstance = false
 			} else {
 				return err
@@ -172,7 +195,10 @@ func (r *Runtime) createStreams(ctx context.Context) error {
 					Name:      ft.getStreamName(),
 					Subjects:  []string{ft.subject},
 					Retention: nats.InterestPolicy,
-					Replicas:  r.Domain.natsJsReplicasCount,
+					Replicas:  r.Domain.ftSC.replicasCount,
+					MaxMsgs:   r.Domain.ftSC.maxMsgs,
+					MaxBytes:  r.Domain.ftSC.maxBytes,
+					MaxAge:    r.Domain.ftSC.maxAge,
 				})
 				if err != nil {
 					logger.Errorf(context.TODO(), "Failed to add stream: %v", err)
@@ -350,7 +376,7 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 					newRevID, err := KeyMutexLock(ctx, r, system.GetHashStr(RuntimeName), true)
 					if err != nil {
 						if errors.Is(err, ErrMutexLocked) {
-							lg.Logf(lg.WarnLevel, "Cant lock. Another runtime is already active")
+							lg.Logf(lg.DebugLevel, "Cant lock. Another runtime is already active")
 							continue
 						} else {
 							lg.Logf(lg.ErrorLevel, "KeyMutexLock failed for %s: %v", RuntimeName, err)

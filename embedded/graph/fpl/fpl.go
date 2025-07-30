@@ -105,7 +105,7 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 		var wg sync.WaitGroup
 		for _, jpgqlQuery := range jpgqlIntersectionValidQueries {
 			wg.Add(1)
-			go func() {
+			go func(jpgqlQuery JPGQLRequestData) {
 				defer wg.Done()
 
 				payload := easyjson.NewJSONObjectWithKeyValue("query", easyjson.NewJSON(jpgqlQuery.request))
@@ -123,9 +123,9 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 					}
 					intersectionUUIDs = newIntersectionUUIDs
 				}
-			}()
-			wg.Wait()
+			}(jpgqlQuery)
 		}
+		wg.Wait()
 
 		// Append result into finalUUIDs ------------------
 		for uuid := range intersectionUUIDs {
