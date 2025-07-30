@@ -61,19 +61,26 @@ func (w *WorkflowEngine) RegisterStatefun(runtime *statefun.Runtime) {
 }
 
 func (w *WorkflowEngine) workflowStatefun(_ sfPlugins.StatefunExecutor, sfctx *sfPlugins.StatefunContextProcessor) {
+	starting := true
+
 	ctxData := sfctx.GetFunctionContext()
 	secret := ctxData.GetByPath("secret").AsStringDefault("")
 	if len(secret) == 0 {
 		secret = system.GetUniqueStrID()
 		ctxData.SetByPath("secret", easyjson.NewJSON(secret))
 		sfctx.SetFunctionContext(ctxData)
+	} else {
+		starting = false
 	}
 
 	callerIdTokens := strings.Split(sfctx.Domain.GetObjectIDWithoutDomain(sfctx.Caller.ID), "-")
 	if len(callerIdTokens) == 2 && callerIdTokens[1] == secret {
 		if err := w.setActivityResultIntoStatefunCtx(callerIdTokens[0], *sfctx.Payload, sfctx); err != nil {
 			lg.Logln(lg.WarnLevel, "Workflow %s received activity callback, but could not process it: %s", sfctx.Self.ID, err.Error())
+			return // cannot continue
 		}
+	} else if !starting {
+		return // cannot continue
 	}
 
 	tools := WorkflowTools{
