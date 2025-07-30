@@ -309,7 +309,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 
 	cs.ctx, cs.cancel = context.WithCancel(ctx)
 
-	cs.clearBackupBarrier()
+	system.MsgOnErrorReturn(cs.clearBackupBarrier())
 
 	storeUpdatesHandler := func(cs *Store) {
 		system.GlobalPrometrics.GetRoutinesCounter().Started("cache.storeUpdatesHandler")

@@ -84,7 +84,7 @@ func (gc GraphSyncClient) VerticesLinkCreate(from, to, linkName, linkType string
 		payload.SetByPath("body", body[0])
 	}
 	if len(tags) > 0 {
-		payload.SetByPath("tags", easyjson.JSONFromArray(tags))
+		payload.SetByPath("tags", easyjson.NewJSON(tags))
 	}
 
 	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.link.create", seqFree(from), &payload, nil)))
@@ -97,7 +97,7 @@ func (gc GraphSyncClient) VerticesLinkUpdate(from, linkName string, tags []strin
 	payload.SetByPath("body", body)
 	payload.SetByPath("replace", easyjson.NewJSON(replace))
 	if len(tags) > 0 {
-		payload.SetByPath("tags", easyjson.JSONFromArray(tags))
+		payload.SetByPath("tags", easyjson.NewJSON(tags))
 	}
 	if len(toAndType4Upsert) > 0 {
 		if len(toAndType4Upsert) == 2 {
@@ -120,7 +120,7 @@ func (gc GraphSyncClient) VerticesLinkUpdateByToAndType(from, to, linkType strin
 
 	payload.SetByPath("body", body)
 	if len(tags) > 0 {
-		payload.SetByPath("tags", easyjson.JSONFromArray(tags))
+		payload.SetByPath("tags", easyjson.NewJSON(tags))
 	}
 	if len(name4Upsert) > 0 {
 		payload.SetByPath("upsert", easyjson.NewJSON(true))

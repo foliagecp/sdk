@@ -107,7 +107,8 @@ func deleteObjectOutLinkIfInvalidByInheritance(ctx *sfPlugins.StatefunContextPro
 			objectLink := easyjson.NewJSONObject()
 			objectLink.SetByPath("to", easyjson.NewJSON(toObjectId))
 			objectLink.SetByPath("type", easyjson.NewJSON(outLinkType))
-			ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", makeSequenceFreeParentBasedID(ctx, fromObjectId), injectParentHoldsLocks(ctx, &objectLink), ctx.Options)
+			_, err := ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", makeSequenceFreeParentBasedID(ctx, fromObjectId), injectParentHoldsLocks(ctx, &objectLink), ctx.Options)
+			system.MsgOnErrorReturn(err)
 		}
 	}
 }
@@ -175,7 +176,8 @@ func UpdateTypeModelVersion(ctx *sfPlugins.StatefunContextProcessor) {
 
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("body.version", easyjson.NewJSON(system.GetUniqueStrID()))
-	ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.update", makeSequenceFreeParentBasedID(ctx, typesVertexId), injectParentHoldsLocks(ctx, &payload), nil)
+	_, err := ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.update", makeSequenceFreeParentBasedID(ctx, typesVertexId), injectParentHoldsLocks(ctx, &payload), nil)
+	system.MsgOnErrorReturn(err)
 }
 
 func RecalculateInheritanceCacheForTypeAtSelfIDIfNeeded(ctx *sfPlugins.StatefunContextProcessor) {
@@ -206,13 +208,14 @@ func RecalculateInheritanceCacheForTypeAtSelfIDIfNeeded(ctx *sfPlugins.StatefunC
 
 		newTypeBody := typeBody.Clone()
 		newTypeBody.RemoveByPath("cache")
-		newTypeBody.SetByPath("cache.parent_types", easyjson.JSONFromArray(keys))
+		newTypeBody.SetByPath("cache.parent_types", easyjson.NewJSON(keys))
 		newTypeBody.SetByPath("cache.version", easyjson.NewJSON(typeModelVersion))
 
 		payload := easyjson.NewJSONObject()
 		payload.SetByPath("body", newTypeBody)
 		payload.SetByPath("replace", easyjson.NewJSON(true))
-		ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.update", makeSequenceFreeParentBasedID(ctx, ctx.Self.ID), injectParentHoldsLocks(ctx, &payload), nil)
+		_, err := ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.update", makeSequenceFreeParentBasedID(ctx, ctx.Self.ID), injectParentHoldsLocks(ctx, &payload), nil)
+		system.MsgOnErrorReturn(err)
 	}
 }
 

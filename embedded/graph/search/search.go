@@ -134,7 +134,7 @@ func FieldValuePartialMatch(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 		commonFieldsArray = append(commonFieldsArray, k)
 	}
 	result.SetByPath("match.objects", resultObjects)
-	result.SetByPath("match.fields", easyjson.JSONFromArray(commonFieldsArray))
+	result.SetByPath("match.fields", easyjson.NewJSON(commonFieldsArray))
 
 	om.AggregateOpMsg(sfMediators.OpMsgOk(result)).Reply()
 }
