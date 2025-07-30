@@ -1,81 +1,130 @@
 package workflow
 
 import (
-	"context"
+	"fmt"
+	"strings"
 
+	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/statefun"
+	lg "github.com/foliagecp/sdk/statefun/logger"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
+	"github.com/foliagecp/sdk/statefun/system"
 )
 
-type execActivityFunction func(ctx context.Context, cancel context.CancelFunc, activity WorkflowActivity)
+const (
+	CTX_CALLBACK_RESULT_PATH = "workflow.callback.%s.result"
+)
 
 type WorkflowTools struct {
-	ExecActivity execActivityFunction
+	ctx                   *sfPlugins.StatefunContextProcessor
+	secret                string
+	workflow              *WorkflowEngine
+	callbackUUIDGenerator int
 }
 
-// type WorkflowLogicHandler func(context context.Context, cancel context.CancelFunc)
-type WorkflowLogicHandler func(ctx context.Context, cancel context.CancelFunc, tools WorkflowTools)
+func (wt *WorkflowTools) ExecActivity(activity *WorkflowActivity, data easyjson.JSON) *easyjson.JSON {
+	wt.callbackUUIDGenerator++
+
+	strUUID := fmt.Sprint(wt.callbackUUIDGenerator)
+	if existingResult, ok := wt.workflow.getActivityResultFromStatefunCtx(strUUID, wt.ctx); ok {
+		return &existingResult
+	}
+
+	wt.ctx.Signal(sfPlugins.AutoSignalSelect, activity.statefunName, strUUID+"-"+wt.secret, &data, wt.ctx.Options)
+
+	panic(workflowStop{}) // Soft workflow termination
+}
+
+type workflowStop struct{}
+
+type WorkflowLogicHandler func(tools WorkflowTools)
 
 type WorkflowEngine struct {
+	statefunName string
 	logicHandler WorkflowLogicHandler
-	sfctx        *sfPlugins.StatefunContextProcessor
 }
 
-func (w *WorkflowEngine) SetLogicHandler(logicHandler WorkflowLogicHandler) {
-	w.logicHandler = logicHandler
-}
-
-func (w *WorkflowEngine) GetStatefunHandler() statefun.FunctionLogicHandler {
-	return w.workflowStatefun
-}
-
-/*
-	{
-		"timeout_sec": int, not requred, default: -1 (infinite)
-		"upsert": bool - optional, default: false
-		"replace": bool - optional, default: false
-		"body": json
+func NewWorkflowEngine(logicHandler WorkflowLogicHandler, statefunName string) *WorkflowEngine {
+	return &WorkflowEngine{
+		statefunName: statefunName,
+		logicHandler: logicHandler,
 	}
-*/
+}
+
+func (w *WorkflowEngine) RegisterStatefun(runtime *statefun.Runtime) {
+	statefun.NewFunctionType(
+		runtime,
+		w.statefunName,
+		w.workflowStatefun,
+		*statefun.NewFunctionTypeConfig().SetMultipleInstancesAllowance(false).SetMaxIdHandlers(-1),
+	)
+}
+
 func (w *WorkflowEngine) workflowStatefun(_ sfPlugins.StatefunExecutor, sfctx *sfPlugins.StatefunContextProcessor) {
-	// Check whether instantiated via callback or not
-	// If via callback -
+	ctxData := sfctx.GetFunctionContext()
+	secret := ctxData.GetByPath("secret").AsStringDefault("")
+	if len(secret) == 0 {
+		secret = system.GetUniqueStrID()
+		ctxData.SetByPath("secret", easyjson.NewJSON(secret))
+		sfctx.SetFunctionContext(ctxData)
+	}
 
-	w.sfctx = sfctx
-
-	ctx, cancel := context.WithCancel(context.Background())
+	callerIdTokens := strings.Split(sfctx.Domain.GetObjectIDWithoutDomain(sfctx.Caller.ID), "-")
+	if len(callerIdTokens) == 2 && callerIdTokens[1] == secret {
+		if err := w.setActivityResultIntoStatefunCtx(callerIdTokens[0], *sfctx.Payload, sfctx); err != nil {
+			lg.Logln(lg.WarnLevel, "Workflow %s received activity callback, but could not process it: %s", sfctx.Self.ID, err.Error())
+		}
+	}
 
 	tools := WorkflowTools{
-		ExecActivity: w.execActivityFunction,
+		ctx:                   sfctx,
+		secret:                secret,
+		workflow:              w,
+		callbackUUIDGenerator: 0,
 	}
 
-	w.logicHandler(ctx, cancel, tools)
-
-	/*
-		w.logicHandler must be implemented like this:
-
-
-		{
-			done := make(chan struct{})
-
-			go func() {
-				defer close(done)
-
-				!!!!!! Workflow engine code here !!!!!!!
-			}()
-
-			select {
-			case <-ctx.Done():
-				fmt.Println("parent: received cancel signal, exiting")
-			case <-done:
-				fmt.Println("logicHandler finished")
-			case <-time.After(5 * time.Second):
-				fmt.Println("parent: done waiting")
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(workflowStop); ok {
+				// soft stop
+				return
 			}
+			// real panic
+			panic(r)
 		}
-	*/
+	}()
+
+	w.logicHandler(tools)
+
+	// clean function context when workflow has reached its end
+	sfctx.SetFunctionContext(easyjson.NewJSONObject().GetPtr())
 }
 
-func (w *WorkflowEngine) execActivityFunction(ctx context.Context, cancel context.CancelFunc, activity WorkflowActivity) {
-	activity.Execute(ctx, cancel, w.sfctx)
+func (w *WorkflowEngine) getActivityResultFromStatefunCtx(activityUUID string, sfctx *sfPlugins.StatefunContextProcessor) (res easyjson.JSON, exists bool) {
+	funcContext := sfctx.GetFunctionContext()
+
+	resPath := fmt.Sprintf(CTX_CALLBACK_RESULT_PATH, activityUUID)
+
+	if funcContext.PathExists(resPath) {
+		return funcContext.GetByPath(resPath), true
+	}
+
+	return easyjson.NewJSONObject(), false
+}
+
+func (w *WorkflowEngine) setActivityResultIntoStatefunCtx(activityUUID string, data easyjson.JSON, sfctx *sfPlugins.StatefunContextProcessor) error {
+	funcContext := sfctx.GetFunctionContext()
+
+	resPath := fmt.Sprintf(CTX_CALLBACK_RESULT_PATH, activityUUID)
+
+	if funcContext.PathExists(resPath) {
+		return fmt.Errorf("data for this activityId already exists")
+	}
+	if ok := funcContext.SetByPath(resPath, data); !ok {
+		return fmt.Errorf("could not set data by path '%s'", resPath)
+	}
+
+	sfctx.SetFunctionContext(funcContext)
+
+	return nil
 }

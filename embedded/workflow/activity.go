@@ -1,45 +1,52 @@
 package workflow
 
 import (
-	"context"
-
 	"github.com/foliagecp/easyjson"
+	"github.com/foliagecp/sdk/statefun"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
 type ActivityTools struct {
-	Signal sfPlugins.SFSignalFunc
+	SFctx  *sfPlugins.StatefunContextProcessor
+	result *easyjson.JSON
 }
 
-type WorkflowActivityLogicHandler func(ctx context.Context, cancel context.CancelFunc, tools ActivityTools)
+func (at *ActivityTools) ReplyWith(result easyjson.JSON) {
+	*at.result = result
+}
+
+type WorkflowActivityLogicHandler func(tools ActivityTools)
 
 type WorkflowActivity struct {
+	statefunName string
 	logicHandler WorkflowActivityLogicHandler
-	sfctx        *sfPlugins.StatefunContextProcessor
 }
 
-func (a *WorkflowActivity) SetLogicHandler(logicHandler WorkflowActivityLogicHandler) {
-	a.logicHandler = logicHandler
+func NewWorkflowActivity(logicHandler WorkflowActivityLogicHandler, statefunName string) *WorkflowActivity {
+	return &WorkflowActivity{
+		statefunName: statefunName,
+		logicHandler: logicHandler,
+	}
 }
 
-func (a *WorkflowActivity) Execute(ctx context.Context, cancel context.CancelFunc, sfctx *sfPlugins.StatefunContextProcessor) {
-	a.sfctx = sfctx
+func (a *WorkflowActivity) RegisterStatefun(runtime *statefun.Runtime) {
+	statefun.NewFunctionType(
+		runtime,
+		a.statefunName,
+		a.activityStatefun,
+		*statefun.NewFunctionTypeConfig().SetMultipleInstancesAllowance(false).SetMaxIdHandlers(-1),
+	)
+}
 
-	// Generate UID for this activity whithin its parent workflow
-	// Check whether result for this activity exection already exists in sfctx
-	// If exist - return result as it is from sfctx
+func (a *WorkflowActivity) activityStatefun(_ sfPlugins.StatefunExecutor, sfctx *sfPlugins.StatefunContextProcessor) {
+	result := easyjson.NewJSONObject().GetPtr()
 
 	tools := ActivityTools{
-		Signal: a.signal,
+		SFctx:  sfctx,
+		result: result,
 	}
 
-	a.logicHandler(ctx, cancel, tools)
+	a.logicHandler(tools)
 
-	//cancel()
-}
-
-func (a *WorkflowActivity) signal(signalProvider sfPlugins.SignalProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) error {
-	// a.sfctx - save the fact of signalling
-	// signal with a callback
-	return nil
+	sfctx.Signal(sfPlugins.AutoSignalSelect, sfctx.Caller.Typename, sfctx.Caller.ID, result, sfctx.Options)
 }
