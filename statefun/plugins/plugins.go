@@ -94,18 +94,18 @@ type StatefunContextProcessor struct {
 	SetContextExpirationAfter func(time.Duration)
 	GetObjectContext          func() *easyjson.JSON
 	SetObjectContext          func(*easyjson.JSON)
+	GetObjectImplTypes        func() (types []string)
 	ObjectMutexLock           func(objectId string, errorOnLocked bool) error
 	ObjectMutexUnlock         func(objectId string) error
 	Domain                    Domain
-	// TODO: DownstreamSignal(<function type>, <links filters>, <payload>, <options>)
-	Signal  SFSignalFunc
-	Request SFRequestFunc
-	Egress  SFEgressFunc
-	Self    StatefunAddress
-	Caller  StatefunAddress
-	Payload *easyjson.JSON
-	Options *easyjson.JSON
-	Reply   *SyncReply // when requested in function: nil - function was signaled, !nil - function was requested
+	Signal                    SFSignalFunc
+	Request                   SFRequestFunc
+	Egress                    SFEgressFunc
+	Self                      StatefunAddress
+	Caller                    StatefunAddress
+	Payload                   *easyjson.JSON
+	Options                   *easyjson.JSON
+	Reply                     *SyncReply // when requested in function: nil - function was signaled, !nil - function was requested
 }
 
 type StatefunExecutor interface {
