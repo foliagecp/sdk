@@ -185,7 +185,7 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 			SetContextExpirationAfter: func(after time.Duration) { ft.setContextExpirationAfter(ft.name+"."+id, after) },
 			GetObjectContext:          func() *easyjson.JSON { return ft.getContext(id) },
 			SetObjectContext:          func(context *easyjson.JSON) { ft.setContext(id, context) },
-			GetObjectImplTypes:        func() (types []string) { return ft.getObjectImplTypes(id) },
+			GetObjectImplTypes:        func() (types []string, err error) { return ft.getObjectImplTypes(id) },
 			Domain:                    ft.runtime.Domain,
 			Self:                      sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
 			Signal: func(signalProvider sfPlugins.SignalProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) error {
@@ -405,10 +405,13 @@ func (ft *FunctionType) getStreamName() string {
 	return fmt.Sprintf("%s_stream", system.GetHashStr(ft.subject))
 }
 
-func (ft *FunctionType) getObjectImplTypes(id string) []string {
+func (ft *FunctionType) getObjectImplTypes(id string) ([]string, error) {
 	objectType, err := ft.findObjectType(id)
-	if err != nil || objectType == "" {
-		return nil
+	if err != nil {
+		return nil, err
+	}
+	if objectType == "" {
+		return nil, fmt.Errorf("object type is empty for id: %s", id)
 	}
 
 	types := []string{objectType}
@@ -418,7 +421,7 @@ func (ft *FunctionType) getObjectImplTypes(id string) []string {
 
 	response, err := ft.runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.read", objectType, nil, nil)
 	if err != nil {
-		return types
+		return nil, fmt.Errorf("failed to read type %s: %s", objectType, err.Error())
 	}
 
 	if response.PathExists("data.body.cache.parent_types") {
@@ -438,7 +441,7 @@ func (ft *FunctionType) getObjectImplTypes(id string) []string {
 		}
 	}
 
-	return types
+	return types, nil
 }
 
 func (ft *FunctionType) findObjectType(id string) (string, error) {
