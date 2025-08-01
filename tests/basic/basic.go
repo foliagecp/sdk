@@ -189,10 +189,10 @@ func Start() {
 			CreateTestGraph(runtime)
 		}
 
-		body := easyjson.NewJSONObjectWithKeyValue("search_fields", easyjson.JSONFromArray([]string{"f1.f11", "f2"}))
+		body := easyjson.NewJSONObjectWithKeyValue("search_fields", easyjson.NewJSON([]string{"f1.f11", "f2"}))
 		system.MsgOnErrorReturn(dbClient.CMDB.TypeUpdate("typea", body, false))
 
-		body = easyjson.NewJSONObjectWithKeyValue("search_fields", easyjson.JSONFromArray([]string{"f1", "f2"}))
+		body = easyjson.NewJSONObjectWithKeyValue("search_fields", easyjson.NewJSON([]string{"f1", "f2"}))
 		system.MsgOnErrorReturn(dbClient.CMDB.TypeUpdate("typeb", body, false))
 
 		b := easyjson.NewJSONObjectWithKeyValue("f2", easyjson.NewJSON(true))

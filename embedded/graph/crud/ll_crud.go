@@ -444,9 +444,9 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			inLinks.AddToArray(inLinkJson)
 		}
 
-		result.SetByPath("links.out.names", easyjson.JSONFromArray(outLinkNames))
-		result.SetByPath("links.out.types", easyjson.JSONFromArray(outLinkTypes))
-		result.SetByPath("links.out.ids", easyjson.JSONFromArray(outLinkIds))
+		result.SetByPath("links.out.names", easyjson.NewJSON(outLinkNames))
+		result.SetByPath("links.out.types", easyjson.NewJSON(outLinkTypes))
+		result.SetByPath("links.out.ids", easyjson.NewJSON(outLinkIds))
 
 		result.SetByPath("links.in", inLinks)
 	} else {
@@ -939,7 +939,7 @@ func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 		result.SetByPath("from", easyjson.NewJSON(selfID))
 		result.SetByPath("to", easyjson.NewJSON(toId))
 
-		result.SetByPath("tags", easyjson.JSONFromArray(tags))
+		result.SetByPath("tags", easyjson.NewJSON(tags))
 	} else {
 		operationKeysMutexUnlock(ctx)
 	}
