@@ -185,6 +185,7 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 			SetContextExpirationAfter: func(after time.Duration) { ft.setContextExpirationAfter(ft.name+"."+id, after) },
 			GetObjectContext:          func() *easyjson.JSON { return ft.getContext(id) },
 			SetObjectContext:          func(context *easyjson.JSON) { ft.setContext(id, context) },
+			GetObjectImplTypes:        func() (types []string, err error) { return ft.getObjectImplTypes(id) },
 			Domain:                    ft.runtime.Domain,
 			Self:                      sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
 			Signal: func(signalProvider sfPlugins.SignalProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) error {
@@ -408,4 +409,51 @@ func (ft *FunctionType) setContextExpirationAfter(keyValueID string, after time.
 
 func (ft *FunctionType) getStreamName() string {
 	return fmt.Sprintf("%s_stream", system.GetHashStr(ft.subject))
+}
+
+func (ft *FunctionType) getObjectImplTypes(id string) ([]string, error) {
+	objectType, err := ft.findObjectType(id)
+	if err != nil {
+		return nil, err
+	}
+	if objectType == "" {
+		return nil, fmt.Errorf("object type is empty for id: %s", id)
+	}
+
+	types := []string{objectType}
+
+	result := map[string]struct{}{}
+	result[objectType] = struct{}{}
+
+	response, err := ft.runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.read", objectType, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read type %s: %s", objectType, err.Error())
+	}
+
+	if response.PathExists("data.body.cache.parent_types") {
+		parentTypes := response.GetByPath("data.body.cache.parent_types")
+		for i := 0; i < parentTypes.ArraySize(); i++ {
+			parentType := parentTypes.ArrayElement(i).AsStringDefault("")
+			parentType = ft.runtime.Domain.CreateObjectIDWithHubDomain(parentType, true)
+			if len(parentType) > 0 {
+				result[parentType] = struct{}{}
+			}
+		}
+	}
+
+	for _type := range result {
+		if _type != objectType {
+			types = append(types, _type)
+		}
+	}
+
+	return types, nil
+}
+
+func (ft *FunctionType) findObjectType(id string) (string, error) {
+	response, err := ft.runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", id, nil, nil)
+	if err != nil {
+		return "", err
+	}
+	return response.GetByPath("data.type").AsStringDefault(""), nil
 }

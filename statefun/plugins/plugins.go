@@ -97,6 +97,7 @@ type StatefunContextProcessor struct {
 	SetContextExpirationAfter func(time.Duration)
 	GetObjectContext          func() *easyjson.JSON
 	SetObjectContext          func(*easyjson.JSON)
+	GetObjectImplTypes        func() (types []string, err error)
 	ObjectMutexLock           func(objectId string, errorOnLocked bool) error
 	ObjectMutexUnlock         func(objectId string) error
 	Domain                    Domain
