@@ -49,18 +49,17 @@ func Start() {
 
 		CreateTestCMDB(runtime)
 
-		if runtime.Domain.Name() == runtime.Domain.HubDomainName() {
-			time.Sleep(10 * time.Second)
-			servers, err := dbc.Query.JPGQLCtraQuery("root", "..*[l:type('rack-server')]")
-			if err != nil {
-				lg.Logf(lg.ErrorLevel, "Error: %s", err)
-				return err
-			}
+		runtime.Domain.SetWeakClusterDomains([]string{"hub", "leaf1", "leaf2", "leaf3"})
 
-			for _, objectID := range servers {
-				if runtime.Domain.GetDomainFromObjectID(objectID) != "hub" {
+		if runtime.Domain.Name() == "hub" {
+			time.Sleep(10 * time.Second)
+			wcd := runtime.Domain.GetWeakClusterDomains()
+			lg.Logf(lg.DebugLevel, "=================================Weak cluster domains: %v", wcd)
+
+			for _, domain := range wcd {
+				if domain != "hub" {
 					dbClient.CMDB.ShadowObjectCanBeRecevier = true
-					system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate(runtime.Domain.GetShadowObjectShadowId(objectID), "rack"))
+					system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate(runtime.Domain.CreateCustomShadowId("hub", domain, "rack1"), "rack"))
 					dbClient.CMDB.ShadowObjectCanBeRecevier = false
 				}
 			}
