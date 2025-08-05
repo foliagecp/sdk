@@ -68,7 +68,7 @@ func Start() {
 		return nil
 	}
 
-	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "distributed").UseJSDomainAsHubDomainName()); err == nil {
+	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "shadow").UseJSDomainAsHubDomainName()); err == nil {
 		RegisterFunctionTypes(runtime)
 
 		runtime.RegisterOnAfterStartFunction(afterStart, true)

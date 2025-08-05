@@ -282,7 +282,7 @@ func (dm *Domain) start(cacheConfig *cache.Config, createDomainRouters bool) err
 	// --------------------------------------------------------------
 
 	if createDomainRouters {
-		if dm.hubDomainName == dm.name {
+		if dm.hubDomainName == DefaultHubDomainName {
 			if err := dm.createHubSignalStream(); err != nil {
 				return err
 			}
@@ -348,7 +348,7 @@ func (dm *Domain) createHubSignalStream() error {
 
 func (dm *Domain) createIngresSignalStream() error {
 	var ss *nats.StreamSource
-	if dm.hubDomainName == dm.name {
+	if dm.hubDomainName == DefaultHubDomainName {
 		ss = &nats.StreamSource{
 			Name:          hubEventStreamName,
 			FilterSubject: fmt.Sprintf(FromGlobalSignalTmpl, dm.name, ">"),
