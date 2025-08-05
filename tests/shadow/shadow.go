@@ -68,9 +68,9 @@ func Start() {
 		return nil
 	}
 
-	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "shadow").UseJSDomainAsHubDomainName()); err == nil {
+	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "shadow").
+		UseJSDomainAsHubDomainName()); err == nil {
 		RegisterFunctionTypes(runtime)
-
 		runtime.RegisterOnAfterStartFunction(afterStart, true)
 		if err := runtime.Start(context.TODO(), cache.NewCacheConfig("main_cache")); err != nil {
 			lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s", err)
