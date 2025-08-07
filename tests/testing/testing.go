@@ -67,12 +67,16 @@ func Testing(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcess
 	times := make([]int, 0, int(count))
 
 	for i := 0; i < int(count); i++ {
-		var memStats runtime.MemStats
-		runtime.ReadMemStats(&memStats)
+		if i%10 == 0 {
+			lg.Logf(lg.DebugLevel, "Iteration %d: Memory=%dMB, Goroutines=%d",
+				i, runtime.MemStats{}.Alloc/1024/1024, runtime.NumGoroutine())
 
-		lg.Logf(lg.DebugLevel, "Iteration %d: Memory=%dMB, Goroutines=%d",
-			i, memStats.Alloc/1024/1024, runtime.NumGoroutine())
+			var memStats runtime.MemStats
+			runtime.ReadMemStats(&memStats)
 
+			lg.Logf(lg.DebugLevel, "Iteration %d: Memory=%dMB, Goroutines=%d",
+				i, memStats.Alloc/1024/1024, runtime.NumGoroutine())
+		}
 		reply, err := ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.query.jpgql.ctra", id, payload.GetPtr(), nil)
 		if err != nil {
 			lg.Logln(lg.ErrorLevel, err.Error())
