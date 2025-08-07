@@ -67,10 +67,7 @@ func Testing(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcess
 	times := make([]int, 0, int(count))
 
 	for i := 0; i < int(count); i++ {
-		if i%10 == 0 {
-			lg.Logf(lg.DebugLevel, "Iteration %d: Memory=%dMB, Goroutines=%d",
-				i, runtime.MemStats{}.Alloc/1024/1024, runtime.NumGoroutine())
-
+		if i%20 == 0 {
 			var memStats runtime.MemStats
 			runtime.ReadMemStats(&memStats)
 
