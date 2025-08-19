@@ -1,0 +1,29 @@
+http_port: 8222
+port: 4222
+
+websocket: {
+    port: 443
+    tls: {
+        cert_file: "/etc/nats/server-cert.pem"
+        key_file: "/etc/nats/server-key.pem"
+    }
+}
+
+tls: {
+    cert_file: "/etc/nats/server-cert.pem"
+    key_file: "/etc/nats/server-key.pem"
+}
+
+jetstream {
+    store_dir: /data/jetstream
+    max_file_store: 40G
+}
+
+authorization {
+    users = [
+        {
+            user: "nats"
+            password: "foliage"
+        }
+    ]
+}
