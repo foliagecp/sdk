@@ -37,7 +37,7 @@ var (
 )
 
 func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	hubDomain := ctx.Domain.HubDomainName()
+	hubDomain := ctx.Domain.CentralHubDomainName()
 	callerDomain := ctx.Domain.GetDomainFromObjectID(ctx.Caller.ID)
 	functionDomain := ctx.Domain.GetDomainFromObjectID(ctx.Self.ID)
 	if ctx.Reply == nil { // Signal came
@@ -70,7 +70,7 @@ func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 				system.MsgOnErrorReturn(ctx.Request(
 					sfPlugins.NatsCoreGlobalRequest,
 					ctx.Self.Typename,
-					ctx.Domain.CreateObjectIDWithHubDomain(ctx.Self.ID+"C", true),
+					ctx.Domain.CreateObjectIDWithLocalHubDomain(ctx.Self.ID+"C", true),
 					ctx.Payload,
 					ctx.Options,
 				))
@@ -98,7 +98,7 @@ func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 }
 
 func TestWeakClusteringShadowObjectFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	hubDomain := ctx.Domain.HubDomainName()
+	hubDomain := ctx.Domain.CentralHubDomainName()
 	functionDomain := ctx.Domain.GetDomainFromObjectID(ctx.Self.ID)
 
 	if ctx.Reply == nil { // Signal came
@@ -155,7 +155,7 @@ func Start() {
 		}
 		dbClient = dbc
 
-		if runtime.Domain.Name() == runtime.Domain.HubDomainName() {
+		if runtime.Domain.Name() == runtime.Domain.CentralHubDomainName() {
 			time.Sleep(5 * time.Second) // Wait for everything to bring up
 			if TriggersTest {
 				RunTriggersTest(runtime)

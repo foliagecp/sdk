@@ -10,7 +10,7 @@ const (
 	FunctionTypeIDLifetimeMs    = 5000
 	RequestTimeoutSec           = 60
 	GCIntervalSec               = 5
-	DefaultHubDomainName        = "hub"
+	DefaultCentralHubDomainName = "hub"
 	HandlesDomainRouters        = true
 	EnableTLS                   = false
 	EnableNatsClusterMode       = false
@@ -37,7 +37,7 @@ type RuntimeConfig struct {
 	functionTypeIDLifetimeMs       int
 	requestTimeoutSec              int
 	gcIntervalSec                  int
-	desiredHUBDomainName           string
+	desiredCentralHUBDomainName    string
 	handlesDomainRouters           bool
 	activePassiveMode              bool
 	isActiveInstance               bool
@@ -82,7 +82,7 @@ func NewRuntimeConfig() *RuntimeConfig {
 		functionTypeIDLifetimeMs:       FunctionTypeIDLifetimeMs,
 		requestTimeoutSec:              RequestTimeoutSec,
 		gcIntervalSec:                  GCIntervalSec,
-		desiredHUBDomainName:           DefaultHubDomainName,
+		desiredCentralHUBDomainName:    DefaultCentralHubDomainName,
 		handlesDomainRouters:           HandlesDomainRouters,
 		enableTLS:                      EnableTLS,
 		activePassiveMode:              activePassiveMode,
@@ -95,13 +95,13 @@ func NewRuntimeConfigSimple(natsURL string, runtimeName string) *RuntimeConfig {
 	return ro.SetNatsURL(natsURL)
 }
 
-func (ro *RuntimeConfig) SetHubDomainName(hubDomainName string) *RuntimeConfig {
-	ro.desiredHUBDomainName = hubDomainName
+func (ro *RuntimeConfig) SetCentralHubDomainName(centralHubDomainName string) *RuntimeConfig {
+	ro.desiredCentralHUBDomainName = centralHubDomainName
 	return ro
 }
 
-func (ro *RuntimeConfig) UseJSDomainAsHubDomainName() *RuntimeConfig {
-	ro.desiredHUBDomainName = "" // empty string means auto fill with current domain name from nats
+func (ro *RuntimeConfig) UseJSDomainAsCentralHubDomainName() *RuntimeConfig {
+	ro.desiredCentralHUBDomainName = "" // empty string means auto fill with current domain name from nats
 	return ro
 }
 

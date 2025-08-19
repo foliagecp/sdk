@@ -213,7 +213,7 @@ func Start() {
 		return nil
 	}
 
-	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "basic").UseJSDomainAsHubDomainName().SetTLS(EnableTLS)); err == nil {
+	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "basic").UseJSDomainAsCentralHubDomainName().SetTLS(EnableTLS)); err == nil {
 		RegisterFunctionTypes(runtime)
 		if TriggersTest {
 			registerTriggerFunctions(runtime)

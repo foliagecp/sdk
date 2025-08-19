@@ -28,7 +28,7 @@ const (
 )
 
 func typeOperationRedirectedToHub(ctx *sfPlugins.StatefunContextProcessor) bool {
-	if ctx.Domain.Name() != ctx.Domain.HubDomainName() {
+	if ctx.Domain.Name() != ctx.Domain.CentralHubDomainName() {
 		om := sfMediators.NewOpMediator(ctx)
 		selfID := getOriginalID(ctx.Self.ID)
 		idOnHub := ctx.Domain.CreateObjectIDWithHubDomain(selfID, true)

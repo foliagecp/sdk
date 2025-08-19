@@ -59,7 +59,8 @@ type SyncReply struct {
 }
 
 type Domain interface {
-	HubDomainName() string
+	CentralHubDomainName() string
+	LocalHubDomainName() string
 	Name() string
 	Cache() *cache.Store
 	GetDomainFromObjectID(objectID string) string

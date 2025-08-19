@@ -151,7 +151,7 @@ func Start() {
 		return nil
 	}
 
-	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "backup_barrier").UseJSDomainAsHubDomainName()); err == nil {
+	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "backup_barrier").UseJSDomainAsCentralHubDomainName()); err == nil {
 		RegisterFunctionTypes(runtime)
 		runtime.RegisterOnAfterStartFunction(afterStart, true)
 		if err := runtime.Start(context.TODO(), cache.NewCacheConfig("main_cache")); err != nil {
