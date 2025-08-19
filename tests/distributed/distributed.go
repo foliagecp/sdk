@@ -70,7 +70,7 @@ func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 				system.MsgOnErrorReturn(ctx.Request(
 					sfPlugins.NatsCoreGlobalRequest,
 					ctx.Self.Typename,
-					ctx.Domain.CreateObjectIDWithLocalHubDomain(ctx.Self.ID+"C", true),
+					ctx.Domain.CreateObjectIDWithHubDomain(ctx.Self.ID+"C", true),
 					ctx.Payload,
 					ctx.Options,
 				))
