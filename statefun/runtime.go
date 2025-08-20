@@ -89,7 +89,7 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		maxAge:        config.kvStreamMaxAge,
 	}
 
-	r.Domain, err = NewDomain(r.nc, r.js, config.desiredCentralHUBDomainName, ftStreamConfig, sysStreamConfig, kvStreamConfig)
+	r.Domain, err = NewDomain(r.nc, r.js, config.desiredCentralHUBDomainName, config.desiredLocalHUBDomainName, ftStreamConfig, sysStreamConfig, kvStreamConfig)
 	if err != nil {
 		return nil, err
 	}

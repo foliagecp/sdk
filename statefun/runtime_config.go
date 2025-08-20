@@ -38,6 +38,7 @@ type RuntimeConfig struct {
 	requestTimeoutSec              int
 	gcIntervalSec                  int
 	desiredCentralHUBDomainName    string
+	desiredLocalHUBDomainName      string
 	handlesDomainRouters           bool
 	activePassiveMode              bool
 	isActiveInstance               bool
@@ -83,6 +84,7 @@ func NewRuntimeConfig() *RuntimeConfig {
 		requestTimeoutSec:              RequestTimeoutSec,
 		gcIntervalSec:                  GCIntervalSec,
 		desiredCentralHUBDomainName:    DefaultCentralHubDomainName,
+		desiredLocalHUBDomainName:      DefaultCentralHubDomainName,
 		handlesDomainRouters:           HandlesDomainRouters,
 		enableTLS:                      EnableTLS,
 		activePassiveMode:              activePassiveMode,
@@ -97,6 +99,11 @@ func NewRuntimeConfigSimple(natsURL string, runtimeName string) *RuntimeConfig {
 
 func (ro *RuntimeConfig) SetCentralHubDomainName(centralHubDomainName string) *RuntimeConfig {
 	ro.desiredCentralHUBDomainName = centralHubDomainName
+	return ro
+}
+
+func (ro *RuntimeConfig) SetLocalHubDomainName(localHubDomainName string) *RuntimeConfig {
+	ro.desiredLocalHUBDomainName = localHubDomainName
 	return ro
 }
 

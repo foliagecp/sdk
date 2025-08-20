@@ -66,29 +66,37 @@ type streamConfig struct {
 	maxAge        time.Duration
 }
 
-func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredHubDomainName string, ftSC, sysSC, kvSC streamConfig) (dm *Domain, e error) {
+func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredCentralHubDomainName, desiredLocalHubDomainName string, ftSC, sysSC, kvSC streamConfig) (dm *Domain, e error) {
 	accInfo, err := js.AccountInfo()
 	if err != nil {
 		return nil, err
 	}
 
-	hubDomainName := desiredHubDomainName
+	centralHubDomainName := desiredCentralHubDomainName
+	localHubDomainName := desiredLocalHubDomainName
 	thisDomainName := accInfo.Domain
 	if thisDomainName == "" {
-		if hubDomainName == "" {
-			thisDomainName = DefaultCentralHubDomainName
-			hubDomainName = DefaultCentralHubDomainName
+		if centralHubDomainName == "" {
+			centralHubDomainName = DefaultCentralHubDomainName
+			if localHubDomainName == "" {
+				localHubDomainName = DefaultCentralHubDomainName
+				thisDomainName = DefaultCentralHubDomainName
+			} else {
+				localHubDomainName = desiredLocalHubDomainName
+				thisDomainName = desiredLocalHubDomainName
+			}
 		} else {
-			thisDomainName = hubDomainName
+			thisDomainName = centralHubDomainName
 		}
 	} else {
-		if hubDomainName == "" {
-			hubDomainName = thisDomainName
+		if centralHubDomainName == "" {
+			centralHubDomainName = thisDomainName
 		}
 	}
 
 	domain := &Domain{
-		centralHubDomainName: hubDomainName,
+		centralHubDomainName: centralHubDomainName,
+		localHubDomainName:   localHubDomainName,
 		name:                 thisDomainName,
 		weakClusterDomains:   map[string]struct{}{thisDomainName: {}},
 		nc:                   nc,
@@ -122,7 +130,7 @@ func (dm *Domain) GetWeakClusterDomains() []string {
 	dm.weakClusterDomainsMutex.Lock()
 	defer dm.weakClusterDomainsMutex.Unlock()
 
-	weakClusterUniqueDomainNamesIncludingThis := []string{}
+	weakClusterUniqueDomainNamesIncludingThis := make([]string, 0, len(dm.weakClusterDomains))
 	for k := range dm.weakClusterDomains {
 		weakClusterUniqueDomainNamesIncludingThis = append(weakClusterUniqueDomainNamesIncludingThis, k)
 	}
@@ -281,13 +289,10 @@ func (dm *Domain) start(cacheConfig *cache.Config, createDomainRouters bool) err
 		}
 		kvExists = true
 	}
-	if !kvExists {
-		return fmt.Errorf("Nats KV was not inited")
-	}
 	// --------------------------------------------------------------
 
 	if createDomainRouters {
-		if dm.centralHubDomainName == dm.name {
+		if dm.localHubDomainName == dm.name {
 			if err := dm.createHubSignalStream(); err != nil {
 				return err
 			}
