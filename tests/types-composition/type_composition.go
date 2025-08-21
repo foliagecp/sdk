@@ -38,6 +38,9 @@ func CollectInventoryInfo(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunC
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("query", easyjson.NewJSON(fmt.Sprintf(".*[l:tags('%s')]", tag)))
 
+	//FIXME use object API (request)
+
+	// TODO 1 signal
 	reply, err := ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.query.jpgql.ctra", ctx.Self.ID, &payload, nil)
 	if err != nil {
 		le.Errorf(context.TODO(), "Cannot request: %v", err)
@@ -47,10 +50,10 @@ func CollectInventoryInfo(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunC
 	uuids := reply.GetByPath("data.uuids").ObjectKeys()
 
 	for _, uuid := range uuids {
-		om := sfMediators.NewOpMediator(ctx)
 		payload := easyjson.NewJSONObject()
 		payload.SetByPath("tag", easyjson.NewJSON(tag))
-		system.MsgOnErrorReturn(om.SignalWithAggregation(sfPlugins.AutoSignalSelect, "functions.tests.type_composition.collect_inventory_info", uuid, &payload, nil))
+		//FIXME use object API (signal)
+		system.MsgOnErrorReturn(ctx.ObjectSignal(sfPlugins.AutoSignalSelect, "functions.tests.type_composition.collect_inventory_info", uuid, &payload, nil))
 	}
 
 	objectTypes, err := ctx.GetObjectImplTypes()
