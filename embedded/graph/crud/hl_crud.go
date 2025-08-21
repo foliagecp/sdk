@@ -39,7 +39,7 @@ func replyWithoutOpStack(om *sfMediators.OpMediator, ctx *sfPlugins.StatefunCont
 */
 func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
-	typesVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false)
+	typesVertexId := ctx.Domain.CreateObjectIDWithLocalHubDomain(BUILT_IN_TYPES, false)
 
 	if typeOperationRedirectedToHub(ctx) {
 		return
@@ -182,7 +182,7 @@ func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProces
 	om.AggregateOpMsg(m)
 
 	vertexIsType := false
-	typesVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false)
+	typesVertexId := ctx.Domain.CreateObjectIDWithLocalHubDomain(BUILT_IN_TYPES, false)
 	for i := 0; i < m.Data.GetByPath("links.in").ArraySize(); i++ {
 		fromId := m.Data.GetByPath("links.in").ArrayElement(i).GetByPath("from").AsStringDefault("")
 		if fromId == typesVertexId {
@@ -235,8 +235,8 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 		return
 	}
 
-	originType = ctx.Domain.CreateObjectIDWithHubDomain(originType, true)
-	builtInObjectsVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false)
+	originType = ctx.Domain.CreateObjectIDWithLocalHubDomain(originType, true)
+	builtInObjectsVertexId := ctx.Domain.CreateObjectIDWithLocalHubDomain(BUILT_IN_OBJECTS, false)
 
 	opTime := ctx.Payload.GetByPath("op_time").AsNumericDefault(-1)
 	ctx.Payload.SetByPath("op_time", easyjson.NewJSON(opTime))
@@ -412,7 +412,7 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 
 	vertexIsObject := false
 	typeBidirectionalLink := false
-	objectsVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false)
+	objectsVertexId := ctx.Domain.CreateObjectIDWithLocalHubDomain(BUILT_IN_OBJECTS, false)
 	for i := 0; i < m.Data.GetByPath("links.in").ArraySize(); i++ {
 		fromId := m.Data.GetByPath("links.in").ArrayElement(i).GetByPath("from").AsStringDefault("")
 		if fromId == objectsVertexId {
@@ -481,7 +481,7 @@ func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
-	toType = ctx.Domain.CreateObjectIDWithHubDomain(toType, true)
+	toType = ctx.Domain.CreateObjectIDWithLocalHubDomain(toType, true)
 
 	link := easyjson.NewJSONObject()
 	link.SetByPath("to", easyjson.NewJSON(toType))
@@ -524,7 +524,7 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
-	toType = ctx.Domain.CreateObjectIDWithHubDomain(toType, true)
+	toType = ctx.Domain.CreateObjectIDWithLocalHubDomain(toType, true)
 
 	link := ctx.Payload.Clone()
 	link.SetByPath("to", easyjson.NewJSON(toType))
@@ -574,7 +574,7 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
-	toType = ctx.Domain.CreateObjectIDWithHubDomain(toType, true)
+	toType = ctx.Domain.CreateObjectIDWithLocalHubDomain(toType, true)
 
 	operationKeysMutexLock(ctx, []string{selfID, toType}, true)
 
@@ -640,7 +640,7 @@ func ReadTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
 		return
 	}
-	toType = ctx.Domain.CreateObjectIDWithHubDomain(toType, true)
+	toType = ctx.Domain.CreateObjectIDWithLocalHubDomain(toType, true)
 
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("to", easyjson.NewJSON(toType))

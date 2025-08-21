@@ -35,7 +35,7 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 func Start() {
 	system.GlobalPrometrics = system.NewPrometrics("", ":9901")
 
-	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "clean").UseJSDomainAsHubDomainName()); err == nil {
+	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "clean").UseJSDomainAsCentralHubDomainName()); err == nil {
 		RegisterFunctionTypes(runtime)
 		runtime.RegisterOnAfterStartFunction(nil, true)
 		if err := runtime.Start(context.TODO(), cache.NewCacheConfig("main_cache")); err != nil {

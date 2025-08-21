@@ -47,7 +47,7 @@ func TypeSetSubType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContext
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'sub_type' undefined")).Reply()
 		return
 	}
-	childTypeWithDomain := ctx.Domain.CreateObjectIDWithHubDomain(childType, true)
+	childTypeWithDomain := ctx.Domain.CreateObjectIDWithLocalHubDomain(childType, true)
 
 	operationKeysMutexLock(ctx, []string{selfID, childTypeWithDomain}, true)
 	defer operationKeysMutexUnlock(ctx)
@@ -82,7 +82,7 @@ func TypeRemoveSubType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("'sub_type' undefined")).Reply()
 		return
 	}
-	childTypeWithDomain := ctx.Domain.CreateObjectIDWithHubDomain(childType, true)
+	childTypeWithDomain := ctx.Domain.CreateObjectIDWithLocalHubDomain(childType, true)
 
 	operationKeysMutexLock(ctx, []string{selfID, childTypeWithDomain}, true)
 	defer operationKeysMutexUnlock(ctx)
@@ -133,8 +133,8 @@ func CreateObjectsLinkFromSuperTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugin
 	fromObjectClaimType := ctx.Payload.GetByPath("from_super_type").AsStringDefault("")
 	toObjectClaimType := ctx.Payload.GetByPath("to_super_type").AsStringDefault("")
 
-	fromObjectClaimType = ctx.Domain.CreateObjectIDWithHubDomain(fromObjectClaimType, true)
-	toObjectClaimType = ctx.Domain.CreateObjectIDWithHubDomain(toObjectClaimType, true)
+	fromObjectClaimType = ctx.Domain.CreateObjectIDWithLocalHubDomain(fromObjectClaimType, true)
+	toObjectClaimType = ctx.Domain.CreateObjectIDWithLocalHubDomain(toObjectClaimType, true)
 
 	objectLinkType := isObjectLinkPermittedForClaimedTypes(ctx, selfID, objectToID, fromObjectClaimType, toObjectClaimType)
 	if len(objectLinkType) == 0 {
@@ -185,8 +185,8 @@ func DeleteObjectsLinkFromSuperTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugin
 	fromObjectClaimType := ctx.Payload.GetByPath("from_super_type").AsStringDefault("")
 	toObjectClaimType := ctx.Payload.GetByPath("to_super_type").AsStringDefault("")
 
-	fromObjectClaimType = ctx.Domain.CreateObjectIDWithHubDomain(fromObjectClaimType, true)
-	toObjectClaimType = ctx.Domain.CreateObjectIDWithHubDomain(toObjectClaimType, true)
+	fromObjectClaimType = ctx.Domain.CreateObjectIDWithLocalHubDomain(fromObjectClaimType, true)
+	toObjectClaimType = ctx.Domain.CreateObjectIDWithLocalHubDomain(toObjectClaimType, true)
 
 	objectLinkType := isObjectLinkPermittedForClaimedTypes(ctx, selfID, objectToID, fromObjectClaimType, toObjectClaimType)
 	if len(objectLinkType) == 0 {

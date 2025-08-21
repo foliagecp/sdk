@@ -44,7 +44,8 @@ const (
 )
 
 type Domain struct {
-	hubDomainName           string
+	centralHubDomainName    string
+	localHubDomainName      string
 	name                    string
 	weakClusterDomains      map[string]struct{}
 	weakClusterDomainsMutex sync.Mutex
@@ -65,43 +66,58 @@ type streamConfig struct {
 	maxAge        time.Duration
 }
 
-func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredHubDomainName string, ftSC, sysSC, kvSC streamConfig) (dm *Domain, e error) {
+func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredCentralHubDomainName, desiredLocalHubDomainName string, ftSC, sysSC, kvSC streamConfig) (dm *Domain, e error) {
 	accInfo, err := js.AccountInfo()
 	if err != nil {
 		return nil, err
 	}
 
-	hubDomainName := desiredHubDomainName
+	centralHubDomainName := desiredCentralHubDomainName
+	localHubDomainName := desiredLocalHubDomainName
 	thisDomainName := accInfo.Domain
 	if thisDomainName == "" {
-		if hubDomainName == "" {
-			thisDomainName = DefaultHubDomainName
-			hubDomainName = DefaultHubDomainName
+		if centralHubDomainName == "" {
+			centralHubDomainName = DefaultCentralHubDomainName
+			if localHubDomainName == "" {
+				localHubDomainName = DefaultCentralHubDomainName
+				thisDomainName = DefaultCentralHubDomainName
+			} else {
+				localHubDomainName = desiredLocalHubDomainName
+				thisDomainName = desiredLocalHubDomainName
+			}
 		} else {
-			thisDomainName = hubDomainName
+			thisDomainName = centralHubDomainName
 		}
 	} else {
-		if hubDomainName == "" {
-			hubDomainName = thisDomainName
+		if centralHubDomainName == "" {
+			centralHubDomainName = thisDomainName
+		}
+		if localHubDomainName == "" {
+			localHubDomainName = thisDomainName
 		}
 	}
 
 	domain := &Domain{
-		hubDomainName:      hubDomainName,
-		name:               thisDomainName,
-		weakClusterDomains: map[string]struct{}{thisDomainName: {}},
-		nc:                 nc,
-		js:                 js,
-		ftSC:               ftSC,
-		sysSC:              sysSC,
-		kvSC:               kvSC,
+		centralHubDomainName: centralHubDomainName,
+		localHubDomainName:   localHubDomainName,
+		name:                 thisDomainName,
+		weakClusterDomains:   map[string]struct{}{thisDomainName: {}},
+		nc:                   nc,
+		js:                   js,
+		ftSC:                 ftSC,
+		sysSC:                sysSC,
+		kvSC:                 kvSC,
 	}
 
 	return domain, nil
 }
 
-func (dm *Domain) HubDomainName() string {
-	return dm.hubDomainName
+func (dm *Domain) CentralHubDomainName() string {
+	return dm.centralHubDomainName
+}
+
+func (dm *Domain) LocalHubDomainName() string {
+	return dm.localHubDomainName
 }
 
 func (dm *Domain) Name() string {
@@ -117,7 +133,7 @@ func (dm *Domain) GetWeakClusterDomains() []string {
 	dm.weakClusterDomainsMutex.Lock()
 	defer dm.weakClusterDomainsMutex.Unlock()
 
-	weakClusterUniqueDomainNamesIncludingThis := []string{}
+	weakClusterUniqueDomainNamesIncludingThis := make([]string, 0, len(dm.weakClusterDomains))
 	for k := range dm.weakClusterDomains {
 		weakClusterUniqueDomainNamesIncludingThis = append(weakClusterUniqueDomainNamesIncludingThis, k)
 	}
@@ -250,8 +266,8 @@ func (dm *Domain) CreateObjectIDWithThisDomain(objectID string, domainReplace bo
 	return dm.CreateObjectIDWithDomain(dm.name, objectID, domainReplace)
 }
 
-func (dm *Domain) CreateObjectIDWithHubDomain(objectID string, domainReplace bool) string {
-	return dm.CreateObjectIDWithDomain(dm.hubDomainName, objectID, domainReplace)
+func (dm *Domain) CreateObjectIDWithLocalHubDomain(objectID string, domainReplace bool) string {
+	return dm.CreateObjectIDWithDomain(dm.localHubDomainName, objectID, domainReplace)
 }
 
 func (dm *Domain) start(cacheConfig *cache.Config, createDomainRouters bool) error {
@@ -276,13 +292,11 @@ func (dm *Domain) start(cacheConfig *cache.Config, createDomainRouters bool) err
 		}
 		kvExists = true
 	}
-	if !kvExists {
-		return fmt.Errorf("Nats KV was not inited")
-	}
 	// --------------------------------------------------------------
 
 	if createDomainRouters {
-		if dm.hubDomainName == DefaultHubDomainName {
+		if dm.centralHubDomainName == dm.name {
+			lg.Logln(lg.DebugLevel, "====================================================>Creating stream hub_events==========================================>")
 			if err := dm.createHubSignalStream(); err != nil {
 				return err
 			}
@@ -348,14 +362,14 @@ func (dm *Domain) createHubSignalStream() error {
 
 func (dm *Domain) createIngresSignalStream() error {
 	var ss *nats.StreamSource
-	if dm.hubDomainName == DefaultHubDomainName {
+	if dm.centralHubDomainName == dm.name {
 		ss = &nats.StreamSource{
 			Name:          hubEventStreamName,
 			FilterSubject: fmt.Sprintf(FromGlobalSignalTmpl, dm.name, ">"),
 		}
 	} else {
 		ext := &nats.ExternalStream{
-			APIPrefix: fmt.Sprintf(streamPrefix, dm.hubDomainName),
+			APIPrefix: fmt.Sprintf(streamPrefix, dm.centralHubDomainName),
 		}
 		ss = &nats.StreamSource{
 			Name:          hubEventStreamName,

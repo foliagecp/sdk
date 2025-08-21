@@ -89,11 +89,13 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		maxAge:        config.kvStreamMaxAge,
 	}
 
-	r.Domain, err = NewDomain(r.nc, r.js, config.desiredHUBDomainName, ftStreamConfig, sysStreamConfig, kvStreamConfig)
+	r.Domain, err = NewDomain(r.nc, r.js, config.desiredCentralHUBDomainName, config.desiredLocalHUBDomainName, ftStreamConfig, sysStreamConfig, kvStreamConfig)
 	if err != nil {
 		return nil, err
 	}
-	r.config.desiredHUBDomainName = r.Domain.hubDomainName
+	r.config.desiredCentralHUBDomainName = r.Domain.centralHubDomainName
+
+	lg.Logf(lg.DebugLevel, "===========================================>Starting runtime with central: %v, local: %v, this: %v", r.Domain.centralHubDomainName, r.Domain.localHubDomainName, r.Domain.name)
 
 	return r, nil
 }

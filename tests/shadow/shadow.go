@@ -4,9 +4,10 @@ package main
 
 import (
 	"context"
+	"time"
+
 	"github.com/foliagecp/sdk/clients/go/db"
 	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
-	"time"
 
 	graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
 	"github.com/foliagecp/sdk/embedded/graph/jpgql"
@@ -49,27 +50,24 @@ func Start() {
 
 		CreateTestCMDB(runtime)
 
-		runtime.Domain.SetWeakClusterDomains([]string{"hub", "leaf1", "leaf2", "leaf3"})
+		runtime.Domain.SetWeakClusterDomains([]string{"leaf1", "leaf2", "leaf3"})
 
-		if runtime.Domain.Name() == "hub" {
+		if runtime.Domain.Name() == runtime.Domain.CentralHubDomainName() {
 			time.Sleep(10 * time.Second)
 			wcd := runtime.Domain.GetWeakClusterDomains()
 			lg.Logf(lg.DebugLevel, "=================================Weak cluster domains: %v", wcd)
 
 			for _, domain := range wcd {
-				if domain != "hub" {
-					dbClient.CMDB.ShadowObjectCanBeRecevier = true
-					system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate(runtime.Domain.CreateCustomShadowId("hub", domain, "rack1"), "rack"))
-					dbClient.CMDB.ShadowObjectCanBeRecevier = false
-				}
+				dbClient.CMDB.ShadowObjectCanBeRecevier = true
+				system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate(runtime.Domain.CreateCustomShadowId(runtime.Domain.CentralHubDomainName(), domain, "rack1"), "rack"))
+				dbClient.CMDB.ShadowObjectCanBeRecevier = false
 			}
 		}
 
 		return nil
 	}
 
-	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "shadow").
-		UseJSDomainAsHubDomainName()); err == nil {
+	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "shadow").UseJSDomainAsLocalHubDomainName()); err == nil {
 		RegisterFunctionTypes(runtime)
 		runtime.RegisterOnAfterStartFunction(afterStart, true)
 		if err := runtime.Start(context.TODO(), cache.NewCacheConfig("main_cache")); err != nil {
