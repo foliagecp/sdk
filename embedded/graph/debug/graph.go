@@ -272,7 +272,7 @@ func LLAPIImportGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statef
 
 		lg.Logln(lg.InfoLevel, "Importing vertices...")
 		for _, n := range graph.Nodes {
-			uuid := ctx.Domain.CreateObjectIDWithHubDomain(n.Id, true)
+			uuid := ctx.Domain.CreateObjectIDWithLocalHubDomain(n.Id, true)
 
 			system.MsgOnErrorReturn(dbc.Graph.VertexDelete(uuid))
 
@@ -280,15 +280,15 @@ func LLAPIImportGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statef
 			system.MsgOnErrorReturn(dbc.Graph.VertexCreate(uuid, body))
 		}
 		/*for _, n := range graph.Nodes {
-			uuid := ctx.Domain.CreateObjectIDWithHubDomain(n.Id, true)
+			uuid := ctx.Domain.CreateObjectIDWithLocalHubDomain(n.Id, true)
 
 			body, _ := ExtractBodyAsJSON(n.Attributes)
 			dbc.Graph.VertexUpdate(uuid, body, true, true)
 		}*/
 		lg.Logln(lg.InfoLevel, "Importing edges...")
 		for _, e := range graph.Edges {
-			uuidFrom := ctx.Domain.CreateObjectIDWithHubDomain(e.Source, true)
-			uuidTo := ctx.Domain.CreateObjectIDWithHubDomain(e.Target, true)
+			uuidFrom := ctx.Domain.CreateObjectIDWithLocalHubDomain(e.Source, true)
+			uuidTo := ctx.Domain.CreateObjectIDWithLocalHubDomain(e.Target, true)
 
 			tp, name, tags := ExtractEdgeTypeAndNameAndTags(e.Attributes)
 			body, _ := ExtractBodyAsJSON(e.Attributes)
@@ -297,8 +297,8 @@ func LLAPIImportGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statef
 		}
 		/*
 			for _, e := range graph.Edges {
-				uuidFrom := ctx.Domain.CreateObjectIDWithHubDomain(e.Source, true)
-				uuidTo := ctx.Domain.CreateObjectIDWithHubDomain(e.Target, true)
+				uuidFrom := ctx.Domain.CreateObjectIDWithLocalHubDomain(e.Source, true)
+				uuidTo := ctx.Domain.CreateObjectIDWithLocalHubDomain(e.Target, true)
 
 				tp, name, tags := ExtractEdgeTypeAndNameAndTags(e.Attributes)
 				body, _ := ExtractBodyAsJSON(e.Attributes)

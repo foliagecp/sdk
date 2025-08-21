@@ -62,7 +62,7 @@ func getObjectAllTypesBaseAndParents(ctx *sfPlugins.StatefunContextProcessor, ob
 		return
 	}
 
-	targetObjectType = ctx.Domain.CreateObjectIDWithHubDomain(targetObjectType, true)
+	targetObjectType = ctx.Domain.CreateObjectIDWithLocalHubDomain(targetObjectType, true)
 	result[targetObjectType] = struct{}{}
 
 	om := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.read", makeSequenceFreeParentBasedID(ctx, targetObjectType), injectParentHoldsLocks(ctx, nil), nil))
@@ -70,7 +70,7 @@ func getObjectAllTypesBaseAndParents(ctx *sfPlugins.StatefunContextProcessor, ob
 		parentTypes := om.Data.GetByPath("body.cache.parent_types")
 		for i := 0; i < parentTypes.ArraySize(); i++ {
 			parentType := parentTypes.ArrayElement(i).AsStringDefault("")
-			parentType = ctx.Domain.CreateObjectIDWithHubDomain(parentType, true)
+			parentType = ctx.Domain.CreateObjectIDWithLocalHubDomain(parentType, true)
 			if len(parentType) > 0 {
 				result[parentType] = struct{}{}
 			}
@@ -172,7 +172,7 @@ func PolyTypeGoalFinalize(ctx *sfPlugins.StatefunContextProcessor, typesToRefres
 }
 
 func UpdateTypeModelVersion(ctx *sfPlugins.StatefunContextProcessor) {
-	typesVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false)
+	typesVertexId := ctx.Domain.CreateObjectIDWithLocalHubDomain(BUILT_IN_TYPES, false)
 
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("body.version", easyjson.NewJSON(system.GetUniqueStrID()))
@@ -230,7 +230,7 @@ func getTypeCacheVersionAndGlobalVersion(ctx *sfPlugins.StatefunContextProcessor
 		typeCacheVersion = som1.Data.GetByPath("body.cache.version").AsStringDefault("")
 	}
 
-	typesVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false)
+	typesVertexId := ctx.Domain.CreateObjectIDWithLocalHubDomain(BUILT_IN_TYPES, false)
 	som2 := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", makeSequenceFreeParentBasedID(ctx, typesVertexId), injectParentHoldsLocks(ctx, nil), nil))
 	if som2.Status == sfMediators.SYNC_OP_STATUS_OK {
 		typeModelVersion = som2.Data.GetByPath("body.version").AsStringDefault("")

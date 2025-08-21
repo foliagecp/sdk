@@ -37,7 +37,7 @@ var (
 )
 
 func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	hubDomain := ctx.Domain.CentralHubDomainName()
+	localHubDomain := ctx.Domain.LocalHubDomainName()
 	callerDomain := ctx.Domain.GetDomainFromObjectID(ctx.Caller.ID)
 	functionDomain := ctx.Domain.GetDomainFromObjectID(ctx.Self.ID)
 	if ctx.Reply == nil { // Signal came
@@ -49,7 +49,7 @@ func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 			ctx.Self.Typename,
 			ctx.Self.ID,
 		)
-		if functionDomain == hubDomain { // Function on HUB
+		if functionDomain == localHubDomain { // Function on HUB
 			system.MsgOnErrorReturn(ctx.Signal(
 				sfPlugins.JetstreamGlobalSignal,
 				ctx.Self.Typename,
@@ -58,7 +58,7 @@ func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 				ctx.Options,
 			))
 		} else { // Function on LEAF
-			if callerDomain == hubDomain { // from HUB
+			if callerDomain == localHubDomain { // from HUB
 				system.MsgOnErrorReturn(ctx.Signal(
 					sfPlugins.JetstreamGlobalSignal,
 					ctx.Self.Typename,
@@ -70,7 +70,7 @@ func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 				system.MsgOnErrorReturn(ctx.Request(
 					sfPlugins.NatsCoreGlobalRequest,
 					ctx.Self.Typename,
-					ctx.Domain.CreateObjectIDWithHubDomain(ctx.Self.ID+"C", true),
+					ctx.Domain.CreateObjectIDWithLocalHubDomain(ctx.Self.ID+"C", true),
 					ctx.Payload,
 					ctx.Options,
 				))
@@ -85,7 +85,7 @@ func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 			ctx.Self.Typename,
 			ctx.Self.ID,
 		)
-		if functionDomain == hubDomain { // Function on HUB
+		if functionDomain == localHubDomain { // Function on HUB
 			system.MsgOnErrorReturn(ctx.Request(
 				sfPlugins.NatsCoreGlobalRequest,
 				ctx.Self.Typename,
@@ -98,7 +98,7 @@ func TestFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCo
 }
 
 func TestWeakClusteringShadowObjectFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	hubDomain := ctx.Domain.CentralHubDomainName()
+	localHubDomain := ctx.Domain.LocalHubDomainName()
 	functionDomain := ctx.Domain.GetDomainFromObjectID(ctx.Self.ID)
 
 	if ctx.Reply == nil { // Signal came
@@ -123,7 +123,7 @@ func TestWeakClusteringShadowObjectFunction(executor sfPlugins.StatefunExecutor,
 		om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONObjectWithKeyValue("msg", easyjson.NewJSON(fmt.Sprintf("hello from %s domain TestWeakClusteringShadowObjectFunction", ctx.Domain.Name()))))).Reply()
 	}
 
-	if functionDomain == hubDomain { // Function on HUB
+	if functionDomain == localHubDomain { // Function on HUB
 		fmt.Println("Weak clustering shadow object SIGNAL")
 		system.MsgOnErrorReturn(ctx.Signal(sfPlugins.JetstreamGlobalSignal, "domains.so.test", "leaf#bar", easyjson.NewJSONObject().GetPtr(), nil))
 

@@ -263,8 +263,8 @@ func (dm *Domain) CreateObjectIDWithThisDomain(objectID string, domainReplace bo
 	return dm.CreateObjectIDWithDomain(dm.name, objectID, domainReplace)
 }
 
-func (dm *Domain) CreateObjectIDWithHubDomain(objectID string, domainReplace bool) string {
-	return dm.CreateObjectIDWithDomain(dm.centralHubDomainName, objectID, domainReplace)
+func (dm *Domain) CreateObjectIDWithLocalHubDomain(objectID string, domainReplace bool) string {
+	return dm.CreateObjectIDWithDomain(dm.localHubDomainName, objectID, domainReplace)
 }
 
 func (dm *Domain) start(cacheConfig *cache.Config, createDomainRouters bool) error {
