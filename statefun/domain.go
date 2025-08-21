@@ -296,7 +296,6 @@ func (dm *Domain) start(cacheConfig *cache.Config, createDomainRouters bool) err
 
 	if createDomainRouters {
 		if dm.centralHubDomainName == dm.name {
-			lg.Logln(lg.DebugLevel, "====================================================>Creating stream hub_events==========================================>")
 			if err := dm.createHubSignalStream(); err != nil {
 				return err
 			}
