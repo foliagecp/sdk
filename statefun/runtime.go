@@ -94,8 +94,7 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		return nil, err
 	}
 	r.config.desiredCentralHUBDomainName = r.Domain.centralHubDomainName
-
-	lg.Logf(lg.DebugLevel, "===========================================>Starting runtime with central: %v, local: %v, this: %v", r.Domain.centralHubDomainName, r.Domain.localHubDomainName, r.Domain.name)
+	r.config.desiredLocalHUBDomainName = r.Domain.localHubDomainName
 
 	return r, nil
 }
