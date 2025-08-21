@@ -15,7 +15,6 @@ import (
 	"github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/cache"
 	lg "github.com/foliagecp/sdk/statefun/logger"
-	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 )
@@ -35,26 +34,11 @@ func CollectInventoryInfo(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunC
 		le.Errorf(context.TODO(), "Cannot get tag from payload")
 		return
 	}
-	payload := easyjson.NewJSONObject()
-	payload.SetByPath("query", easyjson.NewJSON(fmt.Sprintf(".*[l:tags('%s')]", tag)))
 
-	//FIXME use object API (request)
+	linkQuery := sfPlugins.NewLinkQuery("")
+	linkQuery.WithCustom(fmt.Sprintf(".*[l:tags('%s')]", tag))
 
-	// TODO 1 signal
-	reply, err := ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.query.jpgql.ctra", ctx.Self.ID, &payload, nil)
-	if err != nil {
-		le.Errorf(context.TODO(), "Cannot request: %v", err)
-		return
-	}
-
-	uuids := reply.GetByPath("data.uuids").ObjectKeys()
-
-	for _, uuid := range uuids {
-		payload := easyjson.NewJSONObject()
-		payload.SetByPath("tag", easyjson.NewJSON(tag))
-		//FIXME use object API (signal)
-		system.MsgOnErrorReturn(ctx.ObjectSignal(sfPlugins.AutoSignalSelect, "functions.tests.type_composition.collect_inventory_info", uuid, &payload, nil))
-	}
+	system.MsgOnErrorReturn(ctx.ObjectSignal(sfPlugins.AutoSignalSelect, ctx.Self.ID, linkQuery, "functions.tests.type_composition.collect_inventory_info", ctx.Self.ID, ctx.Payload, nil))
 
 	objectTypes, err := ctx.GetObjectImplTypes()
 	if err != nil {

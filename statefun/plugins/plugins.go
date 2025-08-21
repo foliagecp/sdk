@@ -44,7 +44,7 @@ type EgressProvider int
 
 type SFSignalFunc func(signalProvider SignalProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) error
 type SFRequestFunc func(requestProvider RequestProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error)
-type ObjectSignalFunc func(signalProvider SignalProvider, query LinkQuery, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) (map[string]error, error)
+type ObjectSignalFunc func(signalProvider SignalProvider, callerID string, query LinkQuery, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) (map[string]error, error)
 type ObjectRequestFunc func(requestProvider RequestProvider, query LinkQuery, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (map[string]*ObjectRequestReply, error)
 type SFEgressFunc func(egressProvider EgressProvider, payload *easyjson.JSON, customId ...string) error
 

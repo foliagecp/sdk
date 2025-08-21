@@ -2,11 +2,12 @@ package statefun
 
 import (
 	"fmt"
-	"github.com/foliagecp/easyjson"
-	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/foliagecp/easyjson"
+	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 )
 
 func (r *Runtime) ObjectCallRequest(sp sfPlugins.RequestProvider, lq sfPlugins.LinkQuery, ft, id string, payload, options *easyjson.JSON, timeout ...time.Duration) (map[string]*sfPlugins.ObjectRequestReply, error) {
@@ -43,7 +44,7 @@ func (r *Runtime) ObjectCallRequest(sp sfPlugins.RequestProvider, lq sfPlugins.L
 	return result, nil
 }
 
-func (r *Runtime) ObjectCallSignal(sp sfPlugins.SignalProvider, lq sfPlugins.LinkQuery, ft, id string, payload, options *easyjson.JSON) (map[string]error, error) {
+func (r *Runtime) ObjectCallSignal(sp sfPlugins.SignalProvider, callerID string, lq sfPlugins.LinkQuery, ft, id string, payload, options *easyjson.JSON) (map[string]error, error) {
 	if ft == "" {
 		return nil, fmt.Errorf("function typename is empty")
 	}
@@ -58,7 +59,7 @@ func (r *Runtime) ObjectCallSignal(sp sfPlugins.SignalProvider, lq sfPlugins.Lin
 	result := make(map[string]error, len(objectIDs))
 
 	for _, objectID := range objectIDs {
-		err := r.Signal(sp, ft, objectID, payload, options)
+		err := r.signal(sp, "objectSignal", callerID, ft, objectID, payload, options)
 		result[objectID] = err
 	}
 

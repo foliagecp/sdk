@@ -194,8 +194,8 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 			Request: func(requestProvider sfPlugins.RequestProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
 				return ft.runtime.request(requestProvider, ft.name, id, targetTypename, targetID, j, o, timeout...)
 			},
-			ObjectSignal: func(signalProvider sfPlugins.SignalProvider, query sfPlugins.LinkQuery, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) (map[string]error, error) {
-				return ft.runtime.ObjectCallSignal(signalProvider, query, typename, id, payload, options)
+			ObjectSignal: func(signalProvider sfPlugins.SignalProvider, callerID string, query sfPlugins.LinkQuery, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) (map[string]error, error) {
+				return ft.runtime.ObjectCallSignal(signalProvider, callerID, query, typename, id, payload, options)
 			},
 			ObjectRequest: func(requestProvider sfPlugins.RequestProvider, query sfPlugins.LinkQuery, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (map[string]*sfPlugins.ObjectRequestReply, error) {
 				return ft.runtime.ObjectCallRequest(requestProvider, query, typename, id, payload, options, timeout...)
