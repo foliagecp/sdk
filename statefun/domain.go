@@ -78,16 +78,11 @@ func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredCentralHubDomainN
 	if thisDomainName == "" {
 		if centralHubDomainName == "" {
 			centralHubDomainName = DefaultCentralHubDomainName
-			if localHubDomainName == "" {
-				localHubDomainName = DefaultCentralHubDomainName
-				thisDomainName = DefaultCentralHubDomainName
-			} else {
-				localHubDomainName = desiredLocalHubDomainName
-				thisDomainName = desiredLocalHubDomainName
-			}
-		} else {
-			thisDomainName = centralHubDomainName
 		}
+		if localHubDomainName == "" {
+			localHubDomainName = centralHubDomainName
+		}
+		thisDomainName = localHubDomainName
 	} else {
 		if centralHubDomainName == "" {
 			centralHubDomainName = thisDomainName
