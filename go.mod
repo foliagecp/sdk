@@ -7,7 +7,7 @@ require (
 	github.com/PaesslerAG/gval v1.2.2
 	github.com/dop251/goja v0.0.0-20250630131328-58d95d85e994
 	github.com/emicklei/dot v1.6.1
-	github.com/foliagecp/easyjson v0.1.4
+	github.com/foliagecp/easyjson v0.1.5
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904
 	github.com/nats-io/nats-server/v2 v2.10.12
 	github.com/nats-io/nats.go v1.37.0
