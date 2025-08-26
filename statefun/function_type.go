@@ -314,9 +314,11 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 	}
 	if msgRequestCallback != nil {
 		var replyData *easyjson.JSON = nil
+		timer := time.NewTimer(time.Duration(ft.runtime.config.requestTimeoutSec) * time.Second)
+		defer timer.Stop()
 		select {
 		case replyData = <-replyDataChannel:
-		case <-time.After(time.Duration(ft.runtime.config.requestTimeoutSec) * time.Second):
+		case <-timer.C:
 			replyData.SetByPath("status", easyjson.NewJSON("timeout"))
 		}
 		msgRequestCallback(replyData)
