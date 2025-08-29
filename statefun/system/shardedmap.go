@@ -2,90 +2,69 @@ package system
 
 import (
 	"errors"
-	"sort"
 	"sync"
-	"unicode"
-	"unicode/utf8"
 )
 
-// shard is a segment with its own map and RWMutex.
+// shard is an independent segment with its own map and RWMutex.
+// Contention is limited to a single shard for operations on keys that hash there.
 type shard struct {
 	mu sync.RWMutex
 	m  map[string]interface{}
 }
 
-// ShardedMap is a sharded, concurrency-safe map.
+// ShardedMap is a hash-sharded, concurrency-safe map.
+// Shard selection is based on FNV-1a 64-bit hash of the key.
 type ShardedMap struct {
-	shards       []shard      // N shards for each accepted first rune + 1 default shard
-	runeToIndex  map[rune]int // mapping: first rune -> shard index
-	defaultIndex int          // index of the default shard
+	shards   []shard
+	pow2Mask uint64 // if shardCount is power of two, this is shardCount-1; otherwise 0
 }
 
-// New creates a sharded map.
-// spec is the content of a regex-like character-class (without square brackets), e.g. "a-zA-Z0-9/=_$#@$%+-".
-func New(spec string) (*ShardedMap, error) {
-	chars, err := expandCharClass(spec)
-	if err != nil {
-		return nil, err
+// NewHashed creates a sharded map with the given number of shards.
+// shardCount must be > 0. If shardCount is a power of two, shard selection is a fast bitmask.
+func SharedMapNewHashed(shardCount int) (*ShardedMap, error) {
+	if shardCount <= 0 {
+		return nil, errors.New("shardCount must be > 0")
 	}
-	// Deduplicate and sort for stable shard layout.
-	uniq := make(map[rune]struct{}, len(chars))
-	for _, r := range chars {
-		uniq[r] = struct{}{}
-	}
-	keys := make([]rune, 0, len(uniq))
-	for r := range uniq {
-		keys = append(keys, r)
-	}
-	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
-
-	// +1 for the default shard.
-	totalShards := len(keys) + 1
 	sm := &ShardedMap{
-		shards:       make([]shard, totalShards),
-		runeToIndex:  make(map[rune]int, len(keys)),
-		defaultIndex: totalShards - 1,
+		shards:   make([]shard, shardCount),
+		pow2Mask: pow2Mask(uint64(shardCount)),
 	}
 	for i := range sm.shards {
 		sm.shards[i].m = make(map[string]interface{})
 	}
-	for i, r := range keys {
-		sm.runeToIndex[r] = i
-	}
 	return sm, nil
 }
 
-// MustNew is New that panics on error.
-func MustNew(spec string) *ShardedMap {
-	sm, err := New(spec)
+// MustNewHashed creates a sharded map or panics if shardCount is invalid.
+func SharedMapMustNewHashed(shardCount int) *ShardedMap {
+	sm, err := SharedMapNewHashed(shardCount)
 	if err != nil {
 		panic(err)
 	}
 	return sm
 }
 
-// -------- basic operations --------
+// ---------------- Basic operations ----------------
 
 func (sm *ShardedMap) Set(key string, value interface{}) {
-	idx := sm.chooseShard(key)
-	s := &sm.shards[idx]
+	s := sm.shardFor(key)
 	s.mu.Lock()
 	s.m[key] = value
 	s.mu.Unlock()
 }
 
 func (sm *ShardedMap) Get(key string) (interface{}, bool) {
-	idx := sm.chooseShard(key)
-	s := &sm.shards[idx]
+	s := sm.shardFor(key)
 	s.mu.RLock()
 	v, ok := s.m[key]
 	s.mu.RUnlock()
 	return v, ok
 }
 
+// LoadOrStore stores the value only if the key doesn't exist.
+// It returns the actual value and whether the key was already present.
 func (sm *ShardedMap) LoadOrStore(key string, val interface{}) (actual interface{}, loaded bool) {
-	idx := sm.chooseShard(key)
-	s := &sm.shards[idx]
+	s := sm.shardFor(key)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if v, ok := s.m[key]; ok {
@@ -96,8 +75,7 @@ func (sm *ShardedMap) LoadOrStore(key string, val interface{}) (actual interface
 }
 
 func (sm *ShardedMap) Delete(key string) {
-	idx := sm.chooseShard(key)
-	s := &sm.shards[idx]
+	s := sm.shardFor(key)
 	s.mu.Lock()
 	delete(s.m, key)
 	s.mu.Unlock()
@@ -109,6 +87,7 @@ func (sm *ShardedMap) Has(key string) bool {
 }
 
 // Len returns the total number of key/value pairs across all shards.
+// It walks shards sequentially under shared locks.
 func (sm *ShardedMap) Len() int {
 	total := 0
 	for i := range sm.shards {
@@ -120,7 +99,7 @@ func (sm *ShardedMap) Len() int {
 	return total
 }
 
-// Keys returns a copy of all keys (unordered).
+// Keys returns a snapshot of all keys (order unspecified).
 func (sm *ShardedMap) Keys() []string {
 	out := make([]string, 0)
 	for i := range sm.shards {
@@ -134,19 +113,33 @@ func (sm *ShardedMap) Keys() []string {
 	return out
 }
 
-// Range walks over all (key,value) pairs. It locks shards one-by-one under RLock.
-// The order is unspecified. If f returns false, iteration stops early.
+// Range walks over all (key,value) pairs.
+// It snapshots each shard under RLock, releases the lock,
+// and only then calls f on the copied pairs to avoid lock inversion/starvation.
 func (sm *ShardedMap) Range(f func(key string, value interface{}) bool) {
 	for i := range sm.shards {
 		s := &sm.shards[i]
+
+		// Snapshot this shard under RLock
 		s.mu.RLock()
+		tmp := make([]struct {
+			k string
+			v interface{}
+		}, 0, len(s.m))
 		for k, v := range s.m {
-			if !f(k, v) {
-				s.mu.RUnlock()
+			tmp = append(tmp, struct {
+				k string
+				v interface{}
+			}{k: k, v: v})
+		}
+		s.mu.RUnlock()
+
+		// Call f without holding the shard lock
+		for _, it := range tmp {
+			if !f(it.k, it.v) {
 				return
 			}
 		}
-		s.mu.RUnlock()
 	}
 }
 
@@ -174,62 +167,43 @@ func (sm *ShardedMap) Clear() {
 	}
 }
 
-// ShardCount returns the number of shards (including the default shard).
+// ShardCount returns the number of shards.
 func (sm *ShardedMap) ShardCount() int { return len(sm.shards) }
 
-// -------- internals --------
+// ---------------- Internals ----------------
 
-func (sm *ShardedMap) chooseShard(key string) int {
-	if key == "" {
-		return sm.defaultIndex
+func (sm *ShardedMap) shardFor(key string) *shard {
+	// Empty keys are allowed—hashing still works.
+	h := fnv1a64(key)
+	var idx uint64
+	if sm.pow2Mask != 0 {
+		idx = h & sm.pow2Mask
+	} else {
+		idx = h % uint64(len(sm.shards))
 	}
-	r, _ := utf8.DecodeRuneInString(key)
-	if r == utf8.RuneError {
-		return sm.defaultIndex
-	}
-	if idx, ok := sm.runeToIndex[r]; ok {
-		return idx
-	}
-	return sm.defaultIndex
+	return &sm.shards[idx]
 }
 
-// expandCharClass parses a regex-like character-class spec such as "a-zA-Z0-9/=_$#@$%+-" into a set of runes.
-// Rules:
-//   - X-Y is treated as a range only if X and Y are both digits, both lowercase Latin, or both uppercase Latin.
-//   - Otherwise '-' is a literal character.
-//   - No backslashes are required; the string is the content of [] without brackets.
-//   - Unicode named classes/ranges are intentionally unsupported (ASCII ranges and literals only).
-func expandCharClass(spec string) ([]rune, error) {
-	if spec == "" {
-		return nil, errors.New("char class spec is empty")
+// fnv1a64 is a non-cryptographic 64-bit FNV-1a hash.
+// Fast, stable across processes, good enough for shard distribution.
+func fnv1a64(s string) uint64 {
+	const (
+		offset = 1469598103934665603
+		prime  = 1099511628211
+	)
+	var h uint64 = offset
+	for i := 0; i < len(s); i++ {
+		h ^= uint64(s[i])
+		h *= prime
 	}
-	rs := []rune(spec)
-	out := make([]rune, 0, len(rs))
+	return h
+}
 
-	isRangeOK := func(a, b rune) bool {
-		// Allowed ranges: 0-9, a-z, A-Z
-		return (unicode.IsDigit(a) && unicode.IsDigit(b)) ||
-			(unicode.IsLower(a) && unicode.IsLower(b)) ||
-			(unicode.IsUpper(a) && unicode.IsUpper(b))
+// pow2Mask returns N-1 if N is a power of two; otherwise 0.
+// The mask allows shard selection with a single AND instead of modulo.
+func pow2Mask(n uint64) uint64 {
+	if n != 0 && (n&(n-1)) == 0 {
+		return n - 1
 	}
-
-	i := 0
-	for i < len(rs) {
-		// Try to consume an X-Y pattern if valid.
-		if i+2 < len(rs) && rs[i+1] == '-' && isRangeOK(rs[i], rs[i+2]) {
-			a, b := rs[i], rs[i+2]
-			if b < a {
-				return nil, errors.New("invalid range in char class: end < start")
-			}
-			for r := a; r <= b; r++ {
-				out = append(out, r)
-			}
-			i += 3
-			continue
-		}
-		// Otherwise: treat current rune as a literal.
-		out = append(out, rs[i])
-		i++
-	}
-	return out, nil
+	return 0
 }

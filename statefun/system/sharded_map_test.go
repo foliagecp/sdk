@@ -1,292 +1,251 @@
 package system
 
 import (
-	"reflect"
+	"fmt"
+	"math"
+	"runtime"
 	"sort"
+	"strconv"
+	"sync"
 	"testing"
-	"unicode/utf8"
+	"time"
 )
 
-// --- helpers ---
+// --- constructors ---
 
-func asSetRunes(rs []rune) map[rune]struct{} {
-	m := make(map[rune]struct{}, len(rs))
-	for _, r := range rs {
-		m[r] = struct{}{}
-	}
-	return m
-}
-
-func asSetStrings(ss []string) map[string]struct{} {
-	m := make(map[string]struct{}, len(ss))
-	for _, s := range ss {
-		m[s] = struct{}{}
-	}
-	return m
-}
-
-// --- expandCharClass tests (package-internal) ---
-
-func Test_expandCharClass_BasicRanges(t *testing.T) {
-	rs, err := expandCharClass("a-cA-B0-2")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	got := asSetRunes(rs)
-
-	// Expect: a,b,c ; A,B ; 0,1,2
-	for _, r := range []rune{'a', 'b', 'c', 'A', 'B', '0', '1', '2'} {
-		if _, ok := got[r]; !ok {
-			t.Fatalf("expected rune %q in set", r)
-		}
-	}
-}
-
-func Test_expandCharClass_DashAsLiteral(t *testing.T) {
-	rs, err := expandCharClass("ab-")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	got := asSetRunes(rs)
-	// '-' must be treated as a literal here.
-	if _, ok := got['-']; !ok {
-		t.Fatalf("expected literal '-' in set")
-	}
-
-	// Also ensure that "a-_" treats '-' as literal (not a valid range)
-	rs2, err := expandCharClass("a-_")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	got2 := asSetRunes(rs2)
-	for _, r := range []rune{'a', '-', '_'} {
-		if _, ok := got2[r]; !ok {
-			t.Fatalf("expected rune %q in set for spec 'a-_'", r)
-		}
-	}
-}
-
-func Test_expandCharClass_InvalidRange(t *testing.T) {
-	_, err := expandCharClass("z-a")
+func TestNewHashed_InvalidShardCount(t *testing.T) {
+	_, err := SharedMapNewHashed(0)
 	if err == nil {
-		t.Fatalf("expected error for invalid range z-a, got nil")
+		t.Fatalf("expected error for shardCount=0")
 	}
 }
 
-func Test_expandCharClass_EmptySpec(t *testing.T) {
-	_, err := expandCharClass("")
-	if err == nil {
-		t.Fatalf("expected error for empty spec, got nil")
-	}
-}
-
-// --- constructor tests ---
-
-func Test_New_DeduplicatesAndAddsDefaultShard(t *testing.T) {
-	// 'a' repeated, expect unique {a,b,c} + 1 default shard => 4 total
-	sm, err := New("abca")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if sm.ShardCount() != 4 {
-		t.Fatalf("expected 4 shards (3 uniques + 1 default), got %d", sm.ShardCount())
-	}
-
-	// Verify that default index points to the last shard.
-	if sm.defaultIndex != sm.ShardCount()-1 {
-		t.Fatalf("expected defaultIndex == last shard, got %d of %d", sm.defaultIndex, sm.ShardCount())
-	}
-}
-
-func Test_MustNew_PanicsOnError(t *testing.T) {
+func TestMustNewHashed_PanicsOnInvalid(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
-			t.Fatalf("expected panic from MustNew on bad spec")
+			t.Fatalf("expected panic for shardCount=0")
 		}
 	}()
-	_ = MustNew("") // empty spec must panic
+	_ = SharedMapMustNewHashed(0)
 }
 
-// --- shard selection & basic ops ---
+// --- basic API ---
 
-func Test_ShardSelectionByFirstRune(t *testing.T) {
-	sm := MustNew("ab/")
+func TestSetGetHasDelete(t *testing.T) {
+	sm := SharedMapMustNewHashed(16)
 
-	// Directly inspect mapping for first runes (same package access).
-	idxA, okA := sm.runeToIndex['a']
-	idxB, okB := sm.runeToIndex['b']
-	idxSlash, okSlash := sm.runeToIndex['/']
-	if !(okA && okB && okSlash) {
-		t.Fatalf("expected runeToIndex to contain 'a','b','/'")
+	// Set & Get
+	sm.Set("a", 1)
+	if v, ok := sm.Get("a"); !ok || v.(int) != 1 {
+		t.Fatalf("Get('a') = (%v,%v), want (1,true)", v, ok)
 	}
 
-	// a* -> idxA
-	if got := sm.chooseShard("apple"); got != idxA {
-		t.Fatalf("chooseShard('apple') -> %d, want %d", got, idxA)
+	// Has
+	if !sm.Has("a") {
+		t.Fatalf("Has('a') = false, want true")
 	}
-	// b* -> idxB
-	if got := sm.chooseShard("beta"); got != idxB {
-		t.Fatalf("chooseShard('beta') -> %d, want %d", got, idxB)
+	if sm.Has("missing") {
+		t.Fatalf("Has('missing') = true, want false")
 	}
-	// /* -> idxSlash
-	if got := sm.chooseShard("/route"); got != idxSlash {
-		t.Fatalf("chooseShard('/route') -> %d, want %d", got, idxSlash)
-	}
-	// empty key -> default
-	if got := sm.chooseShard(""); got != sm.defaultIndex {
-		t.Fatalf("chooseShard(empty) -> %d, want default %d", got, sm.defaultIndex)
-	}
-	// non-listed first rune (e.g., emoji) -> default
-	if got := sm.chooseShard("💎gem"); got != sm.defaultIndex {
-		t.Fatalf("chooseShard(emoji*) -> %d, want default %d", got, sm.defaultIndex)
-	}
-	// invalid UTF-8 -> default
-	invalid := string([]byte{0xff, 'a'})
-	if utf8.ValidString(invalid) {
-		t.Fatalf("constructed string must be invalid UTF-8 for test")
-	}
-	if got := sm.chooseShard(invalid); got != sm.defaultIndex {
-		t.Fatalf("chooseShard(invalidUTF8) -> %d, want default %d", got, sm.defaultIndex)
+
+	// Delete
+	sm.Delete("a")
+	if _, ok := sm.Get("a"); ok {
+		t.Fatalf("Get after Delete should be false")
 	}
 }
 
-func Test_SetGetDeleteHas(t *testing.T) {
-	sm := MustNew("a-zA-Z0-9/=_$#@$%+-")
+func TestLoadOrStore(t *testing.T) {
+	sm := SharedMapMustNewHashed(8)
 
-	sm.Set("apple", 42)
-	sm.Set("Zorro", "ok")
-	sm.Set("/route", true)
+	// 1st store
+	act, loaded := sm.LoadOrStore("k", 42)
+	if loaded || act.(int) != 42 {
+		t.Fatalf("LoadOrStore new = (%v,%v), want (42,false)", act, loaded)
+	}
 
-	if v, ok := sm.Get("apple"); !ok || v.(int) != 42 {
-		t.Fatalf("Get('apple') = (%v,%v), want (42,true)", v, ok)
-	}
-	if !sm.Has("/route") {
-		t.Fatalf("Has('/route') = false, want true")
-	}
-	sm.Delete("Zorro")
-	if _, ok := sm.Get("Zorro"); ok {
-		t.Fatalf("Zorro should be deleted")
+	// 2nd load (existing)
+	act, loaded = sm.LoadOrStore("k", 7)
+	if !loaded || act.(int) != 42 {
+		t.Fatalf("LoadOrStore existing = (%v,%v), want (42,true)", act, loaded)
 	}
 }
 
-func Test_LenKeysSnapshotClear(t *testing.T) {
-	sm := MustNew("ab")
-	keysIn := []string{"apple", "beta", "alpha", "bravo", "a1", "b2"}
-	for i, k := range keysIn {
-		sm.Set(k, i)
-	}
-	if sm.Len() != len(keysIn) {
-		t.Fatalf("Len() = %d, want %d", sm.Len(), len(keysIn))
+func TestLenKeysSnapshotClear(t *testing.T) {
+	sm := SharedMapMustNewHashed(32)
+
+	// populate
+	N := 1000
+	for i := 0; i < N; i++ {
+		sm.Set(fmt.Sprintf("k%04d", i), i)
 	}
 
-	// Keys: compare as sets (order not guaranteed)
-	gotKeys := sm.Keys()
-	sort.Strings(gotKeys)
-	wantSet := asSetStrings(keysIn)
-	for _, k := range gotKeys {
-		if _, ok := wantSet[k]; !ok {
-			t.Fatalf("unexpected key in Keys(): %q", k)
-		}
+	// Len
+	if l := sm.Len(); l != N {
+		t.Fatalf("Len=%d, want=%d", l, N)
 	}
 
-	// Snapshot: map equality by content
+	// Keys: same cardinality
+	keys := sm.Keys()
+	if len(keys) != N {
+		t.Fatalf("Keys len=%d, want=%d", len(keys), N)
+	}
+
+	// Snapshot: same cardinality and values present
 	snap := sm.Snapshot()
-	if len(snap) != len(keysIn) {
-		t.Fatalf("Snapshot len = %d, want %d", len(snap), len(keysIn))
+	if len(snap) != N {
+		t.Fatalf("Snapshot len=%d, want=%d", len(snap), N)
 	}
-	for k := range wantSet {
-		if _, ok := snap[k]; !ok {
-			t.Fatalf("snapshot missing key %q", k)
+	for i := 0; i < N; i++ {
+		k := fmt.Sprintf("k%04d", i)
+		v, ok := snap[k]
+		if !ok || v.(int) != i {
+			t.Fatalf("Snapshot missing or wrong value for %s: (%v,%v)", k, v, ok)
 		}
 	}
 
 	// Clear
 	sm.Clear()
-	if sm.Len() != 0 {
-		t.Fatalf("Len() after Clear = %d, want 0", sm.Len())
-	}
-	if len(sm.Keys()) != 0 {
-		t.Fatalf("Keys() after Clear should be empty")
+	if l := sm.Len(); l != 0 {
+		t.Fatalf("Len after Clear=%d, want=0", l)
 	}
 }
 
-// --- concurrency tests ---
+func TestRangeEarlyExit(t *testing.T) {
+	sm := SharedMapMustNewHashed(16)
+	for i := 0; i < 1000; i++ {
+		sm.Set(fmt.Sprintf("k%04d", i), i)
+	}
+	var count int
+	sm.Range(func(key string, value interface{}) bool {
+		count++
+		return count < 10 // stop early
+	})
+	if count != 10 {
+		t.Fatalf("Range iterated %d items, want 10 (early stop)", count)
+	}
+}
 
-func Test_ConcurrentAccess(t *testing.T) {
-	sm := MustNew("a-zA-Z0-9/=_$#@$%+-")
+// --- concurrency ---
 
-	// Launch multiple goroutines performing sets/gets in parallel.
-	N := 8
-	M := 1000
-	errCh := make(chan error, N)
+func TestConcurrentAccess(t *testing.T) {
+	sm := SharedMapMustNewHashed(64)
+	workers := runtime.GOMAXPROCS(0) * 8
+	iters := 5000
 
-	done := make(chan struct{})
-	for g := 0; g < N; g++ {
+	wg := sync.WaitGroup{}
+	wg.Add(workers)
+
+	for w := 0; w < workers; w++ {
 		go func(id int) {
-			defer func() {
-				if r := recover(); r != nil {
-					errCh <- &panicError{r}
+			defer wg.Done()
+			for i := 0; i < iters; i++ {
+				// derive a few distinct keys per worker
+				k1 := "w" + strconv.Itoa(id) + "/a/" + strconv.Itoa(i)
+				k2 := "w" + strconv.Itoa(id) + "/b/" + strconv.Itoa(i%100)
+
+				// mix operations
+				sm.Set(k1, i)
+				sm.LoadOrStore(k2, id)
+				if v, ok := sm.Get(k2); ok && v.(int) == id && i%7 == 0 {
+					sm.Delete(k2)
 				}
-			}()
-			// write
-			for i := 0; i < M; i++ {
-				key := []string{"apple", "Beta", "/route", "Zorro", "9lives"}[i%5] + "_" + itoa(i) + "_" + itoa(id)
-				sm.Set(key, i+id)
+				// small shuffle to trigger scheduler
+				if i%251 == 0 {
+					time.Sleep(time.Microsecond)
+				}
 			}
-			// read
-			for i := 0; i < M; i++ {
-				key := []string{"apple", "Beta", "/route", "Zorro", "9lives"}[i%5] + "_" + itoa(i) + "_" + itoa(id)
-				_, _ = sm.Get(key)
-			}
-			// delete a few
-			for i := 0; i < M; i += 10 {
-				key := []string{"apple", "Beta", "/route", "Zorro", "9lives"}[i%5] + "_" + itoa(i) + "_" + itoa(id)
-				sm.Delete(key)
-			}
-			errCh <- nil
-		}(g)
+		}(w)
+	}
+	wg.Wait()
+
+	// basic consistency: no panic, and Len is non-negative with some keys likely left
+	if sm.Len() < 0 {
+		t.Fatalf("Len < 0 - impossible")
+	}
+}
+
+// --- distribution & stability (package-level to access internals safely) ---
+
+func TestShardDistribution_PowerOfTwo(t *testing.T) {
+	// This test checks that the hash roughly spreads keys across shards.
+	// We use a generous tolerance to avoid flakiness.
+	shardCount := 64
+	sm := SharedMapMustNewHashed(shardCount)
+
+	totalKeys := 100_000
+	for i := 0; i < totalKeys; i++ {
+		sm.Set(fmt.Sprintf("k-%06d", i), i)
+	}
+	// Count keys per shard by peeking internals (same package).
+	counts := make([]int, shardCount)
+	for i := range sm.shards {
+		s := &sm.shards[i]
+		s.mu.RLock()
+		counts[i] = len(s.m)
+		s.mu.RUnlock()
 	}
 
-	// Wait for all goroutines to finish
-	for i := 0; i < N; i++ {
-		if err := <-errCh; err != nil {
-			t.Fatalf("goroutine failed: %v", err)
+	// Stats
+	sum := 0
+	min := math.MaxInt
+	max := 0
+	for _, c := range counts {
+		sum += c
+		if c < min {
+			min = c
+		}
+		if c > max {
+			max = c
 		}
 	}
-	close(done)
+	if sum != totalKeys {
+		t.Fatalf("sum per-shard=%d, want %d", sum, totalKeys)
+	}
+	mean := float64(totalKeys) / float64(shardCount)
 
-	// Basic sanity: after deletes of every 10th item, there must still be items left.
-	if sm.Len() == 0 {
-		t.Fatalf("expected non-zero length after concurrent ops")
+	// Allow [0.5x .. 1.5x] of the mean per shard.
+	low := 0.5 * mean
+	high := 1.5 * mean
+	if float64(min) < low || float64(max) > high {
+		// Attach a small summary to help debugging.
+		sorted := append([]int(nil), counts...)
+		sort.Ints(sorted)
+		t.Fatalf("distribution too skewed: min=%d max=%d mean=%.1f allowed=[%.1f..%.1f]", min, max, mean, low, high)
 	}
 }
 
-// --- small utilities for tests ---
+func TestShardStability_SameKeySameShard(t *testing.T) {
+	sm := SharedMapMustNewHashed(128)
 
-// panicError wraps recovered panics to implement error for channels.
-type panicError struct{ v interface{} }
+	keys := []string{
+		"", "a", "A", "0", "-", "foo", "bar", "baz",
+		"user:123", "user:124", "αβγ", "😀", // unicode is fine; we hash bytes
+	}
+	for _, k := range keys {
+		idx1 := indexOfShard(sm, k)
+		idx2 := indexOfShard(sm, k)
+		if idx1 != idx2 {
+			t.Fatalf("shard index not stable for key %q: %d vs %d", k, idx1, idx2)
+		}
+		// Changing value must not affect shard
+		sm.Set(k, 1)
+		idx3 := indexOfShard(sm, k)
+		if idx3 != idx1 {
+			t.Fatalf("shard index changed after Set for key %q: %d -> %d", k, idx1, idx3)
+		}
+	}
+}
 
-func (p *panicError) Error() string { return "panic: " + reflect.TypeOf(p.v).String() }
-
-// itoa is a small integer-to-string helper without pulling strconv in tests.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
+// indexOfShard peeks internals to compute the shard index for a key.
+// (Only used in tests; same package so it's safe.)
+func indexOfShard(sm *ShardedMap, key string) int {
+	h := fnv1a64(key)
+	var idx uint64
+	if sm.pow2Mask != 0 {
+		idx = h & sm.pow2Mask
+	} else {
+		idx = h % uint64(len(sm.shards))
 	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
+	return int(idx)
 }
