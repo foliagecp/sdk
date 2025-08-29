@@ -50,7 +50,11 @@ type StoreValue struct {
 }
 
 func notifySubscriber(c chan KeyValue, key interface{}, value interface{}) {
-	c <- KeyValue{Key: key, Value: value}
+	select {
+	case c <- KeyValue{Key: key, Value: value}:
+	default:
+		// drop if the buffer is full to avoid deadlock
+	}
 }
 
 func (csv *StoreValue) Lock(caller string) {
@@ -267,7 +271,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 		rootValue: &StoreValue{
 			parent:                         nil,
 			value:                          nil,
-			store:                          system.MustNew("a-zA-Z0-9/=_$#@$%+-"),
+			store:                          system.SharedMapMustNewHashed(8),
 			storeConsistencyWithKVLossTime: 0,
 			valueExists:                    false,
 			purgeState:                     0,
@@ -685,7 +689,7 @@ func (cs *Store) TransactionEnd(transactionID string) {
 func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV bool, customSetTime int64) bool {
 	if keyLastToken, parent := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true); len(keyLastToken) > 0 && parent != nil {
 		candidate := &StoreValue{
-			value: newValue, store: system.MustNew("a-zA-Z0-9/=_$#@$%+-"),
+			value: newValue, store: system.SharedMapMustNewHashed(8),
 			valueExists: true, purgeState: 0,
 			syncNeeded: updateInKV, syncedWithKV: !updateInKV,
 			valueUpdateTime: customSetTime,
@@ -737,7 +741,7 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 				csv.Put(value, updateInKV, customSetTime)
 			} else {
 				csvUpdate = &StoreValue{
-					value: value, store: system.MustNew("a-zA-Z0-9/=_$#@$%+-"),
+					value: value, store: system.SharedMapMustNewHashed(8),
 					valueExists: true, purgeState: 0,
 					syncNeeded: updateInKV, syncedWithKV: !updateInKV,
 					valueUpdateTime: customSetTime,
@@ -973,7 +977,7 @@ func (cs *Store) getLastKeyTokenAndItsParentCacheStoreValue(key string, createIf
 			if createIfNotexists {
 				csv := StoreValue{
 					value:                          nil,
-					store:                          system.MustNew("a-zA-Z0-9/=_$#@$%+-"),
+					store:                          system.SharedMapMustNewHashed(8),
 					storeConsistencyWithKVLossTime: 0,
 					valueExists:                    false,
 					purgeState:                     0,
