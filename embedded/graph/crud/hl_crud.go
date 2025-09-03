@@ -212,8 +212,8 @@ func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProces
 	if m.Data.PathExists("body") {
 		result.SetByPath("body", m.Data.GetByPath("body"))
 	}
-	result.SetByPath("to_types", easyjson.JSONFromArray(toTypes))
-	result.SetByPath("object_ids", easyjson.JSONFromArray(toObjects))
+	result.SetByPath("to_types", easyjson.NewJSON(toTypes))
+	result.SetByPath("object_ids", easyjson.NewJSON(toObjects))
 	result.SetByPath("links", m.Data.GetByPath("links"))
 
 	system.MsgOnErrorReturn(om.ReplyWithData(&result))
@@ -439,7 +439,7 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 
 	}
 	result.SetByPath("type", easyjson.NewJSON(objectType))
-	result.SetByPath("to_objects", easyjson.JSONFromArray(toObjects))
+	result.SetByPath("to_objects", easyjson.NewJSON(toObjects))
 	result.SetByPath("links", m.Data.GetByPath("links"))
 
 	if executeTriggersLater {

@@ -67,7 +67,7 @@ func (cmdb CMDBSyncClient) commonTriggerDelete(body easyjson.JSON, triggerType T
 				}
 			}
 		}
-		bodyTriggers = easyjson.NewJSONObjectWithKeyValue(triggerPath, easyjson.JSONFromArray(newTriggers))
+		bodyTriggers = easyjson.NewJSONObjectWithKeyValue(triggerPath, easyjson.NewJSON(newTriggers))
 	} else {
 		bodyTriggers = easyjson.NewJSONObjectWithKeyValue(triggerPath, easyjson.NewJSONArray())
 	}
@@ -99,7 +99,7 @@ func (cmdb CMDBSyncClient) TriggerObjectSet(typeName string, triggerType Trigger
 	}
 
 	body := easyjson.NewJSONObject()
-	body.SetByPath(fmt.Sprintf("triggers.%s", triggerType), easyjson.JSONFromArray(statefunName))
+	body.SetByPath(fmt.Sprintf("triggers.%s", triggerType), easyjson.NewJSON(statefunName))
 	return cmdb.TypeUpdate(
 		typeName,
 		body,
@@ -153,7 +153,7 @@ func (cmdb CMDBSyncClient) TriggerLinkSet(fromTypeName, toTypeName string, trigg
 		return fmt.Errorf("at least 1 statefun name is required")
 	}
 	body := easyjson.NewJSONObject()
-	body.SetByPath(fmt.Sprintf("triggers.%s", triggerType), easyjson.JSONFromArray(statefunName))
+	body.SetByPath(fmt.Sprintf("triggers.%s", triggerType), easyjson.NewJSON(statefunName))
 	return cmdb.TypesLinkUpdate(
 		fromTypeName,
 		toTypeName,
@@ -342,7 +342,7 @@ func (cmdb CMDBSyncClient) TypesLinkCreate(from, to, objectLinkType string, tags
 		payload.SetByPath("body", body[0])
 	}
 	if len(tags) > 0 {
-		payload.SetByPath("tags", easyjson.JSONFromArray(tags))
+		payload.SetByPath("tags", easyjson.NewJSON(tags))
 	}
 	payload.SetByPath("object_type", easyjson.NewJSON(objectLinkType))
 
@@ -360,7 +360,7 @@ func (cmdb CMDBSyncClient) TypesLinkUpdate(from, to string, tags []string, body 
 	payload.SetByPath("to", easyjson.NewJSON(to))
 	payload.SetByPath("body", body)
 	if len(tags) > 0 {
-		payload.SetByPath("tags", easyjson.JSONFromArray(tags))
+		payload.SetByPath("tags", easyjson.NewJSON(tags))
 	}
 	payload.SetByPath("replace", easyjson.NewJSON(replace))
 
@@ -399,7 +399,7 @@ func (cmdb CMDBSyncClient) ObjectsLinkCreate(from, to, name string, tags []strin
 		payload.SetByPath("body", body[0])
 	}
 	if len(tags) > 0 {
-		payload.SetByPath("tags", easyjson.JSONFromArray(tags))
+		payload.SetByPath("tags", easyjson.NewJSON(tags))
 	}
 
 	options := easyjson.NewJSONObject()
@@ -417,7 +417,7 @@ func (cmdb CMDBSyncClient) ObjectsLinkUpdate(from, to string, tags []string, bod
 	payload.SetByPath("to", easyjson.NewJSON(to))
 	payload.SetByPath("body", body)
 	if len(tags) > 0 {
-		payload.SetByPath("tags", easyjson.JSONFromArray(tags))
+		payload.SetByPath("tags", easyjson.NewJSON(tags))
 	}
 	payload.SetByPath("replace", easyjson.NewJSON(replace))
 
@@ -436,7 +436,7 @@ func (cmdb CMDBSyncClient) ObjectsLinkUpdateWithDetails(from, to string, tags []
 	payload.SetByPath("to", easyjson.NewJSON(to))
 	payload.SetByPath("body", body)
 	if len(tags) > 0 {
-		payload.SetByPath("tags", easyjson.JSONFromArray(tags))
+		payload.SetByPath("tags", easyjson.NewJSON(tags))
 	}
 	payload.SetByPath("replace", easyjson.NewJSON(replace))
 

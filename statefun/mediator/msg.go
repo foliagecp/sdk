@@ -91,7 +91,7 @@ func OpMsgFromSfReply(reply *easyjson.JSON, err error) OpMsg {
 	if err == nil {
 		return OpMsgFromJson(reply)
 	}
-	return OpMsgFailed("statefun did not reply")
+	return OpMsgFailed(fmt.Sprintf("statefun reply error: %s", err.Error()))
 }
 
 func (som OpMsg) ToJson() *easyjson.JSON {

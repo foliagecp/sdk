@@ -21,7 +21,7 @@ func (r *queryResolver) SearchObjects(ctx context.Context, query string, objectT
 
 	if DBC != nil {
 		payload := easyjson.NewJSONObjectWithKeyValue("query", easyjson.NewJSON(query))
-		payload.SetByPath("object_type_filter", easyjson.JSONFromArray(objectTypes))
+		payload.SetByPath("object_type_filter", easyjson.NewJSON(objectTypes))
 		msg := sfMediators.OpMsgFromSfReply(DBC.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.search.objects.fvpm", "root", &payload, nil))
 
 		if msg.Status != sfMediators.SYNC_OP_STATUS_OK {

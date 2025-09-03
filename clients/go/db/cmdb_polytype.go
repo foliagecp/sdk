@@ -37,7 +37,7 @@ func (cmdb CMDBSyncClient) ObjectsLinkSuperTypeCreate(from, to, fromClaimType, t
 		payload.SetByPath("body", body[0])
 	}
 	if len(tags) > 0 {
-		payload.SetByPath("tags", easyjson.JSONFromArray(tags))
+		payload.SetByPath("tags", easyjson.NewJSON(tags))
 	}
 
 	options := easyjson.NewJSONObject()

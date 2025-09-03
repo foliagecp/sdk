@@ -97,7 +97,7 @@ For each high-level operation, you can invoke via NATS CLI or via the Go client 
   payload.SetByPath("name", easyjson.NewJSON(linkName))
   payload.SetByPath("body", easyjson.NewJSONObject())
   if len(tags) > 0 {
-      payload.SetByPath("tags", easyjson.JSONFromArray(tags))
+      payload.SetByPath("tags", easyjson.NewJSON(tags))
   }
   err := cmdb.ObjectsLinkSuperTypeCreate(from, to, fromClaimType, toClaimType, linkName, tags, payload)
   ```
