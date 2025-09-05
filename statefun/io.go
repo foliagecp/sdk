@@ -378,6 +378,10 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 	}
 }
 
+func (r *Runtime) GetBaseSignalFunc() func(signalProvider sfPlugins.SignalProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON) error {
+	return r.signal
+}
+
 func (r *Runtime) Signal(signalProvider sfPlugins.SignalProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) error {
 	return r.signal(signalProvider, "ingress", "signal", typename, r.Domain.GetValidObjectId(id), payload, options)
 }
