@@ -3,6 +3,7 @@ package workflow
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/statefun"
@@ -12,7 +13,8 @@ import (
 )
 
 const (
-	CTX_CALLBACK_RESULT_PATH = "workflow.callback.%s.result"
+	CTX_CALLBACK_RESULT_PATH  = "workflow.callback.%s.result"
+	WORKFLOW_PREFIX_OF_SECRET = "slave"
 )
 
 type WorkflowTools struct {
@@ -22,7 +24,11 @@ type WorkflowTools struct {
 	callbackUUIDGenerator int
 }
 
-func (wt *WorkflowTools) ExecActivity(activity *WorkflowActivity, data easyjson.JSON) *easyjson.JSON {
+type ActivityOptions struct {
+	Timeout time.Duration
+}
+
+func (wt *WorkflowTools) ExecActivity(activity *WorkflowActivity, data easyjson.JSON, activityOptions *ActivityOptions) *easyjson.JSON {
 	wt.callbackUUIDGenerator++
 
 	strUUID := fmt.Sprint(wt.callbackUUIDGenerator)
@@ -31,6 +37,17 @@ func (wt *WorkflowTools) ExecActivity(activity *WorkflowActivity, data easyjson.
 	}
 
 	wt.ctx.Signal(sfPlugins.AutoSignalSelect, activity.statefunName, strUUID+"-"+wt.secret, &data, wt.ctx.Options)
+	if activityOptions != nil {
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("cmd", easyjson.NewJSON("schedule_once"))
+		payload.SetByPath("task.caller_typename", easyjson.NewJSON(activity.statefunName))
+		payload.SetByPath("task.caller_id", easyjson.NewJSON(strUUID+"-"+wt.secret))
+		payload.SetByPath("task.target_typename", easyjson.NewJSON(wt.ctx.Self.Typename))
+		payload.SetByPath("task.target_id", easyjson.NewJSON(wt.ctx.Self.ID))
+		payload.SetByPath("task.due_in_ms", easyjson.NewJSON(activityOptions.Timeout.Milliseconds()))
+
+		_ = wt.ctx.Signal(sfPlugins.JetstreamGlobalSignal, DelayedSignalGeneratorTypename, "timer", &payload, nil)
+	}
 
 	panic(workflowStop{}) // Soft workflow termination
 }
@@ -63,17 +80,24 @@ func (w *WorkflowEngine) RegisterStatefun(runtime *statefun.Runtime) {
 func (w *WorkflowEngine) workflowStatefun(_ sfPlugins.StatefunExecutor, sfctx *sfPlugins.StatefunContextProcessor) {
 	starting := true
 
+	callerIdTokens := strings.Split(sfctx.Domain.GetObjectIDWithoutDomain(sfctx.Caller.ID), "-")
+
 	ctxData := sfctx.GetFunctionContext()
 	secret := ctxData.GetByPath("secret").AsStringDefault("")
 	if len(secret) == 0 {
-		secret = system.GetUniqueStrID()
+		if len(callerIdTokens) == 2 {
+			secretTokens := strings.Split(callerIdTokens[1], "_")
+			if len(secretTokens) == 2 && secretTokens[0] == WORKFLOW_PREFIX_OF_SECRET {
+				return // slave (for e.g. activity) replied after workflow has finished its job
+			}
+		}
+		secret = WORKFLOW_PREFIX_OF_SECRET + "_" + system.GetUniqueStrID()
 		ctxData.SetByPath("secret", easyjson.NewJSON(secret))
 		sfctx.SetFunctionContext(ctxData)
 	} else {
 		starting = false
 	}
 
-	callerIdTokens := strings.Split(sfctx.Domain.GetObjectIDWithoutDomain(sfctx.Caller.ID), "-")
 	if len(callerIdTokens) == 2 && callerIdTokens[1] == secret {
 		if err := w.setActivityResultIntoStatefunCtx(callerIdTokens[0], *sfctx.Payload, sfctx); err != nil {
 			lg.Logln(lg.WarnLevel, "Workflow %s received activity callback, but could not process it: %s", sfctx.Self.ID, err.Error())
