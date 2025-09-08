@@ -168,7 +168,7 @@ func (sd *SagaDefinition) RunStateful(ctx context.Context, sfctx *sfPlugins.Stat
 		saveSagaState(sfctx, sd.ID, state)
 
 		// call compensation
-		res := tools.ExecActivity(step.Compensation, step.CompensationInput)
+		res := tools.ExecActivity(step.Compensation, step.CompensationInput, nil)
 		// if ExecActivity did a signal+panic, this invocation will stop here.
 		// after callback the function will be re-invoked and ExecActivity will return the result.
 
@@ -214,7 +214,7 @@ func (sd *SagaDefinition) RunStateful(ctx context.Context, sfctx *sfPlugins.Stat
 	saveSagaState(sfctx, sd.ID, state)
 
 	// execute activity (this will either return existing result or send signal+panic)
-	res := tools.ExecActivity(step.Activity, step.ActivityInput)
+	res := tools.ExecActivity(step.Activity, step.ActivityInput, nil)
 	if res == nil {
 		// defensive
 		return
