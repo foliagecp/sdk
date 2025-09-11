@@ -160,6 +160,9 @@ func createGraphML(sourceVertex string, domain sfPlugins.Domain, nodes map[strin
 	sort.Strings(nodeIds)
 	for _, nodeId := range nodeIds {
 		body := nodes[nodeId]
+		if body == nil {
+			body = easyjson.NewJSONObject().GetPtr()
+		}
 		body = excludeFieldsFromBody(body, conf.excludeVertexFields)
 		outNode := Node{
 			Id:         nodeId,
@@ -191,6 +194,9 @@ func createGraphML(sourceVertex string, domain sfPlugins.Domain, nodes map[strin
 	for _, edgeId := range edgeIds {
 		edge := edges[edgesMap[edgeId]]
 		body := edge.body.GetPtr()
+		if body == nil {
+			body = easyjson.NewJSONObject().GetPtr()
+		}
 		body = excludeFieldsFromBody(body, conf.excludeEdgeFields)
 		outEdge := Edge{
 			Source: edge.from,
