@@ -578,6 +578,20 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			// -----------------------------------------------------------
 		}
 
+		// Create in link on descendant vertex --------------------
+		nextCallPayload := easyjson.NewJSONObject()
+		nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
+		nextCallPayload.SetByPath("in_type", easyjson.NewJSON(linkType))
+		nextCallPayload.SetByPath("op_time", easyjson.NewJSON(opTime))
+
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, makeSequenceFreeParentBasedID(ctx, toId, "inlink"), injectParentHoldsLocks(ctx, &nextCallPayload), ctx.Options)))
+		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
+			operationKeysMutexUnlock(ctx)
+			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
+			return
+		}
+		// --------------------------------------------------------
+
 		// Create out link on this vertex -------------------------
 		// Set link target ------------------
 		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, selfID, linkName), []byte(fmt.Sprintf("%s.%s", linkType, toId)), true, opTime, "") // Store link body in KV
@@ -605,20 +619,6 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		// --------------------------------------------------------
 
 		addLinkOpToOpStack(opStack, ctx.Self.Typename, selfID, toId, linkName, linkType, nil, &linkBody)
-
-		// Create in link on descendant vertex --------------------
-		nextCallPayload := easyjson.NewJSONObject()
-		nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
-		nextCallPayload.SetByPath("in_type", easyjson.NewJSON(linkType))
-		nextCallPayload.SetByPath("op_time", easyjson.NewJSON(opTime))
-
-		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, makeSequenceFreeParentBasedID(ctx, toId, "inlink"), injectParentHoldsLocks(ctx, &nextCallPayload), ctx.Options)))
-		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
-			operationKeysMutexUnlock(ctx)
-			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
-			return
-		}
-		// --------------------------------------------------------
 
 		operationKeysMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
