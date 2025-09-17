@@ -32,6 +32,7 @@ type Runtime struct {
 	Domain *Domain
 
 	registeredFunctionTypes       map[string]*FunctionType
+	canRegisterNewFunctionType    bool
 	onAfterStartFunctionsWithMode []onAfterStartFunctionWithMode
 
 	gt0  int64 // Global time 0 - time of the very first message receiving by any function type
@@ -45,9 +46,10 @@ type Runtime struct {
 // NewRuntime initializes a new Runtime instance with the given configuration.
 func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 	r := &Runtime{
-		config:                  config,
-		registeredFunctionTypes: make(map[string]*FunctionType),
-		shutdown:                make(chan struct{}),
+		config:                     config,
+		registeredFunctionTypes:    make(map[string]*FunctionType),
+		canRegisterNewFunctionType: true,
+		shutdown:                   make(chan struct{}),
 	}
 
 	var err error
@@ -109,6 +111,9 @@ func (r *Runtime) RegisterOnAfterStartFunction(f OnAfterStartFunction, async boo
 // Start initializes streams and starts function subscriptions.
 // It also handles graceful shutdown via context.Context.
 func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
+	// Disable registering new functions after the runtime has started.
+	r.canRegisterNewFunctionType = false
+
 	if intervalMins := system.GetEnvMustProceed("HEAP_WATCHER_INTERVAL_MINS", 0); intervalMins > 0 {
 		go system.StartHeapWatcher(float32(intervalMins))
 	}

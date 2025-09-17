@@ -53,8 +53,12 @@ func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHa
 		config:       config,
 		tokens:       *system.NewTokenBucket(config.functionWorkerPoolConfig.MaxWorkers + config.functionWorkerPoolConfig.TaskQueueLen),
 	}
-	ft.sfWorkerPool = NewSFWorkerPool(ft, config.functionWorkerPoolConfig)
-	runtime.registeredFunctionTypes[ft.name] = ft
+	if runtime.canRegisterNewFunctionType {
+		ft.sfWorkerPool = NewSFWorkerPool(ft, config.functionWorkerPoolConfig)
+		runtime.registeredFunctionTypes[ft.name] = ft
+	} else {
+		lg.GetLogger().Errorf(context.TODO(), "Function type '%s' is not registered. Ensure that all function types are registered before starting the runtime.", ft.name)
+	}
 	return ft
 }
 
