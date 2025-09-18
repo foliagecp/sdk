@@ -117,6 +117,7 @@ func (gc GraphSyncClient) VerticesLinkUpdateByToAndType(from, to, linkType strin
 	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	payload.SetByPath("to", easyjson.NewJSON(to))
 	payload.SetByPath("type", easyjson.NewJSON(linkType))
+	payload.SetByPath("replace", easyjson.NewJSON(replace))
 
 	payload.SetByPath("body", body)
 	if len(tags) > 0 {
