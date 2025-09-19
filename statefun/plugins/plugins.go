@@ -92,25 +92,26 @@ type Domain interface {
 }
 
 type StatefunContextProcessor struct {
-	GetFunctionContext        func() *easyjson.JSON
-	SetFunctionContext        func(*easyjson.JSON)
-	SetContextExpirationAfter func(time.Duration)
-	GetObjectContext          func() *easyjson.JSON
-	SetObjectContext          func(*easyjson.JSON)
-	GetObjectImplTypes        func() (types []string, err error)
-	ObjectMutexLock           func(objectId string, errorOnLocked bool) error
-	ObjectMutexUnlock         func(objectId string) error
-	Domain                    Domain
-	Signal                    SFSignalFunc
-	Request                   SFRequestFunc
-	ObjectSignal              ObjectSignalFunc
-	ObjectRequest             ObjectRequestFunc
-	Egress                    SFEgressFunc
-	Self                      StatefunAddress
-	Caller                    StatefunAddress
-	Payload                   *easyjson.JSON
-	Options                   *easyjson.JSON
-	Reply                     *SyncReply // when requested in function: nil - function was signaled, !nil - function was requested
+	GetFunctionContext            func() *easyjson.JSON
+	SetFunctionContext            func(*easyjson.JSON)
+	SetFunctionContextImmediately func(*easyjson.JSON)
+	SetContextExpirationAfter     func(time.Duration)
+	GetObjectContext              func() *easyjson.JSON
+	SetObjectContext              func(*easyjson.JSON)
+	GetObjectImplTypes            func() (types []string, err error)
+	ObjectMutexLock               func(objectId string, errorOnLocked bool) error
+	ObjectMutexUnlock             func(objectId string) error
+	Domain                        Domain
+	Signal                        SFSignalFunc
+	Request                       SFRequestFunc
+	ObjectSignal                  ObjectSignalFunc
+	ObjectRequest                 ObjectRequestFunc
+	Egress                        SFEgressFunc
+	Self                          StatefunAddress
+	Caller                        StatefunAddress
+	Payload                       *easyjson.JSON
+	Options                       *easyjson.JSON
+	Reply                         *SyncReply // when requested in function: nil - function was signaled, !nil - function was requested
 }
 
 type StatefunExecutor interface {

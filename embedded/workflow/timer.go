@@ -114,7 +114,7 @@ func ensureWheelInitialized(ctx *sfPlugins.StatefunContextProcessor) {
 		}
 		fc.SetByPath("wheel", arr)
 	}
-	ctx.SetFunctionContext(fc)
+	ctx.SetFunctionContextImmediately(fc)
 }
 
 // ---------- Ticker state ----------
@@ -127,7 +127,7 @@ func startTickerIfNeeded(ctx *sfPlugins.StatefunContextProcessor) {
 		return
 	}
 	fc.SetByPath("ticker_active", easyjson.NewJSON(true))
-	ctx.SetFunctionContext(fc)
+	ctx.SetFunctionContextImmediately(fc)
 	scheduleNextTick(ctx)
 }
 
@@ -135,7 +135,7 @@ func stopTickerIfNoTasks(ctx *sfPlugins.StatefunContextProcessor) {
 	fc := ctx.GetFunctionContext()
 	if len(fc.GetByPath("tasks").ObjectKeys()) == 0 {
 		fc.SetByPath("ticker_active", easyjson.NewJSON(false))
-		ctx.SetFunctionContext(fc)
+		ctx.SetFunctionContextImmediately(fc)
 	}
 }
 
@@ -217,7 +217,7 @@ func scheduleOnce(ctx *sfPlugins.StatefunContextProcessor) {
 	}
 	idsArr.AddToArray(easyjson.NewJSON(taskID))
 	fc.SetByPath(path, idsArr)
-	ctx.SetFunctionContext(fc)
+	ctx.SetFunctionContextImmediately(fc)
 }
 
 func scheduleEvery(ctx *sfPlugins.StatefunContextProcessor) {
@@ -281,7 +281,7 @@ func scheduleEvery(ctx *sfPlugins.StatefunContextProcessor) {
 	}
 	idsArr.AddToArray(easyjson.NewJSON(taskID))
 	fc.SetByPath(path, idsArr)
-	ctx.SetFunctionContext(fc)
+	ctx.SetFunctionContextImmediately(fc)
 }
 
 // ---------- Cancel API ----------
@@ -293,7 +293,7 @@ func cancelTask(ctx *sfPlugins.StatefunContextProcessor) {
 	}
 	if fc.PathExists("tasks." + taskID) {
 		fc.RemoveByPath("tasks." + taskID)
-		ctx.SetFunctionContext(fc)
+		ctx.SetFunctionContextImmediately(fc)
 	}
 	// We don't scan wheel slots; unknown IDs will be ignored on tick.
 }
@@ -309,7 +309,7 @@ func cancelAll(ctx *sfPlugins.StatefunContextProcessor) {
 		arr.AddToArray(obj)
 	}
 	fc.SetByPath("wheel", arr)
-	ctx.SetFunctionContext(fc)
+	ctx.SetFunctionContextImmediately(fc)
 }
 
 // ---------- Tick processing ----------
@@ -396,13 +396,13 @@ func processTick(ctx *sfPlugins.StatefunContextProcessor) {
 	// Advance slot
 	nextSlot := (currentSlot + 1) % wheelSize
 	fc.SetByPath("current_slot", easyjson.NewJSON(nextSlot))
-	ctx.SetFunctionContext(fc)
+	ctx.SetFunctionContextImmediately(fc)
 
 	// Keep ticking while tasks exist: block until next tick, self-signal, then return
 	if len(fc.GetByPath("tasks").ObjectKeys()) > 0 {
 		scheduleNextTick(ctx)
 	} else {
 		fc.SetByPath("ticker_active", easyjson.NewJSON(false))
-		ctx.SetFunctionContext(fc)
+		ctx.SetFunctionContextImmediately(fc)
 	}
 }

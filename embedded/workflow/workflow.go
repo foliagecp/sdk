@@ -93,7 +93,7 @@ func (w *WorkflowEngine) workflowStatefun(_ sfPlugins.StatefunExecutor, sfctx *s
 		}
 		secret = WORKFLOW_PREFIX_OF_SECRET + "_" + system.GetUniqueStrID()
 		ctxData.SetByPath("secret", easyjson.NewJSON(secret))
-		sfctx.SetFunctionContext(ctxData)
+		sfctx.SetFunctionContextImmediately(ctxData)
 	} else {
 		starting = false
 	}
@@ -128,7 +128,7 @@ func (w *WorkflowEngine) workflowStatefun(_ sfPlugins.StatefunExecutor, sfctx *s
 	w.logicHandler(tools)
 
 	// clean function context when workflow has reached its end
-	sfctx.SetFunctionContext(easyjson.NewJSONObject().GetPtr())
+	sfctx.SetFunctionContextImmediately(easyjson.NewJSONObject().GetPtr())
 }
 
 func (w *WorkflowEngine) getActivityResultFromStatefunCtx(activityUUID string, sfctx *sfPlugins.StatefunContextProcessor) (res easyjson.JSON, exists bool) {
@@ -155,7 +155,7 @@ func (w *WorkflowEngine) setActivityResultIntoStatefunCtx(activityUUID string, d
 		return fmt.Errorf("could not set data by path '%s'", resPath)
 	}
 
-	sfctx.SetFunctionContext(funcContext)
+	sfctx.SetFunctionContextImmediately(funcContext)
 
 	return nil
 }
