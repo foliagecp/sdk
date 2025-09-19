@@ -148,6 +148,42 @@ func (csv *StoreValue) Put(value interface{}, updateInKV bool, customPutTime int
 	csv.Unlock("Put")
 }
 
+func (csv *StoreValue) PutKVSync(cs *Store, value interface{}, customPutTime int64) {
+	csv.Lock("PutKVSync")
+	key := csv.keyInParent
+
+	csv.value = value
+	csv.valueExists = true
+	csv.purgeState = 0
+	if customPutTime < 0 {
+		customPutTime = system.GetCurrentTimeNs()
+	}
+	csv.valueUpdateTime = customPutTime
+	csv.syncNeeded = false
+	csv.syncedWithKV = true
+
+	// Putting directly into nats KV ----------------------
+	valueBytes := csv.value.([]byte)
+	finalBytes := make([]byte, 9, 9+len(valueBytes))
+	binary.BigEndian.PutUint64(finalBytes[:8], uint64(csv.valueUpdateTime))
+	finalBytes[8] = 1 // Add append flag "1"
+	finalBytes = append(finalBytes, valueBytes...)
+	_, putErr := customNatsKv.KVPut(cs.js, cs.kv, cs.toStoreKey(csv.GetFullKeyString()), finalBytes)
+	if putErr != nil {
+		panic(fmt.Sprintf("PutKVSync received error: %s", putErr.Error()))
+	}
+	// ----------------------------------------------------
+
+	if csv.parent != nil {
+		csv.parent.notifyUpdates.Range(func(_, v interface{}) bool {
+			notifySubscriber(v.(chan KeyValue), key, value)
+			return true
+		})
+	}
+
+	csv.Unlock("PutKVSync")
+}
+
 func (csv *StoreValue) collectGarbage() {
 	system.GlobalPrometrics.GetRoutinesCounter().Started("cache.csv.collectGarbage")
 	defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("cache.csv.collectGarbage")
@@ -763,6 +799,37 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 		}
 	}
 	return true
+}
+
+func (cs *Store) SetValueKVSync(key string, value []byte, customSetTime int64) error {
+	if !keyValidationRegexp.MatchString(key) {
+		return fmt.Errorf("key does not match keyValidationRegexp")
+	}
+
+	if customSetTime < 0 {
+		customSetTime = system.GetCurrentTimeNs()
+	}
+
+	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
+		var csvUpdate *StoreValue
+		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
+			csvUpdate = csv
+		} else {
+			csvUpdate = &StoreValue{
+				value:                          value,
+				store:                          system.SharedMapMustNewHashed(8),
+				storeConsistencyWithKVLossTime: 0,
+				valueExists:                    true,
+				purgeState:                     0,
+				syncNeeded:                     false,
+				syncedWithKV:                   true,
+				valueUpdateTime:                customSetTime,
+			}
+			parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate)
+		}
+		csvUpdate.PutKVSync(cs, value, customSetTime)
+	}
+	return nil
 }
 
 func (cs *Store) Destroy() {

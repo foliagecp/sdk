@@ -29,6 +29,10 @@ var (
 	workflowEngine    = workflow.NewWorkflowEngine(TestWorkflow, "functions.workflow.engine")
 	workflowActivity1 = workflow.NewWorkflowActivity(Activity1, "functions.workflow.activity1")
 	workflowActivity2 = workflow.NewWorkflowActivity(Activity2, "functions.workflow.activity2")
+
+	workflowTestRobustnessMainFunc        = workflow.NewWorkflowEngine(TestWorkflowRobustness, "functions.workflow_robustness.main")
+	workflowTestRobustnessActivityOneFunc = workflow.NewWorkflowActivity(ActivityOne, "functions.workflow_robustness.activityOne")
+	workflowTestRobustnessActivityTwoFunc = workflow.NewWorkflowActivity(ActivityTwo, "functions.workflow_robustness.activityTwo")
 )
 
 func reverseString(s string) string {
@@ -210,6 +214,11 @@ func Start() {
 		workflowEngine.RegisterStatefun(runtime)
 		workflowActivity1.RegisterStatefun(runtime)
 		workflowActivity2.RegisterStatefun(runtime)
+
+		// Test workflow robustness
+		workflowTestRobustnessMainFunc.RegisterStatefun(runtime)
+		workflowTestRobustnessActivityOneFunc.RegisterStatefun(runtime)
+		workflowTestRobustnessActivityTwoFunc.RegisterStatefun(runtime)
 
 		RegisterFunctionTypes(runtime)
 
