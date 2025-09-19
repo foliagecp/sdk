@@ -180,14 +180,15 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 		typenameIDContextProcessor = v.(*sfPlugins.StatefunContextProcessor)
 	} else {
 		v := sfPlugins.StatefunContextProcessor{
-			GetFunctionContext:        func() *easyjson.JSON { return ft.getContext(ft.name + "." + id) },
-			SetFunctionContext:        func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
-			SetContextExpirationAfter: func(after time.Duration) { ft.setContextExpirationAfter(ft.name+"."+id, after) },
-			GetObjectContext:          func() *easyjson.JSON { return ft.getContext(id) },
-			SetObjectContext:          func(context *easyjson.JSON) { ft.setContext(id, context) },
-			GetObjectImplTypes:        func() (types []string, err error) { return ft.getObjectImplTypes(id) },
-			Domain:                    ft.runtime.Domain,
-			Self:                      sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
+			GetFunctionContext:            func() *easyjson.JSON { return ft.getContext(ft.name + "." + id) },
+			SetFunctionContext:            func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
+			SetFunctionContextImmediately: func(context *easyjson.JSON) { ft.setContextImmediately(ft.name+"."+id, context) },
+			SetContextExpirationAfter:     func(after time.Duration) { ft.setContextExpirationAfter(ft.name+"."+id, after) },
+			GetObjectContext:              func() *easyjson.JSON { return ft.getContext(id) },
+			SetObjectContext:              func(context *easyjson.JSON) { ft.setContext(id, context) },
+			GetObjectImplTypes:            func() (types []string, err error) { return ft.getObjectImplTypes(id) },
+			Domain:                        ft.runtime.Domain,
+			Self:                          sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
 			Signal: func(signalProvider sfPlugins.SignalProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) error {
 				return ft.runtime.signal(signalProvider, ft.name, id, targetTypename, targetID, j, o)
 			},
@@ -394,6 +395,14 @@ func (ft *FunctionType) setContext(keyValueID string, context *easyjson.JSON) {
 		ft.runtime.Domain.cache.DeleteValue(keyValueID, true, -1, "")
 	} else {
 		ft.runtime.Domain.cache.SetValue(keyValueID, context.ToBytes(), true, -1, "")
+	}
+}
+
+func (ft *FunctionType) setContextImmediately(keyValueID string, context *easyjson.JSON) {
+	if context == nil {
+		ft.runtime.Domain.cache.DeleteValue(keyValueID, true, -1, "")
+	} else {
+		system.MsgOnErrorReturn(ft.runtime.Domain.cache.SetValueKVSync(keyValueID, context.ToBytes(), -1))
 	}
 }
 
