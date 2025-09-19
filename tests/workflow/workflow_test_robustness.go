@@ -2,132 +2,60 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"time"
 
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/embedded/workflow"
 	lg "github.com/foliagecp/sdk/statefun/logger"
+	"github.com/foliagecp/sdk/statefun/system"
 )
 
 func TestWorkflowRobustness(tools workflow.WorkflowTools) {
 	le := lg.GetLogger()
-	logCtx := context.Background()
-
-	le.Info(logCtx, "==========>TestWorkflowRobustness started")
-
-	testFile := "/tmp/test_config.json"
-	testContent := `{"version": "1.0", "status": "active"}`
-	os.WriteFile(testFile, []byte(testContent), 0644)
-
-	data1 := easyjson.NewJSONObjectWithKeyValue("file", easyjson.NewJSON(testFile))
-	result1 := tools.ExecActivity(workflowActivity1, data1, &workflow.ActivityOptions{Timeout: 3 * time.Second})
-
-	if !result1.GetByPath("ok").AsBoolDefault(false) {
-		le.Error(logCtx, "Backup failed: %s", result1.GetByPath("error").AsStringDefault(""))
-		return
-	}
-
-	data2 := easyjson.NewJSONObjectWithKeyValue("file", easyjson.NewJSON(testFile))
-	data2.SetByPath("backup_file", result1.GetByPath("backup_file"))
-	result2 := tools.ExecActivity(workflowActivity2, data2, &workflow.ActivityOptions{Timeout: 3 * time.Second})
-
-	if !result2.GetByPath("ok").AsBoolDefault(false) {
-		le.Error(logCtx, "File processing failed: %s", result2.GetByPath("error").AsStringDefault(""))
-	}
-
-	le.Info(logCtx, "<==========TestWorkflowRobustness finished")
-}
-
-func ActivityOne(tools workflow.ActivityTools) {
-	le := lg.GetLogger()
 	ctx := context.Background()
 
-	le.Info(ctx, "ActivityOne: Creating backup...")
+	le.Info(ctx, "==TEST============= Starting 5-step workflow...")
 
-	originalFile := tools.SFctx.Payload.GetByPath("file").AsStringDefault("")
-	if originalFile == "" {
-		reply := easyjson.NewJSONObject()
-		reply.SetByPath("ok", easyjson.NewJSON(false))
-		reply.SetByPath("error", easyjson.NewJSON("file parameter required"))
-		tools.ReplyWith(reply)
-		return
+	for i := 1; i <= 5; i++ {
+		data := easyjson.NewJSONObjectWithKeyValue("step", easyjson.NewJSON(i))
+		result := tools.ExecActivity(stepActivity, data, &workflow.ActivityOptions{Timeout: 2 * time.Second})
+
+		if !result.GetByPath("ok").AsBoolDefault(false) {
+			le.Errorf(ctx, "==TEST============= Step %d failed", i)
+			return
+		}
+
+		le.Infof(ctx, "Step %d completed", i)
+
+		if i == 4 && system.GetCurrentTimeNs()%3 == 0 {
+			le.Info(ctx, "==TEST============= Simulating crash after step 4...")
+			os.Exit(1)
+		}
+		time.Sleep(3 * time.Second)
 	}
 
-	if _, err := os.Stat(originalFile); os.IsNotExist(err) {
-		reply := easyjson.NewJSONObject()
-		reply.SetByPath("ok", easyjson.NewJSON(false))
-		reply.SetByPath("error", easyjson.NewJSON("original file does not exist"))
-		tools.ReplyWith(reply)
-		return
-	}
-
-	timestamp := time.Now().Format("20060102_150405")
-	backupFile := originalFile + ".backup." + timestamp
-
-	data, err := os.ReadFile(originalFile)
-	if err != nil {
-		reply := easyjson.NewJSONObject()
-		reply.SetByPath("ok", easyjson.NewJSON(false))
-		reply.SetByPath("error", easyjson.NewJSON(err.Error()))
-		tools.ReplyWith(reply)
-		return
-	}
-
-	err = os.WriteFile(backupFile, data, 0644)
-	if err != nil {
-		reply := easyjson.NewJSONObject()
-		reply.SetByPath("ok", easyjson.NewJSON(false))
-		reply.SetByPath("error", easyjson.NewJSON(err.Error()))
-		tools.ReplyWith(reply)
-		return
-	}
-
-	le.Info(ctx, "ActivityOne: Backup created: %s", backupFile)
-
-	result := easyjson.NewJSONObjectWithKeyValue("ok", easyjson.NewJSON(true))
-	result.SetByPath("backup_file", easyjson.NewJSON(backupFile))
-	tools.ReplyWith(result)
+	le.Info(ctx, "==TEST============= All 5 steps completed!")
 }
 
-func ActivityTwo(tools workflow.ActivityTools) {
-	le := lg.GetLogger()
-	ctx := context.Background()
+func StepActivity(tools workflow.ActivityTools) {
+	step := int(tools.SFctx.Payload.GetByPath("step").AsNumericDefault(0))
 
-	le.Info(ctx, "ActivityTwo: Processing file...")
+	funcCtx := tools.SFctx.GetFunctionContext()
+	stepKey := fmt.Sprintf("step_%d_completed", step)
 
-	originalFile := tools.SFctx.Payload.GetByPath("file").AsStringDefault("")
-	backupFile := tools.SFctx.Payload.GetByPath("backup_file").AsStringDefault("")
-
-	if originalFile == "" || backupFile == "" {
-		reply := easyjson.NewJSONObject()
-		reply.SetByPath("ok", easyjson.NewJSON(false))
-		reply.SetByPath("error", easyjson.NewJSON("file and backup_file parameters required"))
-		tools.ReplyWith(reply)
+	if funcCtx.GetByPath(stepKey).AsBoolDefault(false) {
+		tools.ReplyWith(easyjson.NewJSONObjectWithKeyValue("ok", easyjson.NewJSON(true)))
 		return
 	}
 
-	if _, err := os.Stat(backupFile); os.IsNotExist(err) {
-		reply := easyjson.NewJSONObject()
-		reply.SetByPath("ok", easyjson.NewJSON(false))
-		reply.SetByPath("error", easyjson.NewJSON("backup file does not exist"))
-		tools.ReplyWith(reply)
-		return
-	}
+	f, _ := os.OpenFile("workflow_progress.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	fmt.Fprintf(f, "%d", step)
+	f.Close()
 
-	err := os.Remove(originalFile)
-	if err != nil {
-		reply := easyjson.NewJSONObject()
-		reply.SetByPath("ok", easyjson.NewJSON(false))
-		reply.SetByPath("error", easyjson.NewJSON(err.Error()))
-		tools.ReplyWith(reply)
-		return
-	}
+	funcCtx.SetByPath(stepKey, easyjson.NewJSON(true))
+	tools.SFctx.SetFunctionContextImmediately(funcCtx)
 
-	le.Info(ctx, "ActivityTwo: Original file removed, backup preserved")
-
-	result := easyjson.NewJSONObjectWithKeyValue("ok", easyjson.NewJSON(true))
-	result.SetByPath("removed_file", easyjson.NewJSON(originalFile))
-	result.SetByPath("backup_preserved", easyjson.NewJSON(backupFile))
-	tools.ReplyWith(result)
+	tools.ReplyWith(easyjson.NewJSONObjectWithKeyValue("ok", easyjson.NewJSON(true)))
 }

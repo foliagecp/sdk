@@ -30,9 +30,8 @@ var (
 	workflowActivity1 = workflow.NewWorkflowActivity(Activity1, "functions.workflow.activity1")
 	workflowActivity2 = workflow.NewWorkflowActivity(Activity2, "functions.workflow.activity2")
 
-	workflowTestRobustnessMainFunc        = workflow.NewWorkflowEngine(TestWorkflowRobustness, "functions.workflow_robustness.main")
-	workflowTestRobustnessActivityOneFunc = workflow.NewWorkflowActivity(ActivityOne, "functions.workflow_robustness.activityOne")
-	workflowTestRobustnessActivityTwoFunc = workflow.NewWorkflowActivity(ActivityTwo, "functions.workflow_robustness.activityTwo")
+	workflowTestRobustnessMainFunc = workflow.NewWorkflowEngine(TestWorkflowRobustness, "functions.workflow.robustness.main")
+	stepActivity                   = workflow.NewWorkflowActivity(StepActivity, "functions.workflow.robustness.activity")
 )
 
 func reverseString(s string) string {
@@ -102,7 +101,7 @@ func TimerSink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProce
 	count := int(fc.GetByPath("hits").AsNumericDefault(0))
 	count++
 	fc.SetByPath("hits", easyjson.NewJSON(count))
-	ctx.SetFunctionContext(fc)
+	ctx.SetFunctionContextImmediately(fc)
 
 	lg.Logf(lg.InfoLevel, "[SINK] %s:%s hits=%d payload=%s", ctx.Self.Typename, ctx.Self.ID, count, ctx.Payload.ToString())
 }
@@ -204,7 +203,11 @@ func Start() {
 	system.GlobalPrometrics = system.NewPrometrics("", ":9901")
 
 	afterStart := func(ctx context.Context, runtime *statefun.Runtime) error {
-		startTimerTest(runtime)
+		time.Sleep(10 * time.Second)
+
+		system.MsgOnErrorReturn(runtime.Signal(sfPlugins.JetstreamGlobalSignal, "functions.workflow.robustness.main", "test", nil, nil))
+
+		//startTimerTest(runtime)
 
 		return nil
 	}
@@ -217,8 +220,7 @@ func Start() {
 
 		// Test workflow robustness
 		workflowTestRobustnessMainFunc.RegisterStatefun(runtime)
-		workflowTestRobustnessActivityOneFunc.RegisterStatefun(runtime)
-		workflowTestRobustnessActivityTwoFunc.RegisterStatefun(runtime)
+		stepActivity.RegisterStatefun(runtime)
 
 		RegisterFunctionTypes(runtime)
 
