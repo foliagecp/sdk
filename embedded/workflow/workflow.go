@@ -8,6 +8,7 @@ import (
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/statefun"
 	lg "github.com/foliagecp/sdk/statefun/logger"
+	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 )
@@ -15,6 +16,15 @@ import (
 const (
 	CTX_CALLBACK_RESULT_PATH  = "workflow.callback.%s.result"
 	WORKFLOW_PREFIX_OF_SECRET = "slave"
+
+	ctxSecretPath = "workflow.secret"
+	ctxPausedPath = "workflow.paused"
+)
+
+const (
+	WF_STATE_RUNNING = "RUNNING"
+	WF_STATE_PAUSED  = "PAUSED"
+	WF_STATE_STOPPED = "STOPPED"
 )
 
 type WorkflowTools struct {
@@ -36,6 +46,8 @@ func (wt *WorkflowTools) ExecActivity(activity *WorkflowActivity, data easyjson.
 		return &existingResult
 	}
 
+	// id = <callback_uud>-<secret>
+	// secret = slave_<ustr>
 	wt.ctx.Signal(sfPlugins.AutoSignalSelect, activity.statefunName, strUUID+"-"+wt.secret, &data, wt.ctx.Options)
 	if activityOptions != nil {
 		payload := easyjson.NewJSONObject()
@@ -73,62 +85,121 @@ func (w *WorkflowEngine) RegisterStatefun(runtime *statefun.Runtime) {
 		runtime,
 		w.statefunName,
 		w.workflowStatefun,
-		*statefun.NewFunctionTypeConfig().SetMultipleInstancesAllowance(false).SetMaxIdHandlers(-1),
+		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMultipleInstancesAllowance(false).SetMaxIdHandlers(-1),
 	)
 }
 
 func (w *WorkflowEngine) workflowStatefun(_ sfPlugins.StatefunExecutor, sfctx *sfPlugins.StatefunContextProcessor) {
-	starting := true
-
-	callerIdTokens := strings.Split(sfctx.Domain.GetObjectIDWithoutDomain(sfctx.Caller.ID), "-")
+	isRunning := false
 
 	ctxData := sfctx.GetFunctionContext()
-	secret := ctxData.GetByPath("secret").AsStringDefault("")
-	if len(secret) == 0 {
-		if len(callerIdTokens) == 2 {
-			secretTokens := strings.Split(callerIdTokens[1], "_")
-			if len(secretTokens) == 2 && secretTokens[0] == WORKFLOW_PREFIX_OF_SECRET {
-				return // slave (for e.g. activity) replied after workflow has finished its job
+	secret := ctxData.GetByPath(ctxSecretPath).AsStringDefault("")
+	if len(secret) != 0 { // Secret is not initialized, workflow is not stared
+		isRunning = true
+	}
+
+	isPaused := ctxData.GetByPath(ctxPausedPath).AsBoolDefault(false)
+
+	// Processing commands --------------------------------
+	if sfctx.Payload.PathExists("cmd") {
+		cmd := sfctx.Payload.GetByPath("cmd").AsStringDefault("")
+
+		om := sfMediators.NewOpMediator(sfctx)
+		cmdReply := easyjson.NewJSONObject()
+		cmdUnknown := true
+		defer func() {
+			if cmdUnknown {
+				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("command \"%s\" is unknown", cmd))).Reply()
+			} else {
+				om.AggregateOpMsg(sfMediators.OpMsgOk(cmdReply)).Reply()
 			}
+		}()
+
+		if cmd == "status" {
+			cmdUnknown = false
+			status := easyjson.NewJSONObject()
+
+			state := WF_STATE_STOPPED
+			if isRunning {
+				if isPaused {
+					state = WF_STATE_PAUSED
+				} else {
+					state = WF_STATE_RUNNING
+				}
+			}
+			status.SetByPath("state", easyjson.NewJSON(state))
+			cmdReply = status
+			return
 		}
-		secret = WORKFLOW_PREFIX_OF_SECRET + "_" + system.GetUniqueStrID()
-		ctxData.SetByPath("secret", easyjson.NewJSON(secret))
-		sfctx.SetFunctionContext(ctxData)
-	} else {
-		starting = false
-	}
 
-	if len(callerIdTokens) == 2 && callerIdTokens[1] == secret {
-		if err := w.setActivityResultIntoStatefunCtx(callerIdTokens[0], *sfctx.Payload, sfctx); err != nil {
-			lg.Logln(lg.WarnLevel, "Workflow %s received activity callback, but could not process it: %s", sfctx.Self.ID, err.Error())
-			return // cannot continue
-		}
-	} else if !starting {
-		return // cannot continue
-	}
-
-	tools := WorkflowTools{
-		ctx:                   sfctx,
-		secret:                secret,
-		workflow:              w,
-		callbackUUIDGenerator: 0,
-	}
-
-	defer func() {
-		if r := recover(); r != nil {
-			if _, ok := r.(workflowStop); ok {
-				// soft stop
+		if !isRunning {
+			if cmd == "start" {
+				cmdUnknown = false
+				secret = WORKFLOW_PREFIX_OF_SECRET + "_" + system.GetUniqueStrID()
+				ctxData.SetByPath(ctxSecretPath, easyjson.NewJSON(secret))
+				sfctx.SetFunctionContext(ctxData)
+				isRunning = true
+			}
+		} else {
+			if cmd == "pause" {
+				cmdUnknown = false
+				ctxData.SetByPath(ctxPausedPath, easyjson.NewJSON(true))
+				sfctx.SetFunctionContext(ctxData)
 				return
 			}
-			// real panic
-			panic(r)
+			if cmd == "resume" {
+				cmdUnknown = false
+				ctxData.SetByPath(ctxPausedPath, easyjson.NewJSON(false))
+				sfctx.SetFunctionContext(ctxData)
+				isPaused = false
+			}
+			if cmd == "stop" {
+				cmdUnknown = false
+				sfctx.SetFunctionContext(easyjson.NewJSONObject().GetPtr())
+				return
+			}
 		}
-	}()
+	}
+	// ----------------------------------------------------
 
-	w.logicHandler(tools)
+	if isRunning {
+		callerIdTokens := strings.Split(sfctx.Domain.GetObjectIDWithoutDomain(sfctx.Caller.ID), "-")
+		callback := len(callerIdTokens) == 2 && callerIdTokens[1] == secret
 
-	// clean function context when workflow has reached its end
-	sfctx.SetFunctionContext(easyjson.NewJSONObject().GetPtr())
+		if callback {
+			if err := w.setActivityResultIntoStatefunCtx(callerIdTokens[0], *sfctx.Payload, sfctx); err != nil {
+				lg.Logln(lg.WarnLevel, "Workflow %s received activity callback, but could not process it: %s", sfctx.Self.ID, err.Error())
+				return // cannot continue
+			}
+		}
+
+		if isPaused { // If paused
+			return
+		}
+
+		tools := WorkflowTools{
+			ctx:                   sfctx,
+			secret:                secret,
+			workflow:              w,
+			callbackUUIDGenerator: 0,
+		}
+
+		defer func() {
+			if r := recover(); r != nil {
+				if _, ok := r.(workflowStop); ok {
+					// soft stop
+					return
+				}
+				// real panic
+				panic(r)
+			}
+		}()
+
+		w.logicHandler(tools)
+
+		// clean function context when workflow has reached its end
+		sfctx.SetFunctionContext(easyjson.NewJSONObject().GetPtr())
+	}
 }
 
 func (w *WorkflowEngine) getActivityResultFromStatefunCtx(activityUUID string, sfctx *sfPlugins.StatefunContextProcessor) (res easyjson.JSON, exists bool) {
