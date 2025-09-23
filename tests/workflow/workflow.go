@@ -53,7 +53,7 @@ func TestWorkflow(tools workflow.WorkflowTools) {
 	greet := ""
 
 	data1 := easyjson.NewJSONObjectWithKeyValue("val", easyjson.NewJSON("olleh"))
-	result1 := tools.ExecActivity(workflowActivity1, data1, &workflow.ActivityOptions{Timeout: 1 * time.Second})
+	result1 := tools.ExecActivity(workflowActivity1, data1, &workflow.ActivityOptions{Timeout: 10 * time.Second})
 
 	greet += result1.GetByPathPtr("val").AsStringDefault("ERROR1")
 	greet += " "
@@ -61,7 +61,7 @@ func TestWorkflow(tools workflow.WorkflowTools) {
 	fmt.Println("TestWorkflow: 1")
 
 	data2 := easyjson.NewJSONObjectWithKeyValue("val", easyjson.NewJSON("wolfkrow"))
-	result2 := tools.ExecActivity(workflowActivity2, data2, &workflow.ActivityOptions{Timeout: 1 * time.Second})
+	result2 := tools.ExecActivity(workflowActivity2, data2, &workflow.ActivityOptions{Timeout: 10 * time.Second})
 
 	greet += result2.GetByPathPtr("val").AsStringDefault("ERROR2")
 	greet += "!"
@@ -88,7 +88,7 @@ func Activity2(tools workflow.ActivityTools) {
 	replyData := easyjson.NewJSONObjectWithKeyValue("val", easyjson.NewJSON(reverseString(val)))
 	tools.ReplyWith(replyData)
 
-	time.Sleep(3 * time.Second)
+	time.Sleep(8 * time.Second)
 
 	fmt.Println("  Activity2: 1")
 }
