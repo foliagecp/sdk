@@ -27,7 +27,10 @@ services:
       - "8080:8080"
     env_file: ./configs/.env
     depends_on:
-      - nats
+      db:
+        condition: service_healthy
+      nats:
+        condition: service_started
     build:
       context: ../..
       dockerfile: tests/workflow_full/Dockerfile
@@ -49,6 +52,11 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
 #  prometheus:
 #    image: prom/prometheus
