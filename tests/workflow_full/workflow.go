@@ -50,8 +50,6 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 }
 
 func TestWorkflow(tools workflow.WorkflowTools) {
-	time.Sleep(20 * time.Second)
-
 	le := lg.GetLogger()
 
 	le.Info(context.TODO(), "===== Workflow started =====")
@@ -80,7 +78,21 @@ func TestWorkflow(tools workflow.WorkflowTools) {
 	}
 	le.Info(context.TODO(), "✓ Migrations completed")
 
-	//TODO add new task and new task 2
+	le.Info(context.TODO(), "Step 4: Creating test order...")
+	result4 := tools.ExecActivity(workflowActivity4, easyjson.NewJSONObject(), &workflow.ActivityOptions{Timeout: 15 * time.Second})
+	if !result4.GetByPath("ok").AsBoolDefault(false) {
+		le.Error(context.TODO(), "Failed to create test order")
+		return
+	}
+	le.Info(context.TODO(), "✓ Order created")
+
+	le.Info(context.TODO(), "Step 5: Processing orders...")
+	result5 := tools.ExecActivity(workflowActivity5, easyjson.NewJSONObject(), &workflow.ActivityOptions{Timeout: 15 * time.Second})
+	if !result5.GetByPath("ok").AsBoolDefault(false) {
+		le.Error(context.TODO(), "Failed to process orders")
+		return
+	}
+	le.Info(context.TODO(), "✓ Orders processed")
 
 	le.Info(context.TODO(), "===== Workflow completed successfully =====")
 }

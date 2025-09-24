@@ -145,9 +145,78 @@ func Activity3(tools workflow.ActivityTools) {
 	tools.ReplyWith(easyjson.NewJSONObjectWithKeyValue("ok", easyjson.NewJSON(true)))
 }
 
-func Activity4(tools workflow.ActivityTools) {}
+func Activity4(tools workflow.ActivityTools) {
+	le := lg.GetLogger()
+	funcCtx := tools.SFctx.GetFunctionContext()
+	if funcCtx.GetByPath("test_order_created").AsBoolDefault(false) {
+		tools.ReplyWith(easyjson.NewJSONObjectWithKeyValue("ok", easyjson.NewJSON(true)))
+		return
+	}
 
-func Activity5(tools workflow.ActivityTools) {}
+	le.Info(context.TODO(), "---- Activity 4: Creating test order...")
+
+	db, err := sql.Open("postgres", getConnString(system.GetEnvMustProceed("DB_NAME", "workflow_db")))
+	if err != nil {
+		le.Errorf(context.TODO(), "---- Activity 4: Failed to connect: %v", err)
+		tools.ReplyWith(easyjson.NewJSONObjectWithKeyValue("ok", easyjson.NewJSON(false)))
+		return
+	}
+	defer db.Close()
+
+	var userID int
+	err = db.QueryRow("INSERT INTO users (username, email) VALUES ($1, $2) RETURNING id",
+		"testuser", "test@example.com").Scan(&userID)
+	if err != nil {
+		le.Errorf(context.TODO(), "---- Activity 4: Failed to create user: %v", err)
+		tools.ReplyWith(easyjson.NewJSONObjectWithKeyValue("ok", easyjson.NewJSON(false)))
+		return
+	}
+
+	_, err = db.Exec("INSERT INTO orders (user_id, total, description) VALUES ($1, $2, $3)",
+		userID, 99.99, "Test order from workflow")
+	if err != nil {
+		le.Errorf(context.TODO(), "---- Activity 4: Failed to create order: %v", err)
+		tools.ReplyWith(easyjson.NewJSONObjectWithKeyValue("ok", easyjson.NewJSON(false)))
+		return
+	}
+
+	le.Info(context.TODO(), "---- Activity 4: Test order created successfully")
+
+	funcCtx.SetByPath("test_order_created", easyjson.NewJSON(true))
+	tools.SFctx.SetFunctionContextImmediately(funcCtx)
+
+	tools.ReplyWith(easyjson.NewJSONObjectWithKeyValue("ok", easyjson.NewJSON(true)))
+}
+
+func Activity5(tools workflow.ActivityTools) {
+	le := lg.GetLogger()
+	funcCtx := tools.SFctx.GetFunctionContext()
+	if funcCtx.GetByPath("order_processed").AsBoolDefault(false) {
+		tools.ReplyWith(easyjson.NewJSONObjectWithKeyValue("ok", easyjson.NewJSON(true)))
+		return
+	}
+
+	le.Info(context.TODO(), "---- Activity 5: Processing orders...")
+
+	db, err := sql.Open("postgres", getConnString(system.GetEnvMustProceed("DB_NAME", "workflow_db")))
+	if err != nil {
+		le.Errorf(context.TODO(), "---- Activity 5: Failed to connect: %v", err)
+		tools.ReplyWith(easyjson.NewJSONObjectWithKeyValue("ok", easyjson.NewJSON(false)))
+		return
+	}
+	defer db.Close()
+
+	var orderCount int
+	var totalRevenue float64
+	db.QueryRow("SELECT COUNT(*), COALESCE(SUM(total), 0) FROM orders").Scan(&orderCount, &totalRevenue)
+
+	le.Infof(context.TODO(), "---- Activity 5: Found %d orders, total revenue: $%.2f", orderCount, totalRevenue)
+
+	funcCtx.SetByPath("order_processed", easyjson.NewJSON(true))
+	tools.SFctx.SetFunctionContextImmediately(funcCtx)
+
+	tools.ReplyWith(easyjson.NewJSONObjectWithKeyValue("ok", easyjson.NewJSON(true)))
+}
 
 func getConnString(dbName string) string {
 	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
