@@ -205,9 +205,9 @@ func Start() {
 	afterStart := func(ctx context.Context, runtime *statefun.Runtime) error {
 		time.Sleep(10 * time.Second)
 
-		system.MsgOnErrorReturn(runtime.Signal(sfPlugins.JetstreamGlobalSignal, "functions.workflow.robustness.main", "test", nil, nil))
+		//system.MsgOnErrorReturn(runtime.Signal(sfPlugins.JetstreamGlobalSignal, "functions.workflow.robustness.main", "test", nil, nil))
 
-		//startTimerTest(runtime)
+		startTimerTest(runtime)
 
 		return nil
 	}
