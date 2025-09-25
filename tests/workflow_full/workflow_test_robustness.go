@@ -32,7 +32,6 @@ func TestWorkflowRobustness(tools workflow.WorkflowTools) {
 		if i%2 != 0 {
 			le.Info(ctx, "==TEST============= Simulating crash after step 4...")
 			go restartNATSContainer()
-			//os.Exit(1)
 		}
 
 		time.Sleep(3 * time.Second)

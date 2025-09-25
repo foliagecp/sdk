@@ -11,15 +11,14 @@ import (
 
 	"github.com/foliagecp/easyjson"
 	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
+	graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
 	"github.com/foliagecp/sdk/embedded/graph/fpl"
+	"github.com/foliagecp/sdk/embedded/graph/jpgql"
 	"github.com/foliagecp/sdk/embedded/graph/search"
 	"github.com/foliagecp/sdk/embedded/workflow"
-	lg "github.com/foliagecp/sdk/statefun/logger"
-
-	graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
-	"github.com/foliagecp/sdk/embedded/graph/jpgql"
 	"github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/cache"
+	lg "github.com/foliagecp/sdk/statefun/logger"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 )
@@ -39,6 +38,9 @@ var (
 	workflowActivity4 = workflow.NewWorkflowActivity(Activity4, "functions.workflow.activity4")
 	// new task 2
 	workflowActivity5 = workflow.NewWorkflowActivity(Activity5, "functions.workflow.activity5")
+
+	workflowTestRobustnessMainFunc = workflow.NewWorkflowEngine(TestWorkflowRobustness, "functions.workflow.robustness.main")
+	stepActivity                   = workflow.NewWorkflowActivity(StepActivity, "functions.workflow.robustness.activity")
 )
 
 func RegisterFunctionTypes(runtime *statefun.Runtime) {
@@ -217,17 +219,14 @@ func Start() {
 	system.GlobalPrometrics = system.NewPrometrics("", ":9901")
 
 	afterStart := func(ctx context.Context, runtime *statefun.Runtime) error {
-<<<<<<< HEAD
 		//payload := easyjson.NewJSONObject()
 		//payload.SetByPath("cmd", easyjson.NewJSON("start"))
 		//system.MsgOnErrorReturn(runtime.Signal(sfPlugins.JetstreamGlobalSignal, "functions.workflow.engine", "test", &payload, nil))
 
 		//periodicTest(runtime)
-=======
 		system.MsgOnErrorReturn(runtime.Signal(sfPlugins.JetstreamGlobalSignal, "functions.workflow.engine", "test", nil, nil))
 
 		periodicTest(runtime)
->>>>>>> origin/feat/workflow-instance-write-to-nats
 
 		return nil
 	}
@@ -243,6 +242,10 @@ func Start() {
 
 		statefun.NewFunctionType(runtime, "functions.tests.backup", PeriodicBackup, *statefun.NewFunctionTypeConfig())
 		statefun.NewFunctionType(runtime, "functions.tests.create", PeriodicOrderCreate, *statefun.NewFunctionTypeConfig())
+
+		// Test workflow robustness
+		workflowTestRobustnessMainFunc.RegisterStatefun(runtime)
+		stepActivity.RegisterStatefun(runtime)
 
 		RegisterFunctionTypes(runtime)
 
