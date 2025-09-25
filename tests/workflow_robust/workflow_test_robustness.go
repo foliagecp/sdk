@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"time"
 
 	"github.com/foliagecp/easyjson"
@@ -28,12 +27,6 @@ func TestWorkflowRobustness(tools workflow.WorkflowTools) {
 		}
 
 		le.Infof(ctx, "Step %d completed", i)
-
-		if i%2 != 0 {
-			le.Info(ctx, "==TEST============= Simulating crash after step 4...")
-			go restartNATSContainer()
-			//os.Exit(1)
-		}
 
 		time.Sleep(3 * time.Second)
 	}
@@ -60,9 +53,4 @@ func StepActivity(tools workflow.ActivityTools) {
 	tools.SFctx.SetFunctionContextImmediately(funcCtx)
 
 	tools.ReplyWith(easyjson.NewJSONObjectWithKeyValue("ok", easyjson.NewJSON(true)))
-}
-
-func restartNATSContainer() {
-	cmd := exec.Command("docker", "restart", "workflow-nats-1")
-	cmd.Run()
 }

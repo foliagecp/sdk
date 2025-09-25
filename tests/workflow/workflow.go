@@ -29,9 +29,6 @@ var (
 	workflowEngine    = workflow.NewWorkflowEngine(TestWorkflow, "functions.workflow.engine")
 	workflowActivity1 = workflow.NewWorkflowActivity(Activity1, "functions.workflow.activity1")
 	workflowActivity2 = workflow.NewWorkflowActivity(Activity2, "functions.workflow.activity2")
-
-	workflowTestRobustnessMainFunc = workflow.NewWorkflowEngine(TestWorkflowRobustness, "functions.workflow.robustness.main")
-	stepActivity                   = workflow.NewWorkflowActivity(StepActivity, "functions.workflow.robustness.activity")
 )
 
 func reverseString(s string) string {
@@ -203,10 +200,6 @@ func Start() {
 	system.GlobalPrometrics = system.NewPrometrics("", ":9901")
 
 	afterStart := func(ctx context.Context, runtime *statefun.Runtime) error {
-		time.Sleep(10 * time.Second)
-
-		//system.MsgOnErrorReturn(runtime.Signal(sfPlugins.JetstreamGlobalSignal, "functions.workflow.robustness.main", "test", nil, nil))
-
 		startTimerTest(runtime)
 
 		return nil
@@ -217,10 +210,6 @@ func Start() {
 		workflowEngine.RegisterStatefun(runtime)
 		workflowActivity1.RegisterStatefun(runtime)
 		workflowActivity2.RegisterStatefun(runtime)
-
-		// Test workflow robustness
-		workflowTestRobustnessMainFunc.RegisterStatefun(runtime)
-		stepActivity.RegisterStatefun(runtime)
 
 		RegisterFunctionTypes(runtime)
 
