@@ -11,7 +11,7 @@ COPY . .
 
 RUN go mod tidy
 
-RUN cd ./tests/workflow_full && go build -o /usr/bin/foliage
+RUN cd ./tests/workflow_robust && go build -o /usr/bin/foliage
 
 FROM ubuntu:22.04
 

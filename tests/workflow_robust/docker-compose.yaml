@@ -33,7 +33,7 @@ services:
         condition: service_started
     build:
       context: ../..
-      dockerfile: tests/workflow_full/Dockerfile
+      dockerfile: /Dockerfile
     volumes:
       - .:/foliage
 
