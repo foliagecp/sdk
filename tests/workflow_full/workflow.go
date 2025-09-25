@@ -217,7 +217,9 @@ func Start() {
 	system.GlobalPrometrics = system.NewPrometrics("", ":9901")
 
 	afterStart := func(ctx context.Context, runtime *statefun.Runtime) error {
-		system.MsgOnErrorReturn(runtime.Signal(sfPlugins.JetstreamGlobalSignal, "functions.workflow.engine", "test", nil, nil))
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("cmd", easyjson.NewJSON("start"))
+		system.MsgOnErrorReturn(runtime.Signal(sfPlugins.JetstreamGlobalSignal, "functions.workflow.engine", "test", &payload, nil))
 
 		periodicTest(runtime)
 
