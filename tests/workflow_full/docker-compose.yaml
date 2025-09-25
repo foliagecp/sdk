@@ -58,18 +58,18 @@ services:
       timeout: 5s
       retries: 5
 
-#  prometheus:
-#    image: prom/prometheus
-#    ports:
-#      - 9090:9090
-#    volumes:
-#      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-#
-#  grafana:
-#    ports:
-#     - '3000:3000'
-#    image: grafana/grafana-enterprise
-#    volumes:
-#      - ./configs/grafana/dashboards.yaml:/etc/grafana/provisioning/dashboards/main.yaml
-#      - ./configs/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/main.yaml
-#      - ./configs/grafana/dashboards:/var/lib/grafana/dashboards
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - 9090:9090
+    volumes:
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+
+  grafana:
+    ports:
+     - '3000:3000'
+    image: grafana/grafana-enterprise
+    volumes:
+      - ./configs/grafana/dashboards.yaml:/etc/grafana/provisioning/dashboards/main.yaml
+      - ./configs/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/main.yaml
+      - ./configs/grafana/dashboards:/var/lib/grafana/dashboards
