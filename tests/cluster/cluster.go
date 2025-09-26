@@ -218,7 +218,7 @@ func Start() {
 		return nil
 	}
 
-	runtimeConfig := statefun.NewRuntimeConfigSimple(NatsURL, "basic").UseJSDomainAsCentralHubDomainName()
+	runtimeConfig := statefun.NewRuntimeConfigSimple(NatsURL, "basic").UseJSDomainAsHubDomainName()
 	if EnableNatsClusterMode {
 		runtimeConfig.ConfigureNatsCluster(NatsReplicasCount)
 		lg.Logf(lg.InfoLevel, "NATS cluster mode enabled with %d replicas", NatsReplicasCount)

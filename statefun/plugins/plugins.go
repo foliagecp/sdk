@@ -59,6 +59,7 @@ type SyncReply struct {
 }
 
 type Domain interface {
+	//Deprecated
 	HubDomainName() string
 	CentralHubDomainName() string
 	LocalHubDomainName() string
@@ -68,6 +69,7 @@ type Domain interface {
 	GetObjectIDWithoutDomain(objectID string) string
 	CreateObjectIDWithDomain(domain string, objectID string, domainReplace bool) string
 	CreateObjectIDWithThisDomain(objectID string, domainReplace bool) string
+	//Deprecated
 	CreateObjectIDWithHubDomain(objectID string, domainReplace bool) string
 	CreateObjectIDWithLocalHubDomain(objectID string, domainReplace bool) string
 	// Get all domains in weak cluster including this one

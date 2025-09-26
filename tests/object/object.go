@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+
 	"github.com/foliagecp/sdk/clients/go/db"
 	"github.com/foliagecp/sdk/embedded/graph/graphql"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
@@ -102,7 +103,7 @@ func Start() {
 		return nil
 	}
 
-	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "object").UseJSDomainAsCentralHubDomainName()); err == nil {
+	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "object").UseJSDomainAsHubDomainName()); err == nil {
 		RegisterFunctionTypes(runtime)
 		runtime.RegisterOnAfterStartFunction(afterStart, true)
 		if err := runtime.Start(context.TODO(), cache.NewCacheConfig("main_cache")); err != nil {

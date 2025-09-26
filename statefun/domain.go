@@ -107,6 +107,7 @@ func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredCentralHubDomainN
 	return domain, nil
 }
 
+// Deprecated
 func (dm *Domain) HubDomainName() string {
 	return dm.centralHubDomainName
 }
