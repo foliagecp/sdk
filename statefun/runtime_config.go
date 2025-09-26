@@ -10,6 +10,7 @@ const (
 	FunctionTypeIDLifetimeMs    = 5000
 	RequestTimeoutSec           = 60
 	GCIntervalSec               = 5
+	DefaultHubDomainName        = "hub"
 	DefaultCentralHubDomainName = "hub"
 	HandlesDomainRouters        = true
 	EnableTLS                   = false
@@ -95,6 +96,18 @@ func NewRuntimeConfig() *RuntimeConfig {
 func NewRuntimeConfigSimple(natsURL string, runtimeName string) *RuntimeConfig {
 	ro := NewRuntimeConfig()
 	return ro.SetNatsURL(natsURL)
+}
+
+// SetHubDomainName id deprecated
+func (ro *RuntimeConfig) SetHubDomainName(hubDomainName string) *RuntimeConfig {
+	ro.desiredCentralHUBDomainName = hubDomainName
+	return ro
+}
+
+// UseJSDomainAsHubDomainName is deprecated
+func (ro *RuntimeConfig) UseJSDomainAsHubDomainName() *RuntimeConfig {
+	ro.desiredCentralHUBDomainName = "" // empty string means auto fill with current domain name from nats
+	return ro
 }
 
 func (ro *RuntimeConfig) SetCentralHubDomainName(centralHubDomainName string) *RuntimeConfig {

@@ -67,6 +67,7 @@ type Domain interface {
 	GetObjectIDWithoutDomain(objectID string) string
 	CreateObjectIDWithDomain(domain string, objectID string, domainReplace bool) string
 	CreateObjectIDWithThisDomain(objectID string, domainReplace bool) string
+	CreateObjectIDWithHubDomain(objectID string, domainReplace bool) string
 	CreateObjectIDWithLocalHubDomain(objectID string, domainReplace bool) string
 	// Get all domains in weak cluster including this one
 	GetWeakClusterDomains() []string
