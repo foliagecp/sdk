@@ -107,6 +107,10 @@ func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredCentralHubDomainN
 	return domain, nil
 }
 
+func (dm *Domain) HubDomainName() string {
+	return dm.centralHubDomainName
+}
+
 func (dm *Domain) CentralHubDomainName() string {
 	return dm.centralHubDomainName
 }
@@ -261,7 +265,7 @@ func (dm *Domain) CreateObjectIDWithThisDomain(objectID string, domainReplace bo
 	return dm.CreateObjectIDWithDomain(dm.name, objectID, domainReplace)
 }
 
-// CreateObjectIDWithHubDomain is deprecated
+// Deprecated
 func (dm *Domain) CreateObjectIDWithHubDomain(objectID string, domainReplace bool) string {
 	return dm.CreateObjectIDWithDomain(dm.centralHubDomainName, objectID, domainReplace)
 }

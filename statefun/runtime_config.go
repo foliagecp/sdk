@@ -98,13 +98,13 @@ func NewRuntimeConfigSimple(natsURL string, runtimeName string) *RuntimeConfig {
 	return ro.SetNatsURL(natsURL)
 }
 
-// SetHubDomainName id deprecated
+// Deprecated
 func (ro *RuntimeConfig) SetHubDomainName(hubDomainName string) *RuntimeConfig {
 	ro.desiredCentralHUBDomainName = hubDomainName
 	return ro
 }
 
-// UseJSDomainAsHubDomainName is deprecated
+// Deprecated
 func (ro *RuntimeConfig) UseJSDomainAsHubDomainName() *RuntimeConfig {
 	ro.desiredCentralHUBDomainName = "" // empty string means auto fill with current domain name from nats
 	return ro
