@@ -19,6 +19,8 @@ const (
 
 	ctxSecretPath = "workflow.secret"
 	ctxPausedPath = "workflow.paused"
+	ctxStagePath  = "workflow.info"
+	ctxTaskPath   = "workflow.task"
 )
 
 const (
@@ -36,6 +38,18 @@ type WorkflowTools struct {
 
 type ActivityOptions struct {
 	Timeout time.Duration
+}
+
+func (wt *WorkflowTools) SetStageProgressInfo(name string) {
+	ctxData := wt.ctx.GetFunctionContext()
+	ctxData.SetByPath(ctxStagePath, easyjson.NewJSON(name))
+	wt.ctx.SetFunctionContext(ctxData)
+}
+
+func (wt *WorkflowTools) setTaskDetails(taskData easyjson.JSON) {
+	ctxData := wt.ctx.GetFunctionContext()
+	ctxData.SetByPath(ctxTaskPath, taskData)
+	wt.ctx.SetFunctionContext(ctxData)
 }
 
 func (wt *WorkflowTools) ExecActivity(activity *WorkflowActivity, data easyjson.JSON, activityOptions *ActivityOptions) *easyjson.JSON {
@@ -60,6 +74,9 @@ func (wt *WorkflowTools) ExecActivity(activity *WorkflowActivity, data easyjson.
 
 		_ = wt.ctx.Signal(sfPlugins.JetstreamGlobalSignal, DelayedSignalGeneratorTypename, "timer", &payload, nil)
 	}
+	taskData := easyjson.NewJSONObject()
+	taskData.SetByPath("activity", easyjson.NewJSON(activity.statefunName))
+	wt.setTaskDetails(taskData)
 
 	panic(workflowStop{}) // Soft workflow termination
 }
@@ -127,7 +144,17 @@ func (w *WorkflowEngine) workflowStatefun(_ sfPlugins.StatefunExecutor, sfctx *s
 					state = WF_STATE_RUNNING
 				}
 			}
+
 			status.SetByPath("state", easyjson.NewJSON(state))
+			stage := ctxData.GetByPath(ctxStagePath).AsStringDefault("")
+			if len(stage) > 0 {
+				status.SetByPath("stage", easyjson.NewJSON(stage))
+			}
+			taskData := ctxData.GetByPath(ctxTaskPath)
+			if taskData.IsNonEmptyObject() {
+				status.SetByPath("task", taskData)
+			}
+
 			cmdReply = status
 			return
 		}
