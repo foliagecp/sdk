@@ -20,7 +20,7 @@ services:
       - nats
 
   runtime:
-    image: foliage-sdk-tests-workflow:latest
+    image: foliage-sdk-tests-workflow2:latest
     command: /usr/bin/foliage -ll 5
     ports:
       - "9901:9901"
@@ -33,7 +33,7 @@ services:
         condition: service_started
     build:
       context: ../..
-      dockerfile: /Dockerfile
+      dockerfile: tests/workflow-robust/Dockerfile
     volumes:
       - .:/foliage
 
