@@ -55,6 +55,8 @@ func TestWorkflow(tools workflow.WorkflowTools) {
 	data1 := easyjson.NewJSONObjectWithKeyValue("val", easyjson.NewJSON("olleh"))
 	result1 := tools.ExecActivity(workflowActivity1, data1, &workflow.ActivityOptions{Timeout: 10 * time.Second})
 
+	tools.SetStageProgressInfo("half way there")
+
 	greet += result1.GetByPathPtr("val").AsStringDefault("ERROR1")
 	greet += " "
 
