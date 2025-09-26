@@ -43,13 +43,13 @@ type ActivityOptions struct {
 func (wt *WorkflowTools) SetStageProgressInfo(name string) {
 	ctxData := wt.ctx.GetFunctionContext()
 	ctxData.SetByPath(ctxStagePath, easyjson.NewJSON(name))
-	wt.ctx.SetFunctionContext(ctxData)
+	wt.ctx.SetFunctionContextImmediately(ctxData)
 }
 
 func (wt *WorkflowTools) setTaskDetails(taskData easyjson.JSON) {
 	ctxData := wt.ctx.GetFunctionContext()
 	ctxData.SetByPath(ctxTaskPath, taskData)
-	wt.ctx.SetFunctionContext(ctxData)
+	wt.ctx.SetFunctionContextImmediately(ctxData)
 }
 
 func (wt *WorkflowTools) ExecActivity(activity *WorkflowActivity, data easyjson.JSON, activityOptions *ActivityOptions) *easyjson.JSON {
