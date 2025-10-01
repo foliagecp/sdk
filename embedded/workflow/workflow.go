@@ -43,13 +43,13 @@ type ActivityOptions struct {
 func (wt *WorkflowTools) SetStageProgressInfo(name string) {
 	ctxData := wt.ctx.GetFunctionContext()
 	ctxData.SetByPath(ctxStagePath, easyjson.NewJSON(name))
-	wt.ctx.SetFunctionContext(ctxData)
+	wt.ctx.SetFunctionContextImmediately(ctxData)
 }
 
 func (wt *WorkflowTools) setTaskDetails(taskData easyjson.JSON) {
 	ctxData := wt.ctx.GetFunctionContext()
 	ctxData.SetByPath(ctxTaskPath, taskData)
-	wt.ctx.SetFunctionContext(ctxData)
+	wt.ctx.SetFunctionContextImmediately(ctxData)
 }
 
 func (wt *WorkflowTools) ExecActivity(activity *WorkflowActivity, data easyjson.JSON, activityOptions *ActivityOptions) *easyjson.JSON {
@@ -164,25 +164,25 @@ func (w *WorkflowEngine) workflowStatefun(_ sfPlugins.StatefunExecutor, sfctx *s
 				cmdUnknown = false
 				secret = WORKFLOW_PREFIX_OF_SECRET + "_" + system.GetUniqueStrID()
 				ctxData.SetByPath(ctxSecretPath, easyjson.NewJSON(secret))
-				sfctx.SetFunctionContext(ctxData)
+				sfctx.SetFunctionContextImmediately(ctxData)
 				isRunning = true
 			}
 		} else {
 			if cmd == "pause" {
 				cmdUnknown = false
 				ctxData.SetByPath(ctxPausedPath, easyjson.NewJSON(true))
-				sfctx.SetFunctionContext(ctxData)
+				sfctx.SetFunctionContextImmediately(ctxData)
 				return
 			}
 			if cmd == "resume" {
 				cmdUnknown = false
 				ctxData.SetByPath(ctxPausedPath, easyjson.NewJSON(false))
-				sfctx.SetFunctionContext(ctxData)
+				sfctx.SetFunctionContextImmediately(ctxData)
 				isPaused = false
 			}
 			if cmd == "stop" {
 				cmdUnknown = false
-				sfctx.SetFunctionContext(easyjson.NewJSONObject().GetPtr())
+				sfctx.SetFunctionContextImmediately(easyjson.NewJSONObject().GetPtr())
 				return
 			}
 		}
@@ -225,7 +225,7 @@ func (w *WorkflowEngine) workflowStatefun(_ sfPlugins.StatefunExecutor, sfctx *s
 		w.logicHandler(tools)
 
 		// clean function context when workflow has reached its end
-		sfctx.SetFunctionContext(easyjson.NewJSONObject().GetPtr())
+		sfctx.SetFunctionContextImmediately(easyjson.NewJSONObject().GetPtr())
 	}
 }
 
@@ -253,7 +253,7 @@ func (w *WorkflowEngine) setActivityResultIntoStatefunCtx(activityUUID string, d
 		return fmt.Errorf("could not set data by path '%s'", resPath)
 	}
 
-	sfctx.SetFunctionContext(funcContext)
+	sfctx.SetFunctionContextImmediately(funcContext)
 
 	return nil
 }

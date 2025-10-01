@@ -100,7 +100,7 @@ func TimerSink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProce
 	count := int(fc.GetByPath("hits").AsNumericDefault(0))
 	count++
 	fc.SetByPath("hits", easyjson.NewJSON(count))
-	ctx.SetFunctionContext(fc)
+	ctx.SetFunctionContextImmediately(fc)
 
 	lg.Logf(lg.InfoLevel, "[SINK] %s:%s hits=%d payload=%s", ctx.Self.Typename, ctx.Self.ID, count, ctx.Payload.ToString())
 }
