@@ -43,12 +43,19 @@ type KeyValue struct {
 	Value interface{}
 }
 
+// value types
+const (
+	typeByteArray = iota
+	typeJson
+)
+
 type StoreValue struct {
 	parent      *StoreValue
 	keyInParent string
 	value       interface{}
 	valueExists bool
 	// 0 - do not purge, 1 - wait for KV update confirmation and go to state 2, 2 - purge
+	valueType  uint8
 	purgeState int
 	store      *system.ShardedMap
 	// "0" if store contains all keys and all subkeys (no lru purged ones at any next level)
@@ -238,6 +245,10 @@ func (csv *StoreValue) Range(f func(key, value interface{}) bool) {
 	})
 }
 
+func (csv *StoreValue) SetValueType(valueType uint8) {
+	csv.valueType = valueType
+}
+
 type TransactionOperator struct {
 	operatorType int // 0 - set, 1 - delete
 	key          string
@@ -325,10 +336,18 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 
 							cacheRecordTime := cs.GetValueUpdateTime(key)
 							if kvRecordTime > cacheRecordTime {
-								if appendFlag == FlagAppendOld || appendFlag == FlagBytesAppend || appendFlag == FlagJSONAppend {
+								switch appendFlag {
+								case FlagAppendOld, FlagBytesAppend:
 									//lg.Logf("---CACHE_KV TF UPDATE: %s, %d, %d", key, kvRecordTime, appendFlag)
 									cs.SetValue(key, valueBytes[9:], false, kvRecordTime, "")
-								} else { // Someone else (other module) deleted a key from the cache
+								case FlagJSONAppend:
+									if json, ok := easyjson.JSONFromBytes(valueBytes[9:]); ok {
+										cs.SetValueJSON(key, &json, false, kvRecordTime, "")
+									} else {
+										lg.Logf(lg.ErrorLevel, "Failed to parse JSON for key=%s", key)
+									}
+								default:
+									// Someone else (other module) deleted a key from the cache
 									//lg.Logf("---CACHE_KV TF DELETE: %s, %d, %d", key, kvRecordTime, appendFlag)
 
 									//system.MsgOnErrorReturn(kv.Delete(entry.Key()))
@@ -612,14 +631,14 @@ func (cs *Store) GetValue(key string) ([]byte, error) {
 			if !csv.ValueExists() { // Value was intentionally deleted and was marked so, no cache miss policy can be applied here
 				resultError = fmt.Errorf("value for key=%s does not exist", key)
 			} else {
-				switch v := csv.value.(type) {
-				case []byte:
-					result = v
-				case *easyjson.JSON:
+				switch csv.valueType {
+				case typeByteArray:
+					result = csv.value.([]byte)
+				case typeJson:
 					lg.Logf(lg.WarnLevel, "Value for key=%s is JSON, use GetValueJSON method", key)
-					result = v.ToBytes()
+					result = csv.value.(*easyjson.JSON).ToBytes()
 				default:
-					resultError = fmt.Errorf("unsupported value type: %T", v)
+					resultError = fmt.Errorf("unsupported value type: %d", csv.valueType)
 				}
 			}
 			csv.RUnlock("GetValue")
@@ -664,42 +683,28 @@ func (cs *Store) GetValue(key string) ([]byte, error) {
 	return result, resultError
 }
 
-func (cs *Store) GetValueAsJSON(key string) (*easyjson.JSON, error) {
-	value, err := cs.GetValue(key)
-	if err == nil {
-		if j, ok := easyjson.JSONFromBytes(value); ok {
-			return &j, nil
-		}
-		return nil, fmt.Errorf("Value for key=%s is not a JSON", key)
-	}
-	return nil, err
-}
-
 func (cs *Store) GetValueJSON(key string) (*easyjson.JSON, error) {
 	var result *easyjson.JSON
 	var resultError error
 
-	cacheMiss := true
-
 	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, false); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
 		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
-			cacheMiss = false
 			csv.RLock("GetValueJSON")
 			if !csv.ValueExists() {
 				resultError = fmt.Errorf("value for key=%s does not exist", key)
 			} else {
-				switch v := csv.value.(type) {
-				case *easyjson.JSON:
-					result = v
-				case []byte:
+				switch csv.valueType {
+				case typeJson:
+					result = csv.value.(*easyjson.JSON).Clone().GetPtr()
+				case typeByteArray:
 					lg.Logf(lg.WarnLevel, "Value for key=%s is []byte, converting to JSON", key)
-					if json, ok := easyjson.JSONFromBytes(v); ok {
+					if json, ok := easyjson.JSONFromBytes(csv.value.([]byte)); ok {
 						result = &json
 					} else {
 						resultError = fmt.Errorf("value for key=%s is not valid JSON", key)
 					}
 				default:
-					resultError = fmt.Errorf("unsupported value type: %T", v)
+					resultError = fmt.Errorf("unsupported value type: %d", csv.valueType)
 				}
 			}
 			csv.RUnlock("GetValueJSON")
@@ -708,48 +713,46 @@ func (cs *Store) GetValueJSON(key string) (*easyjson.JSON, error) {
 		}
 	}
 
-	// Cache miss
-	if cacheMiss {
-		if entry, err := customNatsKv.KVGet(cs.js, cs.kv, cs.toStoreKey(key)); err == nil {
-			key := cs.fromStoreKey(entry.Key())
-			valueBytes := entry.Value()
+	// ---------------------Cache miss--------------------------
+	if entry, err := customNatsKv.KVGet(cs.js, cs.kv, cs.toStoreKey(key)); err == nil {
+		key := cs.fromStoreKey(entry.Key())
+		valueBytes := entry.Value()
 
-			if len(valueBytes) >= 9 {
-				flag := valueBytes[8]
-				timestamp := int64(binary.BigEndian.Uint64(valueBytes[:8]))
-				data := valueBytes[9:]
+		if len(valueBytes) >= 9 {
+			flag := valueBytes[8]
+			timestamp := int64(binary.BigEndian.Uint64(valueBytes[:8]))
+			data := valueBytes[9:]
 
-				switch flag {
-				case FlagJSONAppend:
-					if json, ok := easyjson.JSONFromBytes(data); ok {
-						cs.SetValueJSON(key, &json, false, timestamp, "")
-						result = &json
-						resultError = nil
-					} else {
-						resultError = fmt.Errorf("failed to parse JSON for key=%s", key)
-					}
-
-				case FlagAppendOld, FlagBytesAppend:
-					if json, ok := easyjson.JSONFromBytes(data); ok {
-						cs.SetValue(key, data, false, timestamp, "")
-						result = &json
-						resultError = nil
-					} else {
-						resultError = fmt.Errorf("value for key=%s is not JSON", key)
-					}
-
-				case FlagDeleted, FlagDeletedOld:
-					resultError = fmt.Errorf("value for key=%s was deleted", key)
-
-				default:
-					resultError = fmt.Errorf("unknown flag %d for key=%s", flag, key)
+			switch flag {
+			case FlagJSONAppend:
+				if json, ok := easyjson.JSONFromBytes(data); ok {
+					cs.SetValueJSON(key, &json, false, timestamp, "")
+					result = &json
+					resultError = nil
+				} else {
+					resultError = fmt.Errorf("failed to parse JSON for key=%s", key)
 				}
-			} else {
-				resultError = fmt.Errorf("invalid KV entry for key=%s", key)
+
+			case FlagAppendOld, FlagBytesAppend:
+				if json, ok := easyjson.JSONFromBytes(data); ok {
+					cs.SetValue(key, data, false, timestamp, "")
+					result = &json
+					resultError = nil
+				} else {
+					resultError = fmt.Errorf("value for key=%s is not JSON", key)
+				}
+
+			case FlagDeleted, FlagDeletedOld:
+				resultError = fmt.Errorf("value for key=%s was deleted", key)
+
+			default:
+				resultError = fmt.Errorf("unknown flag %d for key=%s", flag, key)
 			}
 		} else {
-			resultError = err
+			resultError = fmt.Errorf("invalid KV entry for key=%s", key)
 		}
+	} else {
+		resultError = err
 	}
 
 	return result, resultError
@@ -864,16 +867,18 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 			var csvUpdate *StoreValue
 			if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
 				//lg.Logln(">>3 " + key)
+				csv.SetValueType(typeByteArray)
 				csv.Put(value, updateInKV, customSetTime)
 			} else {
 				csvUpdate = &StoreValue{
 					value: value, store: system.SharedMapMustNewHashed(8),
-					valueExists: true, purgeState: 0,
+					valueExists: true, purgeState: 0, valueType: typeByteArray,
 					syncNeeded: updateInKV, syncedWithKV: !updateInKV,
 					valueUpdateTime: customSetTime,
 				}
 				actual, loaded := parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate)
 				if loaded && customSetTime >= actual.valueUpdateTime {
+					actual.SetValueType(typeByteArray)
 					actual.Put(value, updateInKV, customSetTime)
 				}
 			}
@@ -891,7 +896,7 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 	return true
 }
 
-func (cs *Store) SetValueJSON(key string, value *easyjson.JSON, updateInKV bool, customSetTime int64, transactionID string) bool {
+func (cs *Store) SetValueJSON(key string, originValue *easyjson.JSON, updateInKV bool, customSetTime int64, transactionID string) bool {
 	if !keyValidationRegexp.MatchString(key) {
 		return false
 	}
@@ -901,13 +906,16 @@ func (cs *Store) SetValueJSON(key string, value *easyjson.JSON, updateInKV bool,
 	}
 
 	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
+		value := originValue.Clone().GetPtr()
 		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
+			csv.SetValueType(typeJson)
 			csv.Put(value, updateInKV, customSetTime)
 		} else {
 			csvUpdate := &StoreValue{
 				value:           value,
 				store:           system.SharedMapMustNewHashed(8),
 				valueExists:     true,
+				valueType:       typeJson,
 				purgeState:      0,
 				syncNeeded:      updateInKV,
 				syncedWithKV:    !updateInKV,
@@ -915,6 +923,7 @@ func (cs *Store) SetValueJSON(key string, value *easyjson.JSON, updateInKV bool,
 			}
 			actual, loaded := parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate)
 			if loaded && customSetTime >= actual.valueUpdateTime {
+				actual.SetValueType(typeJson)
 				actual.Put(value, updateInKV, customSetTime)
 			}
 		}
@@ -981,7 +990,7 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(pattern, false); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
 		keyWithoutLastToken := pattern[:len(pattern)-1]
 		if keyLastToken == "*" {
-			// Gettting time of when CSV became inconsistent with KV
+			// Getting time of when CSV became inconsistent with KV
 			consistencyWithKVLossTime := atomic.LoadInt64(&parentCacheStoreValue.storeConsistencyWithKVLossTime)
 			// ------------------------------------------------------
 
@@ -1078,7 +1087,7 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 			}
 			// ------------------------------------------------------
 		} else {
-			// Gettting time of when CSV became inconsistent with KV
+			// Getting time of when CSV became inconsistent with KV
 			consistencyWithKVLossTime := atomic.LoadInt64(&parentCacheStoreValue.storeConsistencyWithKVLossTime)
 			// ------------------------------------------------------
 
