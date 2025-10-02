@@ -100,7 +100,7 @@ func NewRuntimeConfigSimple(natsURL string, runtimeName string) *RuntimeConfig {
 
 // Deprecated
 func (ro *RuntimeConfig) SetHubDomainName(hubDomainName string) *RuntimeConfig {
-	ro.desiredCentralHUBDomainName = hubDomainName
+	ro.desiredLocalHUBDomainName = hubDomainName
 	return ro
 }
 
