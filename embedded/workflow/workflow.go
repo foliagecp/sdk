@@ -38,6 +38,7 @@ type WorkflowTools struct {
 
 type ActivityOptions struct {
 	Timeout time.Duration
+	Retries int
 }
 
 func (wt *WorkflowTools) SetStageProgressInfo(name string) {
@@ -53,29 +54,43 @@ func (wt *WorkflowTools) setTaskDetails(taskData easyjson.JSON) {
 }
 
 func (wt *WorkflowTools) ExecActivity(activity *WorkflowActivity, data easyjson.JSON, activityOptions *ActivityOptions) *easyjson.JSON {
+	timerTimeoutMs := max(activityOptions.Timeout.Milliseconds(), 1000)
+	retries := max(activityOptions.Retries, 0)
+
 	wt.callbackUUIDGenerator++
 
 	strUUID := fmt.Sprint(wt.callbackUUIDGenerator)
-	if existingResult, ok := wt.workflow.getActivityResultFromStatefunCtx(strUUID, wt.ctx); ok {
+
+	existingResult, retry := wt.workflow.getActivityResultFromStatefunCtx(strUUID, wt.ctx)
+	if retry == -1 || (retry > 0 && retry == retries) {
 		return &existingResult
 	}
 
 	// id = <callback_uud>-<secret>
 	// secret = slave_<ustr>
-	wt.ctx.Signal(sfPlugins.AutoSignalSelect, activity.statefunName, strUUID+"-"+wt.secret, &data, wt.ctx.Options)
+	opts := wt.ctx.Options.Clone()
+	opts.RemoveByPath("retry")
+	wt.ctx.Signal(sfPlugins.AutoSignalSelect, activity.statefunName, strUUID+"-"+wt.secret, &data, &opts)
 	if activityOptions != nil {
+		optionsFromTimer := wt.ctx.Options.Clone()
+		optionsFromTimer.SetByPath("retry", easyjson.NewJSON(retry+1))
+
 		payload := easyjson.NewJSONObject()
 		payload.SetByPath("cmd", easyjson.NewJSON("schedule_once"))
 		payload.SetByPath("task.caller_typename", easyjson.NewJSON(activity.statefunName))
 		payload.SetByPath("task.caller_id", easyjson.NewJSON(strUUID+"-"+wt.secret))
 		payload.SetByPath("task.target_typename", easyjson.NewJSON(wt.ctx.Self.Typename))
 		payload.SetByPath("task.target_id", easyjson.NewJSON(wt.ctx.Self.ID))
-		payload.SetByPath("task.due_in_ms", easyjson.NewJSON(activityOptions.Timeout.Milliseconds()))
+		payload.SetByPath("task.due_in_ms", easyjson.NewJSON(timerTimeoutMs))
+		payload.SetByPath("task.options", optionsFromTimer)
 
 		_ = wt.ctx.Signal(sfPlugins.JetstreamGlobalSignal, DelayedSignalGeneratorTypename, "timer", &payload, nil)
 	}
 	taskData := easyjson.NewJSONObject()
 	taskData.SetByPath("activity", easyjson.NewJSON(activity.statefunName))
+	if retry > 0 {
+		taskData.SetByPath("retry", easyjson.NewJSON(retry))
+	}
 	wt.setTaskDetails(taskData)
 
 	panic(workflowStop{}) // Soft workflow termination
@@ -123,17 +138,17 @@ func (w *WorkflowEngine) workflowStatefun(_ sfPlugins.StatefunExecutor, sfctx *s
 
 		om := sfMediators.NewOpMediator(sfctx)
 		cmdReply := easyjson.NewJSONObject()
-		cmdUnknown := true
+		errorMsg := ""
 		defer func() {
-			if cmdUnknown {
-				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("command \"%s\" is unknown", cmd))).Reply()
+			if len(errorMsg) > 0 {
+				om.AggregateOpMsg(sfMediators.OpMsgFailed(errorMsg)).Reply()
 			} else {
 				om.AggregateOpMsg(sfMediators.OpMsgOk(cmdReply)).Reply()
 			}
 		}()
 
-		if cmd == "status" {
-			cmdUnknown = false
+		switch cmd {
+		case "status":
 			status := easyjson.NewJSONObject()
 
 			state := WF_STATE_STOPPED
@@ -151,40 +166,46 @@ func (w *WorkflowEngine) workflowStatefun(_ sfPlugins.StatefunExecutor, sfctx *s
 				status.SetByPath("stage", easyjson.NewJSON(stage))
 			}
 			taskData := ctxData.GetByPath(ctxTaskPath)
-			if taskData.IsNonEmptyObject() {
+			if taskData.IsObject() {
 				status.SetByPath("task", taskData)
 			}
 
 			cmdReply = status
 			return
-		}
-
-		if !isRunning {
-			if cmd == "start" {
-				cmdUnknown = false
-				secret = WORKFLOW_PREFIX_OF_SECRET + "_" + system.GetUniqueStrID()
-				ctxData.SetByPath(ctxSecretPath, easyjson.NewJSON(secret))
-				sfctx.SetFunctionContextImmediately(ctxData)
-				isRunning = true
-			}
-		} else {
-			if cmd == "pause" {
-				cmdUnknown = false
-				ctxData.SetByPath(ctxPausedPath, easyjson.NewJSON(true))
-				sfctx.SetFunctionContextImmediately(ctxData)
+		case "start":
+			if isRunning {
+				errorMsg = fmt.Sprintf("workflow is already running")
 				return
 			}
-			if cmd == "resume" {
-				cmdUnknown = false
-				ctxData.SetByPath(ctxPausedPath, easyjson.NewJSON(false))
-				sfctx.SetFunctionContextImmediately(ctxData)
-				isPaused = false
-			}
-			if cmd == "stop" {
-				cmdUnknown = false
-				sfctx.SetFunctionContextImmediately(easyjson.NewJSONObject().GetPtr())
+			secret = WORKFLOW_PREFIX_OF_SECRET + "_" + system.GetUniqueStrID()
+			ctxData.SetByPath(ctxSecretPath, easyjson.NewJSON(secret))
+			sfctx.SetFunctionContextImmediately(ctxData)
+			isRunning = true
+		case "pause":
+			if !isRunning {
+				errorMsg = fmt.Sprintf("workflow is not running")
 				return
 			}
+			ctxData.SetByPath(ctxPausedPath, easyjson.NewJSON(true))
+			sfctx.SetFunctionContextImmediately(ctxData)
+			return
+		case "resume":
+			if !isRunning {
+				errorMsg = fmt.Sprintf("workflow is not running")
+				return
+			}
+			ctxData.SetByPath(ctxPausedPath, easyjson.NewJSON(false))
+			sfctx.SetFunctionContextImmediately(ctxData)
+			isPaused = false
+		case "stop":
+			if !isRunning {
+				errorMsg = fmt.Sprintf("workflow is not running")
+				return
+			}
+			sfctx.SetFunctionContextImmediately(easyjson.NewJSONObject().GetPtr())
+			return
+		default:
+			errorMsg = fmt.Sprintf("command \"%s\" is unknown", cmd)
 		}
 	}
 	// ----------------------------------------------------
@@ -194,7 +215,7 @@ func (w *WorkflowEngine) workflowStatefun(_ sfPlugins.StatefunExecutor, sfctx *s
 		callback := len(callerIdTokens) == 2 && callerIdTokens[1] == secret
 
 		if callback {
-			if err := w.setActivityResultIntoStatefunCtx(callerIdTokens[0], *sfctx.Payload, sfctx); err != nil {
+			if err := w.setActivityResultIntoStatefunCtx(callerIdTokens[0], sfctx); err != nil {
 				lg.Logln(lg.WarnLevel, "Workflow %s received activity callback, but could not process it: %s", sfctx.Self.ID, err.Error())
 				return // cannot continue
 			}
@@ -229,27 +250,53 @@ func (w *WorkflowEngine) workflowStatefun(_ sfPlugins.StatefunExecutor, sfctx *s
 	}
 }
 
-func (w *WorkflowEngine) getActivityResultFromStatefunCtx(activityUUID string, sfctx *sfPlugins.StatefunContextProcessor) (res easyjson.JSON, exists bool) {
+func (w *WorkflowEngine) getActivityResultFromStatefunCtx(activityUUID string, sfctx *sfPlugins.StatefunContextProcessor) (res easyjson.JSON, retry int) {
 	funcContext := sfctx.GetFunctionContext()
 
 	resPath := fmt.Sprintf(CTX_CALLBACK_RESULT_PATH, activityUUID)
 
 	if funcContext.PathExists(resPath) {
-		return funcContext.GetByPath(resPath), true
+		obj := funcContext.GetByPath(resPath)
+		if v, ok := obj.AsNumeric(); ok {
+			return easyjson.NewJSONObject(), int(v)
+		}
+		return funcContext.GetByPath(resPath), -1
 	}
 
-	return easyjson.NewJSONObject(), false
+	return easyjson.NewJSONObject(), 0
 }
 
-func (w *WorkflowEngine) setActivityResultIntoStatefunCtx(activityUUID string, data easyjson.JSON, sfctx *sfPlugins.StatefunContextProcessor) error {
+func (w *WorkflowEngine) setActivityResultIntoStatefunCtx(activityUUID string, sfctx *sfPlugins.StatefunContextProcessor) error {
 	funcContext := sfctx.GetFunctionContext()
 
 	resPath := fmt.Sprintf(CTX_CALLBACK_RESULT_PATH, activityUUID)
 
-	if funcContext.PathExists(resPath) {
+	inConextDataType := 0 // nothing
+
+	obj := funcContext.GetByPath(resPath)
+	if obj.IsObject() {
+		inConextDataType = 1 // json object
+	}
+	if obj.IsNumeric() {
+		inConextDataType = 2 // int
+	}
+
+	// retry data -----------------------------------------
+	if v, ok := sfctx.Options.GetByPath("retry").AsNumeric(); sfctx.Options != nil && ok {
+		if inConextDataType == 0 || inConextDataType == 2 {
+			if ok := funcContext.SetByPath(resPath, easyjson.NewJSON(int(v))); !ok {
+				return fmt.Errorf("could not set retry data by path '%s'", resPath)
+			}
+			sfctx.SetFunctionContextImmediately(funcContext)
+			return nil
+		}
+	}
+	// ----------------------------------------------------
+
+	if inConextDataType == 1 {
 		return fmt.Errorf("data for this activityId already exists")
 	}
-	if ok := funcContext.SetByPath(resPath, data); !ok {
+	if ok := funcContext.SetByPath(resPath, *sfctx.Payload); !ok {
 		return fmt.Errorf("could not set data by path '%s'", resPath)
 	}
 
