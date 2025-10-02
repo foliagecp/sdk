@@ -29,6 +29,8 @@ var (
 	workflowEngine    = workflow.NewWorkflowEngine(TestWorkflow, "functions.workflow.engine")
 	workflowActivity1 = workflow.NewWorkflowActivity(Activity1, "functions.workflow.activity1")
 	workflowActivity2 = workflow.NewWorkflowActivity(Activity2, "functions.workflow.activity2")
+
+	activity2Counter int = 0
 )
 
 func reverseString(s string) string {
@@ -63,7 +65,7 @@ func TestWorkflow(tools workflow.WorkflowTools) {
 	fmt.Println("TestWorkflow: 1")
 
 	data2 := easyjson.NewJSONObjectWithKeyValue("val", easyjson.NewJSON("wolfkrow"))
-	result2 := tools.ExecActivity(workflowActivity2, data2, &workflow.ActivityOptions{Timeout: 10 * time.Second})
+	result2 := tools.ExecActivity(workflowActivity2, data2, &workflow.ActivityOptions{Timeout: 10 * time.Second, Retries: 3})
 
 	greet += result2.GetByPathPtr("val").AsStringDefault("ERROR2")
 	greet += "!"
@@ -88,9 +90,13 @@ func Activity2(tools workflow.ActivityTools) {
 
 	val := tools.SFctx.Payload.GetByPath("val").AsStringDefault("0000")
 	replyData := easyjson.NewJSONObjectWithKeyValue("val", easyjson.NewJSON(reverseString(val)))
-	tools.ReplyWith(replyData)
 
-	time.Sleep(8 * time.Second)
+	activity2Counter++
+	if activity2Counter >= 2 {
+		time.Sleep(5 * time.Second)
+		activity2Counter = 0
+		tools.ReplyWith(replyData)
+	}
 
 	fmt.Println("  Activity2: 1")
 }
