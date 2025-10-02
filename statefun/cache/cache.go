@@ -23,6 +23,17 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+const (
+	// Flags 0 (delete) and 1 (append) are deprecated
+	//Deprecated
+	FlagDeletedOld uint8 = 0x00
+	//Deprecated
+	FlagAppendOld   uint8 = 0x01
+	FlagDeleted     uint8 = 0x02
+	FlagBytesAppend uint8 = 0x03
+	FlagJSONAppend  uint8 = 0x04
+)
+
 var (
 	keyValidationRegexp *regexp.Regexp = regexp.MustCompile(`^[a-zA-Z0-9/=_$#@$%+-][a-zA-Z0-9/=._$#@%+-]+[a-zA-Z0-9/=_$#@%+-]$|^[a-zA-Z0-9/=_$#@%+-]*$`)
 )
@@ -116,7 +127,7 @@ func (csv *StoreValue) StoreChild(key string, child *StoreValue) (actual *StoreV
 		return a.(*StoreValue), true
 	}
 
-	// Новый ребёнок — уведомим подписчиков (вне лока)
+	// New child — notify subscribers (outside the lock)
 	csv.notifyUpdates.Range(func(_, v interface{}) bool {
 		notifySubscriber(v.(chan KeyValue), key, child.value)
 		return true
@@ -183,6 +194,7 @@ func (csv *StoreValue) TryPurgeReady() bool {
 	}
 	return false
 }
+
 func (csv *StoreValue) TryPurgeConfirm() bool {
 	if !csv.syncNeeded && csv.syncedWithKV && csv.purgeState == 1 {
 		csv.purgeState = 2
@@ -313,7 +325,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 
 							cacheRecordTime := cs.GetValueUpdateTime(key)
 							if kvRecordTime > cacheRecordTime {
-								if appendFlag == 1 {
+								if appendFlag == FlagAppendOld || appendFlag == FlagBytesAppend || appendFlag == FlagJSONAppend {
 									//lg.Logf("---CACHE_KV TF UPDATE: %s, %d, %d", key, kvRecordTime, appendFlag)
 									cs.SetValue(key, valueBytes[9:], false, kvRecordTime, "")
 								} else { // Someone else (other module) deleted a key from the cache
@@ -327,8 +339,8 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 									//	csv.Purge(true)
 									//}
 								}
-							} else if kvRecordTime == cacheRecordTime { // KV confirmes update
-								if appendFlag == 0 {
+							} else if kvRecordTime == cacheRecordTime { // KV confirms update
+								if appendFlag == FlagDeletedOld || appendFlag == FlagDeleted {
 									//system.MsgOnErrorReturn(kv.Delete(entry.Key()))
 									system.MsgOnErrorReturn(customNatsKv.KVDelete(cs.js, cs.kv, entry.Key()))
 								}
@@ -381,7 +393,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 						lg.Logf(lg.InfoLevel, "Backup requested, set barrier timestamp: %d", backupBarrierTimestamp)
 					}
 				}
-				allBeforeBuckupBarrierSynced := true
+				allBeforeBackupBarrierSynced := true
 
 				cacheStoreValueStack := []*StoreValue{cs.rootValue}
 				suffixPathsStack := []string{""}
@@ -430,7 +442,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 
 							if ve && vut > 0 && vut <= backupBarrierTimestamp {
 								if sn || !sw {
-									allBeforeBuckupBarrierSynced = false
+									allBeforeBackupBarrierSynced = false
 								}
 							}
 						}
@@ -440,12 +452,26 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 						if csvChild.syncNeeded {
 							valueUpdateTime = csvChild.valueUpdateTime
 							timeBytes := make([]byte, 8)
-							binary.BigEndian.PutUint64(timeBytes, uint64(csvChild.valueUpdateTime))
+							binary.BigEndian.PutUint64(timeBytes, uint64(valueUpdateTime))
 							if csvChild.valueExists {
-								header := append(timeBytes, 1) // Add append flag "1"
-								finalBytes = append(header, csvChild.value.([]byte)...)
+								var flag uint8
+								var dataBytes []byte
+								switch v := csvChild.value.(type) {
+								case []byte:
+									flag = FlagBytesAppend
+									dataBytes = v
+								case *easyjson.JSON:
+									flag = FlagJSONAppend
+									dataBytes = v.ToBytes()
+								default:
+									lg.Logf(lg.ErrorLevel, "Unknown type for key=%s, value=%v", newSuffix, v)
+									csvChild.Unlock("kvLazyWriter")
+									return true
+								}
+								header := append(timeBytes, flag)
+								finalBytes = append(header, dataBytes...)
 							} else {
-								finalBytes = append(timeBytes, 0) // Add delete flag "0"
+								finalBytes = append(timeBytes, FlagDeleted) // Add delete flag "0"
 							}
 						} else {
 							if csvChild.valueUpdateTime > 0 && csvChild.valueUpdateTime <= cs.lruTresholdTime && csvChild.purgeState == 0 { // Older than or equal to specific time
@@ -495,7 +521,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 					}
 				}
 
-				if backupBarrierStatus == BackupBarrierStatusLocking && allBeforeBuckupBarrierSynced {
+				if backupBarrierStatus == BackupBarrierStatusLocking && allBeforeBackupBarrierSynced {
 					cs.markCacheReadyForBackup()
 				}
 
@@ -583,14 +609,22 @@ func (cs *Store) GetValue(key string) ([]byte, error) {
 		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
 			cacheMiss = false // Value exists in cache - no cache miss then
 			csv.RLock("GetValue")
-			if csv.ValueExists() {
-				if bv, ok := csv.value.([]byte); ok {
-					result = bv
+			if !csv.ValueExists() { // Value was intentionally deleted and was marked so, no cache miss policy can be applied here
+				resultError = fmt.Errorf("value for key=%s does not exist", key)
+			} else {
+				switch v := csv.value.(type) {
+				case []byte:
+					result = v
+				case *easyjson.JSON:
+					lg.Logf(lg.WarnLevel, "Value for key=%s is JSON, use GetValueJSON method", key)
+					result = v.ToBytes()
+				default:
+					resultError = fmt.Errorf("unsupported value type: %T", v)
 				}
-			} else { // Value was intenionally deleted and was marked so, no cache miss policy can be applied here
-				resultError = fmt.Errorf("Value for for key=%s does not exist", key)
 			}
 			csv.RUnlock("GetValue")
+
+			return result, resultError
 		}
 	}
 
@@ -604,17 +638,29 @@ func (cs *Store) GetValue(key string) ([]byte, error) {
 			if len(valueBytes) >= 9 { // Updated or deleted value exists in KV store
 				appendFlag := valueBytes[8]
 				kvRecordTime := int64(binary.BigEndian.Uint64(valueBytes[:8]))
-				if appendFlag == 1 { // Valid value exists in KV store
+				switch appendFlag {
+				case FlagAppendOld, FlagBytesAppend:
 					cs.SetValue(key, result, false, kvRecordTime, "")
-					resultError = nil
+				case FlagJSONAppend:
+					if json, ok := easyjson.JSONFromBytes(result); ok {
+						cs.SetValueJSON(key, &json, false, kvRecordTime, "")
+						lg.Logf(lg.WarnLevel, "Value for key=%s is JSON in KV, use GetValueJSON method", key)
+						resultError = nil
+					} else {
+						resultError = fmt.Errorf("failed to parse JSON for key=%s", key)
+					}
+				default:
+					resultError = fmt.Errorf("unknown flag %d for key=%s", appendFlag, key)
 				}
+			} else {
+				resultError = fmt.Errorf("invalid KV entry (%v) for key=%s", valueBytes, key)
 			}
 		} else {
 			resultError = err
 		}
 	}
-	// ----------------------------------------------------
 
+	// ----------------------------------------------------
 	return result, resultError
 }
 
@@ -627,6 +673,86 @@ func (cs *Store) GetValueAsJSON(key string) (*easyjson.JSON, error) {
 		return nil, fmt.Errorf("Value for key=%s is not a JSON", key)
 	}
 	return nil, err
+}
+
+func (cs *Store) GetValueJSON(key string) (*easyjson.JSON, error) {
+	var result *easyjson.JSON
+	var resultError error
+
+	cacheMiss := true
+
+	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, false); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
+		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
+			cacheMiss = false
+			csv.RLock("GetValueJSON")
+			if !csv.ValueExists() {
+				resultError = fmt.Errorf("value for key=%s does not exist", key)
+			} else {
+				switch v := csv.value.(type) {
+				case *easyjson.JSON:
+					result = v
+				case []byte:
+					lg.Logf(lg.WarnLevel, "Value for key=%s is []byte, converting to JSON", key)
+					if json, ok := easyjson.JSONFromBytes(v); ok {
+						result = &json
+					} else {
+						resultError = fmt.Errorf("value for key=%s is not valid JSON", key)
+					}
+				default:
+					resultError = fmt.Errorf("unsupported value type: %T", v)
+				}
+			}
+			csv.RUnlock("GetValueJSON")
+
+			return result, resultError
+		}
+	}
+
+	// Cache miss
+	if cacheMiss {
+		if entry, err := customNatsKv.KVGet(cs.js, cs.kv, cs.toStoreKey(key)); err == nil {
+			key := cs.fromStoreKey(entry.Key())
+			valueBytes := entry.Value()
+
+			if len(valueBytes) >= 9 {
+				flag := valueBytes[8]
+				timestamp := int64(binary.BigEndian.Uint64(valueBytes[:8]))
+				data := valueBytes[9:]
+
+				switch flag {
+				case FlagJSONAppend:
+					if json, ok := easyjson.JSONFromBytes(data); ok {
+						cs.SetValueJSON(key, &json, false, timestamp, "")
+						result = &json
+						resultError = nil
+					} else {
+						resultError = fmt.Errorf("failed to parse JSON for key=%s", key)
+					}
+
+				case FlagAppendOld, FlagBytesAppend:
+					if json, ok := easyjson.JSONFromBytes(data); ok {
+						cs.SetValue(key, data, false, timestamp, "")
+						result = &json
+						resultError = nil
+					} else {
+						resultError = fmt.Errorf("value for key=%s is not JSON", key)
+					}
+
+				case FlagDeleted, FlagDeletedOld:
+					resultError = fmt.Errorf("value for key=%s was deleted", key)
+
+				default:
+					resultError = fmt.Errorf("unknown flag %d for key=%s", flag, key)
+				}
+			} else {
+				resultError = fmt.Errorf("invalid KV entry for key=%s", key)
+			}
+		} else {
+			resultError = err
+		}
+	}
+
+	return result, resultError
 }
 
 func (cs *Store) TransactionBegin(transactionID string) {
@@ -696,10 +822,10 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 		}
 		actual, loaded := parent.StoreChild(keyLastToken, candidate)
 		if !loaded {
-			return true // создали впервые
+			return true // created for the first time
 		}
 
-		// Уже есть — ставим только если «пустой»
+		// Already exists — set only if "empty"
 		actual.Lock("SetValueIfDoesNotExist")
 		if !actual.valueExists && actual.value == nil {
 			actual.value = newValue
@@ -762,6 +888,38 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 			lg.Logf(lg.ErrorLevel, "SetValue: transaction with id=%s doesn't exist", transactionID)
 		}
 	}
+	return true
+}
+
+func (cs *Store) SetValueJSON(key string, value *easyjson.JSON, updateInKV bool, customSetTime int64, transactionID string) bool {
+	if !keyValidationRegexp.MatchString(key) {
+		return false
+	}
+
+	if customSetTime < 0 {
+		customSetTime = system.GetCurrentTimeNs()
+	}
+
+	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
+		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
+			csv.Put(value, updateInKV, customSetTime)
+		} else {
+			csvUpdate := &StoreValue{
+				value:           value,
+				store:           system.SharedMapMustNewHashed(8),
+				valueExists:     true,
+				purgeState:      0,
+				syncNeeded:      updateInKV,
+				syncedWithKV:    !updateInKV,
+				valueUpdateTime: customSetTime,
+			}
+			actual, loaded := parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate)
+			if loaded && customSetTime >= actual.valueUpdateTime {
+				actual.Put(value, updateInKV, customSetTime)
+			}
+		}
+	}
+
 	return true
 }
 
