@@ -39,7 +39,7 @@ func (a *WorkflowActivity) RegisterStatefun(runtime *statefun.Runtime) {
 }
 
 func (a *WorkflowActivity) activityStatefun(_ sfPlugins.StatefunExecutor, sfctx *sfPlugins.StatefunContextProcessor) {
-	result := easyjson.NewJSONObject().GetPtr()
+	result := new(easyjson.JSON)
 
 	tools := ActivityTools{
 		SFctx:  sfctx,
@@ -48,5 +48,7 @@ func (a *WorkflowActivity) activityStatefun(_ sfPlugins.StatefunExecutor, sfctx 
 
 	a.logicHandler(tools)
 
-	sfctx.Signal(sfPlugins.AutoSignalSelect, sfctx.Caller.Typename, sfctx.Caller.ID, result, sfctx.Options)
+	if result.Value != nil {
+		sfctx.Signal(sfPlugins.AutoSignalSelect, sfctx.Caller.Typename, sfctx.Caller.ID, result, sfctx.Options)
+	}
 }
