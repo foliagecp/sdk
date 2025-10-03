@@ -475,15 +475,15 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 							if csvChild.valueExists {
 								var flag uint8
 								var dataBytes []byte
-								switch v := csvChild.value.(type) {
-								case []byte:
+								switch csvChild.valueType {
+								case typeByteArray:
 									flag = FlagBytesAppend
-									dataBytes = v
-								case *easyjson.JSON:
+									dataBytes = csvChild.value.([]byte)
+								case typeJson:
 									flag = FlagJSONAppend
-									dataBytes = v.ToBytes()
+									dataBytes = csvChild.value.(*easyjson.JSON).ToBytes()
 								default:
-									lg.Logf(lg.ErrorLevel, "Unknown type for key=%s, value=%v", newSuffix, v)
+									lg.Logf(lg.ErrorLevel, "Unknown type for key=%s, value=%v", newSuffix, csvChild.value)
 									csvChild.Unlock("kvLazyWriter")
 									return true
 								}
