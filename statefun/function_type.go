@@ -386,7 +386,7 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 }
 
 func (ft *FunctionType) getContext(keyValueID string) *easyjson.JSON {
-	if j, err := ft.runtime.Domain.cache.GetValueAsJSON(keyValueID); err == nil {
+	if j, err := ft.runtime.Domain.cache.GetValueJSON(keyValueID); err == nil {
 		return j
 	}
 	j := easyjson.NewJSONObject()
@@ -397,19 +397,19 @@ func (ft *FunctionType) setContext(keyValueID string, context *easyjson.JSON) {
 	if context == nil {
 		ft.runtime.Domain.cache.DeleteValue(keyValueID, true, -1, "")
 	} else {
-		ft.runtime.Domain.cache.SetValue(keyValueID, context.ToBytes(), true, -1, "")
+		ft.runtime.Domain.cache.SetValueJSON(keyValueID, context, true, -1, "")
 	}
 }
 
 // Negative duration removes expiration
 func (ft *FunctionType) setContextExpirationAfter(keyValueID string, after time.Duration) {
-	if j, err := ft.runtime.Domain.cache.GetValueAsJSON(keyValueID); err == nil {
+	if j, err := ft.runtime.Domain.cache.GetValueJSON(keyValueID); err == nil {
 		if after < 0 {
 			j.RemoveByPath(contextExpirationKey)
 		} else {
 			j.SetByPath(contextExpirationKey, easyjson.NewJSON(time.Now().Add(after).UnixNano()))
 		}
-		ft.runtime.Domain.cache.SetValue(keyValueID, j.ToBytes(), true, -1, "")
+		ft.runtime.Domain.cache.SetValueJSON(keyValueID, j, true, -1, "")
 	}
 }
 
