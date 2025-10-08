@@ -244,14 +244,18 @@ func (r *Runtime) handleSingleInstanceFunctions(ctx context.Context, revisions m
 // startFunctionSubscriptions starts the function subscriptions based on the configuration.
 func (r *Runtime) startFunctionSubscriptions(ctx context.Context, revisions map[string]uint64) error {
 	for _, ft := range r.registeredFunctionTypes {
-		revision, exist := revisions[ft.name]
-		if !exist {
-			lg.Logf(lg.WarnLevel, "Function type %s is not registered; skipping", ft.name)
-			continue
-		}
-		if !ft.config.multipleInstancesAllowed && revision == 0 {
-			lg.Logf(lg.WarnLevel, "Function type %s is already running; skipping", ft.name)
-			continue
+		if ft.config.multipleInstancesAllowed {
+			lg.Logf(lg.DebugLevel, "Function type %s allows multiple instances, subscribing", ft.name)
+		} else {
+			revision, exist := revisions[ft.name]
+			if !exist {
+				lg.Logf(lg.WarnLevel, "Function type %s is not registered; skipping", ft.name)
+				continue
+			}
+			if revision == 0 {
+				lg.Logf(lg.WarnLevel, "Function type %s is already running; skipping", ft.name)
+				continue
+			}
 		}
 
 		if ft.config.IsSignalProviderAllowed(sfPlugins.JetstreamGlobalSignal) {
