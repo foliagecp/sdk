@@ -351,8 +351,11 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 									//lg.Logf("---CACHE_KV TF DELETE: %s, %d, %d", key, kvRecordTime, appendFlag)
 
 									//system.MsgOnErrorReturn(kv.Delete(entry.Key()))
-									system.MsgOnErrorReturn(customNatsKv.KVDelete(cs.js, cs.kv, entry.Key()))
-
+									if err = customNatsKv.KVDelete(cs.js, cs.kv, entry.Key()); err != nil &&
+										!(strings.HasPrefix(err.Error(), "nats: sequence ") && strings.Contains(err.Error(), " not found")) {
+										// Ignore "sequence {SEQ} not found" errors - another runtime already deleted the entry
+										lg.Logf(lg.ErrorLevel, "Failed to delete key=%s, err=%s", key, err)
+									}
 									//cs.rootValue.purgeReady
 									//if csv := cs.getLastKeyCacheStoreValue(key); csv != nil {
 									//	csv.Purge(true)
