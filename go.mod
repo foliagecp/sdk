@@ -9,6 +9,7 @@ require (
 	github.com/emicklei/dot v1.6.1
 	github.com/foliagecp/easyjson v0.1.6
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904
+	github.com/google/uuid v1.6.0
 	github.com/nats-io/nats-server/v2 v2.10.12
 	github.com/nats-io/nats.go v1.37.0
 	github.com/prometheus/client_golang v1.17.0
@@ -42,7 +43,6 @@ require (
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/klauspost/compress v1.17.7 // indirect

@@ -110,7 +110,37 @@ type StatefunContextProcessor struct {
 	Caller                    StatefunAddress
 	Payload                   *easyjson.JSON
 	Options                   *easyjson.JSON
+	traceContext              *easyjson.JSON
 	Reply                     *SyncReply // when requested in function: nil - function was signaled, !nil - function was requested
+}
+
+func (scp *StatefunContextProcessor) SetTraceContext(tc *easyjson.JSON) {
+	scp.traceContext = tc
+}
+
+func (scp *StatefunContextProcessor) TraceContext() *easyjson.JSON {
+	return scp.traceContext
+}
+
+func (scp *StatefunContextProcessor) TraceID() string {
+	if scp.traceContext != nil {
+		return scp.traceContext.GetByPath("trace_id").AsStringDefault("")
+	}
+	return ""
+}
+
+func (scp *StatefunContextProcessor) SpanID() string {
+	if scp.traceContext != nil {
+		return scp.traceContext.GetByPath("span_id").AsStringDefault("")
+	}
+	return ""
+}
+
+func (scp *StatefunContextProcessor) ParentSpanID() string {
+	if scp.traceContext != nil {
+		return scp.traceContext.GetByPath("parent_span_id").AsStringDefault("")
+	}
+	return ""
 }
 
 type StatefunExecutor interface {

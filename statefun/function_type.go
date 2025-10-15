@@ -183,6 +183,15 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 	if v, ok := ft.contextProcessors.Load(id); ok {
 		typenameIDContextProcessor = v.(*sfPlugins.StatefunContextProcessor)
 	} else {
+		var tc *easyjson.JSON
+		if msg.TraceContext != nil {
+			currentTrace := TraceContextFromJSON(msg.TraceContext)
+			if currentTrace != nil {
+				newChildTrace := NewTraceContext(currentTrace.TraceID, currentTrace.SpanID)
+				tc = newChildTrace.ToJSON()
+			}
+		}
+
 		v := sfPlugins.StatefunContextProcessor{
 			GetFunctionContext:        func() *easyjson.JSON { return ft.getContext(ft.name + "." + id) },
 			SetFunctionContext:        func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
@@ -193,10 +202,10 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 			Domain:                    ft.runtime.Domain,
 			Self:                      sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
 			Signal: func(signalProvider sfPlugins.SignalProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) error {
-				return ft.runtime.signal(signalProvider, ft.name, id, targetTypename, targetID, j, o)
+				return ft.runtime.signal(signalProvider, ft.name, id, targetTypename, targetID, j, o, tc)
 			},
 			Request: func(requestProvider sfPlugins.RequestProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
-				return ft.runtime.request(requestProvider, ft.name, id, targetTypename, targetID, j, o, timeout...)
+				return ft.runtime.request(requestProvider, ft.name, id, targetTypename, targetID, j, o, tc)
 			},
 			ObjectSignal: func(signalProvider sfPlugins.SignalProvider, query sfPlugins.LinkQuery, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) (map[string]error, error) {
 				return ft.runtime.ObjectCallSignal(signalProvider, query, typename, id, payload, options)
@@ -269,6 +278,23 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 		typenameIDContextProcessor.Options.DeepMerge(*msg.Options)
 	}
 	typenameIDContextProcessor.Caller = *msg.Caller
+
+	typenameIDContextProcessor.SetTraceContext(msg.TraceContext)
+	if msg.TraceContext != nil {
+		traceCtx := TraceContextFromJSON(msg.TraceContext)
+		if traceCtx != nil {
+			startEvent := &TraceEvent{
+				TraceID:      traceCtx.TraceID,
+				SpanID:       traceCtx.SpanID,
+				ParentSpanID: traceCtx.ParentSpanID,
+				EventType:    "span_start",
+				FuncTypename: ft.name,
+				VertexID:     id,
+				Timestamp:    system.GetCurrentTimeNs(),
+			}
+			PublishTraceEvent(ft.runtime.nc, ft.runtime.Domain.name, startEvent)
+		}
+	}
 
 	typenameIDContextProcessor.ObjectMutexLock = func(objectId string, errorOnLocked bool) error {
 		lockId := fmt.Sprintf("%s-lock", objectId)

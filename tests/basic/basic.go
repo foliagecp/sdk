@@ -210,6 +210,7 @@ func Start() {
 
 		fmt.Println("Starting GraphQL")
 		graphql.StartGraphqlServer("8080", &dbClient)
+
 		return nil
 	}
 
