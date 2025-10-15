@@ -110,6 +110,7 @@ type StatefunContextProcessor struct {
 	Caller                    StatefunAddress
 	Payload                   *easyjson.JSON
 	Options                   *easyjson.JSON
+	traceContext              *easyjson.JSON
 	Reply                     *SyncReply // when requested in function: nil - function was signaled, !nil - function was requested
 }
 
