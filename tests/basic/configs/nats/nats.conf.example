@@ -16,6 +16,7 @@ tls: {
 
 jetstream {
     store_dir: /data/jetstream
+    max_file_store: 40G
 }
 
 authorization {

@@ -118,7 +118,7 @@ func findObjectType(ctx *sfPlugins.StatefunContextProcessor, objectID string) (s
 	}
 	id := makeSequenceFreeParentBasedID(ctx, objectID)
 
-	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", id, injectParentHoldsLocks(ctx, nil), &options))
+	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", makeSequenceFreeParentBasedID(ctx, id), injectParentHoldsLocks(ctx, nil), &options))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
 		return som.Data.GetByPath("type").AsStringDefault(""), nil
 	}

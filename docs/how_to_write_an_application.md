@@ -13,7 +13,3 @@
    - Organize these functions to communicate asynchronously using signals, which are handled by NATS in your preferred manner.
    - Utilize Foliage Statefun's context to store data between these calls.
    - Also, consider using an object's context for managing relevant information.
-
-## Example of a test application for json template based WebUI
-
-https://github.com/foliagecp/foliage-nats-test-statefun/blob/fix/ui-stub/ui_client.go

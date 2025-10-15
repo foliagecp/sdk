@@ -105,7 +105,7 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 		var wg sync.WaitGroup
 		for _, jpgqlQuery := range jpgqlIntersectionValidQueries {
 			wg.Add(1)
-			go func() {
+			go func(jpgqlQuery JPGQLRequestData) {
 				defer wg.Done()
 
 				payload := easyjson.NewJSONObjectWithKeyValue("query", easyjson.NewJSON(jpgqlQuery.request))
@@ -123,9 +123,9 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 					}
 					intersectionUUIDs = newIntersectionUUIDs
 				}
-			}()
-			wg.Wait()
+			}(jpgqlQuery)
 		}
+		wg.Wait()
 
 		// Append result into finalUUIDs ------------------
 		for uuid := range intersectionUUIDs {
@@ -146,7 +146,7 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 	// Running post processing function
 	postProcessorFunc := ctx.Payload.GetByPath("post_processor_func.name").AsStringDefault("")
 	if len(postProcessorFunc) > 0 {
-		postProcessorPayload := easyjson.NewJSONObjectWithKeyValue("uuids", easyjson.JSONFromArray(resultUUID))
+		postProcessorPayload := easyjson.NewJSONObjectWithKeyValue("uuids", easyjson.NewJSON(resultUUID))
 		if ctx.Payload.PathExists("post_processor_func.data") {
 			postProcessorPayload.SetByPath("data", ctx.Payload.GetByPath("post_processor_func.data"))
 		}
@@ -154,7 +154,7 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 		return
 	}
 
-	resultJson := easyjson.NewJSONObjectWithKeyValue("uuids", easyjson.JSONFromArray(resultUUID))
+	resultJson := easyjson.NewJSONObjectWithKeyValue("uuids", easyjson.NewJSON(resultUUID))
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultJson)).Reply()
 }
 

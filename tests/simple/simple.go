@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 
-	"github.com/foliagecp/sdk/clients/go/db"
 	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
 	"github.com/foliagecp/sdk/embedded/graph/fpl"
 	"github.com/foliagecp/sdk/embedded/graph/search"
@@ -22,7 +21,7 @@ var (
 	// NatsURL - nats server url
 	NatsURL string = system.GetEnvMustProceed("NATS_URL", "nats://nats:foliage@nats:4222")
 
-	dbClient db.DBSyncClient
+	//dbClient db.DBSyncClient
 )
 
 func RegisterFunctionTypes(runtime *statefun.Runtime) {

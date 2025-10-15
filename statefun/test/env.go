@@ -111,7 +111,7 @@ func (env *statefunTestEnvironment) SubscribeEgress(typename, id string) (*nats.
 
 func (env *statefunTestEnvironment) CacheValue(key string) (*easyjson.JSON, error) {
 	id := env.runtime.Domain.CreateObjectIDWithThisDomain(key, true)
-	return env.runtime.Domain.Cache().GetValueAsJSON(id)
+	return env.runtime.Domain.Cache().GetValueJSON(id)
 }
 
 func (env *statefunTestEnvironment) SetThisDomainPreffix(id string) string {

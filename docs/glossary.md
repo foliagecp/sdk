@@ -2,58 +2,96 @@
 
 ## Foliage Control Plane
 
-The **Foliage Control Plane** is a comprehensive set of tools and functionalities of the platform that provides a universal control environment for integrated 3rd party systems and allows to implement the listed [features](./features.md). 
+The **Foliage Control Plane** is the infrastructure layer of the Pregel platform, providing a universal control environment for integrated third-party systems. It orchestrates asynchronous communication via signals over a heterofunctional graph and offers platform services such as CRUD operations, triggers, security policies, introspection, and a graph query language (JPGQL).
 
-## Stateful Functions (statefun)
+## Heterofunctional Graph
 
-A **Stateful Function** in Foliage is a specialized type of function that can be invoked via a NATS topic by sending a signal, typically accomplished by publishing a message. These functions are uniquely identified by a `typename`, which serves as both their name and address. Stateful Functions are always invoked with a string identifier, representing an object or entity within the system.
+The **Heterofunctional Graph** is the core data model in Foliage, composed of:
 
-When a Stateful Function is invoked with the same identifier concurrently, its executions are carried out sequentially, ensuring that the function's actions are synchronized. However, when invoked with different identifiers, the executions occur concurrently, allowing for parallel processing.
+* **Data Level**: A graph-based model storing objects (vertices) and typed, directed links (edges), including metadata and type definitions as first-class vertices.
+* **Functional Level**: A mesh of stateful functions that propagate and react to signals along the graph edges, enabling behavior to co-evolve with topology changes.
 
-Each Stateful Function associated with a specific identifier has its dedicated context. This context persists between function calls and restarts, ensuring that the Stateful Function can maintain and manage its state across successive invocations.
+This unified graph enables both persistent data storage and signal routing, supporting dynamic control plane logic.
 
-_Note: NATS is a messaging system that provides both publish-subscribe and request-reply messaging capabilities._
+## Vertex
 
-## Application
+A **Vertex** is the fundamental data element in the heterofunctional graph, representing a node that stores a JSON body (`Object Context`). Vertices can be created, read, updated, or deleted via the low-level CRUD LLAPI (LLAPIVertexCreate, LLAPIVertexRead, LLAPIVertexUpdate, LLAPIVertexDelete). Each vertex is uniquely identified by its object ID and can carry arbitrary JSON properties.
 
-A **Foliage Application** is composed of a collection of **Foliage Stateful Functions** running within a single or distributed runtime environment. These functions are organized and orchestrated to achieve specific behaviors or functionalities within the system.
+## Edge
 
-## Adapter
-
-**Foliage's Adapter** refers to a specialized Foliage Application designed with the primary purpose of abstracting the interaction with external software systems or services. This adaptation layer allows other Foliage Applications to seamlessly integrate with it as part of the platform's unified functional graph, facilitating interoperability.
-
-## Signal
-
-A **Foliage Signal** represents the `typename` of a Stateful Function. Sending a signal, denoted as `S`, to an object, represented as `O`, essentially triggers the execution of a Stateful Function identified by the `typename` `S` on the object `O`.
-
-## Stateful Function Typename
-
-The **Stateful Function Typename** is the unique name assigned to a Foliage Stateful Function. It serves as the function's address within the functional space. Each function in a Foliage Application is identified by its typename, enabling precise invocation and addressing.
-
-## Functional Space
-
-**Functional Space** encompasses the collective domain of all Foliage functions, within which each function can invoke any other function. It represents the environment in which Foliage functions interact and collaborate.
+An **Edge** is a synonym for a Link in the heterofunctional graph, representing a typed, directed connection between two vertices. The term "edge" emphasizes the graph-theoretic aspect of links, while "link" highlights its operational semantics. Edges and links are managed interchangeably via the Graph CRUD LLAPI. Creating or deleting a link automatically registers or unregisters the corresponding incoming link on the target vertex.
 
 ## Object
 
-In the context of Foliage, an **Object** refers to a vertex within the system's graph structure. This vertex represents a comprehensive set of information about a real-world object or entity, providing a means to model and interact with real-world entities within the system.
+An **Object** is the high-level concept corresponding to a vertex in the Foliage graph. An object encapsulates real-world entities or system components, modeled as vertices with typed attributes and links. The terms "vertex" and "object" are often used interchangeably.
 
-## Link
+## Object Link
 
-A **Link** signifies a directed connection or edge within the graph structure of the Foliage system. It serves as the means to establish relationships and connections between two objects or vertices, enabling the representation of complex data dependencies and associations.
+An **Object Link** is an instance of an edge (link) connecting two objects (vertices) at the object-CRUD level. It represents a concrete relationship managed by Object CRUD functions (CreateObjectsLink, UpdateObjectsLink, DeleteObjectsLink, ReadObjectsLink). It represents a concrete relationship between a source object and a target object.
 
-## Object Context
+## Type
 
-**Object Context** denotes the data associated with an object upon which a Stateful Function is invoked. This context can be read or modified on demand, allowing Stateful Functions to access and manipulate the data related to specific objects during their execution.
+A **Type** is a special vertex in the graph that defines a schema or category for other objects or links. Type vertices store metadata such as allowed attributes, validation rules, and permissible link types. Types enable governance and introspection of graph topology and payload structures.
 
-## Function Context
+## Type Link
 
-**Function Context** encompasses the data associated with a Stateful Function, which can be read or modified during its execution. This context persists across multiple invocations and is unique for each object's identifier when the function is called.
+A **Type Link** is a schema-level edge between two type vertices that defines permitted relationships in the graph. Managed via Type-Link CRUD functions (CreateTypesLink, UpdateTypesLink, DeleteTypesLink, ReadTypesLink). These definitions enforce topology policies and guide object-link creation. Type links serve as schema-level constraints, guiding the creation of object links and enforcing topology policies.
 
-## Runtime
+## Stateful Function
 
-A **Runtime** in Foliage is a binary service responsible for providing a set of Stateful Functions. It serves as the execution environment for these functions, ensuring their availability and responsiveness.
+A **Stateful Function** is a function with persistent context, invoked via a NATS topic by publishing a signal message. It is uniquely identified by a **typename**, which serves as its address. Functions execute with three contexts:
+
+* **Object Context**: The vertex data and its attributes/links.
+* **Function Context**: The function’s own persisted state for this object identifier.
+* **Signal Context**: The payload data carried by the triggering signal.
+
+Concurrent invocations for the same object identifier are serialized; different identifiers execute in parallel. Contexts persist across invocations and restarts.
+
+## Signal
+
+A **Signal** is an event message sent to a stateful function’s NATS topic. A signal is denoted as `S(O, payload)`, where `S` is the function’s typename, `O` is the object identifier, and `payload` carries any invocation data.
+
+## Functional Space
+
+The **Functional Space** is the namespace of all Foliage stateful functions. Any function in this space can invoke any other by publishing the appropriate signal, enabling a loosely coupled, highly cohesive interaction model.
 
 ## Functional Graph
 
-The **Functional Graph** represents the combination of the Functional Space and a graph database. It empowers objects within the system with functional capabilities, reflecting not only their behavior in the real world but also a desired one.
+The **Functional Graph** combines the heterofunctional data model with the functional space. It enables objects to both store state and participate in dynamic signal propagation, effectively blending a graph database with an event-driven runtime.
+
+## Runtime
+
+A **Runtime** is a binary service (or distributed cluster of services) that hosts and executes a set of Foliage stateful functions. It manages their lifecycle, subscribes to NATS topics, loads contexts from the key-value store, and ensures push-based delivery of signals for immediate execution.
+
+## Foliage Application
+
+A **Foliage Application** consists of one or more stateful functions deployed to a runtime. Applications can be specialized as:
+
+* **Connectors**: Handle bidirectional integration with external systems, ingesting or applying changes to real-world systems and materializing them as graph objects.
+* **Adapters**: Transform and enrich connector-generated objects into domain-specific models, orchestrating target system interactions.
+* **Main Runtime Services**: Provide core platform capabilities, such as CRUD for graph data, trigger management, the JPGQL query engine, introspection/debug tools, and security enforcement.
+
+## Foliage Processing Language (FPL)
+
+**Foliage Processing Language (FPL)** is an extension to JPGQL that adds:
+
+* **Set Operations**: Unions and intersections of JPGQL query results.
+* **Sorting**: Ordering UUID lists ascending or descending.
+* **Post-Processing**: Applying arbitrary functions to resulting UUID sets (e.g., resolving bodies).
+
+FPL queries are issued via `functions.graph.api.query.fpl.root` and consist of:
+
+```json
+{
+  "jpgql_uoi": [ [... JPGQL stages ...] ],
+  "sort": "asc" | "dsc",
+  "post_processor_func": {
+    "name": "<function>",
+    "data": { ... }
+  }
+}
+```
+
+### Example Post-Processor
+
+* **functions.graph.api.query.fpl.pp.vbody**: Takes UUIDs, returns their JSON bodies, and optionally sorts by JSON fields.

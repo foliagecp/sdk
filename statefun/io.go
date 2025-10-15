@@ -204,6 +204,8 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 
 				targetFT.sendMsg(targetID, functionMsg)
 
+				timer := time.NewTimer(time.Duration(targetFT.config.msgAckWaitMs) * time.Millisecond)
+				defer timer.Stop()
 				select {
 				case _, ok := <-ackChannel:
 					if !ok {
@@ -215,7 +217,7 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 						logger.Logln(logger.ErrorLevel, "goLangLocalSignal: nackChannel was unexpectedly closed")
 					}
 					// if ok - whether signal is redirected to NATS Jetstream due to nack command
-				case <-time.After(time.Duration(targetFT.config.msgAckWaitMs) * time.Millisecond):
+				case <-timer.C:
 					logger.Logf(logger.WarnLevel, "goLangLocalSignal: receiver typename=%s called on id=%s did not ack msg in time, for safety reasons msg is being redirected to NATS Jetstream", targetTypename, targetID)
 					system.MsgOnErrorReturn(r.signal(sfPlugins.JetstreamGlobalSignal, callerTypename, callerID, targetTypename, targetID, payload, options, traceCtx))
 				}
@@ -330,21 +332,24 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 			}
 			functionMsg.RefusalCallback = func(_ bool) {
 				defer func() {
-					recover() // in case channel is already closed
+					if r := recover(); r != nil { // in case channel is already closed
+						logger.Logf(logger.ErrorLevel, "panic in request functionMsg.RefusalCallback close(resultJSONChannel) caller:%s:%s target:%s:%s: %v", callerTypename, callerID, targetTypename, targetID, r)
+					}
 				}()
 				close(resultJSONChannel)
 			}
 
 			targetFT.prometricsMeasureMsgDeliver(GolangReq)
 			targetFT.workerTaskExecutor(targetID, functionMsg)
-
+			timer := time.NewTimer(requestTimeoutDuration)
+			defer timer.Stop()
 			select {
 			case resultJSON, ok := <-resultJSONChannel:
 				if ok {
 					return resultJSON, nil
 				}
 				return nil, fmt.Errorf("goLangLocalRequest: target function with typename \"%s\" with id \"%s\" resufes to handle request", targetTypename, targetID)
-			case <-time.After(requestTimeoutDuration):
+			case <-timer.C:
 				return nil, fmt.Errorf("goLangLocalRequest: timeout occured while requesting function typename \"%s\" with id \"%s\"", targetTypename, targetID)
 			}
 		case 1:

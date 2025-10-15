@@ -14,12 +14,12 @@ const (
 	// Vertex related keys --------------------------------
 
 	// key=fmt.Sprintf(BodyValueIndexPrefPattern+KeySuff2Pattern, <vertexId>, <bodyKeyName>, <valueType>), value=<bodyKeyValue>
-	VertexBodyValueIndexPrefPattern = "%s.body.index."
+	VertexBodyValueIndexPrefPattern = "%s.bodyindex."
 
 	// Link related keys ----------------------------------
 
 	// key=fmt.Sprintf(BodyValueIndexPrefPattern+KeySuff3Pattern, <fromVertexId>, <linkName>, <bodyKeyName>, <valueType>), value=<bodyKeyValue>
-	LinkBodyValueIndexPrefPattern = "%s.out.body.index."
+	LinkBodyValueIndexPrefPattern = "%s.out.bodyindex."
 
 	// key=fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, <fromVertexId>, <linkName>), value=<linkType.toVertexId>
 	OutLinkTargetKeyPrefPattern = "%s.out.to."
@@ -37,6 +37,8 @@ const (
 )
 
 func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
+	RegisterPolyTypeFunctions(runtime)
+
 	// High-Level API Helpers
 	statefun.NewFunctionType(runtime, "functions.cmdb.api.delete_object_filtered_out_links", DeleteObjectFilteredOutLinksStatefun, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetAllowedSignalProviders())
 

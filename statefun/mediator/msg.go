@@ -91,7 +91,7 @@ func OpMsgFromSfReply(reply *easyjson.JSON, err error) OpMsg {
 	if err == nil {
 		return OpMsgFromJson(reply)
 	}
-	return OpMsgFailed("statefun did not reply")
+	return OpMsgFailed(fmt.Sprintf("statefun reply error: %s", err.Error()))
 }
 
 func (som OpMsg) ToJson() *easyjson.JSON {
@@ -100,7 +100,7 @@ func (som OpMsg) ToJson() *easyjson.JSON {
 		reply.SetByPath("details", easyjson.NewJSON(som.Details))
 	}
 	if len(som.Meta) > 0 {
-		reply.SetByPath("meta", easyjson.NewJSON(som.Details))
+		reply.SetByPath("meta", easyjson.NewJSON(som.Meta))
 	}
 	if !som.Data.IsNull() {
 		reply.SetByPath("data", som.Data)

@@ -32,6 +32,7 @@ type Runtime struct {
 	Domain *Domain
 
 	registeredFunctionTypes       map[string]*FunctionType
+	canRegisterNewFunctionType    bool
 	onAfterStartFunctionsWithMode []onAfterStartFunctionWithMode
 
 	gt0  int64 // Global time 0 - time of the very first message receiving by any function type
@@ -45,9 +46,10 @@ type Runtime struct {
 // NewRuntime initializes a new Runtime instance with the given configuration.
 func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 	r := &Runtime{
-		config:                  config,
-		registeredFunctionTypes: make(map[string]*FunctionType),
-		shutdown:                make(chan struct{}),
+		config:                     config,
+		registeredFunctionTypes:    make(map[string]*FunctionType),
+		canRegisterNewFunctionType: true,
+		shutdown:                   make(chan struct{}),
 	}
 
 	var err error
@@ -70,7 +72,26 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		return nil, err
 	}
 
-	r.Domain, err = NewDomain(r.nc, r.js, config.desiredHUBDomainName, config.natsReplicasCount)
+	ftStreamConfig := streamConfig{
+		replicasCount: config.natsReplicasCount,
+		maxMsgs:       config.ftStreamMaxMsgs,
+		maxBytes:      config.ftStreamMaxBytes,
+		maxAge:        config.ftStreamMaxAge,
+	}
+	sysStreamConfig := streamConfig{
+		replicasCount: config.natsReplicasCount,
+		maxMsgs:       config.sysStreamMaxMsgs,
+		maxBytes:      config.sysStreamMaxBytes,
+		maxAge:        config.sysStreamMaxAge,
+	}
+	kvStreamConfig := streamConfig{
+		replicasCount: config.natsReplicasCount,
+		maxMsgs:       config.kvStreamMaxMsgs,
+		maxBytes:      config.kvStreamMaxBytes,
+		maxAge:        config.kvStreamMaxAge,
+	}
+
+	r.Domain, err = NewDomain(r.nc, r.js, config.desiredHUBDomainName, ftStreamConfig, sysStreamConfig, kvStreamConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -90,6 +111,13 @@ func (r *Runtime) RegisterOnAfterStartFunction(f OnAfterStartFunction, async boo
 // Start initializes streams and starts function subscriptions.
 // It also handles graceful shutdown via context.Context.
 func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
+	// Disable registering new functions after the runtime has started.
+	r.canRegisterNewFunctionType = false
+
+	if intervalMins := system.GetEnvMustProceed("HEAP_WATCHER_INTERVAL_MINS", 0); intervalMins > 0 {
+		go system.StartHeapWatcher(float32(intervalMins))
+	}
+
 	logger := lg.NewLogger(lg.Options{ReportCaller: true, Level: lg.InfoLevel})
 
 	// Create streams if they do not exist.
@@ -106,14 +134,16 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 		revID, err := KeyMutexLock(ctx, r, system.GetHashStr(RuntimeName), true)
 		if err != nil {
 			if errors.Is(err, ErrMutexLocked) {
-				lg.Logf(lg.WarnLevel, "Cant lock. Another runtime is already active")
+				lg.Logf(lg.DebugLevel, "Cant lock. Another runtime is already active")
 				r.config.isActiveInstance = false
 			} else {
 				return err
 			}
 		} else {
 			r.config.activeRevID = revID
-			defer KeyMutexUnlock(ctx, r, system.GetHashStr(RuntimeName), revID)
+			defer func() {
+				system.MsgOnErrorReturn(KeyMutexUnlock(ctx, r, system.GetHashStr(RuntimeName), revID))
+			}()
 		}
 	} else {
 		r.config.isActiveInstance = true
@@ -170,7 +200,10 @@ func (r *Runtime) createStreams(ctx context.Context) error {
 					Name:      ft.getStreamName(),
 					Subjects:  []string{ft.subject},
 					Retention: nats.InterestPolicy,
-					Replicas:  r.Domain.natsJsReplicasCount,
+					Replicas:  r.Domain.ftSC.replicasCount,
+					MaxMsgs:   r.Domain.ftSC.maxMsgs,
+					MaxBytes:  r.Domain.ftSC.maxBytes,
+					MaxAge:    r.Domain.ftSC.maxAge,
 				})
 				if err != nil {
 					logger.Errorf(context.TODO(), "Failed to add stream: %v", err)
@@ -324,7 +357,7 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 	//release all functions
 	releaseAllLocks := func(ctx context.Context, runtime *Runtime, revisions map[string]uint64) {
 		for ftName, revID := range revisions {
-			KeyMutexUnlock(ctx, runtime, system.GetHashStr(ftName), revID)
+			system.MsgOnErrorReturn(KeyMutexUnlock(ctx, runtime, system.GetHashStr(ftName), revID))
 		}
 	}
 	defer releaseAllLocks(ctx, r, revisions)
@@ -348,7 +381,7 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 					newRevID, err := KeyMutexLock(ctx, r, system.GetHashStr(RuntimeName), true)
 					if err != nil {
 						if errors.Is(err, ErrMutexLocked) {
-							lg.Logf(lg.WarnLevel, "Cant lock. Another runtime is already active")
+							lg.Logf(lg.DebugLevel, "Cant lock. Another runtime is already active")
 							continue
 						} else {
 							lg.Logf(lg.ErrorLevel, "KeyMutexLock failed for %s: %v", RuntimeName, err)

@@ -53,8 +53,12 @@ func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHa
 		config:       config,
 		tokens:       *system.NewTokenBucket(config.functionWorkerPoolConfig.MaxWorkers + config.functionWorkerPoolConfig.TaskQueueLen),
 	}
-	ft.sfWorkerPool = NewSFWorkerPool(ft, config.functionWorkerPoolConfig)
-	runtime.registeredFunctionTypes[ft.name] = ft
+	if runtime.canRegisterNewFunctionType {
+		ft.sfWorkerPool = NewSFWorkerPool(ft, config.functionWorkerPoolConfig)
+		runtime.registeredFunctionTypes[ft.name] = ft
+	} else {
+		lg.GetLogger().Errorf(context.TODO(), "Function type '%s' is not registered. Ensure that all function types are registered before starting the runtime.", ft.name)
+	}
 	return ft
 }
 
@@ -136,17 +140,22 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 		return
 	}
 
+	ft.idKeyMutex.Lock(id)
+	defer ft.idKeyMutex.Unlock(id)
+
 	var msgChannel chan FunctionTypeMsg
 	if value, ok := ft.idHandlersChannel.Load(id); ok {
 		msgChannel = value.(chan FunctionTypeMsg)
 	} else {
 		msgChannel = make(chan FunctionTypeMsg, ft.config.idChannelSize)
 		ft.idHandlersChannel.Store(id, msgChannel)
+		ft.idHandlersLastMsgTime.Store(id, int64(0)) // no time yet
 	}
 	ft.prometricsMeasureIdChannels()
 
 	select {
 	case msgChannel <- msg:
+		ft.idHandlersLastMsgTime.Store(id, time.Now().UnixNano())
 		ft.sfWorkerPool.Notify()
 	default:
 		ft.TokenRelease()
@@ -158,8 +167,13 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 	id = ft.runtime.Domain.CreateObjectIDWithThisDomain(id, false)
 	ft.idKeyMutex.Lock(id)
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Logf(logger.ErrorLevel, "panic in workerTaskExecutor for %s:%s: %v", ft.name, id, r)
+		}
+		ft.idKeyMutex.Unlock(id)
+	}()
 
-	ft.idHandlersLastMsgTime.Store(id, time.Now().UnixNano())
 	if ft.executor != nil {
 		ft.executor.AddForID(id)
 	}
@@ -184,6 +198,7 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 			SetContextExpirationAfter: func(after time.Duration) { ft.setContextExpirationAfter(ft.name+"."+id, after) },
 			GetObjectContext:          func() *easyjson.JSON { return ft.getContext(id) },
 			SetObjectContext:          func(context *easyjson.JSON) { ft.setContext(id, context) },
+			GetObjectImplTypes:        func() (types []string, err error) { return ft.getObjectImplTypes(id) },
 			Domain:                    ft.runtime.Domain,
 			Self:                      sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
 			Signal: func(signalProvider sfPlugins.SignalProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) error {
@@ -191,6 +206,12 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 			},
 			Request: func(requestProvider sfPlugins.RequestProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
 				return ft.runtime.request(requestProvider, ft.name, id, targetTypename, targetID, j, o, tc)
+			},
+			ObjectSignal: func(signalProvider sfPlugins.SignalProvider, query sfPlugins.LinkQuery, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) (map[string]error, error) {
+				return ft.runtime.ObjectCallSignal(signalProvider, query, typename, id, payload, options)
+			},
+			ObjectRequest: func(requestProvider sfPlugins.RequestProvider, query sfPlugins.LinkQuery, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (map[string]*sfPlugins.ObjectRequestReply, error) {
+				return ft.runtime.ObjectCallRequest(requestProvider, query, typename, id, payload, options, timeout...)
 			},
 			Egress: func(egressProvider sfPlugins.EgressProvider, j *easyjson.JSON, customId ...string) error {
 				egressId := id
@@ -202,7 +223,7 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 			// To be assigned later:
 			// Call: ...
 			// Payload: ...
-			// Options: ... // Otions from initial typename declaration will be merged and overwritten by the incoming one in message
+			// Options: ... // Options from initial typename declaration will be merged and overwritten by the incoming one in message
 			// Caller: ...
 		}
 		ft.contextProcessors.Store(id, &v)
@@ -210,7 +231,6 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 	}
 
 	ft.handleMsgForID(id, msg, typenameIDContextProcessor)
-	ft.idKeyMutex.Unlock(id)
 }
 
 func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameIDContextProcessor *sfPlugins.StatefunContextProcessor) {
@@ -315,8 +335,8 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 	}
 	// -------------------------------------------------------
 
-	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_execution_time", "", []string{"typename", "id"}); err == nil {
-		gaugeVec.With(prometheus.Labels{"typename": ft.name, "id": id}).Set(float64(time.Since(start).Microseconds()))
+	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_execution_time", "", []string{"typename"}); err == nil {
+		gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(float64(time.Since(start).Microseconds()))
 	}
 
 	if msg.AckCallback != nil {
@@ -324,9 +344,11 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 	}
 	if msgRequestCallback != nil {
 		var replyData *easyjson.JSON = nil
+		timer := time.NewTimer(time.Duration(ft.runtime.config.requestTimeoutSec) * time.Second)
+		defer timer.Stop()
 		select {
 		case replyData = <-replyDataChannel:
-		case <-time.After(time.Duration(ft.runtime.config.requestTimeoutSec) * time.Second):
+		case <-timer.C:
 			replyData.SetByPath("status", easyjson.NewJSON("timeout"))
 		}
 		msgRequestCallback(replyData)
@@ -356,17 +378,25 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 		if lastMsgTime+int64(typenameIDLifetimeMs)*int64(time.Millisecond) < now {
 			ft.idKeyMutex.Lock(id)
 
-			ft.idHandlersLastMsgTime.Delete(id)
-			ft.idHandlersChannel.Delete(id)
-			ft.contextProcessors.Delete(id)
-			if ft.executor != nil {
-				ft.executor.RemoveForID(id)
+			remove := true
+			if chRaw, ok := ft.idHandlersChannel.Load(id); ok {
+				ch := chRaw.(chan FunctionTypeMsg)
+				if len(ch) > 0 {
+					remove = false
+				}
 			}
-
-			ft.prometricsMeasureIdChannels()
-
-			garbageCollected++
-			//lg.Logf(">>>>>>>>>>>>>> Garbage collected handler for %s:%s", ft.name, id)
+			if remove {
+				ft.idHandlersLastMsgTime.Delete(id)
+				ft.idHandlersChannel.Delete(id)
+				ft.contextProcessors.Delete(id)
+				if ft.executor != nil {
+					ft.executor.RemoveForID(id)
+				}
+				ft.prometricsMeasureIdChannels()
+				garbageCollected++
+			} else {
+				handlersRunning++
+			}
 
 			ft.idKeyMutex.Unlock(id)
 		} else {
@@ -382,7 +412,7 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 }
 
 func (ft *FunctionType) getContext(keyValueID string) *easyjson.JSON {
-	if j, err := ft.runtime.Domain.cache.GetValueAsJSON(keyValueID); err == nil {
+	if j, err := ft.runtime.Domain.cache.GetValueJSON(keyValueID); err == nil {
 		return j
 	}
 	j := easyjson.NewJSONObject()
@@ -393,22 +423,69 @@ func (ft *FunctionType) setContext(keyValueID string, context *easyjson.JSON) {
 	if context == nil {
 		ft.runtime.Domain.cache.DeleteValue(keyValueID, true, -1, "")
 	} else {
-		ft.runtime.Domain.cache.SetValue(keyValueID, context.ToBytes(), true, -1, "")
+		ft.runtime.Domain.cache.SetValueJSON(keyValueID, context, true, -1, "")
 	}
 }
 
 // Negative duration removes expiration
 func (ft *FunctionType) setContextExpirationAfter(keyValueID string, after time.Duration) {
-	if j, err := ft.runtime.Domain.cache.GetValueAsJSON(keyValueID); err == nil {
+	if j, err := ft.runtime.Domain.cache.GetValueJSON(keyValueID); err == nil {
 		if after < 0 {
 			j.RemoveByPath(contextExpirationKey)
 		} else {
 			j.SetByPath(contextExpirationKey, easyjson.NewJSON(time.Now().Add(after).UnixNano()))
 		}
-		ft.runtime.Domain.cache.SetValue(keyValueID, j.ToBytes(), true, -1, "")
+		ft.runtime.Domain.cache.SetValueJSON(keyValueID, j, true, -1, "")
 	}
 }
 
 func (ft *FunctionType) getStreamName() string {
 	return fmt.Sprintf("%s_stream", system.GetHashStr(ft.subject))
+}
+
+func (ft *FunctionType) getObjectImplTypes(id string) ([]string, error) {
+	objectType, err := ft.findObjectType(id)
+	if err != nil {
+		return nil, err
+	}
+	if objectType == "" {
+		return nil, fmt.Errorf("object type is empty for id: %s", id)
+	}
+
+	types := []string{objectType}
+
+	result := map[string]struct{}{}
+	result[objectType] = struct{}{}
+
+	response, err := ft.runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.read", objectType, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read type %s: %s", objectType, err.Error())
+	}
+
+	if response.PathExists("data.body.cache.parent_types") {
+		parentTypes := response.GetByPath("data.body.cache.parent_types")
+		for i := 0; i < parentTypes.ArraySize(); i++ {
+			parentType := parentTypes.ArrayElement(i).AsStringDefault("")
+			parentType = ft.runtime.Domain.CreateObjectIDWithHubDomain(parentType, true)
+			if len(parentType) > 0 {
+				result[parentType] = struct{}{}
+			}
+		}
+	}
+
+	for _type := range result {
+		if _type != objectType {
+			types = append(types, _type)
+		}
+	}
+
+	return types, nil
+}
+
+func (ft *FunctionType) findObjectType(id string) (string, error) {
+	response, err := ft.runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", id, nil, nil)
+	if err != nil {
+		return "", err
+	}
+	return response.GetByPath("data.type").AsStringDefault(""), nil
 }

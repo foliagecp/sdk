@@ -26,6 +26,7 @@ Currently, the utilization of the Foliage Graph Store is primarily suitable for 
 ### Backup, Restore, and Disaster Recovery
 
 NATS Key/Value is based on NATS JetStream. To create a backup of a bucket from Key/Value, you must use its associated stream name. For more information on backups, restore, and disaster recovery in NATS JetStream, please refer to the [NATS JetStream documentation](https://docs.nats.io/running-a-nats-service/nats_admin/jetstream_admin/disaster_recovery).
+You can also use `foliage_mgr.sh` that can make backup and restore.
 
 ### Additional Functionality
 

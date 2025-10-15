@@ -2,12 +2,13 @@ package statefun
 
 import (
 	"fmt"
+	"time"
+
 	"github.com/foliagecp/easyjson"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
-	"time"
 )
 
 type TraceContext struct {
