@@ -183,6 +183,11 @@ func (r *Runtime) Shutdown() {
 	close(r.shutdown)
 }
 
+// GetNatsConnection returns nats connection from runtime
+func (r *Runtime) GetNatsConnection() *nats.Conn {
+	return r.nc
+}
+
 // createStreams ensures that the necessary NATS streams exist.
 func (r *Runtime) createStreams(ctx context.Context) error {
 	logger := lg.NewLogger(lg.Options{ReportCaller: true, Level: lg.InfoLevel})
