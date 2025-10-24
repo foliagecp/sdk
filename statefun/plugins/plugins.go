@@ -118,6 +118,10 @@ func (scp *StatefunContextProcessor) SetTraceContext(tc *easyjson.JSON) {
 	scp.traceContext = tc
 }
 
+func (scp *StatefunContextProcessor) GetTraceContext() *easyjson.JSON {
+	return scp.traceContext
+}
+
 func (scp *StatefunContextProcessor) TraceContext() *easyjson.JSON {
 	return scp.traceContext
 }

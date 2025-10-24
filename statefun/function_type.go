@@ -183,15 +183,6 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 	if v, ok := ft.contextProcessors.Load(id); ok {
 		typenameIDContextProcessor = v.(*sfPlugins.StatefunContextProcessor)
 	} else {
-		var tc *easyjson.JSON
-		if msg.TraceContext != nil {
-			currentTrace := TraceContextFromJSON(msg.TraceContext)
-			if currentTrace != nil {
-				newChildTrace := NewTraceContext(currentTrace.TraceID, currentTrace.SpanID)
-				tc = newChildTrace.ToJSON()
-			}
-		}
-
 		v := sfPlugins.StatefunContextProcessor{
 			GetFunctionContext:        func() *easyjson.JSON { return ft.getContext(ft.name + "." + id) },
 			SetFunctionContext:        func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
@@ -201,12 +192,6 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 			GetObjectImplTypes:        func() (types []string, err error) { return ft.getObjectImplTypes(id) },
 			Domain:                    ft.runtime.Domain,
 			Self:                      sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
-			Signal: func(signalProvider sfPlugins.SignalProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON) error {
-				return ft.runtime.signal(signalProvider, ft.name, id, targetTypename, targetID, j, o, tc)
-			},
-			Request: func(requestProvider sfPlugins.RequestProvider, targetTypename string, targetID string, j *easyjson.JSON, o *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
-				return ft.runtime.request(requestProvider, ft.name, id, targetTypename, targetID, j, o, tc)
-			},
 			ObjectSignal: func(signalProvider sfPlugins.SignalProvider, query sfPlugins.LinkQuery, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) (map[string]error, error) {
 				return ft.runtime.ObjectCallSignal(signalProvider, query, typename, id, payload, options)
 			},
@@ -228,6 +213,25 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 		}
 		ft.contextProcessors.Store(id, &v)
 		typenameIDContextProcessor = &v
+		// Signal and Request are assigned after initialization because they depend on the initialized context for TraceContext propagation
+		typenameIDContextProcessor.Signal = func(sp sfPlugins.SignalProvider, targetTypename, targetID string, p, o *easyjson.JSON) error {
+			var child *easyjson.JSON
+			if cur := typenameIDContextProcessor.GetTraceContext(); cur != nil {
+				if tc := TraceContextFromJSON(cur); tc != nil {
+					child = NewTraceContext(tc.TraceID, tc.SpanID).ToJSON()
+				}
+			}
+			return ft.runtime.signal(sp, ft.name, id, targetTypename, targetID, p, o, child)
+		}
+		typenameIDContextProcessor.Request = func(rp sfPlugins.RequestProvider, targetTypename, targetID string, p, o *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
+			var child *easyjson.JSON
+			if cur := typenameIDContextProcessor.GetTraceContext(); cur != nil {
+				if tc := TraceContextFromJSON(cur); tc != nil {
+					child = NewTraceContext(tc.TraceID, tc.SpanID).ToJSON()
+				}
+			}
+			return ft.runtime.request(rp, ft.name, id, targetTypename, targetID, p, o, child, timeout...)
+		}
 	}
 
 	ft.handleMsgForID(id, msg, typenameIDContextProcessor)
