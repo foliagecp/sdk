@@ -155,6 +155,8 @@ func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 
 	om.AggregateOpMsg(m)
 
+	cachePurgeTypeEdgesForType(selfID)
+
 	PolyTypeGoalFinalize(ctx, polyTypeData)
 
 	om.Reply()
@@ -280,11 +282,14 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 			}
 		}
 	}
-
 	operationKeysMutexUnlock(ctx)
 
 	if opStack != nil {
 		executeTriggersFromLLOpStack(ctx, opStack, "", "")
+	}
+
+	if om.GetStatus() == sfMediators.SYNC_OP_STATUS_OK {
+		cacheSetObjectType(selfID, originType)
 	}
 
 	replyWithoutOpStack(om, ctx, targetReply)
@@ -369,6 +374,7 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 		executeTriggersFromLLOpStack(ctx, j, selfID, objectType)
 	}
 
+	cacheDeleteObjectType(selfID)
 	replyWithoutOpStack(om, ctx)
 }
 
@@ -497,6 +503,10 @@ func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &link), ctx.Options)))
 	operationKeysMutexUnlock(ctx)
 
+	if om.GetStatus() == sfMediators.SYNC_OP_STATUS_OK {
+		cacheSetTypeEdge(selfID, toType, objectLinkType)
+	}
+
 	om.Reply()
 }
 
@@ -544,6 +554,14 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	operationKeysMutexLock(ctx, []string{selfID, toType}, true)
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.update", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &link), ctx.Options)))
 	operationKeysMutexUnlock(ctx)
+
+	if om.GetStatus() == sfMediators.SYNC_OP_STATUS_OK {
+		if ctx.Payload.PathExists("body.type") {
+			if newLT, ok := ctx.Payload.GetByPath("body.type").AsString(); ok && newLT != "" {
+				cacheSetTypeEdge(selfID, toType, newLT)
+			}
+		}
+	}
 
 	om.Reply()
 }
@@ -612,6 +630,8 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	objectLink.SetByPath("op_time", easyjson.NewJSON(opTime))
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &objectLink), ctx.Options)))
 	operationKeysMutexUnlock(ctx)
+
+	cacheDeleteTypeEdge(selfID, toType)
 
 	PolyTypeGoalFinalize(ctx, polyTypeData)
 
@@ -738,17 +758,8 @@ func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	}
 	objectToID = ctx.Domain.CreateObjectIDWithThisDomain(objectToID, false)
 
-	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true)
-	_, _, linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, selfID, objectToID)
-	if err != nil {
-		operationKeysMutexUnlock(ctx)
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
-		return
-	}
-
 	objectLink := easyjson.NewJSONObject()
 	objectLink.SetByPath("to", easyjson.NewJSON(objectToID))
-	objectLink.SetByPath("type", easyjson.NewJSON(linkType))
 	objectLink.SetByPath("body", ctx.Payload.GetByPath("body"))
 	if ctx.Payload.PathExists("tags") {
 		objectLink.SetByPath("tags", ctx.Payload.GetByPath("tags"))
@@ -766,6 +777,17 @@ func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	options := ctx.Options.Clone()
 	options.SetByPath("op_stack", easyjson.NewJSON(true))
+
+	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true)
+	_, _, linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, selfID, objectToID)
+	if err != nil {
+		operationKeysMutexUnlock(ctx)
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
+		return
+	}
+
+	objectLink.SetByPath("type", easyjson.NewJSON(linkType))
+
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.update", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &objectLink), &options)))
 	operationKeysMutexUnlock(ctx)
 
