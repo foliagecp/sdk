@@ -174,6 +174,10 @@ func getTypeTriggers(ctx *sfPlugins.StatefunContextProcessor, typeName string) *
 	return easyjson.NewJSONObject().GetPtr()
 }
 
+func FindObjectType(ctx *sfPlugins.StatefunContextProcessor, objectID string) (string, error) {
+	return findObjectType(ctx, objectID)
+}
+
 func findObjectType(ctx *sfPlugins.StatefunContextProcessor, objectID string) (string, error) {
 	if t, ok := cacheGetObjectType(objectID); ok {
 		return t, nil
