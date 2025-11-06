@@ -909,32 +909,34 @@ func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 
 	opStack := getOpStackFromOptions(ctx.Options)
 
-	//operationKeysMutexLock(ctx, []string{selfID}, true)
 	linkType, linkName, toId, linkExists := getFullLinkInfoFromSpecifiedIdentifier(ctx)
 	if !linkExists {
-		//operationKeysMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
 		return
 	}
 	if !validLinkName.MatchString(linkName) {
-		//operationKeysMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed("invalid link name")).Reply()
 		return
 	}
-	//operationKeysMutexUnlock(ctx)
 
-	operationKeysMutexLock(ctx, []string{selfID, toId}, false)
+	details := ctx.Payload.GetByPath("details").AsBoolDefault(false)
+
+	if details {
+		operationKeysMutexLock(ctx, []string{selfID, toId}, false)
+	}
 
 	linkBody, err := ctx.Domain.Cache().GetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName))
 	if err != nil {
-		operationKeysMutexUnlock(ctx)
+		if details {
+			operationKeysMutexUnlock(ctx)
+		}
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link body from=%s with name=%s does not exist", selfID, linkName))).Reply()
 		return
 	}
 
 	result := easyjson.NewJSONObjectWithKeyValue("body", *linkBody)
 
-	if ctx.Payload.GetByPath("details").AsBoolDefault(false) {
+	if details {
 		tags := []string{}
 		tagKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff3Pattern, selfID, linkName, "tag", ">"))
 		operationKeysMutexUnlock(ctx)
@@ -950,8 +952,6 @@ func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 		result.SetByPath("to", easyjson.NewJSON(toId))
 
 		result.SetByPath("tags", easyjson.NewJSON(tags))
-	} else {
-		operationKeysMutexUnlock(ctx)
 	}
 
 	addLinkOpToOpStack(opStack, ctx.Self.Typename, selfID, toId, linkName, linkType, nil, nil)
