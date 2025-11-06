@@ -256,7 +256,7 @@ func (dm *Domain) CreateObjectIDWithHubDomain(objectID string, domainReplace boo
 	return dm.CreateObjectIDWithDomain(dm.hubDomainName, objectID, domainReplace)
 }
 
-func (dm *Domain) start(cacheConfig *cache.Config, createDomainRouters bool) error {
+func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDomainRouters bool) error {
 	bucketName := fmt.Sprintf("%s_%s_cache_bucket", dm.name, cacheConfig.GetId())
 
 	// Create application key value store bucket if does not exist --
@@ -310,7 +310,7 @@ func (dm *Domain) start(cacheConfig *cache.Config, createDomainRouters bool) err
 	}
 
 	lg.Logln(lg.TraceLevel, "Initializing the cache store...")
-	dm.cache = cache.NewCacheStore(context.Background(), cacheConfig, dm.js, dm.kv)
+	dm.cache = cache.NewCacheStore(ctx, cacheConfig, dm.js, dm.kv)
 	lg.Logln(lg.TraceLevel, "Cache store inited!")
 
 	return nil

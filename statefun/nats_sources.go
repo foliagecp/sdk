@@ -15,7 +15,7 @@ import (
 )
 
 func AddRequestSourceNatsCore(ft *FunctionType) error {
-	_, err := ft.runtime.nc.Subscribe(RequestPrefix+"."+ft.runtime.Domain.name+"."+ft.name+".*", func(msg *nats.Msg) {
+	subscription, err := ft.runtime.nc.Subscribe(RequestPrefix+"."+ft.runtime.Domain.name+"."+ft.name+".*", func(msg *nats.Msg) {
 		/*defer func() {
 			if r := recover(); r != nil {
 				lg.Logf(lg.ErrorLevel, "Recovered panic in request handler of function %s: %v", ft.name, r)
@@ -30,7 +30,7 @@ func AddRequestSourceNatsCore(ft *FunctionType) error {
 		lg.Logf(lg.ErrorLevel, "Invalid request reply subscription for function type %s: %s", ft.name, err)
 		return err
 	}
-
+	ft.requestSubscription = subscription
 	return nil
 }
 
@@ -62,7 +62,7 @@ func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType) error {
 	}
 	// --------------------------------------------------------------
 
-	_, err := ft.runtime.js.QueueSubscribe(
+	subscription, err := ft.runtime.js.QueueSubscribe(
 		ft.subject,
 		consumerGroup,
 		func(msg *nats.Msg) {
@@ -87,6 +87,7 @@ func AddSignalSourceJetstreamQueuePushConsumer(ft *FunctionType) error {
 		lg.Logf(lg.ErrorLevel, "Invalid signal subscription for function type %s: %s", ft.name, err)
 		return err
 	}
+	ft.signalSubscription = subscription
 	return nil
 }
 

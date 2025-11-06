@@ -4,17 +4,29 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"os"
+	"os/signal"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
+	"github.com/foliagecp/sdk/statefun/cache"
 	lg "github.com/foliagecp/sdk/statefun/logger"
+	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
+
 	"github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
+)
 
-	"github.com/foliagecp/sdk/statefun/cache"
-	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
+type ShutdownPhase uint8
+
+const (
+	ShutdownPhaseNone ShutdownPhase = iota
+	ShutdownPhaseOne
+	ShutdownPhaseTwo
+	ShutdownPhaseThree
 )
 
 type OnAfterStartFunction func(ctx context.Context, runtime *Runtime) error
@@ -39,8 +51,9 @@ type Runtime struct {
 	glce int64 // Global last call ended - time of last call of last function handling id of any function type
 	gc   int64 // Global counter - max total id handlers for all function types
 
-	shutdown chan struct{}
-	wg       sync.WaitGroup
+	shutdown      chan struct{}
+	shutdownPhase ShutdownPhase
+	wg            sync.WaitGroup
 }
 
 // NewRuntime initializes a new Runtime instance with the given configuration.
@@ -50,6 +63,7 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		registeredFunctionTypes:    make(map[string]*FunctionType),
 		canRegisterNewFunctionType: true,
 		shutdown:                   make(chan struct{}),
+		shutdownPhase:              ShutdownPhaseNone,
 	}
 
 	var err error
@@ -111,6 +125,32 @@ func (r *Runtime) RegisterOnAfterStartFunction(f OnAfterStartFunction, async boo
 // Start initializes streams and starts function subscriptions.
 // It also handles graceful shutdown via context.Context.
 func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
+	phaseOneContext, cancelPhaseOneContext := context.WithCancel(ctx)
+	phaseTwoContext, cancelPhaseTwoContext := context.WithCancel(ctx)
+	phaseThreeContext, cancelPhaseThreeContext := context.WithCancel(ctx)
+
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+		<-sig
+		r.shutdownPhase = ShutdownPhaseOne
+		lg.GetLogger().Debugf(context.TODO(), "Received shutdown signal, shutting down gracefully...")
+		cancelPhaseOneContext()
+
+		r.shutdownFunctionTypes()
+
+		cancelPhaseTwoContext()
+
+		select {
+		case <-r.Domain.cache.Synced:
+			r.shutdownPhase = ShutdownPhaseTwo
+		}
+
+		if r.shutdownPhase == ShutdownPhaseThree {
+			r.Shutdown()
+		}
+	}()
+
 	// Disable registering new functions after the runtime has started.
 	r.canRegisterNewFunctionType = false
 
@@ -126,7 +166,7 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 	}
 
 	// Start the domain.
-	if err := r.Domain.start(cacheConfig, r.config.handlesDomainRouters); err != nil {
+	if err := r.Domain.start(phaseTwoContext, cacheConfig, r.config.handlesDomainRouters); err != nil {
 		return err
 	}
 
@@ -151,7 +191,7 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 
 	// Handle single-instance functions.
 	singleInstanceFunctionRevisions := make(map[string]uint64)
-	if err := r.handleSingleInstanceFunctions(ctx, singleInstanceFunctionRevisions); err != nil {
+	if err := r.handleSingleInstanceFunctions(phaseOneContext, singleInstanceFunctionRevisions); err != nil {
 		return err
 	}
 
@@ -163,19 +203,34 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 	}
 
 	// Run after-start functions.
-	r.runAfterStartFunctions(ctx)
+	r.runAfterStartFunctions(phaseOneContext)
 
 	// Start garbage collector.
 	r.wg.Add(1)
-	go r.runGarbageCollector(ctx)
+	go r.runGarbageCollector(phaseThreeContext)
 
 	// Wait for shutdown signal.
 	<-r.shutdown
-
+	cancelPhaseThreeContext()
 	// Perform cleanup.
 	logger.Infof(context.TODO(), "Shutting down runtime...")
 	r.wg.Wait()
 	return nil
+}
+
+func (r *Runtime) shutdownFunctionTypes() {
+	lg.GetLogger().Debugf(context.TODO(), "shutting down all function types...")
+	var wg sync.WaitGroup
+	for ftName, ft := range r.registeredFunctionTypes {
+		wg.Add(1)
+		go func(name string, ft *FunctionType) {
+			defer wg.Done()
+			ft.lastMsgTime = time.Now()
+			ft.stopSignalSubscription()
+		}(ftName, ft)
+	}
+	wg.Wait()
+	lg.GetLogger().Debugf(context.TODO(), "all function types shut down successfully")
 }
 
 // Shutdown gracefully stops the runtime.
@@ -277,9 +332,7 @@ func (r *Runtime) startFunctionSubscriptions(ctx context.Context, revisions map[
 func (r *Runtime) runAfterStartFunctions(ctx context.Context) {
 	for _, fnWithMode := range r.onAfterStartFunctionsWithMode {
 		if fnWithMode.async {
-			r.wg.Add(1)
 			go func(f OnAfterStartFunction) {
-				defer r.wg.Done()
 				system.GlobalPrometrics.GetRoutinesCounter().Started("runtime_onAfterStart")
 				defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("runtime_onAfterStart")
 				if err := f(ctx, r); err != nil {
@@ -303,7 +356,6 @@ func (r *Runtime) runGarbageCollector(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
 		case <-r.shutdown:
 			return
 		case <-ticker.C:
