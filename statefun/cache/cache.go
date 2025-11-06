@@ -116,7 +116,6 @@ func (csv *StoreValue) StoreChild(key string, child *StoreValue) (actual *StoreV
 		return a.(*StoreValue), true
 	}
 
-	// Новый ребёнок — уведомим подписчиков (вне лока)
 	csv.notifyUpdates.Range(func(_, v interface{}) bool {
 		notifySubscriber(v.(chan KeyValue), key, child.value)
 		return true
@@ -613,11 +612,11 @@ func (cs *Store) GetValue(key string) ([]byte, error) {
 	var result []byte = nil
 	var resultError error = nil
 
-	cacheMiss := true
+	//cacheMiss := true
 
 	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, false); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
 		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
-			cacheMiss = false // Value exists in cache - no cache miss then
+			//cacheMiss = false // Value exists in cache - no cache miss then
 			csv.RLock("GetValue")
 			if csv.ValueExists() {
 				if bv, ok := csv.value.([]byte); ok {
@@ -630,7 +629,11 @@ func (cs *Store) GetValue(key string) ([]byte, error) {
 		}
 	}
 
-	// Cache miss -----------------------------------------
+	if result == nil {
+		resultError = fmt.Errorf("Value for for key=%s does not exist", key)
+	}
+
+	/*// Cache miss -----------------------------------------
 	if cacheMiss {
 		if entry, err := customNatsKv.KVGet(cs.js, cs.kv, cs.toStoreKey(key)); err == nil {
 			key := cs.fromStoreKey(entry.Key())
@@ -648,7 +651,7 @@ func (cs *Store) GetValue(key string) ([]byte, error) {
 		} else {
 			resultError = err
 		}
-	}
+	}*/
 	// ----------------------------------------------------
 
 	return result, resultError
