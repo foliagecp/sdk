@@ -579,16 +579,20 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		}
 
 		// Create in link on descendant vertex --------------------
-		nextCallPayload := easyjson.NewJSONObject()
-		nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
-		nextCallPayload.SetByPath("in_type", easyjson.NewJSON(linkType))
-		nextCallPayload.SetByPath("op_time", easyjson.NewJSON(opTime))
+		if ctx.Domain.GetDomainFromObjectID(toId) == ctx.Domain.Name() {
+			ctx.Domain.Cache().SetValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, toId, selfID, linkName), []byte(linkType), true, opTime, "")
+		} else {
+			nextCallPayload := easyjson.NewJSONObject()
+			nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
+			nextCallPayload.SetByPath("in_type", easyjson.NewJSON(linkType))
+			nextCallPayload.SetByPath("op_time", easyjson.NewJSON(opTime))
 
-		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, makeSequenceFreeParentBasedID(ctx, toId, "inlink"), injectParentHoldsLocks(ctx, &nextCallPayload), ctx.Options)))
-		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
-			operationKeysMutexUnlock(ctx)
-			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
-			return
+			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, makeSequenceFreeParentBasedID(ctx, toId, "inlink"), injectParentHoldsLocks(ctx, &nextCallPayload), ctx.Options)))
+			if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
+				operationKeysMutexUnlock(ctx)
+				system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
+				return
+			}
 		}
 		// --------------------------------------------------------
 
@@ -844,15 +848,19 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		addLinkOpToOpStack(opStack, ctx.Self.Typename, selfID, toId, linkName, linkType, oldLinkBody, nil)
 
 		// Delete in link on descendant vertex --------------------
-		nextCallPayload := easyjson.NewJSONObject()
-		nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
-		nextCallPayload.SetByPath("op_time", easyjson.NewJSON(opTime))
+		if ctx.Domain.GetDomainFromObjectID(toId) == ctx.Domain.Name() {
+			ctx.Domain.Cache().DeleteValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, toId, selfID, linkName), true, opTime, "")
+		} else {
+			nextCallPayload := easyjson.NewJSONObject()
+			nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
+			nextCallPayload.SetByPath("op_time", easyjson.NewJSON(opTime))
 
-		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, makeSequenceFreeParentBasedID(ctx, toId, "inlink"), injectParentHoldsLocks(ctx, &nextCallPayload), ctx.Options)))
-		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
-			operationKeysMutexUnlock(ctx)
-			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
-			return
+			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, makeSequenceFreeParentBasedID(ctx, toId, "inlink"), injectParentHoldsLocks(ctx, &nextCallPayload), ctx.Options)))
+			if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
+				operationKeysMutexUnlock(ctx)
+				system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
+				return
+			}
 		}
 		// --------------------------------------------------------
 
