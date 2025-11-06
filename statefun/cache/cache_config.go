@@ -2,7 +2,7 @@ package cache
 
 const (
 	KVStorePrefix                               = "store"
-	LRUSize                                     = 1000000
+	LRUSize                                     = 100000000
 	LevelSubscriptionNotificationsBufferMaxSize = 30000 // ~16Mb: elemenets := 16 * 1024 * 1024 / (64 + 512), where 512 - avg value size, 64 - avg key size
 	LazyWriterValueProcessDelayMkS              = 500
 	LazyWriterRepeatDelayMkS                    = 100000
