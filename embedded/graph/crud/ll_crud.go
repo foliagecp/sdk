@@ -379,24 +379,29 @@ Reply:
 			op_stack: json array - optional
 */
 func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	details := ctx.Payload.GetByPath("details").AsBoolDefault(false)
+
 	selfID := getOriginalID(ctx.Self.ID)
 
 	om := sfMediators.NewOpMediator(ctx)
 
-	operationKeysMutexLock(ctx, []string{selfID}, false)
-	_, err := ctx.Domain.Cache().GetValueJSON(selfID)
+	if details {
+		operationKeysMutexLock(ctx, []string{selfID}, false)
+	}
+	j, err := ctx.Domain.Cache().GetValueJSON(selfID)
 	if err != nil { // If vertex does not exist
-		operationKeysMutexUnlock(ctx)
+		if details {
+			operationKeysMutexUnlock(ctx)
+		}
 		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("vertex with id=%s does not exist", selfID))).Reply()
 		return
 	}
 
 	opStack := getOpStackFromOptions(ctx.Options)
 
-	j := getVertexBody(ctx, selfID)
 	result := easyjson.NewJSONObjectWithKeyValue("body", *j)
 
-	if ctx.Payload.GetByPath("details").AsBoolDefault(false) {
+	if details {
 		outLinkNames := []string{}
 		outLinkTypes := []string{}
 		outLinkIds := []string{}
@@ -448,8 +453,6 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		result.SetByPath("links.out.ids", easyjson.NewJSON(outLinkIds))
 
 		result.SetByPath("links.in", inLinks)
-	} else {
-		operationKeysMutexUnlock(ctx)
 	}
 
 	addVertexOpToOpStack(opStack, ctx.Self.Typename, selfID, nil, nil)
