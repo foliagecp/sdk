@@ -40,6 +40,7 @@ type FunctionType struct {
 	//-------for graceful shutdown-------
 	signalSubscription  *nats.Subscription
 	requestSubscription *nats.Subscription
+	shutdownCh          chan struct{}
 	lastMsgTime         time.Time
 	//-----------------------------------
 }
@@ -60,6 +61,7 @@ func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHa
 		idKeyMutex:   system.NewKeyMutex(),
 		config:       config,
 		tokens:       *system.NewTokenBucket(config.functionWorkerPoolConfig.MaxWorkers + config.functionWorkerPoolConfig.TaskQueueLen),
+		shutdownCh:   make(chan struct{}, 1),
 	}
 	if runtime.canRegisterNewFunctionType {
 		ft.sfWorkerPool = NewSFWorkerPool(ft, config.functionWorkerPoolConfig)
@@ -420,10 +422,11 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 		lg.Logf(lg.TraceLevel, ">>>>>>>>>>>>>> Garbage collected for typename %s - no id handlers left", ft.name)
 	}
 
-	if ft.runtime.shutdownPhase == ShutdownPhaseTwo {
+	if atomic.LoadUint32(&ft.runtime.shutdownPhase) == ShutdownPhaseTwo {
 		if handlersRunning == 0 {
 			if time.Since(ft.lastMsgTime) > gracefulShutdownWaitingTimeout {
 				ft.stopRequestSubscription()
+				ft.shutdownCh <- struct{}{}
 			}
 		} else {
 			ft.lastMsgTime = time.Now()

@@ -20,7 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-type ShutdownPhase uint8
+type ShutdownPhase = uint32
 
 const (
 	ShutdownPhaseNone ShutdownPhase = iota
@@ -52,7 +52,7 @@ type Runtime struct {
 	gc   int64 // Global counter - max total id handlers for all function types
 
 	shutdown      chan struct{}
-	shutdownPhase ShutdownPhase
+	shutdownPhase uint32
 	wg            sync.WaitGroup
 }
 
@@ -133,21 +133,40 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 		<-sig
-		r.shutdownPhase = ShutdownPhaseOne
+		atomic.StoreUint32(&r.shutdownPhase, ShutdownPhaseOne)
 		lg.GetLogger().Debugf(context.TODO(), "Received shutdown signal, shutting down gracefully...")
 		cancelPhaseOneContext()
 
 		r.shutdownFunctionTypes()
 
+		atomic.StoreUint32(&r.shutdownPhase, ShutdownPhaseTwo)
+
+		wg := sync.WaitGroup{}
+		for _, ft := range r.registeredFunctionTypes {
+			wg.Add(1)
+			go func(ft *FunctionType) {
+				defer wg.Done()
+				<-ft.shutdownCh
+			}(ft)
+			wg.Wait()
+		}
 		cancelPhaseTwoContext()
 
-		select {
-		case <-r.Domain.cache.Synced:
-			r.shutdownPhase = ShutdownPhaseTwo
-		}
+		<-r.Domain.cache.Synced
 
-		if r.shutdownPhase == ShutdownPhaseThree {
-			r.Shutdown()
+		atomic.StoreUint32(&r.shutdownPhase, ShutdownPhaseThree)
+
+		r.Shutdown()
+
+	}()
+
+	go func() {
+		status := atomic.LoadUint32(&r.shutdownPhase)
+		for {
+			if status != atomic.LoadUint32(&r.shutdownPhase) {
+				status = atomic.LoadUint32(&r.shutdownPhase)
+				lg.Logf(lg.DebugLevel, "::::::::::::::::::::::::::: SHUTDOWN PHASE %d", status)
+			}
 		}
 	}()
 
