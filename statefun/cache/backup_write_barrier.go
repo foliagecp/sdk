@@ -3,12 +3,13 @@ package cache
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
+	"time"
+
 	"github.com/foliagecp/easyjson"
 	customNatsKv "github.com/foliagecp/sdk/embedded/nats/kv"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
-	"sync/atomic"
-	"time"
 )
 
 const (

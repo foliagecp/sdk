@@ -42,6 +42,7 @@ type FunctionType struct {
 	requestSubscription *nats.Subscription
 	shutdownCh          chan struct{}
 	lastMsgTime         time.Time
+	requestSubStopped   bool
 	//-----------------------------------
 }
 
@@ -422,18 +423,25 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 		lg.Logf(lg.TraceLevel, ">>>>>>>>>>>>>> Garbage collected for typename %s - no id handlers left", ft.name)
 	}
 
-	if atomic.LoadUint32(&ft.runtime.shutdownPhase) == ShutdownPhaseTwo {
-		if handlersRunning == 0 {
-			if time.Since(ft.lastMsgTime) > gracefulShutdownWaitingTimeout {
-				ft.stopRequestSubscription()
-				ft.shutdownCh <- struct{}{}
-			}
-		} else {
-			ft.lastMsgTime = time.Now()
-		}
+	if handlersRunning > 0 {
+		ft.lastMsgTime = time.Now()
 	}
 
 	return
+}
+
+func (ft *FunctionType) isReadyForShutdown() bool {
+	handlersRunning := 0
+	ft.idHandlersChannel.Range(func(key, value interface{}) bool {
+		ch := value.(chan FunctionTypeMsg)
+		if len(ch) > 0 {
+			handlersRunning++
+			return false
+		}
+		return true
+	})
+
+	return handlersRunning == 0 && ft.sfWorkerPool.GetActiveWorkersCount() == 0 && time.Since(ft.lastMsgTime) > gracefulShutdownWaitingTimeout
 }
 
 func (ft *FunctionType) getContext(keyValueID string) *easyjson.JSON {
@@ -544,9 +552,10 @@ func (ft *FunctionType) stopSignalSubscription() {
 }
 
 func (ft *FunctionType) stopRequestSubscription() {
-	if !ft.requestSubscription.IsValid() {
+	if ft.requestSubscription == nil || !ft.requestSubscription.IsValid() {
 		return
 	}
+	ft.requestSubStopped = true
 	logger.GetLogger().Debugf(context.TODO(), "unsubscribe request subscription for typename %s", ft.name)
 	ft.requestSubscription.Unsubscribe()
 }

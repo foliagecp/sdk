@@ -3,9 +3,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	lg "github.com/foliagecp/sdk/statefun/logger"
 )
@@ -59,5 +62,8 @@ func main() {
 
 	lg.Logf(lg.InfoLevel, "hello %s", "world")
 
-	Start()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	Start(ctx)
 }

@@ -305,3 +305,9 @@ func (wp *SFWorkerPool) GetWorkerPercentage() (loadedWorkers float64, idleWorker
 
 	return
 }
+
+func (wp *SFWorkerPool) GetActiveWorkersCount() int {
+	wp.mu.Lock()
+	defer wp.mu.Unlock()
+	return wp.workers - wp.idleWorkers
+}
