@@ -34,6 +34,13 @@ const (
 	FlagJSONAppend  uint8 = 0x04
 )
 
+const (
+	//gracefully shutdown
+	shutdownStatusNone = iota
+	shutdownStatusWaiting
+	shutdownStatusReady
+)
+
 var (
 	keyValidationRegexp *regexp.Regexp = regexp.MustCompile(`^[a-zA-Z0-9/=_$#@$%+-][a-zA-Z0-9/=._$#@%+-]+[a-zA-Z0-9/=_$#@%+-]$|^[a-zA-Z0-9/=_$#@%+-]*$`)
 )
@@ -249,6 +256,16 @@ func (csv *StoreValue) SetValueType(valueType uint8) {
 	csv.valueType = valueType
 }
 
+func (csv *StoreValue) syncState() (bool, int64, bool, bool) {
+	csv.RLock("kvLazyWriter read")
+	ve := csv.valueExists
+	vut := csv.valueUpdateTime
+	sn := csv.syncNeeded
+	sw := csv.syncedWithKV
+	csv.RUnlock("kvLazyWriter read")
+	return ve, vut, sn, sw
+}
+
 type TransactionOperator struct {
 	operatorType int // 0 - set, 1 - delete
 	key          string
@@ -328,6 +345,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 				select {
 				case <-cs.ctx.Done():
 					activeKVSync = false
+					return
 				case entry := <-w.Updates():
 					if entry != nil {
 						key := cs.fromStoreKey(entry.Key())
@@ -402,21 +420,26 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 	kvLazyWriter := func(cs *Store) {
 		system.GlobalPrometrics.GetRoutinesCounter().Started("cache.kvLazyWriter")
 		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("cache.kvLazyWriter")
+		shutdownStatus := shutdownStatusNone
 		for {
+			//start := time.Now()
+			iterationSyncedCount := 0
+			traverseCount := 0
+
 			select {
-			case <-ctx.Done():
-				switch atomic.LoadInt32(&cs.backupBarrierStatus) {
-				case BackupBarrierStatusUnlocked:
-					cs.updateBackupBarrier(BackupBarrierStatusLocking, system.GetCurrentTimeNs())
-					lg.GetLogger().Debugf(cs.ctx, "cache got shutdown signal")
-				case BackupBarrierStatusLocked:
-					lg.GetLogger().Debugf(cs.ctx, "cache is synced, ready for shutdown")
+			case <-cs.ctx.Done():
+				switch shutdownStatus {
+				case shutdownStatusNone:
+					lg.GetLogger().Debugf(ctx, "cache got shutdown sinal")
+					shutdownStatus = shutdownStatusWaiting
+				case shutdownStatusWaiting:
+				case shutdownStatusReady:
+					lg.GetLogger().Debugf(ctx, "cache synced, ready for shutdown")
 					close(cs.Synced)
 					return
 				}
 			default:
 			}
-
 			backupBarrierTimestamp, backupBarrierStatus := cs.getBackupBarrierState()
 			if backupBarrierStatus == BackupBarrierStatusLocking {
 				if backupBarrierTimestamp == 0 {
@@ -437,6 +460,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 				lastID := len(cacheStoreValueStack) - 1
 
 				currentStoreValue := cacheStoreValueStack[lastID]
+				traverseCount++ //Debug
 
 				currentStoreValue.RLock("kvLazyWriter")
 				lruTimes = append(lruTimes, currentStoreValue.valueUpdateTime)
@@ -465,13 +489,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 					csvChild := value.(*StoreValue)
 
 					if backupBarrierStatus == BackupBarrierStatusLocking {
-						csvChild.RLock("kvLazyWriter read")
-						ve := csvChild.valueExists
-						vut := csvChild.valueUpdateTime
-						sn := csvChild.syncNeeded
-						sw := csvChild.syncedWithKV
-						csvChild.RUnlock("kvLazyWriter read")
-
+						ve, vut, sn, sw := csvChild.syncState()
 						if ve && vut > 0 && vut <= backupBarrierTimestamp {
 							if sn || !sw {
 								allBeforeBackupBarrierSynced = false
@@ -519,6 +537,8 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 
 					// Putting value into KV store ------------------
 					if csvChild.syncNeeded {
+						iterationSyncedCount++
+
 						keyStr := key.(string)
 						///_, putErr := kv.Put(cs.toStoreKey(newSuffix), finalBytes)
 
@@ -544,7 +564,14 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 					suffixPathsStack = append(suffixPathsStack, newSuffix)
 					depthsStack = append(depthsStack, currentDepth+1)
 
-					time.Sleep(time.Duration(cacheConfig.lazyWriterValueProcessDelayMkS) * time.Microsecond)
+					select {
+					case <-cs.ctx.Done():
+						if shutdownStatus == shutdownStatusNone {
+							shutdownStatus = shutdownStatusWaiting
+						}
+					default:
+						time.Sleep(time.Duration(cacheConfig.lazyWriterValueProcessDelayMkS) * time.Microsecond)
+					}
 					return true
 				})
 
@@ -556,7 +583,9 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 			if backupBarrierStatus == BackupBarrierStatusLocking && allBeforeBackupBarrierSynced {
 				cs.markCacheReadyForBackup()
 			}
-
+			if shutdownStatus == shutdownStatusWaiting && iterationSyncedCount == 0 {
+				shutdownStatus = shutdownStatusReady
+			}
 			sort.Slice(lruTimes, func(i, j int) bool { return lruTimes[i] > lruTimes[j] })
 			if len(lruTimes) > cacheConfig.lruSize {
 				cs.lruTresholdTime = lruTimes[cacheConfig.lruSize-1]
@@ -579,6 +608,20 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 			if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("cache_values", "", []string{"id"}); err == nil {
 				gaugeVec.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(cs.valuesInCache))
 			}
+			/*// Debug info -----------------------------------------------------
+
+			iterationElapsed := time.Since(start)
+
+			if iterationSyncedCount > 0 {
+				speed := float64(iterationSyncedCount) / iterationElapsed.Seconds()
+				lg.GetLogger().Debugf(cs.ctx,
+					"::::::::::::::: Iteration: synced %d values (traversed %d nodes) in %v  speed: %.2f writes/sec",
+					iterationSyncedCount, traverseCount, iterationElapsed, speed)
+			} else {
+				//lg.GetLogger().Debugf(cs.ctx, "::::::::::::::: Iteration: synced 0 values (traversed %d nodes) in %v",
+				//	traverseCount, iterationElapsed)
+			}
+			// ----------------------------------------------------------------*/
 
 			time.Sleep(time.Duration(cacheConfig.lazyWriterRepeatDelayMkS) * time.Microsecond) // Prevents too many locks and prevents too much processor time consumption
 		}

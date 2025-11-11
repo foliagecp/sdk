@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"os"
+	"os/signal"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/foliagecp/sdk/statefun/cache"
@@ -48,9 +51,11 @@ type Runtime struct {
 	glce int64 // Global last call ended - time of last call of last function handling id of any function type
 	gc   int64 // Global counter - max total id handlers for all function types
 
-	shutdown      chan struct{}
-	shutdownPhase atomic.Uint32
-	wg            sync.WaitGroup
+	shutdown                     chan struct{}
+	shutdownPhase                atomic.Uint32
+	functionsStopCh              chan struct{}
+	wg                           sync.WaitGroup
+	afterStartFunctionsWaitGroup sync.WaitGroup
 }
 
 // NewRuntime initializes a new Runtime instance with the given configuration.
@@ -60,6 +65,7 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		registeredFunctionTypes:    make(map[string]*FunctionType),
 		canRegisterNewFunctionType: true,
 		shutdown:                   make(chan struct{}),
+		functionsStopCh:            make(chan struct{}),
 	}
 	r.shutdownPhase.Store(ShutdownPhaseNone)
 
@@ -128,24 +134,46 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 	phaseThreeContext, cancelPhaseThreeContext := context.WithCancel(context.Background())
 
 	gracefulShutdownFunc := func() {
-		<-ctx.Done()
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+		<-sig
+		startShutdown := time.Now()
 		r.shutdownPhase.Store(ShutdownPhaseOne)
-		lg.GetLogger().Debugf(context.TODO(), "Received shutdown signal, shutting down gracefully...")
+		lg.GetLogger().Debugf(ctx, "Received shutdown signal, shutting down gracefully...")
+		lg.GetLogger().Debugf(ctx, "Shutdown phase 1")
 		cancelPhaseOneContext()
+
+		timeout := time.NewTimer(10 * time.Second)
+		defer timeout.Stop()
+
+		done := make(chan struct{}, 1)
+		go func() {
+			r.afterStartFunctionsWaitGroup.Wait()
+			done <- struct{}{}
+		}()
+
+		select {
+		case <-timeout.C:
+			lg.GetLogger().Debugf(ctx, "AfterStart functions timed out")
+		case <-done:
+			lg.GetLogger().Debugf(ctx, "AfterStart functions completed")
+		}
 
 		r.drainSignalSubscriptions()
 
 		r.shutdownPhase.Store(ShutdownPhaseTwo)
+		lg.GetLogger().Debugf(ctx, "Shutdown phase 2")
 
-		r.stopRequestSubscriptions()
+		<-r.functionsStopCh
 
 		cancelPhaseTwoContext()
 
+		lg.GetLogger().Debugf(ctx, "Shutdown phase 3")
+
 		<-r.Domain.cache.Synced
 
-		r.shutdownPhase.Store(ShutdownPhaseThree)
-
 		r.Shutdown()
+		lg.GetLogger().Debugf(ctx, "Shutdown took %v s", time.Since(startShutdown))
 	}
 
 	go gracefulShutdownFunc()
@@ -210,8 +238,6 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 	<-r.shutdown
 	cancelPhaseThreeContext()
 
-	r.nc.Close()
-
 	// Perform cleanup.
 	logger.Info(ctx, "Shutting down...")
 
@@ -224,6 +250,7 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 	select {
 	case <-waitCh:
 	case <-timeoutCh:
+		logger.Info(ctx, "Timed out waiting WG for runtime to finish")
 	}
 	return nil
 }
@@ -234,7 +261,6 @@ func (r *Runtime) drainSignalSubscriptions() {
 		wg.Add(1)
 		go func(name string, ft *FunctionType) {
 			defer wg.Done()
-			ft.lastMsgTime = time.Now()
 			ft.stopSignalSubscription()
 		}(ftName, ft)
 	}
@@ -242,23 +268,23 @@ func (r *Runtime) drainSignalSubscriptions() {
 }
 
 func (r *Runtime) stopRequestSubscriptions() {
-	wg := sync.WaitGroup{}
-	for ftName, ft := range r.registeredFunctionTypes {
-		wg.Add(1)
-		go func(name string, ft *FunctionType) {
-			defer wg.Done()
-			ticker := time.NewTicker(100 * time.Millisecond)
-			defer ticker.Stop()
-			for {
-				if ft.isReadyForShutdown() {
-					ft.stopRequestSubscription()
-					return
-				}
-				<-ticker.C
+	for {
+		allFunctionsReadyForShutdown := true
+		for _, ft := range r.registeredFunctionTypes {
+			if (int(ft.lastMsgTimeNs.Load()) + r.config.functionTypeIDLifetimeMs*1000) > int(system.GetCurrentTimeNs()) {
+				allFunctionsReadyForShutdown = false
+				continue
 			}
-		}(ftName, ft)
+		}
+		if allFunctionsReadyForShutdown {
+			break
+		}
+		time.Sleep(1 * time.Second)
 	}
-	wg.Wait()
+
+	for _, ft := range r.registeredFunctionTypes {
+		ft.stopRequestSubscription()
+	}
 }
 
 // Shutdown stops the runtime.
@@ -360,9 +386,9 @@ func (r *Runtime) startFunctionSubscriptions(ctx context.Context, revisions map[
 func (r *Runtime) runAfterStartFunctions(ctx context.Context) {
 	for _, fnWithMode := range r.onAfterStartFunctionsWithMode {
 		if fnWithMode.async {
-			r.wg.Add(1)
+			r.afterStartFunctionsWaitGroup.Add(1)
 			go func(f OnAfterStartFunction) {
-				defer r.wg.Done()
+				defer r.afterStartFunctionsWaitGroup.Done()
 				system.GlobalPrometrics.GetRoutinesCounter().Started("runtime_onAfterStart")
 				defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("runtime_onAfterStart")
 				if err := f(ctx, r); err != nil {
@@ -405,6 +431,9 @@ func (r *Runtime) collectGarbage() {
 		lg.Logf(lg.ErrorLevel, "Error ensuring GaugeVec: %v", err)
 	}
 
+	isShutdown := r.shutdownPhase.Load() == ShutdownPhaseTwo
+	functionsReadyForStop := isShutdown
+
 	for _, ft := range r.registeredFunctionTypes {
 		collected, running := ft.gc(r.config.functionTypeIDLifetimeMs)
 		totalGarbageCollected += collected
@@ -413,6 +442,25 @@ func (r *Runtime) collectGarbage() {
 		if gaugeVec != nil {
 			gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(float64(running))
 		}
+
+		if isShutdown &&
+			(running > 0 ||
+				ft.sfWorkerPool.GetActiveWorkersCount() > 0 ||
+				len(ft.sfWorkerPool.taskQueue) > 0 ||
+				(int64(ft.lastMsgTimeNs.Load())+int64(r.config.functionTypeIDLifetimeMs*1000*1000) > system.GetCurrentTimeNs())) {
+			lg.GetLogger().Debugf(context.TODO(), "for function %s is running=%d, is active=%d", ft.name, running, ft.sfWorkerPool.GetActiveWorkersCount())
+			functionsReadyForStop = false
+			ft.lastMsgTimeNs.Store(uint64(system.GetCurrentTimeNs()))
+		}
+	}
+
+	if functionsReadyForStop {
+		lg.GetLogger().Infof(context.TODO(), "all functions are ready for stop")
+		for _, ft := range r.registeredFunctionTypes {
+			ft.stopRequestSubscription()
+		}
+		r.shutdownPhase.Store(ShutdownPhaseThree)
+		r.functionsStopCh <- struct{}{}
 	}
 
 	if totalGarbageCollected > 0 && totalHandlersRunning == 0 {

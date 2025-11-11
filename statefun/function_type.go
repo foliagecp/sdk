@@ -41,8 +41,7 @@ type FunctionType struct {
 	signalSubscription  *nats.Subscription
 	requestSubscription *nats.Subscription
 	shutdownCh          chan struct{}
-	lastMsgTime         time.Time
-	requestSubStopped   bool
+	lastMsgTimeNs       atomic.Uint64
 	//-----------------------------------
 }
 
@@ -50,8 +49,6 @@ const (
 	contextExpirationKey = "____ctx_expires_after_ms"
 	sendMsgFuncErrorMsg  = "task refuse for statefun %s with id=%s: %s"
 )
-
-var gracefulShutdownWaitingTimeout = time.Second * time.Duration(system.GetEnvMustProceed("GRACEFUL_SHUTDOWN_WAITING_TIMEOUT", 10))
 
 func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHandler, config FunctionTypeConfig) *FunctionType {
 	ft := &FunctionType{
@@ -249,6 +246,7 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 }
 
 func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameIDContextProcessor *sfPlugins.StatefunContextProcessor) {
+	ft.lastMsgTimeNs.Store(uint64(system.GetCurrentTimeNs()))
 	msgRequestCallback := msg.RequestCallback
 	replyDataChannel := make(chan *easyjson.JSON, 1)
 	typenameIDContextProcessor.Reply = nil
@@ -422,26 +420,7 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 	if garbageCollected > 0 && handlersRunning == 0 {
 		lg.Logf(lg.TraceLevel, ">>>>>>>>>>>>>> Garbage collected for typename %s - no id handlers left", ft.name)
 	}
-
-	if handlersRunning > 0 {
-		ft.lastMsgTime = time.Now()
-	}
-
 	return
-}
-
-func (ft *FunctionType) isReadyForShutdown() bool {
-	handlersRunning := 0
-	ft.idHandlersChannel.Range(func(key, value interface{}) bool {
-		ch := value.(chan FunctionTypeMsg)
-		if len(ch) > 0 {
-			handlersRunning++
-			return false
-		}
-		return true
-	})
-
-	return handlersRunning == 0 && ft.sfWorkerPool.GetActiveWorkersCount() == 0 && time.Since(ft.lastMsgTime) > gracefulShutdownWaitingTimeout
 }
 
 func (ft *FunctionType) getContext(keyValueID string) *easyjson.JSON {
@@ -533,7 +512,7 @@ func (ft *FunctionType) stopSignalSubscription() {
 		return
 	}
 
-	timeout := time.After(gracefulShutdownWaitingTimeout)
+	timeout := time.After(10 * time.Second)
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -555,7 +534,7 @@ func (ft *FunctionType) stopRequestSubscription() {
 	if ft.requestSubscription == nil || !ft.requestSubscription.IsValid() {
 		return
 	}
-	ft.requestSubStopped = true
-	logger.GetLogger().Debugf(context.TODO(), "unsubscribe request subscription for typename %s", ft.name)
+	ft.sfWorkerPool.Stop()
 	ft.requestSubscription.Unsubscribe()
+	logger.GetLogger().Debugf(context.TODO(), "unsubscribe request subscription for typename %s", ft.name)
 }

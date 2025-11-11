@@ -168,7 +168,7 @@ func RunRequestReplyTest(runtime *statefun.Runtime) {
 	lg.Logln(lg.DebugLevel, "<<< Test ended: request reply calls")
 }
 
-func Start(ctx context.Context) {
+func Start() {
 	system.GlobalPrometrics = system.NewPrometrics("", ":9901")
 
 	afterStart := func(ctx context.Context, runtime *statefun.Runtime) error {
@@ -220,7 +220,7 @@ func Start(ctx context.Context) {
 			registerTriggerFunctions(runtime)
 		}
 		runtime.RegisterOnAfterStartFunction(afterStart, true)
-		if err := runtime.Start(ctx, cache.NewCacheConfig("main_cache")); err != nil {
+		if err := runtime.Start(context.Background(), cache.NewCacheConfig("main_cache")); err != nil {
 			lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s", err)
 		}
 	} else {
