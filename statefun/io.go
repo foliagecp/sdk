@@ -382,6 +382,9 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 }
 
 func (r *Runtime) Signal(signalProvider sfPlugins.SignalProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) error {
+	if !r.isReady {
+		return fmt.Errorf("can not send signal - runtime has not started yet")
+	}
 	if r.shutdownPhase.Load() != ShutdownPhaseNone {
 		return fmt.Errorf("can not send signal - runtime is shutting down")
 	}
@@ -389,6 +392,9 @@ func (r *Runtime) Signal(signalProvider sfPlugins.SignalProvider, typename strin
 }
 
 func (r *Runtime) Request(requestProvider sfPlugins.RequestProvider, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
+	if !r.isReady {
+		return nil, fmt.Errorf("can not send request - runtime has not started yet")
+	}
 	if r.shutdownPhase.Load() != ShutdownPhaseNone {
 		return nil, fmt.Errorf("can not send request - runtime is shutting down")
 	}
