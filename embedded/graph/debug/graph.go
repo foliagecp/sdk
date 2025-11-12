@@ -287,7 +287,7 @@ func LLAPIImportGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statef
 				defer wg.Done()
 				for i := range vertexIdx {
 					n := graph.Nodes[i]
-					uuid := ctx.Domain.CreateObjectIDWithHubDomain(n.Id, true)
+					uuid := ctx.Domain.CreateObjectIDWithLocalHubDomain(n.Id, true)
 
 					if err := dbc.Graph.VertexDelete(uuid); err != nil {
 						system.MsgOnErrorReturn(err)

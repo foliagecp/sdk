@@ -28,10 +28,10 @@ const (
 )
 
 func typeOperationRedirectedToHub(ctx *sfPlugins.StatefunContextProcessor) bool {
-	if ctx.Domain.Name() != ctx.Domain.HubDomainName() {
+	if ctx.Domain.Name() != ctx.Domain.LocalHubDomainName() {
 		om := sfMediators.NewOpMediator(ctx)
 		selfID := getOriginalID(ctx.Self.ID)
-		idOnHub := ctx.Domain.CreateObjectIDWithHubDomain(selfID, true)
+		idOnHub := ctx.Domain.CreateObjectIDWithLocalHubDomain(selfID, true)
 		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, idOnHub, ctx.Payload, ctx.Options))).Reply()
 		return true
 	}
@@ -195,13 +195,13 @@ func cmdbSchemaPrepare(ctx context.Context, runtime *statefun.Runtime) error {
 	v := easyjson.NewJSONObject()
 	v.SetByPath("to", easyjson.NewJSON(BUILT_IN_TYPES))
 	v.SetByPath("type", easyjson.NewJSON(TYPES_TYPELINK))
-	v.SetByPath("name", easyjson.NewJSON(runtime.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false)))
+	v.SetByPath("name", easyjson.NewJSON(runtime.Domain.CreateObjectIDWithLocalHubDomain(BUILT_IN_TYPES, false)))
 	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", BUILT_IN_ROOT, &v, nil))
 
 	v = easyjson.NewJSONObject()
 	v.SetByPath("to", easyjson.NewJSON(BUILT_IN_OBJECTS))
 	v.SetByPath("type", easyjson.NewJSON(OBJECTS_TYPELINK))
-	v.SetByPath("name", easyjson.NewJSON(runtime.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false)))
+	v.SetByPath("name", easyjson.NewJSON(runtime.Domain.CreateObjectIDWithLocalHubDomain(BUILT_IN_OBJECTS, false)))
 	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", BUILT_IN_ROOT, &v, nil))
 	// ----------------------------------------------------
 

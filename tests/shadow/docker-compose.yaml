@@ -1,0 +1,140 @@
+services:
+  nats-hub:
+    image: nats:latest
+    command: -c /etc/nats/hub.conf
+    ports:
+      - "4222:4222"
+      - "6222:6222"
+      - "8222:8222"
+      - "7422:7422"
+    volumes:
+       - ./configs/nats/:/etc/nats/
+
+  nats-leaf1:
+    image: nats:latest
+    command: -c /etc/nats/leaf1.conf
+    ports:
+      - "4223:4223"
+      - "6223:6223"
+      - "8223:8223"
+    depends_on:
+      - nats-hub
+    volumes:
+       - ./configs/nats/:/etc/nats/
+
+  nats-leaf2:
+    image: nats:latest
+    command: -c /etc/nats/leaf2.conf
+    ports:
+      - "4224:4223"
+      - "6224:6223"
+      - "8224:8223"
+    depends_on:
+      - nats-hub
+    volumes:
+       - ./configs/nats/:/etc/nats/
+
+  nats-leaf3:
+    image: nats:latest
+    command: -c /etc/nats/leaf3.conf
+    ports:
+      - "4225:4223"
+      - "6225:6223"
+      - "8225:8223"
+    depends_on:
+      - nats-hub
+    volumes:
+       - ./configs/nats/:/etc/nats/
+
+  io:
+    image: natsio/nats-box:latest
+    entrypoint:
+      - /bin/sh
+    tty: true
+    depends_on:
+      - nats-hub
+
+  runtime-hub:
+    image: foliage-sdk-tests-shadow:latest
+    command: /usr/bin/foliage -ll 5
+    ports:
+      - "9901:9901"
+    env_file: ./configs/hub.env
+    depends_on:
+      - nats-leaf1
+      - nats-leaf2
+      - nats-leaf3
+    build:
+      context: ../..
+      dockerfile: tests/shadow/Dockerfile
+
+  runtime-leaf1:
+    image: foliage-sdk-tests-shadow:latest
+    command: /usr/bin/foliage -ll 5
+    ports:
+      - "9902:9902"
+    env_file: ./configs/leaf1.env
+    depends_on:
+      - runtime-hub
+      - nats-leaf1
+    build:
+      context: ../..
+      dockerfile: tests/shadow/Dockerfile
+
+  runtime-leaf2:
+    image: foliage-sdk-tests-shadow:latest
+    command: /usr/bin/foliage -ll 5
+    ports:
+      - "9903:9902"
+    env_file: ./configs/leaf2.env
+    depends_on:
+      - runtime-hub
+      - nats-leaf2
+    build:
+      context: ../..
+      dockerfile: tests/shadow/Dockerfile
+
+  runtime-leaf3:
+    image: foliage-sdk-tests-shadow:latest
+    command: /usr/bin/foliage -ll 5
+    ports:
+      - "9904:9902"
+    env_file: ./configs/leaf3.env
+    depends_on:
+      - runtime-hub
+      - nats-leaf3
+    build:
+      context: ../..
+      dockerfile: tests/shadow/Dockerfile
+
+#  nats-exporter-hub:
+#    image: natsio/prometheus-nats-exporter:latest
+#    depends_on:
+#     - nats-hub
+#    ports:
+#     - '7777:7777'
+#    command: -varz -jsz=all http://nats-hub:8222
+#
+#  nats-exporter-leaf:
+#    image: natsio/prometheus-nats-exporter:latest
+#    depends_on:
+#     - nats-leaf
+#    ports:
+#     - '7778:7778'
+#    command: -varz -jsz=all http://nats-leaf:8223
+#
+#  prometheus:
+#    image: prom/prometheus
+#    ports:
+#      - 9090:9090
+#    volumes:
+#      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+#
+#  grafana:
+#    ports:
+#     - '3000:3000'
+#    image: grafana/grafana-enterprise
+#    volumes:
+#      - ./configs/grafana/dashboards.yaml:/etc/grafana/provisioning/dashboards/main.yaml
+#      - ./configs/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/main.yaml
+#      - ./configs/grafana/dashboards:/var/lib/grafana/dashboards

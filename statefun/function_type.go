@@ -470,7 +470,7 @@ func (ft *FunctionType) getObjectImplTypes(id string) ([]string, error) {
 		parentTypes := response.GetByPath("data.body.cache.parent_types")
 		for i := 0; i < parentTypes.ArraySize(); i++ {
 			parentType := parentTypes.ArrayElement(i).AsStringDefault("")
-			parentType = ft.runtime.Domain.CreateObjectIDWithHubDomain(parentType, true)
+			parentType = ft.runtime.Domain.CreateObjectIDWithLocalHubDomain(parentType, true)
 			if len(parentType) > 0 {
 				result[parentType] = struct{}{}
 			}

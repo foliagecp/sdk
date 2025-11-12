@@ -74,7 +74,7 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 	statefun.NewFunctionType(runtime, "functions.graph.api.link.delete", LLAPILinkDelete, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
 	statefun.NewFunctionType(runtime, "functions.graph.api.link.read", LLAPILinkRead, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
 
-	if runtime.Domain.Name() == runtime.Domain.HubDomainName() {
+	if runtime.Domain.Name() == runtime.Domain.LocalHubDomainName() {
 		runtime.RegisterOnAfterStartFunction(cmdbSchemaPrepare, false)
 	}
 }

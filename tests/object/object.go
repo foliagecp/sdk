@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+
 	"github.com/foliagecp/sdk/clients/go/db"
 	"github.com/foliagecp/sdk/embedded/graph/graphql"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
