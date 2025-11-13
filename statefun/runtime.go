@@ -52,17 +52,30 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		shutdown:                   make(chan struct{}),
 	}
 
-	var err error
-
-	if r.config.enableTLS {
-		opts := []nats.Option{
-			nats.Secure(&tls.Config{InsecureSkipVerify: true}), // for self-assigned certificates
-		}
-		r.nc, err = nats.Connect(config.natsURL, opts...)
-	} else {
-		r.nc, err = nats.Connect(config.natsURL)
+	natsOpts := nats.GetDefaultOptions()
+	natsOpts.Url = r.config.natsURL
+	natsOpts.MaxReconnect = -1 // -1 - infinity attempts
+	natsOpts.ReconnectedCB = func(nc *nats.Conn) {
+		lg.GetLogger().Warnf(context.TODO(), "NATS reconnected %d times", nc.Statistics.Reconnects)
 	}
 
+	if r.config.enableTLS {
+		natsOpts.Secure = true
+		natsOpts.TLSConfig = &tls.Config{InsecureSkipVerify: true}
+	}
+
+	var err error
+	maxAttempts := system.GetEnvMustProceed("RETRIES_NATS_CONNECT", 10)
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		r.nc, err = natsOpts.Connect()
+		if err != nil && attempt < maxAttempts {
+			lg.GetLogger().Errorf(context.TODO(), "Can't connect to NATS at attempt %d/%d: %v", attempt, maxAttempts, err)
+			// Linear backoff: increase delay by 1 second on each attempt
+			time.Sleep(time.Duration(1+attempt) * time.Second)
+		} else {
+			break
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
