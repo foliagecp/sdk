@@ -61,7 +61,7 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 
 	if r.config.enableTLS {
 		natsOpts.Secure = true
-		natsOpts.TLSConfig = &tls.Config{InsecureSkipVerify: true}
+		natsOpts.TLSConfig = &tls.Config{InsecureSkipVerify: true} // for self-assigned certificates
 	}
 
 	var err error
