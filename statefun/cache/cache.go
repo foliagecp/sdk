@@ -622,11 +622,11 @@ func (cs *Store) GetValue(key string) ([]byte, error) {
 	var result []byte = nil
 	var resultError error = nil
 
-	cacheMiss := true
+	//cacheMiss := true
 
 	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, false); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
 		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
-			cacheMiss = false // Value exists in cache - no cache miss then
+			//cacheMiss = false // Value exists in cache - no cache miss then
 			csv.RLock("GetValue")
 			if !csv.ValueExists() { // Value was intentionally deleted and was marked so, no cache miss policy can be applied here
 				resultError = fmt.Errorf("value for key=%s does not exist", key)
@@ -648,7 +648,11 @@ func (cs *Store) GetValue(key string) ([]byte, error) {
 	}
 
 	// Cache miss -----------------------------------------
-	if cacheMiss {
+	if result == nil {
+		resultError = fmt.Errorf("Value for for key=%s does not exist", key)
+	}
+
+	/*if cacheMiss {
 		if entry, err := customNatsKv.KVGet(cs.js, cs.kv, cs.toStoreKey(key)); err == nil {
 			key := cs.fromStoreKey(entry.Key())
 			valueBytes := entry.Value()
@@ -664,10 +668,10 @@ func (cs *Store) GetValue(key string) ([]byte, error) {
 					if json, ok := easyjson.JSONFromBytes(result); ok {
 						cs.SetValueJSON(key, &json, false, kvRecordTime, "")
 						lg.Logf(lg.WarnLevel, "Value for key=%s is JSON in KV, use GetValueJSON method", key)
-						resultError = nil
+					resultError = nil
 					} else {
 						resultError = fmt.Errorf("failed to parse JSON for key=%s", key)
-					}
+				}
 				default:
 					resultError = fmt.Errorf("unknown flag %d for key=%s", appendFlag, key)
 				}
@@ -677,9 +681,9 @@ func (cs *Store) GetValue(key string) ([]byte, error) {
 		} else {
 			resultError = err
 		}
-	}
-
+	}*/
 	// ----------------------------------------------------
+
 	return result, resultError
 }
 
@@ -714,7 +718,11 @@ func (cs *Store) GetValueJSON(key string) (*easyjson.JSON, error) {
 	}
 
 	// ---------------------Cache miss--------------------------
-	if entry, err := customNatsKv.KVGet(cs.js, cs.kv, cs.toStoreKey(key)); err == nil {
+	if result == nil {
+		resultError = fmt.Errorf("Value for for key=%s does not exist", key)
+	}
+
+	/*if entry, err := customNatsKv.KVGet(cs.js, cs.kv, cs.toStoreKey(key)); err == nil {
 		key := cs.fromStoreKey(entry.Key())
 		valueBytes := entry.Value()
 
@@ -753,7 +761,7 @@ func (cs *Store) GetValueJSON(key string) (*easyjson.JSON, error) {
 		}
 	} else {
 		resultError = err
-	}
+	}*/
 
 	return result, resultError
 }

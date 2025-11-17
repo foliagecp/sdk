@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/statefun"
@@ -26,6 +27,69 @@ const (
 	BUILT_IN_TYPE_GROUP = "group"
 	BUILT_IN_OBJECT_NAV = "nav"
 )
+
+// ----------------------------
+var (
+	// key: objectID -> typeID
+	objectTypeCache sync.Map
+	// key: fromType -> *sync.Map(toType -> objectLinkType)
+	type2TypeObjectLinkTypeCache sync.Map
+)
+
+func cacheGetObjectType(objectID string) (string, bool) {
+	if v, ok := objectTypeCache.Load(objectID); ok {
+		if s, ok := v.(string); ok && s != "" {
+			return s, true
+		}
+	}
+	return "", false
+}
+func cacheSetObjectType(objectID, typeID string) { objectTypeCache.Store(objectID, typeID) }
+func cacheDeleteObjectType(objectID string)      { objectTypeCache.Delete(objectID) }
+
+func cacheGetTypeEdge(fromType, toType string) (string, bool) {
+	if v, ok := type2TypeObjectLinkTypeCache.Load(fromType); ok {
+		if m, ok := v.(*sync.Map); ok {
+			if lt, ok := m.Load(toType); ok {
+				if s, ok := lt.(string); ok && s != "" {
+					return s, true
+				}
+			}
+		}
+	}
+	return "", false
+}
+func cacheSetTypeEdge(fromType, toType, linkType string) {
+	var m *sync.Map
+	if v, ok := type2TypeObjectLinkTypeCache.Load(fromType); ok {
+		m, _ = v.(*sync.Map)
+	}
+	if m == nil {
+		m = &sync.Map{}
+		type2TypeObjectLinkTypeCache.Store(fromType, m)
+	}
+	m.Store(toType, linkType)
+}
+func cacheDeleteTypeEdge(fromType, toType string) {
+	if v, ok := type2TypeObjectLinkTypeCache.Load(fromType); ok {
+		if m, ok := v.(*sync.Map); ok {
+			m.Delete(toType)
+		}
+	}
+}
+func cachePurgeTypeEdgesForType(typeID string) {
+	// outcome
+	type2TypeObjectLinkTypeCache.Delete(typeID)
+	// income
+	type2TypeObjectLinkTypeCache.Range(func(k, v any) bool {
+		if m, ok := v.(*sync.Map); ok {
+			m.Delete(typeID)
+		}
+		return true
+	})
+}
+
+// -----------------------------------------------------------------------------
 
 func typeOperationRedirectedToHub(ctx *sfPlugins.StatefunContextProcessor) bool {
 	if ctx.Domain.Name() != ctx.Domain.HubDomainName() {
@@ -110,7 +174,15 @@ func getTypeTriggers(ctx *sfPlugins.StatefunContextProcessor, typeName string) *
 	return easyjson.NewJSONObject().GetPtr()
 }
 
+func FindObjectType(ctx *sfPlugins.StatefunContextProcessor, objectID string) (string, error) {
+	return findObjectType(ctx, objectID)
+}
+
 func findObjectType(ctx *sfPlugins.StatefunContextProcessor, objectID string) (string, error) {
+	if t, ok := cacheGetObjectType(objectID); ok {
+		return t, nil
+	}
+
 	options := easyjson.NewJSONObject()
 	if ctx.Options != nil {
 		options = ctx.Options.Clone()
@@ -120,8 +192,11 @@ func findObjectType(ctx *sfPlugins.StatefunContextProcessor, objectID string) (s
 
 	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", makeSequenceFreeParentBasedID(ctx, id), injectParentHoldsLocks(ctx, nil), &options))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
-		return som.Data.GetByPath("type").AsStringDefault(""), nil
+		tp := som.Data.GetByPath("type").AsStringDefault("")
+		cacheSetObjectType(objectID, tp)
+		return tp, nil
 	}
+
 	return "", fmt.Errorf(som.Details)
 }
 
@@ -174,6 +249,10 @@ func getReferenceLinkTypeBetweenTwoObjects(ctx *sfPlugins.StatefunContextProcess
 }
 
 func getObjectsLinkTypeFromTypesLink(ctx *sfPlugins.StatefunContextProcessor, fromType, toType string) (string, error) {
+	if lt, ok := cacheGetTypeEdge(fromType, toType); ok {
+		return lt, nil
+	}
+
 	linkBody, err := getLinkBody(ctx, fromType, toType)
 	if err != nil {
 		return "", err
@@ -183,6 +262,8 @@ func getObjectsLinkTypeFromTypesLink(ctx *sfPlugins.StatefunContextProcessor, fr
 	if !ok {
 		return "", fmt.Errorf("type of a link was not defined in link type")
 	}
+
+	cacheSetTypeEdge(fromType, toType, linkType)
 	return linkType, nil
 }
 
