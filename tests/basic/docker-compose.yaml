@@ -34,6 +34,7 @@ services:
       dockerfile: tests/basic/Dockerfile
     volumes:
       - .:/foliage
+    stop_grace_period: 300s
 
   nats-exporter:
     image: natsio/prometheus-nats-exporter:latest

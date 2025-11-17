@@ -4,17 +4,29 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"os"
+	"os/signal"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
+	"github.com/foliagecp/sdk/statefun/cache"
 	lg "github.com/foliagecp/sdk/statefun/logger"
+	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
+
 	"github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
+)
 
-	"github.com/foliagecp/sdk/statefun/cache"
-	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
+type ShutdownPhase = uint32
+
+const (
+	ShutdownPhaseNone ShutdownPhase = iota
+	ShutdownPhaseOne
+	ShutdownPhaseTwo
+	ShutdownPhaseThree
 )
 
 type OnAfterStartFunction func(ctx context.Context, runtime *Runtime) error
@@ -39,8 +51,12 @@ type Runtime struct {
 	glce int64 // Global last call ended - time of last call of last function handling id of any function type
 	gc   int64 // Global counter - max total id handlers for all function types
 
-	shutdown chan struct{}
-	wg       sync.WaitGroup
+	isReady                      bool
+	shutdown                     chan struct{}
+	shutdownPhase                atomic.Uint32
+	functionsStopCh              chan struct{}
+	wg                           sync.WaitGroup
+	afterStartFunctionsWaitGroup sync.WaitGroup
 }
 
 // NewRuntime initializes a new Runtime instance with the given configuration.
@@ -49,8 +65,11 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		config:                     config,
 		registeredFunctionTypes:    make(map[string]*FunctionType),
 		canRegisterNewFunctionType: true,
+		isReady:                    false,
 		shutdown:                   make(chan struct{}),
+		functionsStopCh:            make(chan struct{}),
 	}
+	r.shutdownPhase.Store(ShutdownPhaseNone)
 
 	natsOpts := nats.GetDefaultOptions()
 	natsOpts.Url = r.config.natsURL
@@ -124,6 +143,56 @@ func (r *Runtime) RegisterOnAfterStartFunction(f OnAfterStartFunction, async boo
 // Start initializes streams and starts function subscriptions.
 // It also handles graceful shutdown via context.Context.
 func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
+	logger := lg.GetLogger()
+	phaseOneContext, cancelPhaseOneContext := context.WithCancel(context.Background())
+	phaseTwoContext, cancelPhaseTwoContext := context.WithCancel(context.Background())
+	phaseThreeContext, cancelPhaseThreeContext := context.WithCancel(context.Background())
+
+	gracefulShutdownFunc := func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+		<-sig
+		startShutdown := time.Now()
+		r.shutdownPhase.Store(ShutdownPhaseOne)
+		lg.GetLogger().Debugf(ctx, "Received shutdown signal, shutting down gracefully...")
+		lg.GetLogger().Debugf(ctx, "Shutdown phase 1")
+		cancelPhaseOneContext()
+
+		timeout := time.NewTimer(10 * time.Second)
+		defer timeout.Stop()
+
+		done := make(chan struct{}, 1)
+		go func() {
+			r.afterStartFunctionsWaitGroup.Wait()
+			done <- struct{}{}
+		}()
+
+		select {
+		case <-timeout.C:
+			lg.GetLogger().Debugf(ctx, "AfterStart functions timed out")
+		case <-done:
+			lg.GetLogger().Debugf(ctx, "AfterStart functions completed")
+		}
+
+		r.drainSignalSubscriptions()
+
+		r.shutdownPhase.Store(ShutdownPhaseTwo)
+		lg.GetLogger().Debugf(ctx, "Shutdown phase 2")
+
+		<-r.functionsStopCh
+
+		cancelPhaseTwoContext()
+
+		lg.GetLogger().Debugf(ctx, "Shutdown phase 3")
+
+		<-r.Domain.cache.Synced
+
+		r.Shutdown()
+		lg.GetLogger().Debugf(ctx, "Shutdown took %v s", time.Since(startShutdown))
+	}
+
+	go gracefulShutdownFunc()
+
 	// Disable registering new functions after the runtime has started.
 	r.canRegisterNewFunctionType = false
 
@@ -131,15 +200,13 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 		go system.StartHeapWatcher(float32(intervalMins))
 	}
 
-	logger := lg.NewLogger(lg.Options{ReportCaller: true, Level: lg.InfoLevel})
-
 	// Create streams if they do not exist.
 	if err := r.createStreams(ctx); err != nil {
 		return err
 	}
 
 	// Start the domain.
-	if err := r.Domain.start(cacheConfig, r.config.handlesDomainRouters); err != nil {
+	if err := r.Domain.start(phaseTwoContext, cacheConfig, r.config.handlesDomainRouters); err != nil {
 		return err
 	}
 
@@ -147,7 +214,7 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 		revID, err := KeyMutexLock(ctx, r, system.GetHashStr(RuntimeName), true)
 		if err != nil {
 			if errors.Is(err, ErrMutexLocked) {
-				lg.Logf(lg.DebugLevel, "Cant lock. Another runtime is already active")
+				logger.Debugf(ctx, "Cant lock. Another runtime is already active")
 				r.config.isActiveInstance = false
 			} else {
 				return err
@@ -164,7 +231,7 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 
 	// Handle single-instance functions.
 	singleInstanceFunctionRevisions := make(map[string]uint64)
-	if err := r.handleSingleInstanceFunctions(ctx, singleInstanceFunctionRevisions); err != nil {
+	if err := r.handleSingleInstanceFunctions(phaseOneContext, singleInstanceFunctionRevisions); err != nil {
 		return err
 	}
 
@@ -176,22 +243,69 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 	}
 
 	// Run after-start functions.
-	r.runAfterStartFunctions(ctx)
+	r.runAfterStartFunctions(phaseOneContext)
 
 	// Start garbage collector.
 	r.wg.Add(1)
-	go r.runGarbageCollector(ctx)
+	go r.runGarbageCollector(phaseThreeContext)
+
+	// Set Runtime ready
+	r.isReady = true
 
 	// Wait for shutdown signal.
 	<-r.shutdown
+	cancelPhaseThreeContext()
 
 	// Perform cleanup.
-	logger.Infof(context.TODO(), "Shutting down runtime...")
-	r.wg.Wait()
+	logger.Info(ctx, "Shutting down...")
+
+	waitCh := make(chan struct{})
+	go func() {
+		r.wg.Wait()
+		close(waitCh)
+	}()
+	timeoutCh := time.After(5 * time.Second)
+	select {
+	case <-waitCh:
+	case <-timeoutCh:
+		logger.Info(ctx, "Timed out waiting WG for runtime to finish")
+	}
 	return nil
 }
 
-// Shutdown gracefully stops the runtime.
+func (r *Runtime) drainSignalSubscriptions() {
+	var wg sync.WaitGroup
+	for ftName, ft := range r.registeredFunctionTypes {
+		wg.Add(1)
+		go func(name string, ft *FunctionType) {
+			defer wg.Done()
+			ft.stopSignalSubscription()
+		}(ftName, ft)
+	}
+	wg.Wait()
+}
+
+func (r *Runtime) stopRequestSubscriptions() {
+	for {
+		allFunctionsReadyForShutdown := true
+		for _, ft := range r.registeredFunctionTypes {
+			if (int(ft.lastMsgTimeNs.Load()) + r.config.functionTypeIDLifetimeMs*1000) > int(system.GetCurrentTimeNs()) {
+				allFunctionsReadyForShutdown = false
+				continue
+			}
+		}
+		if allFunctionsReadyForShutdown {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+
+	for _, ft := range r.registeredFunctionTypes {
+		ft.stopRequestSubscription()
+	}
+}
+
+// Shutdown stops the runtime.
 func (r *Runtime) Shutdown() {
 	close(r.shutdown)
 }
@@ -292,9 +406,9 @@ func (r *Runtime) startFunctionSubscriptions(ctx context.Context, revisions map[
 func (r *Runtime) runAfterStartFunctions(ctx context.Context) {
 	for _, fnWithMode := range r.onAfterStartFunctionsWithMode {
 		if fnWithMode.async {
-			r.wg.Add(1)
+			r.afterStartFunctionsWaitGroup.Add(1)
 			go func(f OnAfterStartFunction) {
-				defer r.wg.Done()
+				defer r.afterStartFunctionsWaitGroup.Done()
 				system.GlobalPrometrics.GetRoutinesCounter().Started("runtime_onAfterStart")
 				defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("runtime_onAfterStart")
 				if err := f(ctx, r); err != nil {
@@ -318,7 +432,6 @@ func (r *Runtime) runGarbageCollector(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
 		case <-r.shutdown:
 			return
 		case <-ticker.C:
@@ -338,6 +451,9 @@ func (r *Runtime) collectGarbage() {
 		lg.Logf(lg.ErrorLevel, "Error ensuring GaugeVec: %v", err)
 	}
 
+	isShutdown := r.shutdownPhase.Load() == ShutdownPhaseTwo
+	functionsReadyForStop := isShutdown
+
 	for _, ft := range r.registeredFunctionTypes {
 		collected, running := ft.gc(r.config.functionTypeIDLifetimeMs)
 		totalGarbageCollected += collected
@@ -346,6 +462,25 @@ func (r *Runtime) collectGarbage() {
 		if gaugeVec != nil {
 			gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(float64(running))
 		}
+
+		if isShutdown &&
+			(running > 0 ||
+				ft.sfWorkerPool.GetActiveWorkersCount() > 0 ||
+				len(ft.sfWorkerPool.taskQueue) > 0 ||
+				(int64(ft.lastMsgTimeNs.Load())+int64(r.config.functionTypeIDLifetimeMs*1000*1000) > system.GetCurrentTimeNs())) {
+			lg.GetLogger().Debugf(context.TODO(), "for function %s is running=%d, is active=%d", ft.name, running, ft.sfWorkerPool.GetActiveWorkersCount())
+			functionsReadyForStop = false
+			ft.lastMsgTimeNs.Store(uint64(system.GetCurrentTimeNs()))
+		}
+	}
+
+	if functionsReadyForStop {
+		lg.GetLogger().Infof(context.TODO(), "all functions are ready for stop")
+		for _, ft := range r.registeredFunctionTypes {
+			ft.stopRequestSubscription()
+		}
+		r.shutdownPhase.Store(ShutdownPhaseThree)
+		r.functionsStopCh <- struct{}{}
 	}
 
 	if totalGarbageCollected > 0 && totalHandlersRunning == 0 {

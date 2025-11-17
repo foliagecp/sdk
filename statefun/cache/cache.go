@@ -34,6 +34,13 @@ const (
 	FlagJSONAppend  uint8 = 0x04
 )
 
+const (
+	//gracefully shutdown
+	shutdownStatusNone = iota
+	shutdownStatusWaiting
+	shutdownStatusReady
+)
+
 var (
 	keyValidationRegexp *regexp.Regexp = regexp.MustCompile(`^[a-zA-Z0-9/=_$#@$%+-][a-zA-Z0-9/=._$#@%+-]+[a-zA-Z0-9/=_$#@%+-]$|^[a-zA-Z0-9/=_$#@%+-]*$`)
 )
@@ -249,6 +256,16 @@ func (csv *StoreValue) SetValueType(valueType uint8) {
 	csv.valueType = valueType
 }
 
+func (csv *StoreValue) syncState() (bool, int64, bool, bool) {
+	csv.RLock("kvLazyWriter read")
+	ve := csv.valueExists
+	vut := csv.valueUpdateTime
+	sn := csv.syncNeeded
+	sw := csv.syncedWithKV
+	csv.RUnlock("kvLazyWriter read")
+	return ve, vut, sn, sw
+}
+
 type TransactionOperator struct {
 	operatorType int // 0 - set, 1 - delete
 	key          string
@@ -282,6 +299,7 @@ type Store struct {
 	backupBarrierTimestamp   int64
 	backupBarrierStatus      int32 // 0=unlocked, 1=locking, 2=locked
 	backupBarrierLastChecked int64
+	Synced                   chan struct{}
 }
 
 func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamContext, kv nats.KeyValue) *Store {
@@ -311,6 +329,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 		backupBarrierTimestamp:   0,
 		backupBarrierStatus:      BackupBarrierStatusUnlocked,
 		backupBarrierLastChecked: 0,
+		Synced:                   make(chan struct{}),
 	}
 
 	cs.ctx, cs.cancel = context.WithCancel(ctx)
@@ -326,6 +345,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 				select {
 				case <-cs.ctx.Done():
 					activeKVSync = false
+					return
 				case entry := <-w.Updates():
 					if entry != nil {
 						key := cs.fromStoreKey(entry.Key())
@@ -400,176 +420,212 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 	kvLazyWriter := func(cs *Store) {
 		system.GlobalPrometrics.GetRoutinesCounter().Started("cache.kvLazyWriter")
 		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("cache.kvLazyWriter")
+		shutdownStatus := shutdownStatusNone
 		for {
+			//start := time.Now()
+			iterationSyncedCount := 0
+			traverseCount := 0
+
 			select {
 			case <-cs.ctx.Done():
-			default:
-				backupBarrierTimestamp, backupBarrierStatus := cs.getBackupBarrierState()
-				if backupBarrierStatus == BackupBarrierStatusLocking {
-					if backupBarrierTimestamp == 0 {
-						backupBarrierTimestamp = system.GetCurrentTimeNs()
-						system.MsgOnErrorReturn(cs.updateBackupBarrierWithTimestamp(backupBarrierTimestamp))
-						lg.Logf(lg.InfoLevel, "Backup requested, set barrier timestamp: %d", backupBarrierTimestamp)
-					}
+				switch shutdownStatus {
+				case shutdownStatusNone:
+					lg.GetLogger().Debugf(ctx, "cache got shutdown sinal")
+					shutdownStatus = shutdownStatusWaiting
+				case shutdownStatusWaiting:
+				case shutdownStatusReady:
+					lg.GetLogger().Debugf(ctx, "cache synced, ready for shutdown")
+					close(cs.Synced)
+					return
 				}
-				allBeforeBackupBarrierSynced := true
+			default:
+			}
+			backupBarrierTimestamp, backupBarrierStatus := cs.getBackupBarrierState()
+			if backupBarrierStatus == BackupBarrierStatusLocking {
+				if backupBarrierTimestamp == 0 {
+					backupBarrierTimestamp = system.GetCurrentTimeNs()
+					system.MsgOnErrorReturn(cs.updateBackupBarrierWithTimestamp(backupBarrierTimestamp))
+					lg.Logf(lg.InfoLevel, "set barrier timestamp: %d", backupBarrierTimestamp)
+				}
+			}
+			allBeforeBackupBarrierSynced := true
 
-				cacheStoreValueStack := []*StoreValue{cs.rootValue}
-				suffixPathsStack := []string{""}
-				depthsStack := []int{0}
+			cacheStoreValueStack := []*StoreValue{cs.rootValue}
+			suffixPathsStack := []string{""}
+			depthsStack := []int{0}
 
-				lruTimes := []int64{}
+			lruTimes := []int64{}
 
-				for len(cacheStoreValueStack) > 0 {
-					lastID := len(cacheStoreValueStack) - 1
+			for len(cacheStoreValueStack) > 0 {
+				lastID := len(cacheStoreValueStack) - 1
 
-					currentStoreValue := cacheStoreValueStack[lastID]
+				currentStoreValue := cacheStoreValueStack[lastID]
+				traverseCount++ //Debug
 
-					currentStoreValue.RLock("kvLazyWriter")
-					lruTimes = append(lruTimes, currentStoreValue.valueUpdateTime)
-					currentStoreValue.RUnlock("kvLazyWriter")
+				currentStoreValue.RLock("kvLazyWriter")
+				lruTimes = append(lruTimes, currentStoreValue.valueUpdateTime)
+				currentStoreValue.RUnlock("kvLazyWriter")
 
-					currentSuffix := suffixPathsStack[lastID]
-					currentDepth := depthsStack[lastID]
+				currentSuffix := suffixPathsStack[lastID]
+				currentDepth := depthsStack[lastID]
 
-					cacheStoreValueStack = cacheStoreValueStack[:lastID]
-					suffixPathsStack = suffixPathsStack[:lastID]
-					depthsStack = depthsStack[:lastID]
+				cacheStoreValueStack = cacheStoreValueStack[:lastID]
+				suffixPathsStack = suffixPathsStack[:lastID]
+				depthsStack = depthsStack[:lastID]
 
-					noChildred := true
-					currentStoreValue.Range(func(key, value interface{}) bool {
-						noChildred = false
+				noChildred := true
+				currentStoreValue.Range(func(key, value interface{}) bool {
+					noChildred = false
 
-						var newSuffix string
-						if currentDepth == 0 {
-							newSuffix = currentSuffix + key.(string)
-						} else {
-							newSuffix = currentSuffix + "." + key.(string)
-						}
+					var newSuffix string
+					if currentDepth == 0 {
+						newSuffix = currentSuffix + key.(string)
+					} else {
+						newSuffix = currentSuffix + "." + key.(string)
+					}
 
-						var finalBytes []byte = nil
+					var finalBytes []byte = nil
 
-						csvChild := value.(*StoreValue)
+					csvChild := value.(*StoreValue)
 
-						if backupBarrierStatus == BackupBarrierStatusLocking {
-							csvChild.RLock("kvLazyWriter read")
-							ve := csvChild.valueExists
-							vut := csvChild.valueUpdateTime
-							sn := csvChild.syncNeeded
-							sw := csvChild.syncedWithKV
-							csvChild.RUnlock("kvLazyWriter read")
-
-							if ve && vut > 0 && vut <= backupBarrierTimestamp {
-								if sn || !sw {
-									allBeforeBackupBarrierSynced = false
-								}
+					if backupBarrierStatus == BackupBarrierStatusLocking {
+						ve, vut, sn, sw := csvChild.syncState()
+						if ve && vut > 0 && vut <= backupBarrierTimestamp {
+							if sn || !sw {
+								allBeforeBackupBarrierSynced = false
 							}
 						}
+					}
 
-						var valueUpdateTime int64 = 0
-						csvChild.Lock("kvLazyWriter")
-						if csvChild.syncNeeded {
-							valueUpdateTime = csvChild.valueUpdateTime
-							timeBytes := make([]byte, 8)
-							binary.BigEndian.PutUint64(timeBytes, uint64(valueUpdateTime))
-							if csvChild.valueExists {
-								var flag uint8
-								var dataBytes []byte
-								switch csvChild.valueType {
-								case typeByteArray:
-									flag = FlagBytesAppend
-									dataBytes = csvChild.value.([]byte)
-								case typeJson:
-									flag = FlagJSONAppend
-									dataBytes = csvChild.value.(*easyjson.JSON).ToBytes()
-								default:
-									lg.Logf(lg.ErrorLevel, "Unknown type for key=%s, value=%v", newSuffix, csvChild.value)
-									csvChild.Unlock("kvLazyWriter")
-									return true
-								}
-								header := append(timeBytes, flag)
-								finalBytes = append(header, dataBytes...)
-							} else {
-								finalBytes = append(timeBytes, FlagDeleted) // Add delete flag "0"
-							}
-						} else {
-							if csvChild.valueUpdateTime > 0 && csvChild.valueUpdateTime <= cs.lruTresholdTime && csvChild.purgeState == 0 { // Older than or equal to specific time
-								// currentStoreValue locked by range no locking/unlocking needed
-								currentStoreValue.ConsistencyLoss(system.GetCurrentTimeNs())
-								//lg.Logf("Consistency lost for key=\"%s\" store", currentStoreValue.GetFullKeyString())
-								//lg.Logln("Purging: " + newSuffix)
-								csvChild.TryPurgeReady()
-								csvChild.TryPurgeConfirm()
-							}
-						}
-						csvChild.Unlock("kvLazyWriter")
-
-						// Putting value into KV store ------------------
-						if csvChild.syncNeeded {
-							keyStr := key.(string)
-							///_, putErr := kv.Put(cs.toStoreKey(newSuffix), finalBytes)
-
-							if err := cs.checkBackupBarrierInfoBeforeWrite(valueUpdateTime); err != nil {
-								lg.Logf(lg.TraceLevel, "==============skipping write for key=%s due to barrier: %v", keyStr, err)
+					var valueUpdateTime int64 = 0
+					csvChild.Lock("kvLazyWriter")
+					if csvChild.syncNeeded {
+						valueUpdateTime = csvChild.valueUpdateTime
+						timeBytes := make([]byte, 8)
+						binary.BigEndian.PutUint64(timeBytes, uint64(valueUpdateTime))
+						if csvChild.valueExists {
+							var flag uint8
+							var dataBytes []byte
+							switch csvChild.valueType {
+							case typeByteArray:
+								flag = FlagBytesAppend
+								dataBytes = csvChild.value.([]byte)
+							case typeJson:
+								flag = FlagJSONAppend
+								dataBytes = csvChild.value.(*easyjson.JSON).ToBytes()
+							default:
+								lg.Logf(lg.ErrorLevel, "Unknown type for key=%s, value=%v", newSuffix, csvChild.value)
+								csvChild.Unlock("kvLazyWriter")
 								return true
 							}
-
-							_, putErr := customNatsKv.KVPut(cs.js, kv, cs.toStoreKey(newSuffix), finalBytes)
-							if putErr == nil {
-								csvChild.Lock("kvLazyWriter")
-								if valueUpdateTime == csvChild.valueUpdateTime {
-									csvChild.syncNeeded = false
-								}
-								csvChild.Unlock("kvLazyWriter")
-							} else {
-								lg.Logf(lg.ErrorLevel, "Store kvLazyWriter cannot update key=%s\n: %s", keyStr, putErr)
-							}
+							header := append(timeBytes, flag)
+							finalBytes = append(header, dataBytes...)
+						} else {
+							finalBytes = append(timeBytes, FlagDeleted) // Add delete flag "0"
 						}
-						// ----------------------------------------------
+					} else {
+						if csvChild.valueUpdateTime > 0 && csvChild.valueUpdateTime <= cs.lruTresholdTime && csvChild.purgeState == 0 { // Older than or equal to specific time
+							// currentStoreValue locked by range no locking/unlocking needed
+							currentStoreValue.ConsistencyLoss(system.GetCurrentTimeNs())
+							//lg.Logf("Consistency lost for key=\"%s\" store", currentStoreValue.GetFullKeyString())
+							//lg.Logln("Purging: " + newSuffix)
+							csvChild.TryPurgeReady()
+							csvChild.TryPurgeConfirm()
+						}
+					}
+					csvChild.Unlock("kvLazyWriter")
 
-						cacheStoreValueStack = append(cacheStoreValueStack, value.(*StoreValue))
-						suffixPathsStack = append(suffixPathsStack, newSuffix)
-						depthsStack = append(depthsStack, currentDepth+1)
+					// Putting value into KV store ------------------
+					if csvChild.syncNeeded {
+						iterationSyncedCount++
 
+						keyStr := key.(string)
+						///_, putErr := kv.Put(cs.toStoreKey(newSuffix), finalBytes)
+
+						if err := cs.checkBackupBarrierInfoBeforeWrite(valueUpdateTime); err != nil {
+							lg.Logf(lg.TraceLevel, "==============skipping write for key=%s due to barrier: %v", keyStr, err)
+							return true
+						}
+
+						_, putErr := customNatsKv.KVPut(cs.js, kv, cs.toStoreKey(newSuffix), finalBytes)
+						if putErr == nil {
+							csvChild.Lock("kvLazyWriter")
+							if valueUpdateTime == csvChild.valueUpdateTime {
+								csvChild.syncNeeded = false
+							}
+							csvChild.Unlock("kvLazyWriter")
+						} else {
+							lg.Logf(lg.ErrorLevel, "Store kvLazyWriter cannot update key=%s\n: %s", keyStr, putErr)
+						}
+					}
+					// ----------------------------------------------
+
+					cacheStoreValueStack = append(cacheStoreValueStack, value.(*StoreValue))
+					suffixPathsStack = append(suffixPathsStack, newSuffix)
+					depthsStack = append(depthsStack, currentDepth+1)
+
+					select {
+					case <-cs.ctx.Done():
+						if shutdownStatus == shutdownStatusNone {
+							shutdownStatus = shutdownStatusWaiting
+						}
+					default:
 						time.Sleep(time.Duration(cacheConfig.lazyWriterValueProcessDelayMkS) * time.Microsecond)
-						return true
-					})
-
-					if noChildred {
-						currentStoreValue.collectGarbage()
 					}
+					return true
+				})
+
+				if noChildred {
+					currentStoreValue.collectGarbage()
 				}
-
-				if backupBarrierStatus == BackupBarrierStatusLocking && allBeforeBackupBarrierSynced {
-					cs.markCacheReadyForBackup()
-				}
-
-				sort.Slice(lruTimes, func(i, j int) bool { return lruTimes[i] > lruTimes[j] })
-				if len(lruTimes) > cacheConfig.lruSize {
-					cs.lruTresholdTime = lruTimes[cacheConfig.lruSize-1]
-				} else {
-					cs.lruTresholdTime = lruTimes[len(lruTimes)-1]
-				}
-
-				/*// Debug info -----------------------------------------------------
-				if cs.valuesInCache != len(lruTimes) {
-					cmpr := []bool{}
-					for i := 0; i < len(lruTimes); i++ {
-						cmpr = append(cmpr, lruTimes[i] > 0 && lruTimes[i] <= cs.lruTresholdTime)
-					}
-					lg.Logf("LEFT IN CACHE: %d (%d) - %s %s", len(lruTimes), cs.lruTresholdTime, fmt.Sprintln(cmpr), fmt.Sprintln(lruTimes))
-				}
-				// ----------------------------------------------------------------*/
-
-				cs.valuesInCache = len(lruTimes)
-
-				if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("cache_values", "", []string{"id"}); err == nil {
-					gaugeVec.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(cs.valuesInCache))
-				}
-
-				time.Sleep(time.Duration(cacheConfig.lazyWriterRepeatDelayMkS) * time.Microsecond) // Prevents too many locks and prevents too much processor time consumption
 			}
+
+			if backupBarrierStatus == BackupBarrierStatusLocking && allBeforeBackupBarrierSynced {
+				cs.markCacheReadyForBackup()
+			}
+			if shutdownStatus == shutdownStatusWaiting && iterationSyncedCount == 0 {
+				shutdownStatus = shutdownStatusReady
+			}
+			sort.Slice(lruTimes, func(i, j int) bool { return lruTimes[i] > lruTimes[j] })
+			if len(lruTimes) > cacheConfig.lruSize {
+				cs.lruTresholdTime = lruTimes[cacheConfig.lruSize-1]
+			} else {
+				cs.lruTresholdTime = lruTimes[len(lruTimes)-1]
+			}
+
+			/*// Debug info -----------------------------------------------------
+			if cs.valuesInCache != len(lruTimes) {
+				cmpr := []bool{}
+				for i := 0; i < len(lruTimes); i++ {
+					cmpr = append(cmpr, lruTimes[i] > 0 && lruTimes[i] <= cs.lruTresholdTime)
+				}
+				lg.Logf("LEFT IN CACHE: %d (%d) - %s %s", len(lruTimes), cs.lruTresholdTime, fmt.Sprintln(cmpr), fmt.Sprintln(lruTimes))
+			}
+			// ----------------------------------------------------------------*/
+
+			cs.valuesInCache = len(lruTimes)
+
+			if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("cache_values", "", []string{"id"}); err == nil {
+				gaugeVec.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(cs.valuesInCache))
+			}
+			/*// Debug info -----------------------------------------------------
+
+			iterationElapsed := time.Since(start)
+
+			if iterationSyncedCount > 0 {
+				speed := float64(iterationSyncedCount) / iterationElapsed.Seconds()
+				lg.GetLogger().Debugf(cs.ctx,
+					"::::::::::::::: Iteration: synced %d values (traversed %d nodes) in %v  speed: %.2f writes/sec",
+					iterationSyncedCount, traverseCount, iterationElapsed, speed)
+			} else {
+				//lg.GetLogger().Debugf(cs.ctx, "::::::::::::::: Iteration: synced 0 values (traversed %d nodes) in %v",
+				//	traverseCount, iterationElapsed)
+			}
+			// ----------------------------------------------------------------*/
+
+			time.Sleep(time.Duration(cacheConfig.lazyWriterRepeatDelayMkS) * time.Microsecond) // Prevents too many locks and prevents too much processor time consumption
 		}
+
 	}
 	go storeUpdatesHandler(&cs)
 	go kvLazyWriter(&cs)

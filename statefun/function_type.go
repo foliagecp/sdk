@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/foliagecp/easyjson"
@@ -36,6 +37,12 @@ type FunctionType struct {
 
 	sfWorkerPool *SFWorkerPool
 	tokens       system.TokenBucket
+	//-------for graceful shutdown-------
+	signalSubscription  *nats.Subscription
+	requestSubscription *nats.Subscription
+	shutdownCh          chan struct{}
+	lastMsgTimeNs       atomic.Uint64
+	//-----------------------------------
 }
 
 const (
@@ -52,6 +59,7 @@ func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHa
 		idKeyMutex:   system.NewKeyMutex(),
 		config:       config,
 		tokens:       *system.NewTokenBucket(config.functionWorkerPoolConfig.MaxWorkers + config.functionWorkerPoolConfig.TaskQueueLen),
+		shutdownCh:   make(chan struct{}, 1),
 	}
 	if runtime.canRegisterNewFunctionType {
 		ft.sfWorkerPool = NewSFWorkerPool(ft, config.functionWorkerPoolConfig)
@@ -238,6 +246,7 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 }
 
 func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameIDContextProcessor *sfPlugins.StatefunContextProcessor) {
+	ft.lastMsgTimeNs.Store(uint64(system.GetCurrentTimeNs()))
 	msgRequestCallback := msg.RequestCallback
 	replyDataChannel := make(chan *easyjson.JSON, 1)
 	typenameIDContextProcessor.Reply = nil
@@ -411,7 +420,6 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 	if garbageCollected > 0 && handlersRunning == 0 {
 		lg.Logf(lg.TraceLevel, ">>>>>>>>>>>>>> Garbage collected for typename %s - no id handlers left", ft.name)
 	}
-
 	return
 }
 
@@ -492,4 +500,41 @@ func (ft *FunctionType) findObjectType(id string) (string, error) {
 		return "", err
 	}
 	return response.GetByPath("data.type").AsStringDefault(""), nil
+}
+
+func (ft *FunctionType) stopSignalSubscription() {
+	if !ft.signalSubscription.IsValid() {
+		return
+	}
+	logger.GetLogger().Debugf(context.TODO(), "draining signal subscription for typename %s", ft.name)
+	if err := ft.signalSubscription.Drain(); err != nil {
+		logger.GetLogger().Errorf(context.TODO(), "failed to drain signal subscription for typename %s: %s", ft.name, err.Error())
+		return
+	}
+
+	timeout := time.After(10 * time.Second)
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			logger.GetLogger().Errorf(context.TODO(), "timeout waiting for signal subscription drain for typename %s", ft.name)
+			return
+		case <-ticker.C:
+			if !ft.signalSubscription.IsValid() {
+				logger.GetLogger().Debugf(context.TODO(), "signal subscription drained successfully for typename %s", ft.name)
+				return
+			}
+		}
+	}
+}
+
+func (ft *FunctionType) stopRequestSubscription() {
+	if ft.requestSubscription == nil || !ft.requestSubscription.IsValid() {
+		return
+	}
+	ft.sfWorkerPool.Stop()
+	ft.requestSubscription.Unsubscribe()
+	logger.GetLogger().Debugf(context.TODO(), "unsubscribe request subscription for typename %s", ft.name)
 }

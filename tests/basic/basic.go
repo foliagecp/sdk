@@ -9,17 +9,17 @@ import (
 	"time"
 
 	"github.com/foliagecp/easyjson"
+	graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
+	"github.com/foliagecp/sdk/embedded/graph/fpl"
+	"github.com/foliagecp/sdk/embedded/graph/jpgql"
+	"github.com/foliagecp/sdk/embedded/graph/search"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/foliagecp/sdk/clients/go/db"
 	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
-	"github.com/foliagecp/sdk/embedded/graph/fpl"
 	"github.com/foliagecp/sdk/embedded/graph/graphql"
-	"github.com/foliagecp/sdk/embedded/graph/search"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 
-	graphDebug "github.com/foliagecp/sdk/embedded/graph/debug"
-	"github.com/foliagecp/sdk/embedded/graph/jpgql"
 	"github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/cache"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
@@ -220,7 +220,7 @@ func Start() {
 			registerTriggerFunctions(runtime)
 		}
 		runtime.RegisterOnAfterStartFunction(afterStart, true)
-		if err := runtime.Start(context.TODO(), cache.NewCacheConfig("main_cache")); err != nil {
+		if err := runtime.Start(context.Background(), cache.NewCacheConfig("main_cache")); err != nil {
 			lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s", err)
 		}
 	} else {
