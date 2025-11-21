@@ -242,15 +242,15 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 		}
 	}
 
-	// Run after-start functions.
-	r.runAfterStartFunctions(phaseOneContext)
-
 	// Start garbage collector.
 	r.wg.Add(1)
 	go r.runGarbageCollector(phaseThreeContext)
 
 	// Set Runtime ready
 	r.isReady = true
+
+	// Run after-start functions.
+	r.runAfterStartFunctions(phaseOneContext)
 
 	// Wait for shutdown signal.
 	<-r.shutdown
