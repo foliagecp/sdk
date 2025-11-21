@@ -189,6 +189,7 @@ func getVertexBodyAndOutLinks(ctx *sfPlugins.StatefunContextProcessor, id string
 
 		payload := easyjson.NewJSONObjectWithKeyValue("details", easyjson.NewJSON(true))
 		payload.SetByPath("name", easyjson.NewJSON(linkName))
+		// TODO: Do not read in link to get link type, but tags cannot be obtained by any other means
 		som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", from, &payload, nil))
 		if som.Status == sfMediators.SYNC_OP_STATUS_OK {
 			lt = som.Data.GetByPath("type").AsStringDefault(lt)
