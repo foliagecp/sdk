@@ -503,7 +503,7 @@ func JPGQLCallTreeResultAggregation(_ sfPlugins.StatefunExecutor, ctx *sfPlugins
 	result.SetByPath("stats.times.query_start_nano", easyjson.NewJSON(queryStartedNano))
 	result.SetByPath("stats.times.query_end_nano", easyjson.NewJSON(callTimeNano))
 	result.SetByPath("stats.duration.max_backpressure_nano", easyjson.NewJSON(maxBackpressureNano))
-	result.SetByPath("stats.duration.query_nano", easyjson.NewJSON(callTimeNano-queryStartedNano))
+	result.SetByPath("stats.duration.query_nano", easyjson.NewJSON(qdsEndNano-queryStartedNano))
 	result.SetByPath("stats.duration.qds_nano", easyjson.NewJSON(qdsEndNano-queryStartedNano))
 
 	om.AggregateOpMsg(sfMediators.OpMsgOk(result)).Reply()
