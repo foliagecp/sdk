@@ -341,7 +341,7 @@ func JPGQLCallTreeResultAggregation(_ sfPlugins.StatefunExecutor, ctx *sfPlugins
 	visited := map[string]struct{}{}
 	visited[rootVertexID+"|"+jpQuery] = struct{}{}
 
-	resultUUIDs := map[string]bool{}
+	resultUUIDs := map[string]interface{}{}
 
 	// Stats
 	maxDepthReached := 0
