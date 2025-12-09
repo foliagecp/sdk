@@ -278,9 +278,7 @@ func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDo
 		}
 		kvExists = true
 	}
-	if !kvExists {
-		return fmt.Errorf("Nats KV was not inited")
-	}
+
 	// --------------------------------------------------------------
 
 	if createDomainRouters {
@@ -307,11 +305,52 @@ func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDo
 		if err := dm.createTraceStream(); err != nil {
 			return err
 		}
+		if err := dm.createWALOperationsStream(); err != nil {
+			return err
+		}
+		if err := dm.createWALCommitsStream(); err != nil {
+			return err
+		}
 	}
 
-	lg.Logln(lg.TraceLevel, "Initializing the cache store...")
+	le := lg.GetLogger()
+
+	le.Debug(ctx, "Starting Transaction Committer...")
+	if err := dm.TransactionCommitter(ctx); err != nil {
+		return err
+	}
+
+	le.Debug(ctx, "Waiting for KV to become consistent...")
+	startTime := time.Now()
+	lastLogTime := startTime
+	logInterval := 5 * time.Second
+
+	for {
+		consistent, err := dm.isKVConsistent()
+		if err != nil {
+			le.Errorf(ctx, "Failed to check KV consistency: %s", err)
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		if consistent {
+			elapsed := time.Since(startTime)
+			le.Debugf(ctx, "KV is consistent (waited %v), proceeding with cache initialization", elapsed.Round(time.Millisecond))
+			break
+		}
+
+		if time.Since(lastLogTime) >= logInterval {
+			elapsed := time.Since(startTime)
+			le.Debugf(ctx, "Still waiting for KV consistency... (elapsed: %v)", elapsed.Round(time.Second))
+			lastLogTime = time.Now()
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	le.Trace(ctx, "Initializing the cache store...")
 	dm.cache = cache.NewCacheStore(ctx, cacheConfig, dm.js, dm.kv)
-	lg.Logln(lg.TraceLevel, "Cache store inited!")
+	dm.cache.SetTransactionGenerator(dm)
+	le.Trace(ctx, "Cache store inited!")
 
 	return nil
 }
@@ -410,6 +449,26 @@ func (dm *Domain) createTraceStream() error {
 	return dm.createStreamIfNotExists(sc)
 }
 
+func (dm *Domain) createWALOperationsStream() error {
+	sc := &nats.StreamConfig{
+		Name:      WALOperationsStreamName,
+		Subjects:  []string{fmt.Sprintf("wal.ops.%s.>", dm.kv.Bucket())},
+		Retention: nats.WorkQueuePolicy,
+		MaxAge:    24 * time.Hour,
+	}
+	return dm.createStreamIfNotExists(sc)
+}
+
+func (dm *Domain) createWALCommitsStream() error {
+	sc := &nats.StreamConfig{
+		Name:      WALCommitsStreamName,
+		Subjects:  []string{fmt.Sprintf(WALCommitsSubject, dm.kv.Bucket())},
+		Retention: nats.WorkQueuePolicy,
+		MaxAge:    24 * time.Hour,
+	}
+	return dm.createStreamIfNotExists(sc)
+}
+
 func (dm *Domain) createStreamIfNotExists(sc *nats.StreamConfig) error {
 	// Create streams if does not exist ------------------------------
 	/* Each stream contains a single subject (topic).
@@ -475,7 +534,7 @@ func (dm *Domain) createRouter(sourceStreamName string, subject string, tsc targ
 					case domainEgressStreamName:
 						// Default logic - infinite republishing
 					case domainIngressStreamName:
-						// Send message to DLQ without retryAdd commentMore actions
+						// Send message to DLQ without retry
 						if err == nil {
 							lg.Logf(lg.DebugLevel, "Domain (domain=%s) router with sourceStreamName=%s republished message to DLQ", dm.name, sourceStreamName)
 							system.MsgOnErrorReturn(msg.Ack())
@@ -514,4 +573,16 @@ func dlqMsgBuilder(subject, stream, domain, errorMsg string, data []byte) *nats.
 	dlqMsg.Header.Set("Timestamp", time.Now().UTC().String())
 
 	return dlqMsg
+}
+
+func (dm *Domain) PublishOperation(txID string, opTime int64, opType cache.OpType, key string, value []byte) error {
+	return dm.publishWALOperation(txID, opTime, opType, key, value)
+}
+
+func (dm *Domain) PublishCommit(txID string) error {
+	return dm.publishWALCommit(txID)
+}
+
+func (dm *Domain) GenerateTransactionID() string {
+	return GenerateTransactionID()
 }
