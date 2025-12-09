@@ -122,8 +122,14 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		maxBytes:      config.kvStreamMaxBytes,
 		maxAge:        config.kvStreamMaxAge,
 	}
+	traceStreamConfig := streamConfig{
+		replicasCount: config.natsReplicasCount,
+		maxMsgs:       config.traceStreamMaxMsgs,
+		maxBytes:      config.traceStreamMaxBytes,
+		maxAge:        config.traceStreamMaxAge,
+	}
 
-	r.Domain, err = NewDomain(r.nc, r.js, config.desiredHUBDomainName, ftStreamConfig, sysStreamConfig, kvStreamConfig)
+	r.Domain, err = NewDomain(r.nc, r.js, config.desiredHUBDomainName, ftStreamConfig, sysStreamConfig, kvStreamConfig, traceStreamConfig)
 	if err != nil {
 		return nil, err
 	}

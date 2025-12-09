@@ -1,6 +1,10 @@
 package statefun
 
-import "time"
+import (
+	"time"
+
+	"github.com/foliagecp/sdk/statefun/system"
+)
 
 const (
 	RuntimeName                 = "runtime"
@@ -21,6 +25,9 @@ const (
 	SysStreamMaxMsgs            = 80000
 	SysStreamMaxBytes           = 1024 * 1024 * 512
 	SysStreamMaxAge             = 12 * time.Hour
+	TraceStreamMaxMsgs          = 100000
+	TraceStreamMaxBytes         = 1024 * 1024 * 64
+	TraceStreamMaxAge           = 24 //hours
 	KVStreamMaxMsgs             = -1 //unlimited
 	KVStreamMaxBytes            = -1 //unlimited
 	KVStreamMaxAge              = 0  //unlimited
@@ -46,30 +53,36 @@ type RuntimeConfig struct {
 }
 
 type StreamParams struct {
-	natsReplicasCount int
-	ftStreamMaxMsgs   int64
-	ftStreamMaxBytes  int64
-	ftStreamMaxAge    time.Duration
-	sysStreamMaxMsgs  int64
-	sysStreamMaxBytes int64
-	sysStreamMaxAge   time.Duration
-	kvStreamMaxMsgs   int64
-	kvStreamMaxBytes  int64
-	kvStreamMaxAge    time.Duration
+	natsReplicasCount   int
+	ftStreamMaxMsgs     int64
+	ftStreamMaxBytes    int64
+	ftStreamMaxAge      time.Duration
+	sysStreamMaxMsgs    int64
+	sysStreamMaxBytes   int64
+	sysStreamMaxAge     time.Duration
+	kvStreamMaxMsgs     int64
+	kvStreamMaxBytes    int64
+	kvStreamMaxAge      time.Duration
+	traceStreamMaxMsgs  int64
+	traceStreamMaxBytes int64
+	traceStreamMaxAge   time.Duration
 }
 
 func NewRuntimeConfig() *RuntimeConfig {
 	streamParams := StreamParams{
-		natsReplicasCount: NatsReplicasCount,
-		ftStreamMaxMsgs:   FtStreamMaxMsgs,
-		ftStreamMaxBytes:  FtStreamMaxBytes,
-		ftStreamMaxAge:    FtStreamMaxAge,
-		sysStreamMaxMsgs:  SysStreamMaxMsgs,
-		sysStreamMaxBytes: SysStreamMaxBytes,
-		sysStreamMaxAge:   SysStreamMaxAge,
-		kvStreamMaxMsgs:   KVStreamMaxMsgs,
-		kvStreamMaxBytes:  KVStreamMaxBytes,
-		kvStreamMaxAge:    KVStreamMaxAge,
+		natsReplicasCount:   NatsReplicasCount,
+		ftStreamMaxMsgs:     FtStreamMaxMsgs,
+		ftStreamMaxBytes:    FtStreamMaxBytes,
+		ftStreamMaxAge:      FtStreamMaxAge,
+		sysStreamMaxMsgs:    SysStreamMaxMsgs,
+		sysStreamMaxBytes:   SysStreamMaxBytes,
+		sysStreamMaxAge:     SysStreamMaxAge,
+		kvStreamMaxMsgs:     KVStreamMaxMsgs,
+		kvStreamMaxBytes:    KVStreamMaxBytes,
+		kvStreamMaxAge:      KVStreamMaxAge,
+		traceStreamMaxMsgs:  int64(system.GetEnvMustProceed("TRACE_STREAM_MAX_BYTES", TraceStreamMaxMsgs)),
+		traceStreamMaxBytes: int64(system.GetEnvMustProceed("TRACE_STREAM_MAX_MSG", TraceStreamMaxBytes)),
+		traceStreamMaxAge:   time.Duration(system.GetEnvMustProceed("TRACE_STREAM_MAX_AGE_HOURS", TraceStreamMaxAge)) * time.Hour,
 	}
 
 	return &RuntimeConfig{
@@ -170,6 +183,7 @@ const (
 	StreamTypeFunction StreamType = iota
 	StreamTypeSystem
 	StreamTypeKV
+	StreamTypeTrace
 )
 
 func (ro *RuntimeConfig) SetStreamMaxMessages(streamType StreamType, maxMessages int64) *RuntimeConfig {
@@ -180,6 +194,8 @@ func (ro *RuntimeConfig) SetStreamMaxMessages(streamType StreamType, maxMessages
 		ro.sysStreamMaxMsgs = maxMessages
 	case StreamTypeKV:
 		ro.kvStreamMaxMsgs = maxMessages
+	case StreamTypeTrace:
+		ro.traceStreamMaxBytes = maxMessages
 	}
 
 	return ro
@@ -193,6 +209,8 @@ func (ro *RuntimeConfig) SetStreamMaxBytes(streamType StreamType, maxBytes int64
 		ro.sysStreamMaxBytes = maxBytes
 	case StreamTypeKV:
 		ro.kvStreamMaxBytes = maxBytes
+	case StreamTypeTrace:
+		ro.traceStreamMaxBytes = maxBytes
 	}
 
 	return ro
@@ -206,6 +224,8 @@ func (ro *RuntimeConfig) SetStreamMaxAge(streamType StreamType, maxAge time.Dura
 		ro.sysStreamMaxAge = maxAge
 	case StreamTypeKV:
 		ro.kvStreamMaxAge = maxAge
+	case StreamTypeTrace:
+		ro.traceStreamMaxAge = maxAge
 	}
 
 	return ro

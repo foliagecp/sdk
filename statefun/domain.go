@@ -55,6 +55,7 @@ type Domain struct {
 	ftSC                    streamConfig
 	sysSC                   streamConfig
 	kvSC                    streamConfig
+	traceSC                 streamConfig
 
 	kv    nats.KeyValue
 	cache *cache.Store
@@ -67,7 +68,7 @@ type streamConfig struct {
 	maxAge        time.Duration
 }
 
-func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredHubDomainName string, ftSC, sysSC, kvSC streamConfig) (dm *Domain, e error) {
+func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredHubDomainName string, ftSC, sysSC, kvSC, traceSC streamConfig) (dm *Domain, e error) {
 	accInfo, err := js.AccountInfo()
 	if err != nil {
 		return nil, err
@@ -97,6 +98,7 @@ func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredHubDomainName str
 		ftSC:               ftSC,
 		sysSC:              sysSC,
 		kvSC:               kvSC,
+		traceSC:            traceSC,
 	}
 
 	return domain, nil
@@ -436,6 +438,10 @@ func (dm *Domain) createDLQStream() error {
 	sc := &nats.StreamConfig{
 		Name:      deadLetterQueueStreamName,
 		Retention: nats.LimitsPolicy,
+		Replicas:  dm.sysSC.replicasCount,
+		MaxBytes:  dm.sysSC.maxBytes,
+		MaxMsgs:   dm.sysSC.maxMsgs,
+		MaxAge:    dm.sysSC.maxAge,
 	}
 	return dm.createStreamIfNotExists(sc)
 }
@@ -445,6 +451,10 @@ func (dm *Domain) createTraceStream() error {
 		Name:      domainTraceStreamName,
 		Subjects:  []string{fmt.Sprintf(domainTraceSubjectsTmpl, dm.name)},
 		Retention: nats.LimitsPolicy,
+		Replicas:  dm.traceSC.replicasCount,
+		MaxBytes:  dm.traceSC.maxBytes,
+		MaxMsgs:   dm.traceSC.maxMsgs,
+		MaxAge:    dm.traceSC.maxAge,
 	}
 	return dm.createStreamIfNotExists(sc)
 }
