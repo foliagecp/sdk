@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -57,6 +58,7 @@ type Runtime struct {
 	functionsStopCh              chan struct{}
 	wg                           sync.WaitGroup
 	afterStartFunctionsWaitGroup sync.WaitGroup
+	once                         sync.Once
 }
 
 // NewRuntime initializes a new Runtime instance with the given configuration.
@@ -151,6 +153,7 @@ func (r *Runtime) RegisterOnAfterStartFunction(f OnAfterStartFunction, async boo
 func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 	logger := lg.GetLogger()
 	phaseOneContext, cancelPhaseOneContext := context.WithCancel(context.Background())
+	_ = phaseOneContext
 	phaseTwoContext, cancelPhaseTwoContext := context.WithCancel(context.Background())
 	phaseThreeContext, cancelPhaseThreeContext := context.WithCancel(context.Background())
 
@@ -158,10 +161,18 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 		<-sig
+		if !r.config.isActiveInstance {
+			logger.Debugf(ctx, "Runtime is not active. Shutting down immediately")
+			r.Shutdown()
+			cancelPhaseOneContext()
+			cancelPhaseTwoContext()
+			cancelPhaseThreeContext()
+			return
+		}
 		startShutdown := time.Now()
 		r.shutdownPhase.Store(ShutdownPhaseOne)
-		lg.GetLogger().Debugf(ctx, "Received shutdown signal, shutting down gracefully...")
-		lg.GetLogger().Debugf(ctx, "Shutdown phase 1")
+		logger.Debugf(ctx, "Received shutdown signal, shutting down gracefully...")
+		logger.Debugf(ctx, "Shutdown phase 1")
 		cancelPhaseOneContext()
 
 		timeout := time.NewTimer(10 * time.Second)
@@ -175,26 +186,35 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 
 		select {
 		case <-timeout.C:
-			lg.GetLogger().Debugf(ctx, "AfterStart functions timed out")
+			logger.Debugf(ctx, "AfterStart functions timed out")
 		case <-done:
-			lg.GetLogger().Debugf(ctx, "AfterStart functions completed")
+			logger.Debugf(ctx, "AfterStart functions completed")
 		}
 
 		r.drainSignalSubscriptions()
 
 		r.shutdownPhase.Store(ShutdownPhaseTwo)
-		lg.GetLogger().Debugf(ctx, "Shutdown phase 2")
+
+		logger.Debugf(ctx, "Shutdown phase 2")
 
 		<-r.functionsStopCh
 
 		cancelPhaseTwoContext()
 
-		lg.GetLogger().Debugf(ctx, "Shutdown phase 3")
+		logger.Debugf(ctx, "Shutdown phase 3")
 
 		<-r.Domain.cache.Synced
 
+		if r.config.isActiveInstance {
+			logger.Debugf(ctx, "Shutdown - waiting for transaction committer")
+			<-r.Domain.shutdown
+		}
+
 		r.Shutdown()
-		lg.GetLogger().Debugf(ctx, "Shutdown took %v s", time.Since(startShutdown))
+
+		cancelPhaseThreeContext()
+
+		logger.Debugf(ctx, "Shutdown took %v s", time.Since(startShutdown))
 	}
 
 	go gracefulShutdownFunc()
@@ -237,7 +257,7 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 
 	// Handle single-instance functions.
 	singleInstanceFunctionRevisions := make(map[string]uint64)
-	if err := r.handleSingleInstanceFunctions(phaseOneContext, singleInstanceFunctionRevisions); err != nil {
+	if err := r.handleSingleInstanceFunctions(phaseThreeContext, singleInstanceFunctionRevisions); err != nil {
 		return err
 	}
 
@@ -255,16 +275,13 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 	// Set Runtime ready
 	r.isReady = true
 
-	// Run after-start functions.
-	r.runAfterStartFunctions(phaseOneContext)
-
 	// Wait for shutdown signal.
 	<-r.shutdown
-	cancelPhaseThreeContext()
 
 	// Perform cleanup.
 	logger.Info(ctx, "Shutting down...")
 
+	// Wait for last goroutines
 	waitCh := make(chan struct{})
 	go func() {
 		r.wg.Wait()
@@ -517,8 +534,10 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 
 	//release all functions
 	releaseAllLocks := func(ctx context.Context, runtime *Runtime, revisions map[string]uint64) {
-		for ftName, revID := range revisions {
-			system.MsgOnErrorReturn(KeyMutexUnlock(ctx, runtime, system.GetHashStr(ftName), revID))
+		if runtime.config.isActiveInstance {
+			for ftName, revID := range revisions {
+				system.MsgOnErrorReturn(KeyMutexUnlock(ctx, runtime, system.GetHashStr(ftName), revID))
+			}
 		}
 	}
 	defer releaseAllLocks(ctx, r, revisions)
@@ -536,40 +555,67 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 				if r.config.isActiveInstance {
 					newRevID, err := KeyMutexLockUpdate(ctx, r, system.GetHashStr(RuntimeName), r.config.activeRevID)
 					if err != nil {
-						lg.Logf(lg.ErrorLevel, "KeyMutexLockUpdate failed for %s: %v", RuntimeName, err)
+						lg.Logf(lg.WarnLevel, "Lost active lock for %s: %v", RuntimeName, err)
+						r.config.isActiveInstance = false
+						r.config.activeRevID = 0
+						continue
 					} else {
 						r.config.activeRevID = newRevID
 					}
 				} else {
 					newRevID, err := KeyMutexLock(ctx, r, system.GetHashStr(RuntimeName), true)
 					if err == nil {
+						lg.Logf(lg.DebugLevel, "Passive instance becoming active")
 						r.config.isActiveInstance = true
 						r.config.activeRevID = newRevID
-						subscribeRequired = true
+
+						if err := r.Domain.checkKvConsistency(ctx); err != nil {
+							lg.Logf(lg.ErrorLevel, "Failed to become active: %v", err)
+							system.MsgOnErrorReturn(KeyMutexUnlock(ctx, r, system.GetHashStr(RuntimeName), newRevID))
+							r.config.isActiveInstance = false
+						} else {
+							subscribeRequired = true
+						}
 					} else if !errors.Is(err, ErrMutexLocked) {
 						lg.Logf(lg.ErrorLevel, "KeyMutexLock failed for %s: %v", RuntimeName, err)
-						return
+						continue
 					}
+				}
+			} else {
+				r.config.isActiveInstance = true
+			}
+
+			tryLock := func(ftName string) {
+				newRevID, err := KeyMutexLock(ctx, r, system.GetHashStr(ftName), true)
+				if err == nil {
+					subscribeRequired = true
+					revisions[ftName] = newRevID
+					lg.Logf(lg.TraceLevel, "KeyMutexLock succeeded for %s", ftName)
 				}
 			}
 
 			if r.config.isActiveInstance {
+				r.once.Do(func() {
+					lg.GetLogger().Debugf(ctx, "runtime is active, run afterStartFunctions")
+					r.runAfterStartFunctions(ctx)
+				})
+
 				for ftName, revID := range revisions {
-					if revID != 0 {
-						newRevID, err := KeyMutexLockUpdate(ctx, r, system.GetHashStr(ftName), revID)
-						if err != nil {
-							lg.Logf(lg.ErrorLevel, "KeyMutexLockUpdate failed for %s: %v", ftName, err)
-						} else {
-							revisions[ftName] = newRevID
-						}
-					} else {
-						newRevID, err := KeyMutexLock(ctx, r, system.GetHashStr(ftName), true)
-						if err == nil {
-							subscribeRequired = true
-							revisions[ftName] = newRevID
-							lg.Logf(lg.DebugLevel, "KeyMutexLock succeeded for %s", ftName)
-						}
+					if revID == 0 {
+						tryLock(ftName)
+						continue
 					}
+					newRevID, err := KeyMutexLockUpdate(ctx, r, system.GetHashStr(ftName), revID)
+					if err == nil {
+						revisions[ftName] = newRevID
+						continue
+					}
+					if strings.Contains(err.Error(), "already unlocked") {
+						revisions[ftName] = 0
+						tryLock(ftName)
+						continue
+					}
+					lg.Logf(lg.ErrorLevel, "KeyMutexLockUpdate failed for %s: %v", ftName, err)
 				}
 			}
 

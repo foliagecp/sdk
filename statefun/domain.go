@@ -59,6 +59,8 @@ type Domain struct {
 
 	kv    nats.KeyValue
 	cache *cache.Store
+
+	shutdown chan struct{}
 }
 
 type streamConfig struct {
@@ -99,6 +101,7 @@ func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredHubDomainName str
 		sysSC:              sysSC,
 		kvSC:               kvSC,
 		traceSC:            traceSC,
+		shutdown:           make(chan struct{}),
 	}
 
 	return domain, nil
@@ -317,44 +320,106 @@ func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDo
 
 	le := lg.GetLogger()
 
-	le.Debug(ctx, "Starting Transaction Committer...")
+	le.Trace(ctx, "Initializing the cache store...")
+	dm.cache = cache.NewCacheStore(ctx, cacheConfig, dm.js, dm.kv)
+	dm.shutdown = make(chan struct{})
+	dm.cache.SetTransactionGenerator(dm)
+
 	if err := dm.TransactionCommitter(ctx); err != nil {
 		return err
 	}
-
-	le.Debug(ctx, "Waiting for KV to become consistent...")
-	startTime := time.Now()
-	lastLogTime := startTime
-	logInterval := 5 * time.Second
-
-	for {
-		consistent, err := dm.isKVConsistent()
-		if err != nil {
-			le.Errorf(ctx, "Failed to check KV consistency: %s", err)
-			time.Sleep(1 * time.Second)
-			continue
-		}
-		if consistent {
-			elapsed := time.Since(startTime)
-			le.Debugf(ctx, "KV is consistent (waited %v), proceeding with cache initialization", elapsed.Round(time.Millisecond))
-			break
-		}
-
-		if time.Since(lastLogTime) >= logInterval {
-			elapsed := time.Since(startTime)
-			le.Debugf(ctx, "Still waiting for KV consistency... (elapsed: %v)", elapsed.Round(time.Second))
-			lastLogTime = time.Now()
-		}
-
-		time.Sleep(100 * time.Millisecond)
+	if err := dm.checkKvConsistency(ctx); err != nil {
+		return err
 	}
-
-	le.Trace(ctx, "Initializing the cache store...")
-	dm.cache = cache.NewCacheStore(ctx, cacheConfig, dm.js, dm.kv)
-	dm.cache.SetTransactionGenerator(dm)
 	le.Trace(ctx, "Cache store inited!")
 
 	return nil
+}
+
+func (dm *Domain) checkKvConsistency(ctx context.Context) error {
+	consumerName := CommitterDurableName + "-" + dm.kv.Bucket()
+
+	const (
+		checkInterval = 100 * time.Millisecond
+		waitTimeout   = 30 * time.Second
+	)
+
+	timeout := time.NewTimer(waitTimeout)
+	defer timeout.Stop()
+
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+
+	lg.GetLogger().Tracef(ctx, "Waiting for KV consistency ...")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+
+		case <-timeout.C:
+			return fmt.Errorf("timeout waiting for KV consistency")
+
+		case <-ticker.C:
+			info, err := dm.js.ConsumerInfo(WALCommitsStreamName, consumerName)
+			if err != nil {
+				lg.GetLogger().Debugf(ctx,
+					"Failed to get consumer info: %s", err,
+				)
+				continue
+			}
+
+			noPendingWork :=
+				info.NumPending == 0 &&
+					info.NumAckPending == 0
+
+			consistent, err := dm.isKVConsistent()
+			if err != nil {
+				lg.GetLogger().Errorf(ctx,
+					"Failed to check consistency: %s", err,
+				)
+				continue
+			}
+
+			if !noPendingWork {
+				lg.GetLogger().Tracef(ctx,
+					"Transactions in progress: pending=%d, ackPending=%d",
+					info.NumPending, info.NumAckPending,
+				)
+
+				if consistent {
+					if err := dm.setKVConsistent(false); err != nil {
+						return fmt.Errorf(
+							"failed to set KV inconsistent: %w", err,
+						)
+					}
+				}
+
+				if !timeout.Stop() {
+					select {
+					case <-timeout.C:
+					default:
+					}
+				}
+				timeout.Reset(waitTimeout)
+				continue
+			}
+
+			if !consistent {
+				lg.GetLogger().Tracef(ctx,
+					"No pending work, setting KV consistent",
+				)
+				if err := dm.setKVConsistent(true); err != nil {
+					return fmt.Errorf(
+						"failed to set KV consistent: %w", err,
+					)
+				}
+			}
+
+			lg.GetLogger().Tracef(ctx, "KV is consistent")
+			return nil
+		}
+	}
 }
 
 func (dm *Domain) createIngressRouter() error {
@@ -462,7 +527,7 @@ func (dm *Domain) createTraceStream() error {
 func (dm *Domain) createWALOperationsStream() error {
 	sc := &nats.StreamConfig{
 		Name:      WALOperationsStreamName,
-		Subjects:  []string{fmt.Sprintf("wal.ops.%s.>", dm.kv.Bucket())},
+		Subjects:  []string{WALOperationsSubject},
 		Retention: nats.WorkQueuePolicy,
 		MaxAge:    24 * time.Hour,
 	}
@@ -472,7 +537,7 @@ func (dm *Domain) createWALOperationsStream() error {
 func (dm *Domain) createWALCommitsStream() error {
 	sc := &nats.StreamConfig{
 		Name:      WALCommitsStreamName,
-		Subjects:  []string{fmt.Sprintf(WALCommitsSubject, dm.kv.Bucket())},
+		Subjects:  []string{WALCommitsSubject},
 		Retention: nats.WorkQueuePolicy,
 		MaxAge:    24 * time.Hour,
 	}
@@ -594,5 +659,5 @@ func (dm *Domain) PublishCommit(txID string) error {
 }
 
 func (dm *Domain) GenerateTransactionID() string {
-	return GenerateTransactionID()
+	return generateTransactionID()
 }

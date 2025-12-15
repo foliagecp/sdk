@@ -304,6 +304,170 @@ type Store struct {
 	Synced                   chan struct{}
 }
 
+type traverseResult struct {
+	opsCount                     int
+	traverseCount                int
+	iterationSyncedCount         int
+	lruTimes                     []int64
+	allBeforeBackupBarrierSynced bool
+}
+
+func (cs *Store) traverseCacheForTransaction(
+	txID string,
+	barrierTime int64,
+	ignoreBarrier bool,
+) *traverseResult {
+	le := lg.GetLogger()
+	result := &traverseResult{
+		opsCount:                     0,
+		traverseCount:                0,
+		iterationSyncedCount:         0,
+		lruTimes:                     []int64{},
+		allBeforeBackupBarrierSynced: true,
+	}
+
+	var backupBarrierTimestamp int64
+	var backupBarrierStatus int32
+	if !ignoreBarrier {
+		backupBarrierTimestamp, backupBarrierStatus = cs.getBackupBarrierState()
+	}
+
+	cacheStoreValueStack := []*StoreValue{cs.rootValue}
+	suffixPathsStack := []string{""}
+	depthsStack := []int{0}
+
+	for len(cacheStoreValueStack) > 0 {
+		lastID := len(cacheStoreValueStack) - 1
+
+		currentStoreValue := cacheStoreValueStack[lastID]
+		result.traverseCount++
+
+		currentStoreValue.RLock("kvLazyWriter")
+		result.lruTimes = append(result.lruTimes, currentStoreValue.valueUpdateTime)
+		currentStoreValue.RUnlock("kvLazyWriter")
+
+		currentSuffix := suffixPathsStack[lastID]
+		currentDepth := depthsStack[lastID]
+
+		cacheStoreValueStack = cacheStoreValueStack[:lastID]
+		suffixPathsStack = suffixPathsStack[:lastID]
+		depthsStack = depthsStack[:lastID]
+
+		noChildren := true
+		currentStoreValue.Range(func(key, value interface{}) bool {
+			noChildren = false
+
+			var newSuffix string
+			if currentDepth == 0 {
+				newSuffix = currentSuffix + key.(string)
+			} else {
+				newSuffix = currentSuffix + "." + key.(string)
+			}
+
+			csvChild := value.(*StoreValue)
+
+			if backupBarrierStatus == BackupBarrierStatusLocking {
+				ve, vut, sn, sw := csvChild.syncState()
+				if ve && vut > 0 && vut <= backupBarrierTimestamp {
+					if sn || !sw {
+						result.allBeforeBackupBarrierSynced = false
+					}
+				}
+			}
+
+			var valueUpdateTime int64 = 0
+			var opType OpType
+			var finalBytes []byte = nil
+
+			csvChild.Lock("kvLazyWriter")
+			if csvChild.syncNeeded {
+				valueUpdateTime = csvChild.valueUpdateTime
+				timeBytes := make([]byte, 8)
+				binary.BigEndian.PutUint64(timeBytes, uint64(valueUpdateTime))
+				if csvChild.valueExists {
+					var flag uint8
+					var dataBytes []byte
+					switch csvChild.valueType {
+					case typeByteArray:
+						flag = FlagBytesAppend
+						dataBytes = csvChild.value.([]byte)
+					case typeJson:
+						flag = FlagJSONAppend
+						dataBytes = csvChild.value.(*easyjson.JSON).ToBytes()
+					default:
+						le.Errorf(cs.ctx, "Unknown type for key=%s, value=%v", newSuffix, csvChild.value)
+						csvChild.Unlock("kvLazyWriter")
+						cacheStoreValueStack = append(cacheStoreValueStack, value.(*StoreValue))
+						suffixPathsStack = append(suffixPathsStack, newSuffix)
+						depthsStack = append(depthsStack, currentDepth+1)
+						return true
+					}
+					header := append(timeBytes, flag)
+					finalBytes = append(header, dataBytes...)
+					opType = OpTypePUT
+				} else {
+					finalBytes = append(timeBytes, FlagDeleted)
+					opType = OpTypeDelete
+				}
+			} else {
+				if csvChild.valueUpdateTime > 0 && csvChild.valueUpdateTime <= cs.lruTresholdTime && csvChild.purgeState == 0 {
+					currentStoreValue.ConsistencyLoss(system.GetCurrentTimeNs())
+					csvChild.TryPurgeReady()
+					csvChild.TryPurgeConfirm()
+				}
+			}
+			csvChild.Unlock("kvLazyWriter")
+
+			if finalBytes != nil {
+				result.iterationSyncedCount++
+				keyStr := key.(string)
+
+				if !ignoreBarrier {
+					if valueUpdateTime > barrierTime {
+						cacheStoreValueStack = append(cacheStoreValueStack, value.(*StoreValue))
+						suffixPathsStack = append(suffixPathsStack, newSuffix)
+						depthsStack = append(depthsStack, currentDepth+1)
+						return true
+					}
+
+					if err := cs.checkBackupBarrierInfoBeforeWrite(valueUpdateTime); err != nil {
+						le.Tracef(cs.ctx, "skipping write for key=%s due to barrier: %v", keyStr, err)
+						cacheStoreValueStack = append(cacheStoreValueStack, value.(*StoreValue))
+						suffixPathsStack = append(suffixPathsStack, newSuffix)
+						depthsStack = append(depthsStack, currentDepth+1)
+						return true
+					}
+				}
+
+				if err := cs.transactionGenerator.PublishOperation(txID, valueUpdateTime, opType, cs.toStoreKey(newSuffix), finalBytes); err != nil {
+					le.Errorf(cs.ctx, "Store kvLazyWriter cannot publish WAL operation for key=%s: %s", keyStr, err)
+				} else {
+					result.opsCount++
+					csvChild.Lock("kvLazyWriter")
+					if valueUpdateTime == csvChild.valueUpdateTime {
+						csvChild.syncNeeded = false
+					}
+					csvChild.Unlock("kvLazyWriter")
+				}
+			}
+
+			cacheStoreValueStack = append(cacheStoreValueStack, value.(*StoreValue))
+			suffixPathsStack = append(suffixPathsStack, newSuffix)
+			depthsStack = append(depthsStack, currentDepth+1)
+
+			time.Sleep(time.Duration(cs.cacheConfig.lazyWriterValueProcessDelayMkS) * time.Microsecond)
+
+			return true
+		})
+
+		if noChildren {
+			currentStoreValue.collectGarbage()
+		}
+	}
+
+	return result
+}
+
 func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamContext, kv nats.KeyValue) *Store {
 	le := lg.GetLogger()
 	var inited atomic.Bool
@@ -423,246 +587,94 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 	kvLazyWriterWithWAL := func(cs *Store) {
 		system.GlobalPrometrics.GetRoutinesCounter().Started("cache.kvLazyWriter")
 		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("cache.kvLazyWriter")
+
 		shutdownStatus := shutdownStatusNone
 		for {
-			iterationSyncedCount := 0
-			traverseCount := 0
+			if shutdownStatus == shutdownStatusReady {
+				le.Debugf(ctx, "cache synced, ready for shutdown")
+				close(cs.Synced)
+				return
+			}
 
-			select {
-			case <-cs.ctx.Done():
-				switch shutdownStatus {
-				case shutdownStatusNone:
-					le.Debugf(ctx, "cache got shutdown sinal")
+			if cs.transactionGenerator == nil {
+				le.Debugf(ctx, "WAL is not ready, skip this iteration")
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+
+			if shutdownStatus == shutdownStatusNone {
+				barrierTime := system.GetCurrentTimeNs()
+				txID := fmt.Sprintf("%d", barrierTime)
+
+				waitTimer := time.NewTimer(time.Duration(cacheConfig.walTransactionWaitPeriodMS) * time.Millisecond)
+				select {
+				case <-cs.ctx.Done():
+					waitTimer.Stop()
+					le.Debugf(ctx, "cache got shutdown signal")
 					shutdownStatus = shutdownStatusWaiting
-				case shutdownStatusWaiting:
-				case shutdownStatusReady:
-					le.Debugf(ctx, "cache synced, ready for shutdown")
-					close(cs.Synced)
-					return
+					continue
+				case <-waitTimer.C:
 				}
-			default:
-			}
-			backupBarrierTimestamp, backupBarrierStatus := cs.getBackupBarrierState()
-			if backupBarrierStatus == BackupBarrierStatusLocking {
-				if backupBarrierTimestamp == 0 {
-					backupBarrierTimestamp = system.GetCurrentTimeNs()
-					system.MsgOnErrorReturn(cs.updateBackupBarrierWithTimestamp(backupBarrierTimestamp))
-					le.Infof(ctx, "set barrier timestamp: %d", backupBarrierTimestamp)
-				}
-			}
-			allBeforeBackupBarrierSynced := true
 
-			txID := ""
-			if cs.transactionGenerator != nil {
-				txID = cs.transactionGenerator.GenerateTransactionID()
-			}
-			opsCount := 0
-
-			cacheStoreValueStack := []*StoreValue{cs.rootValue}
-			suffixPathsStack := []string{""}
-			depthsStack := []int{0}
-
-			lruTimes := []int64{}
-
-			for len(cacheStoreValueStack) > 0 {
-				lastID := len(cacheStoreValueStack) - 1
-
-				currentStoreValue := cacheStoreValueStack[lastID]
-				traverseCount++ //Debug
-
-				currentStoreValue.RLock("kvLazyWriter")
-				lruTimes = append(lruTimes, currentStoreValue.valueUpdateTime)
-				currentStoreValue.RUnlock("kvLazyWriter")
-
-				currentSuffix := suffixPathsStack[lastID]
-				currentDepth := depthsStack[lastID]
-
-				cacheStoreValueStack = cacheStoreValueStack[:lastID]
-				suffixPathsStack = suffixPathsStack[:lastID]
-				depthsStack = depthsStack[:lastID]
-
-				noChildred := true
-				currentStoreValue.Range(func(key, value interface{}) bool {
-					noChildred = false
-
-					var newSuffix string
-					if currentDepth == 0 {
-						newSuffix = currentSuffix + key.(string)
-					} else {
-						newSuffix = currentSuffix + "." + key.(string)
+				backupBarrierTimestamp, backupBarrierStatus := cs.getBackupBarrierState()
+				if backupBarrierStatus == BackupBarrierStatusLocking {
+					if backupBarrierTimestamp == 0 {
+						backupBarrierTimestamp = system.GetCurrentTimeNs()
+						system.MsgOnErrorReturn(cs.updateBackupBarrierWithTimestamp(backupBarrierTimestamp))
+						le.Infof(ctx, "set barrier timestamp: %d", backupBarrierTimestamp)
 					}
+				}
 
-					var finalBytes []byte = nil
+				result := cs.traverseCacheForTransaction(txID, barrierTime, false)
 
-					csvChild := value.(*StoreValue)
-
-					if backupBarrierStatus == BackupBarrierStatusLocking {
-						ve, vut, sn, sw := csvChild.syncState()
-						if ve && vut > 0 && vut <= backupBarrierTimestamp {
-							if sn || !sw {
-								allBeforeBackupBarrierSynced = false
-							}
-						}
+				if result.opsCount > 0 {
+					le.Tracef(ctx, "Transaction %s: traversed=%d nodes, opsCount=%d", txID, result.traverseCount, result.opsCount)
+					le.Tracef(ctx, "Publishing WAL commit for tx=%s with %d operations", txID, result.opsCount)
+					if err := cs.transactionGenerator.PublishCommit(txID); err != nil {
+						le.Errorf(ctx, "Store kvLazyWriter cannot publish WAL commit for tx=%s: %s", txID, err)
 					}
+				}
 
-					var valueUpdateTime int64 = 0
-					var opType OpType
-					csvChild.Lock("kvLazyWriter")
-					if csvChild.syncNeeded {
-						valueUpdateTime = csvChild.valueUpdateTime
-						timeBytes := make([]byte, 8)
-						binary.BigEndian.PutUint64(timeBytes, uint64(valueUpdateTime))
-						if csvChild.valueExists {
-							var flag uint8
-							var dataBytes []byte
-							switch csvChild.valueType {
-							case typeByteArray:
-								flag = FlagBytesAppend
-								dataBytes = csvChild.value.([]byte)
-							case typeJson:
-								flag = FlagJSONAppend
-								dataBytes = csvChild.value.(*easyjson.JSON).ToBytes()
-							default:
-								le.Errorf(ctx, "Unknown type for key=%s, value=%v", newSuffix, csvChild.value)
-								csvChild.Unlock("kvLazyWriter")
-								return true
-							}
-							header := append(timeBytes, flag)
-							finalBytes = append(header, dataBytes...)
-							opType = OpTypePUT
-						} else {
-							finalBytes = append(timeBytes, FlagDeleted) // Add delete flag "0"
-							opType = OpTypeDelete
-						}
-					} else {
-						if csvChild.valueUpdateTime > 0 && csvChild.valueUpdateTime <= cs.lruTresholdTime && csvChild.purgeState == 0 { // Older than or equal to specific time
-							// currentStoreValue locked by range no locking/unlocking needed
-							currentStoreValue.ConsistencyLoss(system.GetCurrentTimeNs())
-							//lg.Logf("Consistency lost for key=\"%s\" store", currentStoreValue.GetFullKeyString())
-							//lg.Logln("Purging: " + newSuffix)
-							csvChild.TryPurgeReady()
-							csvChild.TryPurgeConfirm()
-						}
+				if backupBarrierStatus == BackupBarrierStatusLocking {
+					if result.allBeforeBackupBarrierSynced {
+						cs.markCacheReadyForBackup()
 					}
-					csvChild.Unlock("kvLazyWriter")
+				}
 
-					// Putting value into WAL stream ------------------
-					if csvChild.syncNeeded {
-						iterationSyncedCount++
+				sort.Slice(result.lruTimes, func(i, j int) bool { return result.lruTimes[i] > result.lruTimes[j] })
+				if len(result.lruTimes) > cacheConfig.lruSize {
+					cs.lruTresholdTime = result.lruTimes[cacheConfig.lruSize-1]
+				} else if len(result.lruTimes) > 0 {
+					cs.lruTresholdTime = result.lruTimes[len(result.lruTimes)-1]
+				}
 
-						keyStr := key.(string)
+				cs.valuesInCache = len(result.lruTimes)
 
-						if err := cs.checkBackupBarrierInfoBeforeWrite(valueUpdateTime); err != nil {
-							le.Tracef(ctx, "==============skipping write for key=%s due to barrier: %v", keyStr, err)
-							return true
-						}
+				if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("cache_values", "", []string{"id"}); err == nil {
+					gaugeVec.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(cs.valuesInCache))
+				}
+				time.Sleep(time.Duration(cacheConfig.lazyWriterRepeatDelayMkS) * time.Microsecond) // Prevents too many locks and prevents too much processor time consumption
+			}
 
-						if cs.transactionGenerator != nil {
-							if err := cs.transactionGenerator.PublishOperation(txID, valueUpdateTime, opType, cs.toStoreKey(newSuffix), finalBytes); err != nil {
-								le.Errorf(ctx, "Store kvLazyWriter cannot publish WAL operation for key=%s: %s", keyStr, err)
-							} else {
-								opsCount++
-								csvChild.Lock("kvLazyWriter")
-								if valueUpdateTime == csvChild.valueUpdateTime {
-									csvChild.syncNeeded = false
-								}
-								csvChild.Unlock("kvLazyWriter")
-							}
-						} else {
-							_, putErr := customNatsKv.KVPut(cs.js, cs.kv, cs.toStoreKey(newSuffix), finalBytes)
-							if putErr == nil {
-								csvChild.Lock("kvLazyWriter")
-								if valueUpdateTime == csvChild.valueUpdateTime {
-									csvChild.syncNeeded = false
-								}
-								csvChild.Unlock("kvLazyWriter")
-							} else {
-								le.Errorf(ctx, "Store kvLazyWriter cannot update key=%s\n: %s", keyStr, putErr)
-							}
-						}
+			if shutdownStatus == shutdownStatusWaiting {
+				txID := cs.transactionGenerator.GenerateTransactionID()
+				le.Debugf(ctx, "Final shutdown transaction %s - collecting all pending operations", txID)
+
+				result := cs.traverseCacheForTransaction(txID, 0, true)
+
+				if result.opsCount > 0 {
+					le.Debugf(ctx, "Final transaction %s: traversed=%d nodes, opsCount=%d", txID, result.traverseCount, result.opsCount)
+					le.Debugf(ctx, "Publishing final WAL commit for tx=%s with %d operations", txID, result.opsCount)
+					if err := cs.transactionGenerator.PublishCommit(txID); err != nil {
+						le.Errorf(ctx, "Store kvLazyWriter cannot publish final WAL commit for tx=%s: %s", txID, err)
 					}
-					// ----------------------------------------------
+				}
 
-					cacheStoreValueStack = append(cacheStoreValueStack, value.(*StoreValue))
-					suffixPathsStack = append(suffixPathsStack, newSuffix)
-					depthsStack = append(depthsStack, currentDepth+1)
-
-					select {
-					case <-cs.ctx.Done():
-						if shutdownStatus == shutdownStatusNone {
-							shutdownStatus = shutdownStatusWaiting
-						}
-					default:
-						time.Sleep(time.Duration(cacheConfig.lazyWriterValueProcessDelayMkS) * time.Microsecond)
-					}
-					return true
-				})
-
-				if noChildred {
-					currentStoreValue.collectGarbage()
+				if result.iterationSyncedCount == 0 {
+					shutdownStatus = shutdownStatusReady
 				}
 			}
-
-			if txID != "" && opsCount > 0 {
-				le.Infof(ctx, "Transaction %s: traversed=%d nodes, opsCount=%d", txID, traverseCount, opsCount)
-			}
-
-			if cs.transactionGenerator != nil && opsCount > 0 {
-				le.Infof(ctx, "Publishing WAL commit for tx=%s with %d operations", txID, opsCount)
-				if err := cs.transactionGenerator.PublishCommit(txID); err != nil {
-					le.Errorf(ctx, "Store kvLazyWriter cannot publish WAL commit for tx=%s: %s", txID, err)
-				}
-			}
-
-			if backupBarrierStatus == BackupBarrierStatusLocking {
-				if allBeforeBackupBarrierSynced {
-					cs.markCacheReadyForBackup()
-				}
-			}
-
-			if shutdownStatus == shutdownStatusWaiting && iterationSyncedCount == 0 {
-				shutdownStatus = shutdownStatusReady
-			}
-			sort.Slice(lruTimes, func(i, j int) bool { return lruTimes[i] > lruTimes[j] })
-			if len(lruTimes) > cacheConfig.lruSize {
-				cs.lruTresholdTime = lruTimes[cacheConfig.lruSize-1]
-			} else {
-				cs.lruTresholdTime = lruTimes[len(lruTimes)-1]
-			}
-
-			/*// Debug info -----------------------------------------------------
-			if cs.valuesInCache != len(lruTimes) {
-				cmpr := []bool{}
-				for i := 0; i < len(lruTimes); i++ {
-					cmpr = append(cmpr, lruTimes[i] > 0 && lruTimes[i] <= cs.lruTresholdTime)
-				}
-				lg.Logf("LEFT IN CACHE: %d (%d) - %s %s", len(lruTimes), cs.lruTresholdTime, fmt.Sprintln(cmpr), fmt.Sprintln(lruTimes))
-			}
-			// ----------------------------------------------------------------*/
-
-			cs.valuesInCache = len(lruTimes)
-
-			if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("cache_values", "", []string{"id"}); err == nil {
-				gaugeVec.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(cs.valuesInCache))
-			}
-			/*// Debug info -----------------------------------------------------
-
-			iterationElapsed := time.Since(start)
-
-			if iterationSyncedCount > 0 {
-				speed := float64(iterationSyncedCount) / iterationElapsed.Seconds()
-				lg.GetLogger().Debugf(cs.ctx,
-					"::::::::::::::: Iteration: synced %d values (traversed %d nodes) in %v  speed: %.2f writes/sec",
-					iterationSyncedCount, traverseCount, iterationElapsed, speed)
-			} else {
-				//lg.GetLogger().Debugf(cs.ctx, "::::::::::::::: Iteration: synced 0 values (traversed %d nodes) in %v",
-				//	traverseCount, iterationElapsed)
-			}
-			// ----------------------------------------------------------------*/
-
-			time.Sleep(time.Duration(cacheConfig.lazyWriterRepeatDelayMkS) * time.Microsecond) // Prevents too many locks and prevents too much processor time consumption
 		}
-
 	}
 	go storeUpdatesHandler(&cs)
 	go kvLazyWriterWithWAL(&cs)
@@ -1304,7 +1316,8 @@ func (cs *Store) fromStoreKey(key string) string {
 	return strings.Replace(key, cs.cacheConfig.kvStorePrefix+".", "", 1)
 }
 
-// WAL
+// -------- WAL transactions ---------
+
 type OpType = string
 
 const (
@@ -1323,3 +1336,5 @@ type TransactionGenerator interface {
 func (cs *Store) SetTransactionGenerator(tg TransactionGenerator) {
 	cs.transactionGenerator = tg
 }
+
+// -----------------------------------

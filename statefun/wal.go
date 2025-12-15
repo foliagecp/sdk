@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	customNatsKv "github.com/foliagecp/sdk/embedded/nats/kv"
@@ -19,33 +18,33 @@ import (
 const (
 	WALOperationsStreamName = "wal_operations"
 	WALCommitsStreamName    = "wal_commits"
-	WALOperationsSubject    = "wal.ops.%s.%s"
-	WALCommitsSubject       = "wal.commits.%s"
+	WALOperationsSubject    = "wal.ops.*.*"
+	WALCommitsSubject       = "wal.commits.*"
 	CommitterDurableName    = "TRANSACTION_COMMITTER_CONSUMER"
 )
 
 func (dm *Domain) TransactionCommitter(ctx context.Context) error {
+	ready := make(chan struct{})
 	go func() {
-		if err := dm.runTransactionCommitter(ctx); err != nil {
-			lg.GetLogger().Debugf(ctx, "TransactionCommitter error: %s", err)
+		if err := dm.runTransactionCommitter(ctx, ready); err != nil {
+			lg.GetLogger().Errorf(ctx, "TransactionCommitter error: %s", err)
 		}
 	}()
+	<-ready
 	return nil
 }
 
-func (dm *Domain) runTransactionCommitter(ctx context.Context) error {
-	commitSubject := fmt.Sprintf(WALCommitsSubject, dm.kv.Bucket())
+func (dm *Domain) runTransactionCommitter(ctx context.Context, ready chan struct{}) error {
+	commitSubject := fmt.Sprintf("wal.commits.%s", dm.kv.Bucket())
 	consumerName := CommitterDurableName + "-" + dm.kv.Bucket()
 
-	lg.GetLogger().Debugf(ctx, "TransactionCommitter starting for bucket=%s, subject=%s", dm.kv.Bucket(), commitSubject)
+	lg.GetLogger().Tracef(ctx, "TransactionCommitter starting for bucket=%s, subject=%s", dm.kv.Bucket(), commitSubject)
 
 	if err := dm.setKVConsistent(false); err != nil {
-		lg.GetLogger().Debugf(ctx, "Failed to set KV as inconsistent: %s", err)
+		lg.GetLogger().Errorf(ctx, "ailed to set KV as inconsistent: %s", err)
 		return err
 	}
-	lg.GetLogger().Debugf(ctx, "KV marked as inconsistent, will process pending transactions")
-
-	processedTxs := sync.Map{}
+	lg.GetLogger().Tracef(ctx, "KV marked as inconsistent, will process pending transactions")
 
 	_, err := dm.js.AddConsumer(WALCommitsStreamName, &nats.ConsumerConfig{
 		Name:           consumerName,
@@ -56,27 +55,27 @@ func (dm *Domain) runTransactionCommitter(ctx context.Context) error {
 		AckPolicy:      nats.AckExplicitPolicy,
 		AckWait:        30 * time.Second,
 		MaxDeliver:     5,
+		MaxAckPending:  1,
 	})
 	if err != nil && !errors.Is(err, nats.ErrConsumerNameAlreadyInUse) {
-		lg.GetLogger().Debugf(ctx, "TransactionCommitter failed to create consumer: %s", err)
+		lg.GetLogger().Errorf(ctx, "TransactionCommitter failed to create consumer: %s", err)
 		return err
 	}
 
-	lg.GetLogger().Debugf(ctx, "TransactionCommitter consumer created/exists: %s", consumerName)
+	lg.GetLogger().Tracef(ctx, "TransactionCommitter consumer created/exists: %s", consumerName)
 
 	pendingCount := dm.countPendingCommits(consumerName)
-	lg.GetLogger().Debugf(ctx, "Found %d pending transactions to process", pendingCount)
+	lg.GetLogger().Tracef(ctx, "Found %d pending transactions to process", pendingCount)
 
 	if pendingCount == 0 {
-		lg.GetLogger().Debugf(ctx, "No pending transactions, marking KV as consistent immediately")
+		lg.GetLogger().Tracef(ctx, "No pending transactions, marking KV as consistent immediately")
 		if err = dm.setKVConsistent(true); err != nil {
-			lg.GetLogger().Debugf(ctx, "Failed to set KV as consistent: %s", err)
+			lg.GetLogger().Errorf(ctx, "Failed to set KV as consistent: %s", err)
 			return err
 		}
 	}
 
 	processedCount := 0
-	processingTxs := sync.Map{}
 
 	_, err = dm.js.QueueSubscribe(
 		commitSubject,
@@ -84,44 +83,30 @@ func (dm *Domain) runTransactionCommitter(ctx context.Context) error {
 		func(msg *nats.Msg) {
 			txID := msg.Header.Get("tx_id")
 			if txID == "" {
-				lg.GetLogger().Debugf(ctx, "TransactionCommitter: received commit without tx_id")
+				lg.GetLogger().Error(ctx, "TransactionCommitter: received commit without tx_id")
 				system.MsgOnErrorReturn(msg.Ack())
 				return
 			}
 
-			if _, processing := processingTxs.LoadOrStore(txID, true); processing {
-				lg.GetLogger().Debugf(ctx, "TransactionCommitter: transaction %s is already being processed, ignoring duplicate", txID)
-				return
-			}
-			defer processingTxs.Delete(txID)
-
-			if _, processed := processedTxs.Load(txID); processed {
-				lg.GetLogger().Debugf(ctx, "TransactionCommitter: transaction %s already processed, Ack() final", txID)
-				system.MsgOnErrorReturn(msg.Ack())
-				processedTxs.Delete(txID)
-
-				processedCount++
-				if pendingCount > 0 && processedCount >= pendingCount {
-					lg.GetLogger().Debugf(ctx, "All %d pending transactions processed, marking KV as consistent", pendingCount)
-					if err := dm.setKVConsistent(true); err != nil {
-						lg.GetLogger().Debugf(ctx, "Failed to set KV as consistent: %s", err)
-					}
-					pendingCount = 0
-				}
-
-				return
-			}
-
-			lg.GetLogger().Debugf(ctx, "TransactionCommitter: first time processing commit for tx_id=%s, Nak()", txID)
-			system.MsgOnErrorReturn(msg.Nak())
+			lg.GetLogger().Tracef(ctx, "TransactionCommitter: processing commit for tx_id=%s", txID)
 
 			if err = dm.applyTransactionOperations(ctx, txID); err != nil {
-				lg.GetLogger().Debugf(ctx, "TransactionCommitter: failed to apply transaction %s: %s", txID, err)
+				lg.GetLogger().Errorf(ctx, "TransactionCommitter: failed to apply transaction %s: %s", txID, err)
+				system.MsgOnErrorReturn(msg.Nak())
 				return
 			}
 
-			lg.GetLogger().Debugf(ctx, "TransactionCommitter: successfully applied transaction %s, marked as processed", txID)
-			processedTxs.Store(txID, true)
+			lg.GetLogger().Tracef(ctx, "TransactionCommitter: transaction %s completed, Ack()", txID)
+			system.MsgOnErrorReturn(msg.Ack())
+
+			processedCount++
+			if pendingCount > 0 && processedCount >= pendingCount {
+				lg.GetLogger().Debugf(ctx, "TransactionCommitter: all %d pending transactions processed, marking KV as consistent", pendingCount)
+				if err = dm.setKVConsistent(true); err != nil {
+					lg.GetLogger().Errorf(ctx, "TransactionCommitter: failed to set KV as consistent: %s", err)
+				}
+				pendingCount = 0
+			}
 		},
 		nats.Bind(WALCommitsStreamName, consumerName),
 		nats.ManualAck(),
@@ -130,20 +115,67 @@ func (dm *Domain) runTransactionCommitter(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	close(ready)
+	select {
+	case <-dm.cache.Synced:
+		if err = dm.setKVConsistent(false); err != nil {
+			lg.GetLogger().Errorf(ctx, "Failed to set KV as inconsistent: %s", err)
+		}
 
-	<-ctx.Done()
-	return nil
+		lg.GetLogger().Trace(ctx, "Cache synced, recounting pending transactions for shutdown")
+
+		finalPendingCount := dm.countPendingCommits(consumerName)
+		lg.GetLogger().Tracef(ctx, "Final pending transactions count: %d", finalPendingCount)
+
+		if finalPendingCount == 0 {
+			lg.GetLogger().Trace(ctx, "No final pending transactions, shutdown complete")
+			close(dm.shutdown)
+			return nil
+		}
+
+		checkInterval := 200 * time.Millisecond
+		logInterval := 5 * time.Second
+		maxWaitTime := 30 * time.Second
+		startWait := time.Now()
+		lastLogTime := startWait
+
+		for {
+			currentPending := dm.countPendingCommits(consumerName)
+
+			if time.Since(lastLogTime) >= logInterval {
+				lg.GetLogger().Tracef(ctx, "Shutdown: waiting for transactions, pending=%d, elapsed=%v",
+					currentPending, time.Since(startWait).Round(time.Second))
+				lastLogTime = time.Now()
+			}
+
+			if currentPending == 0 {
+				lg.GetLogger().Tracef(ctx, "All transactions processed in %v, shutdown complete",
+					time.Since(startWait).Round(time.Millisecond))
+				close(dm.shutdown)
+				return nil
+			}
+
+			if time.Since(startWait) > maxWaitTime {
+				lg.GetLogger().Warnf(ctx, "Shutdown timeout reached after %v with %d pending transactions",
+					maxWaitTime, currentPending)
+				close(dm.shutdown)
+				return nil
+			}
+
+			time.Sleep(checkInterval)
+		}
+	}
 }
 
 func (dm *Domain) applyTransactionOperations(ctx context.Context, txID string) error {
-	opsSubject := fmt.Sprintf(WALOperationsSubject, dm.kv.Bucket(), txID)
+	opsSubject := fmt.Sprintf("wal.ops.%s.%s", dm.kv.Bucket(), txID)
 	consumerName := "TX_OPS_" + dm.kv.Bucket() + "_" + txID
 
-	lg.GetLogger().Debugf(ctx, "applyTransactionOperations: processing tx_id=%s, subject=%s", txID, opsSubject)
+	lg.GetLogger().Tracef(ctx, "applyTransactionOperations: processing tx_id=%s, subject=%s", txID, opsSubject)
 
 	info, err := dm.js.ConsumerInfo(WALOperationsStreamName, consumerName)
 	if err != nil || info == nil {
-		lg.GetLogger().Debugf(ctx, "Consumer %s not found, creating new one", consumerName)
+		lg.GetLogger().Errorf(ctx, "Consumer %s not found, creating new one", consumerName)
 
 		consumerConfig := &nats.ConsumerConfig{
 			Name:          consumerName,
@@ -155,58 +187,53 @@ func (dm *Domain) applyTransactionOperations(ctx context.Context, txID string) e
 		}
 
 		if _, err = dm.js.AddConsumer(WALOperationsStreamName, consumerConfig); err != nil {
-			lg.GetLogger().Debugf(ctx, "Failed to create consumer: %s", err)
+			lg.GetLogger().Errorf(ctx, "Failed to create consumer: %s", err)
 			return fmt.Errorf("failed to create operations consumer: %w", err)
 		}
-		lg.GetLogger().Debugf(ctx, "Created durable consumer %s", consumerName)
+		lg.GetLogger().Tracef(ctx, "Created durable consumer %s", consumerName)
 	} else {
-		lg.GetLogger().Debugf(ctx, "Reusing existing consumer %s", consumerName)
+		lg.GetLogger().Tracef(ctx, "Reusing existing consumer %s", consumerName)
 	}
 
 	sub, err := dm.js.PullSubscribe(opsSubject, consumerName)
 	if err != nil {
-		lg.GetLogger().Debugf(ctx, "Failed to create subscription: %s", err)
+		lg.GetLogger().Errorf(ctx, "Failed to create subscription: %s", err)
 		return fmt.Errorf("failed to subscribe to operations: %w", err)
 	}
-	lg.GetLogger().Debugf(ctx, "Created subscription for consumer %s, checking if valid...", consumerName)
 
 	if !sub.IsValid() {
-		lg.GetLogger().Debugf(ctx, "Subscription is INVALID immediately after creation!")
 		return fmt.Errorf("subscription invalid after creation")
 	}
-	lg.GetLogger().Debugf(ctx, "Subscription is valid, proceeding with Fetch")
 
 	defer func() {
-		lg.GetLogger().Debugf(ctx, "Unsubscribing from consumer %s", consumerName)
 		system.MsgOnErrorReturn(sub.Unsubscribe())
 	}()
 
 	totalOps := 0
 
 	for {
-		lg.GetLogger().Debugf(ctx, "Attempting to Fetch up to 100 messages, subscription valid=%v", sub.IsValid())
 		msgs, err := sub.Fetch(100, nats.MaxWait(1*time.Second))
 		if err != nil {
 			if errors.Is(err, nats.ErrTimeout) {
-				lg.GetLogger().Debugf(ctx, "applyTransactionOperations: finished, processed %d operations for tx_id=%s", totalOps, txID)
+				lg.GetLogger().Tracef(ctx, "applyTransactionOperations: finished, processed %d operations for tx_id=%s", totalOps, txID)
 				break
 			}
 			return fmt.Errorf("failed to fetch operations: %w", err)
 		}
 
 		if len(msgs) == 0 {
-			lg.GetLogger().Debugf(ctx, "applyTransactionOperations: no more messages, processed %d operations for tx_id=%s", totalOps, txID)
+			lg.GetLogger().Tracef(ctx, "applyTransactionOperations: no more messages, processed %d operations for tx_id=%s", totalOps, txID)
 			break
 		}
 
-		lg.GetLogger().Debugf(ctx, "applyTransactionOperations: fetched %d operations for tx_id=%s", len(msgs), txID)
+		//lg.GetLogger().Tracef(ctx, "applyTransactionOperations: fetched %d operations for tx_id=%s", len(msgs), txID)
 
 		for _, msg := range msgs {
 			opType := msg.Header.Get("op_type")
 			key := msg.Header.Get("key")
 
 			if key == "" {
-				lg.GetLogger().Debugf(ctx, "Operation without key in transaction %s", txID)
+				lg.GetLogger().Errorf(ctx, "Operation without key in transaction %s", txID)
 				system.MsgOnErrorReturn(msg.Ack())
 				continue
 			}
@@ -214,28 +241,25 @@ func (dm *Domain) applyTransactionOperations(ctx context.Context, txID string) e
 			var kvErr error
 			switch opType {
 			case cache.OpTypePUT:
-				lg.GetLogger().Debugf(ctx, "Applying PUT for key=%s in tx=%s", key, txID)
 				_, kvErr = customNatsKv.KVPut(dm.js, dm.kv, key, msg.Data)
 			case cache.OpTypeDelete:
-				lg.GetLogger().Debugf(ctx, "Applying DELETE for key=%s in tx=%s", key, txID)
 				kvErr = customNatsKv.KVDelete(dm.js, dm.kv, key)
 				if kvErr != nil {
 					errMsg := kvErr.Error()
 					if errors.Is(kvErr, nats.ErrKeyNotFound) ||
 						strings.Contains(errMsg, "message not found") ||
 						strings.Contains(errMsg, "key not found") {
-						lg.GetLogger().Debugf(ctx, "Key %s already deleted, ignoring error: %s", key, errMsg)
 						kvErr = nil
 					}
 				}
 			default:
-				lg.GetLogger().Debugf(ctx, "Unknown operation type %s in transaction %s", opType, txID)
+				lg.GetLogger().Tracef(ctx, "Unknown operation type %s in transaction %s", opType, txID)
 				system.MsgOnErrorReturn(msg.Ack())
 				continue
 			}
 
 			if kvErr != nil {
-				lg.GetLogger().Debugf(ctx, "Failed to apply operation to KV: %s", kvErr)
+				lg.GetLogger().Errorf(ctx, "Failed to apply operation to KV: %s", kvErr)
 				system.MsgOnErrorReturn(msg.Nak())
 				return fmt.Errorf("failed to apply operation: %w", kvErr)
 			}
@@ -245,7 +269,7 @@ func (dm *Domain) applyTransactionOperations(ctx context.Context, txID string) e
 		}
 	}
 
-	lg.GetLogger().Debugf(ctx, "applyTransactionOperations: all operations processed, deleting consumer %s", consumerName)
+	lg.GetLogger().Tracef(ctx, "applyTransactionOperations: all operations processed, deleting consumer %s", consumerName)
 	system.MsgOnErrorReturn(dm.js.DeleteConsumer(WALOperationsStreamName, consumerName))
 
 	return nil
@@ -276,21 +300,21 @@ func (dm *Domain) isKVConsistent() (bool, error) {
 func (dm *Domain) countPendingCommits(consumerName string) int {
 	info, err := dm.js.ConsumerInfo(WALCommitsStreamName, consumerName)
 	if err != nil {
-		lg.GetLogger().Debugf(context.TODO(), "Failed to get consumer info: %s", err)
+		lg.GetLogger().Errorf(context.TODO(), "Failed to get consumer info: %s", err)
 		return 0
 	}
 
 	pending := int(info.NumPending)
-	lg.GetLogger().Debugf(context.TODO(), "Consumer %s has %d pending messages", consumerName, pending)
+	lg.GetLogger().Tracef(context.TODO(), "Consumer %s has %d pending messages", consumerName, pending)
 	return pending
 }
 
-func GenerateTransactionID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+func generateTransactionID() string {
+	return fmt.Sprintf("%d", system.GetCurrentTimeNs())
 }
 
 func (dm *Domain) publishWALOperation(txID string, opTime int64, opType cache.OpType, key string, value []byte) error {
-	subject := fmt.Sprintf(WALOperationsSubject, dm.kv.Bucket(), txID)
+	subject := fmt.Sprintf("wal.ops.%s.%s", dm.kv.Bucket(), txID)
 
 	msg := nats.NewMsg(subject)
 	msg.Header.Set("tx_id", txID)
@@ -298,8 +322,6 @@ func (dm *Domain) publishWALOperation(txID string, opTime int64, opType cache.Op
 	msg.Header.Set("op_type", opType)
 	msg.Header.Set("key", key)
 	msg.Data = value
-
-	lg.GetLogger().Debugf(context.TODO(), "::::::::::Publishing WAL operation: tx=%s, type=%s, key=%s, subject=%s", txID, opType, key, subject)
 
 	if _, err := dm.js.PublishMsg(msg); err != nil {
 		lg.GetLogger().Errorf(context.TODO(), "Failed to publish WAL operation: %s", err)
@@ -309,16 +331,16 @@ func (dm *Domain) publishWALOperation(txID string, opTime int64, opType cache.Op
 }
 
 func (dm *Domain) publishWALCommit(txID string) error {
-	subject := fmt.Sprintf(WALCommitsSubject, dm.kv.Bucket())
+	subject := fmt.Sprintf("wal.commits.%s", dm.kv.Bucket())
 
 	msg := nats.NewMsg(subject)
 	msg.Header.Set("tx_id", txID)
 	msg.Header.Set("commit_time", strconv.FormatInt(time.Now().UnixNano(), 10))
 
-	lg.GetLogger().Debugf(context.TODO(), "::::::::::Publishing WAL commit: tx=%s, subject=%s", txID, subject)
+	lg.GetLogger().Tracef(context.TODO(), "Publishing WAL commit: tx=%s, subject=%s", txID, subject)
 
 	if _, err := dm.js.PublishMsg(msg); err != nil {
-		lg.GetLogger().Errorf(context.TODO(), "::::::::::Failed to publish WAL commit: %s", err)
+		lg.GetLogger().Errorf(context.TODO(), "Failed to publish WAL commit: %s", err)
 		return err
 	}
 	return nil
