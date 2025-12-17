@@ -54,11 +54,23 @@ type Runtime struct {
 
 	isReady                      bool
 	shutdown                     chan struct{}
-	shutdownPhase                atomic.Uint32
+	gs                           *GracefullyShutdown
 	functionsStopCh              chan struct{}
 	wg                           sync.WaitGroup
 	afterStartFunctionsWaitGroup sync.WaitGroup
 	once                         sync.Once
+}
+
+type GracefullyShutdown struct {
+	Phase atomic.Uint32
+
+	cancelPhaseOne   context.CancelFunc
+	cancelPhaseTwo   context.CancelFunc
+	cancelPhaseThree context.CancelFunc
+
+	CtxPhaseOne   context.Context
+	CtxPhaseTwo   context.Context
+	CtxPhaseThree context.Context
 }
 
 // NewRuntime initializes a new Runtime instance with the given configuration.
@@ -71,7 +83,6 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		shutdown:                   make(chan struct{}),
 		functionsStopCh:            make(chan struct{}),
 	}
-	r.shutdownPhase.Store(ShutdownPhaseNone)
 
 	natsOpts := nats.GetDefaultOptions()
 	natsOpts.Url = r.config.natsURL
@@ -152,10 +163,7 @@ func (r *Runtime) RegisterOnAfterStartFunction(f OnAfterStartFunction, async boo
 // It also handles graceful shutdown via context.Context.
 func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 	logger := lg.GetLogger()
-	phaseOneContext, cancelPhaseOneContext := context.WithCancel(context.Background())
-	_ = phaseOneContext
-	phaseTwoContext, cancelPhaseTwoContext := context.WithCancel(context.Background())
-	phaseThreeContext, cancelPhaseThreeContext := context.WithCancel(context.Background())
+	r.gs = NewGracefullyShutdown(context.Background())
 
 	gracefulShutdownFunc := func() {
 		sig := make(chan os.Signal, 1)
@@ -163,18 +171,15 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 		<-sig
 		if !r.config.isActiveInstance {
 			logger.Debugf(ctx, "Runtime is not active. Shutting down immediately")
+			r.gs.cancelAllContexts()
 			r.Shutdown()
-			cancelPhaseOneContext()
-			cancelPhaseTwoContext()
-			cancelPhaseThreeContext()
 			return
 		}
 		startShutdown := time.Now()
-		r.shutdownPhase.Store(ShutdownPhaseOne)
+		r.gs.setPhase(ShutdownPhaseOne)
 		logger.Debugf(ctx, "Received shutdown signal, shutting down gracefully...")
 		logger.Debugf(ctx, "Shutdown phase 1")
-		cancelPhaseOneContext()
-
+		r.gs.cancelPhaseOne()
 		timeout := time.NewTimer(10 * time.Second)
 		defer timeout.Stop()
 
@@ -193,13 +198,13 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 
 		r.drainSignalSubscriptions()
 
-		r.shutdownPhase.Store(ShutdownPhaseTwo)
+		r.gs.setPhase(ShutdownPhaseTwo)
 
 		logger.Debugf(ctx, "Shutdown phase 2")
 
 		<-r.functionsStopCh
 
-		cancelPhaseTwoContext()
+		r.gs.cancelPhaseTwo()
 
 		logger.Debugf(ctx, "Shutdown phase 3")
 
@@ -209,11 +214,8 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 			logger.Debugf(ctx, "Shutdown - waiting for transaction committer")
 			<-r.Domain.shutdown
 		}
-
 		r.Shutdown()
-
-		cancelPhaseThreeContext()
-
+		r.gs.cancelPhaseThree()
 		logger.Debugf(ctx, "Shutdown took %v s", time.Since(startShutdown))
 	}
 
@@ -232,7 +234,7 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 	}
 
 	// Start the domain.
-	if err := r.Domain.start(phaseTwoContext, cacheConfig, r.config.handlesDomainRouters); err != nil {
+	if err := r.Domain.start(r.gs.CtxPhaseTwo, cacheConfig, r.config.handlesDomainRouters); err != nil {
 		return err
 	}
 
@@ -257,7 +259,7 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 
 	// Handle single-instance functions.
 	singleInstanceFunctionRevisions := make(map[string]uint64)
-	if err := r.handleSingleInstanceFunctions(phaseThreeContext, singleInstanceFunctionRevisions); err != nil {
+	if err := r.handleSingleInstanceFunctions(r.gs.CtxPhaseThree, singleInstanceFunctionRevisions); err != nil {
 		return err
 	}
 
@@ -270,7 +272,7 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 
 	// Start garbage collector.
 	r.wg.Add(1)
-	go r.runGarbageCollector(phaseThreeContext)
+	go r.runGarbageCollector(r.gs.CtxPhaseThree)
 
 	// Set Runtime ready
 	r.isReady = true
@@ -326,6 +328,32 @@ func (r *Runtime) stopRequestSubscriptions() {
 	for _, ft := range r.registeredFunctionTypes {
 		ft.stopRequestSubscription()
 	}
+}
+
+func NewGracefullyShutdown(rootCtx context.Context) *GracefullyShutdown {
+	gs := &GracefullyShutdown{}
+
+	gs.setPhase(ShutdownPhaseNone)
+	gs.CtxPhaseOne, gs.cancelPhaseOne = context.WithCancel(rootCtx)
+	gs.CtxPhaseTwo, gs.cancelPhaseTwo = context.WithCancel(rootCtx)
+	gs.CtxPhaseThree, gs.cancelPhaseThree = context.WithCancel(rootCtx)
+
+	return gs
+}
+
+func (gs *GracefullyShutdown) setPhase(phase ShutdownPhase) {
+	gs.Phase.Store(phase)
+}
+
+func (gs *GracefullyShutdown) phase() ShutdownPhase {
+	return gs.Phase.Load()
+}
+
+// cancelAllContexts force stops passive runtime
+func (gs *GracefullyShutdown) cancelAllContexts() {
+	gs.cancelPhaseOne()
+	gs.cancelPhaseTwo()
+	gs.cancelPhaseThree()
 }
 
 // Shutdown stops the runtime.
@@ -474,7 +502,7 @@ func (r *Runtime) collectGarbage() {
 		lg.Logf(lg.ErrorLevel, "Error ensuring GaugeVec: %v", err)
 	}
 
-	isShutdown := r.shutdownPhase.Load() == ShutdownPhaseTwo
+	isShutdown := r.gs.phase() == ShutdownPhaseTwo
 	functionsReadyForStop := isShutdown
 
 	for _, ft := range r.registeredFunctionTypes {
@@ -502,7 +530,7 @@ func (r *Runtime) collectGarbage() {
 		for _, ft := range r.registeredFunctionTypes {
 			ft.stopRequestSubscription()
 		}
-		r.shutdownPhase.Store(ShutdownPhaseThree)
+		r.gs.setPhase(ShutdownPhaseThree)
 		r.functionsStopCh <- struct{}{}
 	}
 
@@ -595,9 +623,9 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 			}
 
 			if r.config.isActiveInstance {
-				r.once.Do(func() {
+				r.once.Do(func() { //TODO need change logic for active->passive->active
 					lg.GetLogger().Debugf(ctx, "runtime is active, run afterStartFunctions")
-					r.runAfterStartFunctions(ctx)
+					r.runAfterStartFunctions(r.gs.CtxPhaseOne)
 				})
 
 				for ftName, revID := range revisions {
