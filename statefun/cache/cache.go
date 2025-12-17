@@ -455,8 +455,6 @@ func (cs *Store) traverseCacheForTransaction(
 			suffixPathsStack = append(suffixPathsStack, newSuffix)
 			depthsStack = append(depthsStack, currentDepth+1)
 
-			time.Sleep(time.Duration(cs.cacheConfig.lazyWriterValueProcessDelayMkS) * time.Microsecond)
-
 			return true
 		})
 

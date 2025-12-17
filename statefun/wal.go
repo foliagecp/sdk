@@ -41,7 +41,6 @@ func (dm *Domain) runTransactionCommitter(ctx context.Context, ready chan struct
 	lg.GetLogger().Tracef(ctx, "TransactionCommitter starting for bucket=%s, subject=%s", dm.kv.Bucket(), commitSubject)
 
 	if err := dm.setKVConsistent(false); err != nil {
-		lg.GetLogger().Errorf(ctx, "ailed to set KV as inconsistent: %s", err)
 		return err
 	}
 	lg.GetLogger().Tracef(ctx, "KV marked as inconsistent, will process pending transactions")
@@ -175,7 +174,7 @@ func (dm *Domain) applyTransactionOperations(ctx context.Context, txID string) e
 
 	info, err := dm.js.ConsumerInfo(WALOperationsStreamName, consumerName)
 	if err != nil || info == nil {
-		lg.GetLogger().Errorf(ctx, "Consumer %s not found, creating new one", consumerName)
+		lg.GetLogger().Tracef(ctx, "Consumer %s not found, creating new one", consumerName)
 
 		consumerConfig := &nats.ConsumerConfig{
 			Name:          consumerName,
@@ -233,7 +232,7 @@ func (dm *Domain) applyTransactionOperations(ctx context.Context, txID string) e
 			key := msg.Header.Get("key")
 
 			if key == "" {
-				lg.GetLogger().Errorf(ctx, "Operation without key in transaction %s", txID)
+				lg.GetLogger().Warnf(ctx, "Operation without key in transaction %s", txID)
 				system.MsgOnErrorReturn(msg.Ack())
 				continue
 			}
