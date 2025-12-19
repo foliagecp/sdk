@@ -52,7 +52,7 @@ func (dm *Domain) runTransactionCommitter(ctx context.Context, ready chan struct
 		DeliverGroup:   consumerName + "-group",
 		FilterSubject:  commitSubject,
 		AckPolicy:      nats.AckExplicitPolicy,
-		AckWait:        30 * time.Second,
+		AckWait:        5 * time.Second,
 		MaxDeliver:     5,
 		MaxAckPending:  1,
 	})
