@@ -58,7 +58,8 @@ type Runtime struct {
 	functionsStopCh              chan struct{}
 	wg                           sync.WaitGroup
 	afterStartFunctionsWaitGroup sync.WaitGroup
-	once                         sync.Once
+	afterStartRunning            atomic.Bool
+	activeInstanceMu             sync.RWMutex
 }
 
 type GracefullyShutdown struct {
@@ -453,6 +454,13 @@ func (r *Runtime) startFunctionSubscriptions(ctx context.Context, revisions map[
 	return nil
 }
 
+func (r *Runtime) stopFunctionSubscriptions(ctx context.Context) {
+	for _, ft := range r.registeredFunctionTypes {
+		ft.stopSignalSubscription()
+		ft.stopRequestSubscription()
+	}
+}
+
 // runAfterStartFunctions executes the registered OnAfterStart functions.
 func (r *Runtime) runAfterStartFunctions(ctx context.Context) {
 	for _, fnWithMode := range r.onAfterStartFunctionsWithMode {
@@ -583,9 +591,16 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 				if r.config.isActiveInstance {
 					newRevID, err := KeyMutexLockUpdate(ctx, r, system.GetHashStr(RuntimeName), r.config.activeRevID)
 					if err != nil {
-						lg.Logf(lg.WarnLevel, "Lost active lock for %s: %v", RuntimeName, err)
+						lg.Logf(lg.WarnLevel, "Active instance lost lock, becoming passive")
+						r.activeInstanceMu.Lock()
 						r.config.isActiveInstance = false
 						r.config.activeRevID = 0
+						r.activeInstanceMu.Unlock()
+						r.stopFunctionSubscriptions(ctx)
+						if r.afterStartRunning.Load() {
+							r.gs.cancelPhaseOne()
+							r.afterStartRunning.Store(false)
+						}
 						continue
 					} else {
 						r.config.activeRevID = newRevID
@@ -594,14 +609,21 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 					newRevID, err := KeyMutexLock(ctx, r, system.GetHashStr(RuntimeName), true)
 					if err == nil {
 						lg.Logf(lg.DebugLevel, "Passive instance becoming active")
+						r.activeInstanceMu.Lock()
 						r.config.isActiveInstance = true
 						r.config.activeRevID = newRevID
+						r.activeInstanceMu.Unlock()
 
 						if err := r.Domain.checkKvConsistency(ctx); err != nil {
 							lg.Logf(lg.ErrorLevel, "Failed to become active: %v", err)
 							system.MsgOnErrorReturn(KeyMutexUnlock(ctx, r, system.GetHashStr(RuntimeName), newRevID))
+
+							r.activeInstanceMu.Lock()
 							r.config.isActiveInstance = false
+							r.config.activeRevID = 0
+							r.activeInstanceMu.Unlock()
 						} else {
+							r.gs.CtxPhaseOne, r.gs.cancelPhaseOne = context.WithCancel(context.Background())
 							subscribeRequired = true
 						}
 					} else if !errors.Is(err, ErrMutexLocked) {
@@ -623,11 +645,13 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 			}
 
 			if r.config.isActiveInstance {
-				r.once.Do(func() { //TODO need change logic for active->passive->active
-					lg.GetLogger().Debugf(ctx, "runtime is active, run afterStartFunctions")
-					r.runAfterStartFunctions(r.gs.CtxPhaseOne)
-				})
-
+				if r.config.isActiveInstance {
+					if r.afterStartRunning.CompareAndSwap(false, true) {
+						r.gs.CtxPhaseOne, r.gs.cancelPhaseOne = context.WithCancel(context.Background())
+						lg.GetLogger().Debugf(ctx, "runtime is active, run afterStartFunctions")
+						r.runAfterStartFunctions(r.gs.CtxPhaseOne)
+					}
+				}
 				for ftName, revID := range revisions {
 					if revID == 0 {
 						tryLock(ftName)
