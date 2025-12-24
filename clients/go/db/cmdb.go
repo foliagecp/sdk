@@ -356,7 +356,7 @@ func (cmdb CMDBSyncClient) TypesLinkUpdate(from, to string, tags []string, body 
 	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 	if len(objectLinkType4Upsert) > 0 {
 		payload.SetByPath("upsert", easyjson.NewJSON(true))
-		payload.SetByPath("object_type", easyjson.NewJSON(objectLinkType4Upsert))
+		payload.SetByPath("object_type", easyjson.NewJSON(objectLinkType4Upsert[0]))
 	}
 	payload.SetByPath("to", easyjson.NewJSON(to))
 	payload.SetByPath("body", body)
