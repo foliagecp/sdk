@@ -548,10 +548,13 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		link.SetByPath("name", easyjson.NewJSON(toType))
 		link.SetByPath("upsert", ctx.Payload.GetByPath("upsert"))
 
-		objectLinkType := ctx.Payload.GetByPath("object_type").AsStringDefault(toType)
+		objectLinkType := ""
 		if olt, e := getObjectsLinkTypeFromTypesLink(ctx, ctx.Self.ID, toType); e == nil {
 			objectLinkType = olt
+		} else {
+			objectLinkType = toType
 		}
+		objectLinkType = ctx.Payload.GetByPath("object_type").AsStringDefault(objectLinkType)
 
 		link.SetByPath("body.type", easyjson.NewJSON(objectLinkType))
 	}
