@@ -422,7 +422,8 @@ func JPGQLCallTreeResultAggregation(_ sfPlugins.StatefunExecutor, ctx *sfPlugins
 			visited[visitKey] = struct{}{}
 
 			targetDomain := ctx.Domain.GetDomainFromObjectID(targetID)
-			if targetDomain == "" || targetDomain == currentDomainName {
+			isShadow := ctx.Domain.IsShadowObject(targetID)
+			if !isShadow && (targetDomain == "" || targetDomain == currentDomainName) {
 				// ---------- 5. Target vertex is in the same domain — just push to local DFS stack ----------
 				nextDepth := item.depth + 1
 				if nextDepth > maxDepthReached {
