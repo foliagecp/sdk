@@ -88,6 +88,8 @@ type Domain interface {
 
 	GetValidObjectId(objectId string) string
 
+	GetObjectIDByShadowObjectID(id string) string
+
 	CreateCustomShadowId(storeDomain, targetDomain, uuid string) string
 }
 
