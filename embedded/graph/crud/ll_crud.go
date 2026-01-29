@@ -439,7 +439,7 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			linkType := ""
 			linkTypeBytes, err := ctx.Domain.Cache().GetValue(inLinkKey)
 			if err == nil {
-				linkType = string(linkTypeBytes)
+				linkType = ctx.Domain.GetObjectIDWithoutDomain(string(linkTypeBytes))
 			}
 
 			inLinkJson := easyjson.NewJSONObjectWithKeyValue("from", easyjson.NewJSON(linkFromVId))
@@ -554,7 +554,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 		var linkType string
 		if s, ok := payload.GetByPath("type").AsString(); ok {
-			linkType = s
+			linkType = ctx.Domain.GetObjectIDWithoutDomain(s)
 		} else {
 			om.AggregateOpMsg(sfMediators.OpMsgFailed("type is not defined")).Reply()
 			return
