@@ -103,14 +103,14 @@ func getFullLinkInfoFromSpecifiedIdentifier(ctx *sfPlugins.StatefunContextProces
 		linkType := linkTargetTokens[0]
 		toId := linkTargetTokens[1]
 
-		return linkType, linkName, toId, true
+		return ctx.Domain.GetObjectIDWithoutDomain(linkType), linkName, toId, true
 	} else {
 		if toVertexId, ok := ctx.Payload.GetByPath("to").AsString(); ok {
 			toVertexId = ctx.Domain.CreateObjectIDWithThisDomain(toVertexId, false)
 			if lt, ok := ctx.Payload.GetByPath("type").AsString(); ok {
 				linkNameBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfID, lt, toVertexId))
 				if err == nil {
-					return lt, string(linkNameBytes), toVertexId, true
+					return ctx.Domain.GetObjectIDWithoutDomain(lt), string(linkNameBytes), toVertexId, true
 				}
 			}
 		}

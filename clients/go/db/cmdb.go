@@ -160,7 +160,7 @@ func (cmdb CMDBSyncClient) TriggerLinkSet(fromTypeName, toTypeName string, trigg
 		nil,
 		body,
 		false,
-		true,
+		toTypeName,
 	)
 }
 
@@ -351,11 +351,12 @@ func (cmdb CMDBSyncClient) TypesLinkCreate(from, to, objectLinkType string, tags
 	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.types.link.create", seqFree(from), &payload, &options)))
 }
 
-func (cmdb CMDBSyncClient) TypesLinkUpdate(from, to string, tags []string, body easyjson.JSON, replace bool, upsert ...bool) error {
+func (cmdb CMDBSyncClient) TypesLinkUpdate(from, to string, tags []string, body easyjson.JSON, replace bool, objectLinkType4Upsert ...string) error {
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
-	if len(upsert) > 0 {
-		payload.SetByPath("upsert", easyjson.NewJSON(upsert[0]))
+	if len(objectLinkType4Upsert) > 0 {
+		payload.SetByPath("upsert", easyjson.NewJSON(true))
+		payload.SetByPath("object_type", easyjson.NewJSON(objectLinkType4Upsert[0]))
 	}
 	payload.SetByPath("to", easyjson.NewJSON(to))
 	payload.SetByPath("body", body)

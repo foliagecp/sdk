@@ -209,6 +209,36 @@ func (dm *Domain) GetValidObjectId(objectId string) string {
 	return objectId
 }
 
+// GetObjectIDByShadowObjectID converts an input id to a "real" object id.
+//
+// Rules:
+//
+//	DomainA/DomainB#ObjectId -> DomainB/ObjectId
+//	DomainA/ObjectId         -> DomainA/ObjectId
+//	ObjectId                 -> ThisDomainName/ObjectId
+func (dm *Domain) GetObjectIDByShadowObjectID(id string) string {
+	// 1) Shadow object: DomainX/DomainY#ObjectId  => DomainY/ObjectId
+	if dm.IsShadowObject(id) {
+		targetDomain, objectID, err := dm.GetShadowObjectDomainAndID(id)
+		if err == nil {
+			return targetDomain + ObjectIDDomainSeparator + objectID
+		}
+		// If parsing failed for any reason — fall back to default rules below
+	}
+
+	// 2) Already has explicit domain: Domain/ObjectId => Domain/ObjectId
+	// (also tolerates multiple "/" by taking first token as domain and last as id,
+	//  same as your helpers do)
+	if strings.Contains(id, ObjectIDDomainSeparator) {
+		domain := dm.GetDomainFromObjectID(id)
+		objectID := dm.GetObjectIDWithoutDomain(id)
+		return domain + ObjectIDDomainSeparator + objectID
+	}
+
+	// 3) No domain at all: ObjectId => ThisDomain/ObjectId
+	return dm.name + ObjectIDDomainSeparator + id
+}
+
 /*
  * domainName1/domainName2#ObjectId -> true
  * domainName1/ObjectId  -> false

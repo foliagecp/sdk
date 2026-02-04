@@ -517,6 +517,7 @@ func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		"body": json, optional
 		"tags": []string
 		"upsert": bool
+		"object_type": string // use when upsert=true; will be overrided if already presented on link
 		"replace": bool
 	}
 */
@@ -546,6 +547,16 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	if ctx.Payload.PathExists("upsert") {
 		link.SetByPath("name", easyjson.NewJSON(toType))
 		link.SetByPath("upsert", ctx.Payload.GetByPath("upsert"))
+
+		objectLinkType := ""
+		if olt, e := getObjectsLinkTypeFromTypesLink(ctx, ctx.Self.ID, toType); e == nil {
+			objectLinkType = olt
+		} else {
+			objectLinkType = toType
+		}
+		objectLinkType = ctx.Payload.GetByPath("object_type").AsStringDefault(objectLinkType)
+
+		link.SetByPath("body.type", easyjson.NewJSON(objectLinkType))
 	}
 	if ctx.Payload.PathExists("replace") {
 		link.SetByPath("replace", ctx.Payload.GetByPath("replace"))
