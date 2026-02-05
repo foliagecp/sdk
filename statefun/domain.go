@@ -560,6 +560,7 @@ func (dm *Domain) createWALOperationsStream() error {
 		Subjects:  []string{WALOperationsSubject},
 		Retention: nats.WorkQueuePolicy,
 		MaxAge:    24 * time.Hour,
+		Replicas:  dm.sysSC.replicasCount,
 	}
 	return dm.createStreamIfNotExists(sc)
 }
@@ -570,6 +571,7 @@ func (dm *Domain) createWALCommitsStream() error {
 		Subjects:  []string{WALCommitsSubject},
 		Retention: nats.WorkQueuePolicy,
 		MaxAge:    24 * time.Hour,
+		Replicas:  dm.sysSC.replicasCount,
 	}
 	return dm.createStreamIfNotExists(sc)
 }
