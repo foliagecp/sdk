@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -72,7 +73,7 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 	r.shutdownPhase.Store(ShutdownPhaseNone)
 
 	natsOpts := nats.GetDefaultOptions()
-	natsOpts.Url = r.config.natsURL
+	natsOpts.Servers = strings.Split(r.config.natsURL, ",")
 	natsOpts.MaxReconnect = -1 // -1 - infinity attempts
 	natsOpts.ReconnectedCB = func(nc *nats.Conn) {
 		lg.GetLogger().Warnf(context.TODO(), "NATS reconnected %d times", nc.Statistics.Reconnects)
