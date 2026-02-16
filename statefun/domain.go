@@ -59,6 +59,8 @@ type Domain struct {
 
 	kv    nats.KeyValue
 	cache *cache.Store
+
+	shutdown chan struct{}
 }
 
 type streamConfig struct {
@@ -310,9 +312,7 @@ func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDo
 		}
 		kvExists = true
 	}
-	if !kvExists {
-		return fmt.Errorf("Nats KV was not inited")
-	}
+
 	// --------------------------------------------------------------
 
 	if createDomainRouters {
@@ -339,13 +339,106 @@ func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDo
 		if err := dm.createTraceStream(); err != nil {
 			return err
 		}
+		if err := dm.createWALOperationsStream(); err != nil {
+			return err
+		}
+		if err := dm.createWALCommitsStream(); err != nil {
+			return err
+		}
 	}
 
-	lg.Logln(lg.TraceLevel, "Initializing the cache store...")
+	le := lg.GetLogger()
+
+	le.Trace(ctx, "Initializing the cache store...")
 	dm.cache = cache.NewCacheStore(ctx, cacheConfig, dm.js, dm.kv)
-	lg.Logln(lg.TraceLevel, "Cache store inited!")
+	dm.cache.SetTransactionGenerator(dm)
+
+	if err := dm.TransactionCommitter(ctx); err != nil {
+		return err
+	}
+	if err := dm.checkKvConsistency(ctx); err != nil {
+		return err
+	}
+	le.Trace(ctx, "Cache store inited!")
 
 	return nil
+}
+
+func (dm *Domain) checkKvConsistency(ctx context.Context) error {
+	consumerName := CommitterDurableName + "-" + dm.kv.Bucket()
+
+	const (
+		checkInterval = 100 * time.Millisecond
+		waitTimeout   = 30 * time.Second
+	)
+
+	timeout := time.NewTimer(waitTimeout)
+	defer timeout.Stop()
+
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+
+	lg.Logln(lg.TraceLevel, "Waiting for KV consistency ...")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+
+		case <-timeout.C:
+			return fmt.Errorf("timeout waiting for KV consistency")
+
+		case <-ticker.C:
+			info, err := dm.js.ConsumerInfo(WALCommitsStreamName, consumerName)
+			if err != nil {
+				lg.Logf(lg.DebugLevel, "Failed to get consumer info: %s", err)
+				continue
+			}
+
+			noPendingWork :=
+				info.NumPending == 0 &&
+					info.NumAckPending == 0
+
+			consistent, err := dm.isKVConsistent()
+			if err != nil {
+				lg.Logf(lg.ErrorLevel, "Failed to check consistency: %s", err)
+				continue
+			}
+
+			if !noPendingWork {
+				lg.Logf(lg.TraceLevel, "Transactions in progress: pending=%d, ackPending=%d", info.NumPending, info.NumAckPending)
+
+				if consistent {
+					if err := dm.setKVConsistent(false); err != nil {
+						return fmt.Errorf(
+							"failed to set KV inconsistent: %w", err,
+						)
+					}
+				}
+
+				if !timeout.Stop() {
+					select {
+					case <-timeout.C:
+					default:
+					}
+				}
+				timeout.Reset(waitTimeout)
+				continue
+			}
+
+			if !consistent {
+				lg.Logln(lg.TraceLevel, "No pending work, setting KV consistent")
+				if err := dm.setKVConsistent(true); err != nil {
+					return fmt.Errorf(
+						"failed to set KV consistent: %w", err,
+					)
+				}
+			}
+
+			lg.Logln(lg.TraceLevel, "KV is consistent")
+			return nil
+		}
+	}
 }
 
 func (dm *Domain) createIngressRouter() error {
@@ -450,6 +543,28 @@ func (dm *Domain) createTraceStream() error {
 	return dm.createStreamIfNotExists(sc)
 }
 
+func (dm *Domain) createWALOperationsStream() error {
+	sc := &nats.StreamConfig{
+		Name:      WALOperationsStreamName,
+		Subjects:  []string{WALOperationsSubject},
+		Retention: nats.WorkQueuePolicy,
+		MaxAge:    24 * time.Hour,
+		Replicas:  dm.sysSC.replicasCount,
+	}
+	return dm.createStreamIfNotExists(sc)
+}
+
+func (dm *Domain) createWALCommitsStream() error {
+	sc := &nats.StreamConfig{
+		Name:      WALCommitsStreamName,
+		Subjects:  []string{WALCommitsSubject},
+		Retention: nats.WorkQueuePolicy,
+		MaxAge:    24 * time.Hour,
+		Replicas:  dm.sysSC.replicasCount,
+	}
+	return dm.createStreamIfNotExists(sc)
+}
+
 func (dm *Domain) createStreamIfNotExists(sc *nats.StreamConfig) error {
 	// Create streams if does not exist ------------------------------
 	/* Each stream contains a single subject (topic).
@@ -515,7 +630,7 @@ func (dm *Domain) createRouter(sourceStreamName string, subject string, tsc targ
 					case domainEgressStreamName:
 						// Default logic - infinite republishing
 					case domainIngressStreamName:
-						// Send message to DLQ without retryAdd commentMore actions
+						// Send message to DLQ without retry
 						if err == nil {
 							lg.Logf(lg.DebugLevel, "Domain (domain=%s) router with sourceStreamName=%s republished message to DLQ", dm.name, sourceStreamName)
 							system.MsgOnErrorReturn(msg.Ack())
@@ -554,4 +669,24 @@ func dlqMsgBuilder(subject, stream, domain, errorMsg string, data []byte) *nats.
 	dlqMsg.Header.Set("Timestamp", time.Now().UTC().String())
 
 	return dlqMsg
+}
+
+func (dm *Domain) PublishOperation(txID string, opTime int64, opType cache.OpType, key string, value []byte) error {
+	return dm.publishWALOperation(txID, opTime, opType, key, value)
+}
+
+func (dm *Domain) PublishCommit(txID string) error {
+	return dm.publishWALCommit(txID)
+}
+
+func (dm *Domain) GenerateTransactionID() string {
+	return generateTransactionID()
+}
+
+func (dm *Domain) isBackupBarrierActive() bool {
+	entry, err := dm.kv.Get(cache.BackupBarrierLockKey)
+	if err != nil {
+		return false
+	}
+	return len(entry.Value()) > 0
 }
