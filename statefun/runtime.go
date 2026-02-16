@@ -583,6 +583,12 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 	}
 }
 
+// IsActiveInstance indicates whether this runtime instance currently owns
+// the active role in HA mode
+func (r *Runtime) IsActiveInstance() bool {
+	return r.config.isActiveInstance
+}
+
 // contains checks if a slice contains a particular string.
 func contains(slice []string, item string) bool {
 	for _, s := range slice {
