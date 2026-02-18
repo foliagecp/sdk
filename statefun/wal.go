@@ -15,6 +15,8 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+var errTransactionAlreadyApplied = fmt.Errorf("transaction already applied by another runtime")
+
 const (
 	WALOperationsStreamName = "wal_operations"
 	WALCommitsStreamName    = "wal_commits"
@@ -136,6 +138,12 @@ func (dm *Domain) runTransactionCommitter(ctx context.Context, ready chan struct
 			}
 
 			if err := dm.applyTransactionOperations(ctx, txID); err != nil {
+				if errors.Is(err, errTransactionAlreadyApplied) {
+					lg.Logf(lg.DebugLevel, "TransactionCommitter: transaction %s already applied, acking", txID)
+					system.MsgOnErrorReturn(msg.Ack())
+					processedCount++
+					return
+				}
 				lg.Logf(lg.ErrorLevel, "TransactionCommitter: failed to apply transaction %s: %s", txID, err)
 				system.MsgOnErrorReturn(msg.Nak())
 				return
@@ -237,6 +245,10 @@ func (dm *Domain) applyTransactionOperations(ctx context.Context, txID string) e
 
 	sub, err := dm.js.PullSubscribe(opsSubject, consumerName)
 	if err != nil {
+		if errors.Is(err, nats.ErrConsumerDeleted) {
+			lg.Logf(lg.DebugLevel, "Per-tx consumer %s already deleted, transaction applied by another runtime", consumerName)
+			return errTransactionAlreadyApplied
+		}
 		lg.Logf(lg.ErrorLevel, "Failed to create subscription: %s", err)
 		return fmt.Errorf("failed to subscribe to operations: %w", err)
 	}
@@ -257,6 +269,10 @@ func (dm *Domain) applyTransactionOperations(ctx context.Context, txID string) e
 			if errors.Is(err, nats.ErrTimeout) {
 				lg.Logf(lg.TraceLevel, "applyTransactionOperations: finished, processed %d operations for tx_id=%s", totalOps, txID)
 				break
+			}
+			if errors.Is(err, nats.ErrConsumerDeleted) {
+				lg.Logf(lg.DebugLevel, "Per-tx consumer deleted during fetch, transaction applied by another runtime (tx_id=%s)", txID)
+				return errTransactionAlreadyApplied
 			}
 			return fmt.Errorf("failed to fetch operations: %w", err)
 		}

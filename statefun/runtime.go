@@ -684,11 +684,6 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 			}
 
 			if r.config.isActiveInstance {
-				if r.afterStartRunning.CompareAndSwap(false, true) {
-					lg.GetLogger().Debugf(ctx, "runtime is active, run afterStartFunctions")
-					r.runAfterStartFunctions(r.gs.phaseOneCtx())
-				}
-
 				for ftName, revID := range revisions {
 					if revID == 0 {
 						tryLock(ftName)
@@ -712,6 +707,11 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 				if err := r.startFunctionSubscriptions(ctx, revisions); err != nil {
 					lg.Logf(lg.ErrorLevel, "function subscriptions failed: %v", err)
 				}
+			}
+
+			if r.afterStartRunning.CompareAndSwap(false, true) {
+				lg.GetLogger().Debugf(ctx, "run afterStartFunctions")
+				r.runAfterStartFunctions(r.gs.phaseOneCtx())
 			}
 		}
 	}
