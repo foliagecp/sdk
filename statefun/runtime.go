@@ -605,7 +605,6 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 		r.stopFunctionSubscriptions(ctx)
 		if r.afterStartRunning.Load() {
 			r.gs.cancelPhaseOne()
-			r.afterStartRunning.Store(false)
 		}
 		kvConsistencyCheck = nil
 	}
@@ -650,6 +649,7 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 							r.config.isActiveInstance = true
 							r.activeInstanceMu.Unlock()
 							r.gs.resetPhaseOneCtx()
+							r.afterStartRunning.Store(false)
 							subscribeRequired = true
 						}
 					default:
