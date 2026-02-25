@@ -295,6 +295,9 @@ type Store struct {
 	transactionsMutex           *sync.Mutex
 	getKeysByPatternFromKVMutex *sync.Mutex
 
+	// walWriteEnabled - true for active instance
+	// only active instances can write to WAL streams
+	walWriteEnabled      atomic.Bool
 	transactionGenerator TransactionGenerator
 
 	//write barrier state
@@ -499,6 +502,9 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 
 	cs.ctx, cs.cancel = context.WithCancel(ctx)
 
+	// default - can not publish to WAL
+	cs.walWriteEnabled.Store(false)
+
 	storeUpdatesHandler := func(cs *Store) {
 		system.GlobalPrometrics.GetRoutinesCounter().Started("cache.storeUpdatesHandler")
 		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("cache.storeUpdatesHandler")
@@ -594,6 +600,11 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 
 			if cs.transactionGenerator == nil {
 				le.Debugf(ctx, "WAL is not ready, skip this iteration")
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+			if !cs.walWriteEnabled.Load() {
+				le.Debugf(ctx, "WAL writes are disabled, skip this iteration")
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}
@@ -1227,6 +1238,10 @@ type TransactionGenerator interface {
 
 func (cs *Store) SetTransactionGenerator(tg TransactionGenerator) {
 	cs.transactionGenerator = tg
+}
+
+func (cs *Store) SetWALWriteEnabled(enabled bool) {
+	cs.walWriteEnabled.Store(enabled)
 }
 
 // -----------------------------------

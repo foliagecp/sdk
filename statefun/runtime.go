@@ -259,6 +259,9 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 		r.config.isActiveInstance = true
 	}
 
+	// if active - can publish to WAL, passive - can not
+	r.Domain.Cache().SetWALWriteEnabled(r.config.isActiveInstance)
+
 	// Handle single-instance functions.
 	singleInstanceFunctionRevisions := make(map[string]uint64)
 	if err := r.handleSingleInstanceFunctions(r.gs.ctxPhaseThree, singleInstanceFunctionRevisions); err != nil {
@@ -602,6 +605,7 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 		r.config.isActiveInstance = false
 		r.config.activeRevID = 0
 		r.activeInstanceMu.Unlock()
+		r.Domain.Cache().SetWALWriteEnabled(false)
 		r.stopFunctionSubscriptions(ctx)
 		if r.afterStartRunning.Load() {
 			r.gs.cancelPhaseOne()
@@ -648,6 +652,7 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 							r.activeInstanceMu.Lock()
 							r.config.isActiveInstance = true
 							r.activeInstanceMu.Unlock()
+							r.Domain.Cache().SetWALWriteEnabled(true)
 							r.gs.resetPhaseOneCtx()
 							r.afterStartRunning.Store(false)
 							subscribeRequired = true
