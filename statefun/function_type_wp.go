@@ -292,6 +292,46 @@ func (wp *SFWorkerPool) Stop() {
 	wp.wg.Wait()
 }
 
+// DropPendingTasks removes tasks that have not started yet
+// Running tasks are not interrupted
+func (wp *SFWorkerPool) DropPendingTasks() (dropped int) {
+	// Drop tasks already moved into worker queue
+	drainingSharedQueue := true
+	for drainingSharedQueue {
+		select {
+		case task := <-wp.taskQueue:
+			dropped++
+			wp.ft.TokenRelease()
+			if task.Msg.Data.AckCallback != nil {
+				// do not try to redeliver
+				task.Msg.Data.AckCallback(true)
+			}
+		default:
+			drainingSharedQueue = false
+		}
+	}
+
+	// Drop tasks still waiting in per-id channels
+	wp.ft.idHandlersChannel.Range(func(_, value any) bool {
+		ch := value.(chan FunctionTypeMsg)
+		for {
+			select {
+			case msg := <-ch:
+				dropped++
+				wp.ft.TokenRelease()
+				if msg.AckCallback != nil {
+					// do not try to redeliver
+					msg.AckCallback(true)
+				}
+			default:
+				return true
+			}
+		}
+	})
+
+	return dropped
+}
+
 func (wp *SFWorkerPool) GetWorkerPoolLoadPercentage() float64 {
 	return 100.0 * float64(len(wp.taskQueue)) / float64(cap(wp.taskQueue))
 }
