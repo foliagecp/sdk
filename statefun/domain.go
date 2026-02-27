@@ -294,12 +294,9 @@ func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDo
 	bucketName := fmt.Sprintf("%s_%s_cache_bucket", dm.name, cacheConfig.GetId())
 
 	// Create application key value store bucket if does not exist --
-	kvExists := false
-	if kv, err := dm.js.KeyValue(bucketName); err == nil {
-		dm.kv = kv
-		kvExists = true
-	}
-	if !kvExists {
+	if existingKV, err := dm.js.KeyValue(bucketName); err == nil {
+		dm.kv = existingKV
+	} else {
 		var err error
 		dm.kv, err = kv.CreateKeyValue(dm.nc, dm.js, &nats.KeyValueConfig{
 			Bucket:   bucketName,
@@ -310,7 +307,6 @@ func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDo
 		if err != nil {
 			return err
 		}
-		kvExists = true
 	}
 
 	// --------------------------------------------------------------

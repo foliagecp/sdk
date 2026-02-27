@@ -78,17 +78,17 @@ func (cs *Store) refreshBackupBarrierFromKV() {
 	cs.updateBackupBarrier(status, barrierTs)
 }
 
-func (cs *Store) clearBackupBarrier() error {
-	barrier := easyjson.NewJSONObject()
-	barrier.SetByPath("status", easyjson.NewJSON(BackupBarrierStatusUnlocked))
-	barrier.SetByPath("barrier_timestamp", easyjson.NewJSON(0))
-
-	system.MsgOnErrorReturn(customNatsKv.KVPut(cs.js, cs.kv, BackupBarrierLockKey, barrier.ToBytes()))
-
-	cs.updateBackupBarrier(BackupBarrierStatusUnlocked, 0)
-
-	return nil
-}
+//func (cs *Store) clearBackupBarrier() error {
+//	barrier := easyjson.NewJSONObject()
+//	barrier.SetByPath("status", easyjson.NewJSON(BackupBarrierStatusUnlocked))
+//	barrier.SetByPath("barrier_timestamp", easyjson.NewJSON(0))
+//
+//	system.MsgOnErrorReturn(customNatsKv.KVPut(cs.js, cs.kv, BackupBarrierLockKey, barrier.ToBytes()))
+//
+//	cs.updateBackupBarrier(BackupBarrierStatusUnlocked, 0)
+//
+//	return nil
+//}
 
 func (cs *Store) updateBackupBarrier(status int32, timestamp int64) {
 	atomic.StoreInt64(&cs.backupBarrierTimestamp, timestamp)

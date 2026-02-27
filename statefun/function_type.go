@@ -12,7 +12,6 @@ import (
 
 	"github.com/foliagecp/easyjson"
 
-	"github.com/foliagecp/sdk/statefun/logger"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
@@ -65,7 +64,7 @@ func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHa
 		ft.sfWorkerPool = NewSFWorkerPool(ft, config.functionWorkerPoolConfig)
 		runtime.registeredFunctionTypes[ft.name] = ft
 	} else {
-		lg.GetLogger().Errorf(context.TODO(), "Function type '%s' is not registered. Ensure that all function types are registered before starting the runtime.", ft.name)
+		lg.Logf(lg.ErrorLevel, "Function type '%s' is not registered. Ensure that all function types are registered before starting the runtime.", ft.name)
 	}
 	return ft
 }
@@ -142,9 +141,18 @@ func (ft *FunctionType) TokenCapacity() int {
 func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	id := ft.runtime.Domain.CreateObjectIDWithThisDomain(originId, false)
 
+	// In HA mode passive runtime must not enqueue new tasks
+	if ft.runtime.config.activePassiveMode && !ft.runtime.IsActiveInstance() {
+		if msg.RefusalCallback != nil {
+			msg.RefusalCallback(false) // try to redeliver
+		}
+		lg.Logf(lg.DebugLevel, sendMsgFuncErrorMsg, ft.name, id, "runtime is passive")
+		return
+	}
+
 	if !ft.TokenTryAcquire() {
 		msg.RefusalCallback(true) // No redelivering cause system have no more scaling resources!
-		logger.Logf(logger.ErrorLevel, sendMsgFuncErrorMsg, ft.name, id, "no tokens left")
+		lg.Logf(lg.ErrorLevel, sendMsgFuncErrorMsg, ft.name, id, "no tokens left")
 		return
 	}
 
@@ -168,7 +176,7 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	default:
 		ft.TokenRelease()
 		msg.RefusalCallback(false) // Can try to rediliver cause free tokens still exists, system have scaling resources
-		logger.Logf(logger.WarnLevel, sendMsgFuncErrorMsg, ft.name, id, "queue for current id is full")
+		lg.Logf(lg.WarnLevel, sendMsgFuncErrorMsg, ft.name, id, "queue for current id is full")
 	}
 }
 
@@ -177,7 +185,7 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 	ft.idKeyMutex.Lock(id)
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Logf(logger.ErrorLevel, "panic in workerTaskExecutor for %s:%s: %v", ft.name, id, r)
+			lg.Logf(lg.ErrorLevel, "panic in workerTaskExecutor for %s:%s: %v", ft.name, id, r)
 		}
 		ft.idKeyMutex.Unlock(id)
 	}()
@@ -506,9 +514,9 @@ func (ft *FunctionType) stopSignalSubscription() {
 	if !ft.signalSubscription.IsValid() {
 		return
 	}
-	logger.GetLogger().Debugf(context.TODO(), "draining signal subscription for typename %s", ft.name)
+	lg.Logf(lg.DebugLevel, "draining signal subscription for typename %s", ft.name)
 	if err := ft.signalSubscription.Drain(); err != nil {
-		logger.GetLogger().Errorf(context.TODO(), "failed to drain signal subscription for typename %s: %s", ft.name, err.Error())
+		lg.Logf(lg.ErrorLevel, "failed to drain signal subscription for typename %s: %s", ft.name, err.Error())
 		return
 	}
 
@@ -519,11 +527,11 @@ func (ft *FunctionType) stopSignalSubscription() {
 	for {
 		select {
 		case <-timeout:
-			logger.GetLogger().Errorf(context.TODO(), "timeout waiting for signal subscription drain for typename %s", ft.name)
+			lg.Logf(lg.ErrorLevel, "timeout waiting for signal subscription drain for typename %s", ft.name)
 			return
 		case <-ticker.C:
 			if !ft.signalSubscription.IsValid() {
-				logger.GetLogger().Debugf(context.TODO(), "signal subscription drained successfully for typename %s", ft.name)
+				lg.Logf(lg.ErrorLevel, "signal subscription drained successfully for typename %s", ft.name)
 				return
 			}
 		}
@@ -535,6 +543,6 @@ func (ft *FunctionType) stopRequestSubscription() {
 		return
 	}
 	ft.sfWorkerPool.Stop()
-	ft.requestSubscription.Unsubscribe()
-	logger.GetLogger().Debugf(context.TODO(), "unsubscribe request subscription for typename %s", ft.name)
+	_ = ft.requestSubscription.Unsubscribe()
+	lg.Logf(lg.DebugLevel, "unsubscribe request subscription for typename %s", ft.name)
 }

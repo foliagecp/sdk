@@ -503,11 +503,9 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 		system.GlobalPrometrics.GetRoutinesCounter().Started("cache.storeUpdatesHandler")
 		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("cache.storeUpdatesHandler")
 		if w, err := kv.Watch(cacheConfig.kvStorePrefix+".>", nats.IgnoreDeletes()); err == nil {
-			activeKVSync := true
-			for activeKVSync {
+			for {
 				select {
 				case <-cs.ctx.Done():
-					activeKVSync = false
 					return
 				case entry := <-w.Updates():
 					if entry != nil {
