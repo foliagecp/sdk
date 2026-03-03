@@ -8,6 +8,7 @@ import (
 
 	"github.com/foliagecp/easyjson"
 	customNatsKv "github.com/foliagecp/sdk/embedded/nats/kv"
+	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
 )
@@ -48,6 +49,8 @@ func (cs *Store) checkBackupBarrierInfoBeforeWrite(opTime int64) error {
 		}
 	}
 
+	lg.Logf(lg.InfoLevel, "clearBackupBarrier: backup barrier cleared")
+
 	return nil
 }
 
@@ -69,6 +72,7 @@ func (cs *Store) shouldRefreshBackupBarrier() bool {
 func (cs *Store) refreshBackupBarrierFromKV() {
 	barrier, err := cs.getBackupBarrierInfo()
 	if err != nil {
+		lg.Logf(lg.ErrorLevel, "refreshBackupBarrierFromKV: failed to read barrier from KV: %s", err)
 		return
 	}
 
@@ -91,9 +95,13 @@ func (cs *Store) refreshBackupBarrierFromKV() {
 //}
 
 func (cs *Store) updateBackupBarrier(status int32, timestamp int64) {
+	oldStatus := atomic.LoadInt32(&cs.backupBarrierStatus)
 	atomic.StoreInt64(&cs.backupBarrierTimestamp, timestamp)
 	atomic.StoreInt32(&cs.backupBarrierStatus, status)
 	atomic.StoreInt64(&cs.backupBarrierLastChecked, system.GetCurrentTimeNs())
+	if oldStatus != status {
+		lg.Logf(lg.InfoLevel, "backup barrier status changed: %d -> %d (timestamp=%d)", oldStatus, status, timestamp)
+	}
 }
 
 func (cs *Store) markCacheReadyForBackup() {
@@ -104,6 +112,8 @@ func (cs *Store) markCacheReadyForBackup() {
 	barrier.SetByPath("status", easyjson.NewJSON(BackupBarrierStatusLocked))
 	barrier.SetByPath("barrier_timestamp", easyjson.NewJSON(cs.backupBarrierTimestamp))
 	system.MsgOnErrorReturn(customNatsKv.KVPut(cs.js, cs.kv, BackupBarrierLockKey, barrier.ToBytes()))
+
+	lg.Logf(lg.InfoLevel, "in-memory storage is ready for backup (barrier locked at timestamp=%d)", backupBarrierTimestamp)
 }
 
 func (cs *Store) updateBackupBarrierWithTimestamp(timestamp int64) error {
