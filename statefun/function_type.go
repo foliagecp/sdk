@@ -254,6 +254,16 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 }
 
 func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameIDContextProcessor *sfPlugins.StatefunContextProcessor) {
+	// In HA mode passive runtime must not enqueue new tasks
+	// request will reject by timeout
+	if ft.runtime.config.activePassiveMode && !ft.runtime.IsActiveInstance() {
+		if msg.AckCallback != nil {
+			msg.AckCallback(true) // we dont want to redeliver this
+		}
+		lg.Logf(lg.DebugLevel, sendMsgFuncErrorMsg, ft.name, id, "runtime is passive")
+		return
+	}
+
 	ft.lastMsgTimeNs.Store(uint64(system.GetCurrentTimeNs()))
 	msgRequestCallback := msg.RequestCallback
 	replyDataChannel := make(chan *easyjson.JSON, 1)
