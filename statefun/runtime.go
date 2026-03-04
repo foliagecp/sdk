@@ -315,26 +315,6 @@ func (r *Runtime) drainSignalSubscriptions() {
 	wg.Wait()
 }
 
-func (r *Runtime) stopRequestSubscriptions() {
-	for {
-		allFunctionsReadyForShutdown := true
-		for _, ft := range r.registeredFunctionTypes {
-			if (int(ft.lastMsgTimeNs.Load()) + r.config.functionTypeIDLifetimeMs*1000) > int(system.GetCurrentTimeNs()) {
-				allFunctionsReadyForShutdown = false
-				continue
-			}
-		}
-		if allFunctionsReadyForShutdown {
-			break
-		}
-		time.Sleep(1 * time.Second)
-	}
-
-	for _, ft := range r.registeredFunctionTypes {
-		ft.stopRequestSubscription()
-	}
-}
-
 func NewGracefulShutdown(rootCtx context.Context) *GracefulShutdown {
 	gs := &GracefulShutdown{}
 

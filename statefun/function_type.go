@@ -141,6 +141,15 @@ func (ft *FunctionType) TokenCapacity() int {
 func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	id := ft.runtime.Domain.CreateObjectIDWithThisDomain(originId, false)
 
+	// In HA mode passive runtime must not enqueue new tasks
+	if ft.runtime.config.activePassiveMode && !ft.runtime.IsActiveInstance() {
+		if msg.RefusalCallback != nil {
+			msg.RefusalCallback(false) // try to redeliver
+		}
+		lg.Logf(lg.DebugLevel, sendMsgFuncErrorMsg, ft.name, id, "runtime is passive")
+		return
+	}
+
 	if !ft.TokenTryAcquire() {
 		msg.RefusalCallback(true) // No redelivering cause system have no more scaling resources!
 		lg.Logf(lg.ErrorLevel, sendMsgFuncErrorMsg, ft.name, id, "no tokens left")
@@ -532,7 +541,7 @@ func (ft *FunctionType) stopSignalSubscription() {
 			return
 		case <-ticker.C:
 			if !ft.signalSubscription.IsValid() {
-				lg.Logf(lg.DebugLevel, "signal subscription drained successfully for typename %s", ft.name)
+				lg.Logf(lg.ErrorLevel, "signal subscription drained successfully for typename %s", ft.name)
 				return
 			}
 		}
@@ -544,6 +553,6 @@ func (ft *FunctionType) stopRequestSubscription() {
 		return
 	}
 	ft.sfWorkerPool.Stop()
-	ft.requestSubscription.Unsubscribe()
+	_ = ft.requestSubscription.Unsubscribe()
 	lg.Logf(lg.DebugLevel, "unsubscribe request subscription for typename %s", ft.name)
 }

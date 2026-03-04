@@ -10,6 +10,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/embedded/nats/kv"
 	"github.com/foliagecp/sdk/statefun/cache"
 	lg "github.com/foliagecp/sdk/statefun/logger"
@@ -294,12 +295,9 @@ func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDo
 	bucketName := fmt.Sprintf("%s_%s_cache_bucket", dm.name, cacheConfig.GetId())
 
 	// Create application key value store bucket if does not exist --
-	kvExists := false
-	if kv, err := dm.js.KeyValue(bucketName); err == nil {
-		dm.kv = kv
-		kvExists = true
-	}
-	if !kvExists {
+	if existingKV, err := dm.js.KeyValue(bucketName); err == nil {
+		dm.kv = existingKV
+	} else {
 		var err error
 		dm.kv, err = kv.CreateKeyValue(dm.nc, dm.js, &nats.KeyValueConfig{
 			Bucket:   bucketName,
@@ -310,7 +308,6 @@ func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDo
 		if err != nil {
 			return err
 		}
-		kvExists = true
 	}
 
 	// --------------------------------------------------------------
@@ -686,7 +683,13 @@ func (dm *Domain) GenerateTransactionID() string {
 func (dm *Domain) isBackupBarrierActive() bool {
 	entry, err := dm.kv.Get(cache.BackupBarrierLockKey)
 	if err != nil {
+		lg.Logf(lg.ErrorLevel, "IsBackupBarrierActive: failed to get backup barrier lock entry: %s", err)
 		return false
 	}
-	return len(entry.Value()) > 0
+	barrier, ok := easyjson.JSONFromBytes(entry.Value())
+	if !ok {
+		return false
+	}
+	status := int32(barrier.GetByPath("status").AsNumericDefault(cache.BackupBarrierStatusUnlocked))
+	return status == cache.BackupBarrierStatusLocked
 }
