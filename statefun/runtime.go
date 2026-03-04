@@ -259,6 +259,9 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 		r.config.isActiveInstance = true
 	}
 
+	// if active - can publish to WAL, passive - can not
+	r.Domain.Cache().SetWALWriteEnabled(r.config.isActiveInstance)
+
 	// Handle single-instance functions.
 	singleInstanceFunctionRevisions := make(map[string]uint64)
 	if err := r.handleSingleInstanceFunctions(r.gs.ctxPhaseThree, singleInstanceFunctionRevisions); err != nil {
@@ -476,6 +479,20 @@ func (r *Runtime) stopFunctionSubscriptions(ctx context.Context) {
 	}
 }
 
+func (r *Runtime) dropAllFunctionPendingTasks() {
+	totalDropped := 0
+	for _, ft := range r.registeredFunctionTypes {
+		dropped := ft.sfWorkerPool.DropPendingTasks()
+		totalDropped += dropped
+		if dropped > 0 {
+			lg.Logf(lg.DebugLevel, "Dropped %d pending tasks for function %s on passive transition", dropped, ft.name)
+		}
+	}
+	if totalDropped > 0 {
+		lg.Logf(lg.DebugLevel, "Dropped %d pending tasks in total on passive transition", totalDropped)
+	}
+}
+
 // runAfterStartFunctions executes the registered OnAfterStart functions.
 func (r *Runtime) runAfterStartFunctions(ctx context.Context) {
 	for _, fnWithMode := range r.onAfterStartFunctionsWithMode {
@@ -602,7 +619,9 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 		r.config.isActiveInstance = false
 		r.config.activeRevID = 0
 		r.activeInstanceMu.Unlock()
+		r.Domain.Cache().SetWALWriteEnabled(false)
 		r.stopFunctionSubscriptions(ctx)
+		r.dropAllFunctionPendingTasks()
 		if r.afterStartRunning.Load() {
 			r.gs.cancelPhaseOne()
 		}
@@ -648,6 +667,7 @@ func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisi
 							r.activeInstanceMu.Lock()
 							r.config.isActiveInstance = true
 							r.activeInstanceMu.Unlock()
+							r.Domain.Cache().SetWALWriteEnabled(true)
 							r.gs.resetPhaseOneCtx()
 							r.afterStartRunning.Store(false)
 							subscribeRequired = true
