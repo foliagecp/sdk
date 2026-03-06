@@ -414,11 +414,9 @@ func (r *Runtime) handleSingleInstanceFunctions(ctx context.Context, revisions m
 		}
 	}
 
-	// Start lock updater for single-instance functions.
-	if len(revisions) > 0 {
-		r.wg.Add(1)
-		go r.singleInstanceFunctionLocksUpdater(ctx, revisions)
-	}
+	// Always start runtime lifecycle updater
+	r.wg.Add(1)
+	go r.runtimeLifecycleUpdater(ctx, revisions)
 
 	return nil
 }
@@ -574,8 +572,8 @@ func (r *Runtime) reportPerformanceMetrics() {
 	}
 }
 
-// singleInstanceFunctionLocksUpdater periodically updates locks for single-instance functions.
-func (r *Runtime) singleInstanceFunctionLocksUpdater(ctx context.Context, revisions map[string]uint64) {
+// runtimeLifecycleUpdater periodically updates runtime/function locks and lifecycle hooks
+func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[string]uint64) {
 	defer r.wg.Done()
 	ticker := time.NewTicker(time.Duration(r.config.kvMutexLifeTimeSec) / 2 * time.Second)
 	defer ticker.Stop()
