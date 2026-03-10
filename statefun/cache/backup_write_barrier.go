@@ -49,9 +49,12 @@ func (cs *Store) checkBackupBarrierInfoBeforeWrite(opTime int64) error {
 		}
 	}
 
-	lg.Logf(lg.InfoLevel, "clearBackupBarrier: backup barrier cleared")
-
 	return nil
+}
+
+func (cs *Store) IsBackupBarrierActive() bool {
+	_, status := cs.getBackupBarrierState()
+	return status == BackupBarrierStatusLocked || status == BackupBarrierStatusLocking
 }
 
 func (cs *Store) getBackupBarrierState() (timestamp int64, status int32) {
@@ -73,6 +76,7 @@ func (cs *Store) refreshBackupBarrierFromKV() {
 	barrier, err := cs.getBackupBarrierInfo()
 	if err != nil {
 		lg.Logf(lg.ErrorLevel, "refreshBackupBarrierFromKV: failed to read barrier from KV: %s", err)
+		atomic.StoreInt64(&cs.backupBarrierLastChecked, system.GetCurrentTimeNs())
 		return
 	}
 

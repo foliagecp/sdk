@@ -510,11 +510,17 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("cache.storeUpdatesHandler")
 		if w, err := kv.Watch(cacheConfig.kvStorePrefix+".>", nats.IgnoreDeletes()); err == nil {
 			defer system.MsgOnErrorReturn(w.Stop())
-			for {
+			activeKVSync := true
+			for activeKVSync {
 				select {
 				case <-cs.ctx.Done():
-					return
-				case entry := <-w.Updates():
+					activeKVSync = false
+				case entry, ok := <-w.Updates():
+					if !ok {
+						le.Warnf(ctx, "storeUpdatesHandler: KV watcher channel closed unexpectedly")
+						activeKVSync = false
+						break
+					}
 					if entry != nil {
 						key := cs.fromStoreKey(entry.Key())
 						valueBytes := entry.Value()
