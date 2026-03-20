@@ -160,7 +160,7 @@ func (cmdb CMDBSyncClient) TriggerLinkSet(fromTypeName, toTypeName string, trigg
 		nil,
 		body,
 		false,
-		toTypeName,
+		"",
 	)
 }
 

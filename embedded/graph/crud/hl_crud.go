@@ -556,7 +556,9 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		}
 		objectLinkType = ctx.Payload.GetByPath("object_type").AsStringDefault(objectLinkType)
 
-		link.SetByPath("body.type", easyjson.NewJSON(objectLinkType))
+		if len(objectLinkType) > 0 {
+			link.SetByPath("body.type", easyjson.NewJSON(objectLinkType))
+		}
 	}
 	if ctx.Payload.PathExists("replace") {
 		link.SetByPath("replace", ctx.Payload.GetByPath("replace"))
