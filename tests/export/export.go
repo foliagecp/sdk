@@ -110,37 +110,37 @@ func Start() {
 			body := easyjson.NewJSONObjectWithKeyValue("name", easyjson.NewJSON(fmt.Sprintf("srv-%d", i)))
 			body.SetByPath("cpu", easyjson.NewJSON(4*(i+1)))
 			body.SetByPath("ram", easyjson.NewJSON(8*(i+1)))
-			system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate(fmt.Sprintf("srv/%d", i), "server", *body.GetPtr()))
+			system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate(fmt.Sprintf("srv-%d", i), "server", *body.GetPtr()))
 		}
 
 		rackBody := easyjson.NewJSONObjectWithKeyValue("location", easyjson.NewJSON("DC1-Row3"))
-		system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate("rack/A", "rack", *rackBody.GetPtr()))
+		system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate("rack-A", "rack", *rackBody.GetPtr()))
 
 		for i := 0; i < 3; i++ {
 			nicBody := easyjson.NewJSONObjectWithKeyValue("speed", easyjson.NewJSON("10G"))
-			system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate(fmt.Sprintf("nic/%d", i), "nic", *nicBody.GetPtr()))
+			system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate(fmt.Sprintf("nic-%d", i), "nic", *nicBody.GetPtr()))
 		}
 
 		lg.Logln(lg.InfoLevel, "=== Creating object links ===")
 		for i := 0; i < 5; i++ {
 			system.MsgOnErrorReturn(dbc.CMDB.ObjectsLinkCreate(
-				fmt.Sprintf("srv/%d", i), "rack/A",
+				fmt.Sprintf("srv-%d", i), "rack-A",
 				fmt.Sprintf("rack-link-%d", i), nil,
 			))
 		}
 		for i := 0; i < 3; i++ {
 			system.MsgOnErrorReturn(dbc.CMDB.ObjectsLinkCreate(
-				"srv/0", fmt.Sprintf("nic/%d", i),
+				"srv-0", fmt.Sprintf("nic-%d", i),
 				fmt.Sprintf("nic-link-%d", i), nil,
 			))
 		}
 
 		lg.Logln(lg.InfoLevel, "=== Updating objects ===")
 		updateBody := easyjson.NewJSONObjectWithKeyValue("status", easyjson.NewJSON("active"))
-		system.MsgOnErrorReturn(dbc.CMDB.ObjectUpdate("srv/0", *updateBody.GetPtr(), false))
+		system.MsgOnErrorReturn(dbc.CMDB.ObjectUpdate("srv-0", *updateBody.GetPtr(), false))
 
 		lg.Logln(lg.InfoLevel, "=== Deleting an object ===")
-		system.MsgOnErrorReturn(dbc.CMDB.ObjectDelete("srv/4"))
+		system.MsgOnErrorReturn(dbc.CMDB.ObjectDelete("srv-4"))
 
 		lg.Logln(lg.InfoLevel, "=== CRUD operations complete, waiting for export pipeline... ===")
 
@@ -165,7 +165,7 @@ func Start() {
 		}
 
 		// Check specific objects
-		testIDs := []string{"srv/0", "srv/1", "rack/A", "nic/0"}
+		testIDs := []string{"srv-0", "srv-1", "rack-A", "nic-0"}
 		for _, id := range testIDs {
 			fullID := domainName + "/" + id
 			body, err := pgDumper.ReadVertex(ctx, fullID)
@@ -177,7 +177,7 @@ func Start() {
 		}
 
 		// Check that deleted object is gone
-		deletedID := domainName + "/srv/4"
+		deletedID := domainName + "/srv-4"
 		if _, err := pgDumper.ReadVertex(ctx, deletedID); err != nil {
 			lg.Logf(lg.InfoLevel, "Deleted vertex %s correctly absent from PG", deletedID)
 		} else {

@@ -222,16 +222,16 @@ func TestE2E_TypesAndObjects(t *testing.T) {
 		// Create objects
 		for i := 0; i < 3; i++ {
 			body := easyjson.NewJSONObjectWithKeyValue("name", easyjson.NewJSON(fmt.Sprintf("srv%d", i)))
-			system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate(fmt.Sprintf("srv/%d", i), "server", *body.GetPtr()))
+			system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate(fmt.Sprintf("srv-%d", i), "server", *body.GetPtr()))
 		}
 
 		body := easyjson.NewJSONObjectWithKeyValue("location", easyjson.NewJSON("DC1"))
-		system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate("rack/A", "rack", *body.GetPtr()))
+		system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate("rack-A", "rack", *body.GetPtr()))
 
 		// Create object links
 		for i := 0; i < 3; i++ {
 			system.MsgOnErrorReturn(dbc.CMDB.ObjectsLinkCreate(
-				fmt.Sprintf("srv/%d", i), "rack/A",
+				fmt.Sprintf("srv-%d", i), "rack-A",
 				fmt.Sprintf("hosts-%d", i), nil,
 			))
 		}
@@ -257,7 +257,7 @@ func TestE2E_TypesAndObjects(t *testing.T) {
 
 	// Verify object vertices exist
 	for i := 0; i < 3; i++ {
-		objID := fmt.Sprintf("%s/srv/%d", env.domainName, i)
+		objID := fmt.Sprintf("%s/srv-%d", env.domainName, i)
 		body, err := env.pgDumper.ReadVertex(ctx, objID)
 		if err == nil {
 			assert.NotNil(t, body, "vertex %s should have body", objID)
@@ -285,11 +285,11 @@ func TestE2E_UpdateObject(t *testing.T) {
 		system.MsgOnErrorReturn(dbc.CMDB.TypeCreate("device"))
 
 		body1 := easyjson.NewJSONObjectWithKeyValue("status", easyjson.NewJSON("active"))
-		system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate("dev/1", "device", *body1.GetPtr()))
+		system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate("dev-1", "device", *body1.GetPtr()))
 
 		// Update body
 		body2 := easyjson.NewJSONObjectWithKeyValue("status", easyjson.NewJSON("maintenance"))
-		system.MsgOnErrorReturn(dbc.CMDB.ObjectUpdate("dev/1", *body2.GetPtr(), true))
+		system.MsgOnErrorReturn(dbc.CMDB.ObjectUpdate("dev-1", *body2.GetPtr(), true))
 
 		return nil
 	})
@@ -302,7 +302,7 @@ func TestE2E_UpdateObject(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	objID := env.domainName + "/dev/1"
+	objID := env.domainName + "/dev-1"
 
 	// Wait for updated body in PG
 	ok := env.waitForPG(func() bool {
@@ -334,10 +334,10 @@ func TestE2E_DeleteObject(t *testing.T) {
 		system.MsgOnErrorReturn(dbc.CMDB.TypeCreate("temp"))
 
 		body := easyjson.NewJSONObjectWithKeyValue("x", easyjson.NewJSON(1))
-		system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate("tmp/1", "temp", *body.GetPtr()))
+		system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate("tmp-1", "temp", *body.GetPtr()))
 
 		// Delete it
-		system.MsgOnErrorReturn(dbc.CMDB.ObjectDelete("tmp/1"))
+		system.MsgOnErrorReturn(dbc.CMDB.ObjectDelete("tmp-1"))
 
 		return nil
 	})
@@ -350,7 +350,7 @@ func TestE2E_DeleteObject(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	objID := env.domainName + "/tmp/1"
+	objID := env.domainName + "/tmp-1"
 
 	// Wait for the vertex to appear and then disappear
 	// First wait for some data to flow through
@@ -373,7 +373,7 @@ func TestE2E_ConsistencyCheck(t *testing.T) {
 
 		for i := 0; i < numObjects; i++ {
 			body := easyjson.NewJSONObjectWithKeyValue("index", easyjson.NewJSON(i))
-			system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate(fmt.Sprintf("node/%d", i), "node", *body.GetPtr()))
+			system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate(fmt.Sprintf("node-%d", i), "node", *body.GetPtr()))
 		}
 		return nil
 	})
@@ -404,7 +404,7 @@ func TestE2E_ConsistencyCheck(t *testing.T) {
 	// Check which objects are present
 	found := 0
 	for i := 0; i < numObjects; i++ {
-		objID := fmt.Sprintf("%s/node/%d", env.domainName, i)
+		objID := fmt.Sprintf("%s/node-%d", env.domainName, i)
 		if body, err := env.pgDumper.ReadVertex(ctx, objID); err == nil {
 			t.Logf("  %s: %s", objID, string(body))
 			found++
@@ -423,7 +423,7 @@ func TestE2E_DumperRestart(t *testing.T) {
 
 		for i := 0; i < 3; i++ {
 			body := easyjson.NewJSONObjectWithKeyValue("v", easyjson.NewJSON(i))
-			system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate(fmt.Sprintf("item/%d", i), "item", *body.GetPtr()))
+			system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate(fmt.Sprintf("item-%d", i), "item", *body.GetPtr()))
 		}
 		return nil
 	})
