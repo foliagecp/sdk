@@ -1255,6 +1255,10 @@ func (cs *Store) SetTransactionGenerator(tg TransactionGenerator) {
 	cs.transactionGenerator = tg
 }
 
+func (cs *Store) GetStorePrefix() string {
+	return cs.cacheConfig.kvStorePrefix
+}
+
 func (cs *Store) SetWALWriteEnabled(enabled bool) {
 	cs.walWriteEnabled.Store(enabled)
 }

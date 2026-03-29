@@ -59,3 +59,7 @@ func (cc *Config) SetLazyWriterRepeatDelayMkS(lazyWriterRepeatDelayMkS int) *Con
 	cc.lazyWriterRepeatDelayMkS = lazyWriterRepeatDelayMkS
 	return cc
 }
+
+func (cc *Config) GetKVStorePrefix() string {
+	return cc.kvStorePrefix
+}

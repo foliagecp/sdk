@@ -60,7 +60,10 @@ type Domain struct {
 	kv    nats.KeyValue
 	cache *cache.Store
 
-	shutdown chan struct{}
+	shutdown        chan struct{}
+	exportCommitter *ExportCommitter
+	exportEnabled   bool
+	exportSC        streamConfig
 }
 
 type streamConfig struct {
@@ -341,6 +344,20 @@ func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDo
 		if err := dm.createWALCommitsStream(); err != nil {
 			return err
 		}
+	}
+
+	// Create export stream if enabled
+	if dm.exportEnabled {
+		dm.exportCommitter = NewExportCommitter(dm.js, dm.name)
+		if err := dm.exportCommitter.CreateExportStream(
+			dm.exportSC.maxMsgs,
+			dm.exportSC.maxBytes,
+			dm.exportSC.maxAge,
+			dm.exportSC.replicasCount,
+		); err != nil {
+			return fmt.Errorf("failed to create export stream: %w", err)
+		}
+		lg.Logf(lg.DebugLevel, "Export stream created: %s", dm.exportCommitter.StreamName())
 	}
 
 	le := lg.GetLogger()

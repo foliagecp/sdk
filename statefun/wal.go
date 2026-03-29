@@ -262,6 +262,7 @@ func (dm *Domain) applyTransactionOperations(ctx context.Context, txID string) e
 	}()
 
 	totalOps := 0
+	var exportOps []WALOp
 
 	for {
 		msgs, err := sub.Fetch(opsFetchBatchSize, nats.MaxWait(opsFetchTimeout))
@@ -321,7 +322,25 @@ func (dm *Domain) applyTransactionOperations(ctx context.Context, txID string) e
 			}
 
 			totalOps++
+			if dm.exportCommitter != nil {
+				exportOps = append(exportOps, WALOp{
+					OpType: opType,
+					Key:    key,
+					Value:  msg.Data,
+				})
+			}
 			system.MsgOnErrorReturn(msg.Ack())
+		}
+	}
+
+	// Publish export events after all KV operations succeed
+	if dm.exportCommitter != nil && len(exportOps) > 0 {
+		storePrefix := cache.KVStorePrefix
+		if dm.cache != nil {
+			storePrefix = dm.cache.GetStorePrefix()
+		}
+		if err := dm.exportCommitter.ProcessTransaction(txID, exportOps, storePrefix); err != nil {
+			lg.Logf(lg.WarnLevel, "ExportCommitter: failed to process tx=%s (non-fatal): %s", txID, err)
 		}
 	}
 
