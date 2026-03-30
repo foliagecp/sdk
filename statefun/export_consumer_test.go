@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// ---- helpers ----------------------------------------------------------------
+
 func runConsumerTestServer(t *testing.T) (*server.Server, nats.JetStreamContext) {
 	t.Helper()
 	opts := natsservertest.DefaultTestOptions
@@ -59,6 +61,30 @@ func publishTestEvents(t *testing.T, js nats.JetStreamContext, domain string, co
 	}
 }
 
+// createDumperSub creates a per-dumper sourced stream and returns a pull subscription
+// bound to a durable consumer on that stream.
+func createDumperSub(t *testing.T, js nats.JetStreamContext, domain, dumperName string) *nats.Subscription {
+	t.Helper()
+	require.NoError(t, statefun.CreateExportDumperStream(js, domain, dumperName, 1000, 64*1024*1024, time.Hour))
+
+	dumperStreamName := fmt.Sprintf(statefun.ExportDumperStreamNameTmpl, domain, dumperName)
+	exportSubject := fmt.Sprintf(statefun.ExportSubjectTmpl, domain)
+	consumerName := dumperName + "-test"
+
+	_, err := js.AddConsumer(dumperStreamName, &nats.ConsumerConfig{
+		Name:          consumerName,
+		Durable:       consumerName,
+		FilterSubject: exportSubject,
+		AckPolicy:     nats.AckExplicitPolicy,
+		DeliverPolicy: nats.DeliverAllPolicy,
+	})
+	require.NoError(t, err)
+
+	sub, err := js.PullSubscribe(exportSubject, "", nats.Bind(dumperStreamName, consumerName))
+	require.NoError(t, err)
+	return sub
+}
+
 func fetchAllEvents(t *testing.T, sub *nats.Subscription, expected int, timeout time.Duration) []statefun.ExportEvent {
 	t.Helper()
 	var events []statefun.ExportEvent
@@ -91,77 +117,72 @@ func fetchAllEvents(t *testing.T, sub *nats.Subscription, expected int, timeout 
 	return events
 }
 
+// ---- tests ------------------------------------------------------------------
+
+// TestMultipleConsumers_IndependentReading verifies that each dumper's sourced
+// stream independently delivers all events regardless of other dumpers.
 func TestMultipleConsumers_IndependentReading(t *testing.T) {
 	srv, js := runConsumerTestServer(t)
 	defer srv.Shutdown()
 
 	domain := "hub"
 	createTestExportStream(t, js, domain)
-
-	// Publish 10 events
 	publishTestEvents(t, js, domain, 10)
 
-	// Create 3 independent consumers
-	sub1, err := statefun.CreateExportConsumer(js, domain, "dumper-pg")
-	require.NoError(t, err)
-	sub2, err := statefun.CreateExportConsumer(js, domain, "dumper-neo4j")
-	require.NoError(t, err)
-	sub3, err := statefun.CreateExportConsumer(js, domain, "dumper-clickhouse")
-	require.NoError(t, err)
+	// Each dumper gets its own sourced stream.
+	sub1 := createDumperSub(t, js, domain, "dumper-pg")
+	sub2 := createDumperSub(t, js, domain, "dumper-neo4j")
+	sub3 := createDumperSub(t, js, domain, "dumper-clickhouse")
 
-	// Each consumer should receive all 10 events independently
-	events1 := fetchAllEvents(t, sub1, 10, 5*time.Second)
-	events2 := fetchAllEvents(t, sub2, 10, 5*time.Second)
-	events3 := fetchAllEvents(t, sub3, 10, 5*time.Second)
+	events1 := fetchAllEvents(t, sub1, 10, 10*time.Second)
+	events2 := fetchAllEvents(t, sub2, 10, 10*time.Second)
+	events3 := fetchAllEvents(t, sub3, 10, 10*time.Second)
 
 	assert.Len(t, events1, 10)
 	assert.Len(t, events2, 10)
 	assert.Len(t, events3, 10)
 
-	// Verify all three got the same events in the same order
+	// All three dumpers receive the same events in the same order.
 	for i := 0; i < 10; i++ {
+		assert.Equal(t, fmt.Sprintf("tx-%04d", i), events1[i].TxID)
 		assert.Equal(t, events1[i].TxID, events2[i].TxID)
 		assert.Equal(t, events1[i].TxID, events3[i].TxID)
-		assert.Equal(t, fmt.Sprintf("tx-%04d", i), events1[i].TxID)
 	}
 }
 
+// TestMultipleConsumers_DifferentPace verifies that a slow dumper does not
+// block a fast one — each reads at its own pace from its own sourced stream.
 func TestMultipleConsumers_DifferentPace(t *testing.T) {
 	srv, js := runConsumerTestServer(t)
 	defer srv.Shutdown()
 
 	domain := "hub"
 	createTestExportStream(t, js, domain)
-
 	publishTestEvents(t, js, domain, 20)
 
-	// Fast consumer reads all
-	subFast, err := statefun.CreateExportConsumer(js, domain, "fast-dumper")
-	require.NoError(t, err)
-	eventsFast := fetchAllEvents(t, subFast, 20, 5*time.Second)
+	subFast := createDumperSub(t, js, domain, "fast-dumper")
+	eventsFast := fetchAllEvents(t, subFast, 20, 10*time.Second)
 	assert.Len(t, eventsFast, 20)
 
-	// Slow consumer reads first 5, pauses, then reads the rest
-	subSlow, err := statefun.CreateExportConsumer(js, domain, "slow-dumper")
-	require.NoError(t, err)
-	eventsSlow1 := fetchAllEvents(t, subSlow, 5, 5*time.Second)
+	subSlow := createDumperSub(t, js, domain, "slow-dumper")
+	eventsSlow1 := fetchAllEvents(t, subSlow, 5, 10*time.Second)
 	assert.Len(t, eventsSlow1, 5)
 
 	time.Sleep(500 * time.Millisecond) // simulate slow processing
 
-	eventsSlow2 := fetchAllEvents(t, subSlow, 15, 5*time.Second)
+	eventsSlow2 := fetchAllEvents(t, subSlow, 15, 10*time.Second)
 	assert.Len(t, eventsSlow2, 15)
 
-	// Total: slow consumer also got all 20
 	allSlow := append(eventsSlow1, eventsSlow2...)
 	assert.Len(t, allSlow, 20)
 
-	// Same order as fast consumer
 	for i := 0; i < 20; i++ {
 		assert.Equal(t, eventsFast[i].TxID, allSlow[i].TxID)
 	}
 }
 
+// TestConsumer_Reconnect verifies that a durable consumer on a sourced stream
+// resumes from the last acknowledged position after reconnection.
 func TestConsumer_Reconnect(t *testing.T) {
 	srv, js := runConsumerTestServer(t)
 	defer srv.Shutdown()
@@ -170,31 +191,25 @@ func TestConsumer_Reconnect(t *testing.T) {
 	createTestExportStream(t, js, domain)
 	publishTestEvents(t, js, domain, 10)
 
-	// Consumer reads first 5, then disconnects
-	sub1, err := statefun.CreateExportConsumer(js, domain, "reconnect-dumper")
-	require.NoError(t, err)
-	events1 := fetchAllEvents(t, sub1, 5, 5*time.Second)
+	// Read first 5, then disconnect.
+	sub1 := createDumperSub(t, js, domain, "reconnect-dumper")
+	events1 := fetchAllEvents(t, sub1, 5, 10*time.Second)
 	assert.Len(t, events1, 5)
-
-	// Unsubscribe (simulate disconnect)
 	require.NoError(t, sub1.Unsubscribe())
 
-	// Reconnect — create new subscription on the same durable consumer
-	sub2, err := js.PullSubscribe(
-		fmt.Sprintf(statefun.ExportSubjectTmpl, domain),
-		"reconnect-dumper",
-	)
+	// Reconnect to the same durable consumer on the same sourced stream.
+	dumperStreamName := fmt.Sprintf(statefun.ExportDumperStreamNameTmpl, domain, "reconnect-dumper")
+	sub2, err := js.PullSubscribe(fmt.Sprintf(statefun.ExportSubjectTmpl, domain), "", nats.Bind(dumperStreamName, "reconnect-dumper-test"))
 	require.NoError(t, err)
 
-	// Should continue from message 6, not message 1
-	events2 := fetchAllEvents(t, sub2, 5, 5*time.Second)
+	// Should continue from message 6, not restart from message 1.
+	events2 := fetchAllEvents(t, sub2, 5, 10*time.Second)
 	assert.Len(t, events2, 5)
-
-	// Verify ordering: events2 starts where events1 left off
 	assert.Equal(t, "tx-0005", events2[0].TxID)
 	assert.Equal(t, "tx-0009", events2[4].TxID)
 }
 
+// TestConsumer_Ordering verifies that events arrive in strict publish order.
 func TestConsumer_Ordering(t *testing.T) {
 	srv, js := runConsumerTestServer(t)
 	defer srv.Shutdown()
@@ -203,19 +218,17 @@ func TestConsumer_Ordering(t *testing.T) {
 	createTestExportStream(t, js, domain)
 	publishTestEvents(t, js, domain, 100)
 
-	sub, err := statefun.CreateExportConsumer(js, domain, "order-checker")
-	require.NoError(t, err)
-
-	events := fetchAllEvents(t, sub, 100, 10*time.Second)
+	sub := createDumperSub(t, js, domain, "order-checker")
+	events := fetchAllEvents(t, sub, 100, 20*time.Second)
 	assert.Len(t, events, 100)
 
-	// Verify strict ordering
 	for i, evt := range events {
-		expected := fmt.Sprintf("tx-%04d", i)
-		assert.Equal(t, expected, evt.TxID, "event %d out of order", i)
+		assert.Equal(t, fmt.Sprintf("tx-%04d", i), evt.TxID, "event %d out of order", i)
 	}
 }
 
+// TestMultipleConsumers_10Consumers verifies that 10 concurrent dumpers all
+// receive all events independently without interfering with each other.
 func TestMultipleConsumers_10Consumers(t *testing.T) {
 	srv, js := runConsumerTestServer(t)
 	defer srv.Shutdown()
@@ -224,35 +237,26 @@ func TestMultipleConsumers_10Consumers(t *testing.T) {
 	createTestExportStream(t, js, domain)
 	publishTestEvents(t, js, domain, 50)
 
-	// Create 10 consumers concurrently
 	const numConsumers = 10
 	subs := make([]*nats.Subscription, numConsumers)
 	for i := 0; i < numConsumers; i++ {
-		var err error
-		subs[i], err = statefun.CreateExportConsumer(js, domain, fmt.Sprintf("consumer-%02d", i))
-		require.NoError(t, err)
+		subs[i] = createDumperSub(t, js, domain, fmt.Sprintf("consumer-%02d", i))
 	}
 
-	// All consumers read in parallel
 	var wg sync.WaitGroup
 	results := make([][]statefun.ExportEvent, numConsumers)
-
 	for i := 0; i < numConsumers; i++ {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			results[idx] = fetchAllEvents(t, subs[idx], 50, 10*time.Second)
+			results[idx] = fetchAllEvents(t, subs[idx], 50, 20*time.Second)
 		}(i)
 	}
-
 	wg.Wait()
 
-	// All consumers got exactly 50 events
 	for i := 0; i < numConsumers; i++ {
 		assert.Len(t, results[i], 50, "consumer %d", i)
 	}
-
-	// All in same order
 	for i := 1; i < numConsumers; i++ {
 		for j := 0; j < 50; j++ {
 			assert.Equal(t, results[0][j].TxID, results[i][j].TxID,
@@ -261,25 +265,27 @@ func TestMultipleConsumers_10Consumers(t *testing.T) {
 	}
 }
 
-func TestDeleteExportConsumer(t *testing.T) {
+// TestDeleteExportDumperStream verifies that a per-dumper sourced stream can
+// be deleted and is no longer accessible afterwards.
+func TestDeleteExportDumperStream(t *testing.T) {
 	srv, js := runConsumerTestServer(t)
 	defer srv.Shutdown()
 
 	domain := "hub"
 	createTestExportStream(t, js, domain)
+	require.NoError(t, statefun.CreateExportDumperStream(js, domain, "temp-dumper", 1000, 64*1024*1024, time.Hour))
 
-	_, err := statefun.CreateExportConsumer(js, domain, "temp-consumer")
-	require.NoError(t, err)
+	dumperStreamName := fmt.Sprintf(statefun.ExportDumperStreamNameTmpl, domain, "temp-dumper")
+	_, err := js.StreamInfo(dumperStreamName)
+	require.NoError(t, err, "stream should exist before delete")
 
-	err = statefun.DeleteExportConsumer(js, domain, "temp-consumer")
-	require.NoError(t, err)
+	require.NoError(t, statefun.DeleteExportDumperStream(js, domain, "temp-dumper"))
 
-	// Verify consumer is gone
-	streamName := fmt.Sprintf(statefun.ExportStreamNameTmpl, domain)
-	_, err = js.ConsumerInfo(streamName, "temp-consumer")
-	assert.Error(t, err)
+	_, err = js.StreamInfo(dumperStreamName)
+	assert.Error(t, err, "stream should be gone after delete")
 }
 
+// BenchmarkConsumerThroughput measures pull-consumer throughput on a sourced stream.
 func BenchmarkConsumerThroughput(b *testing.B) {
 	opts := natsservertest.DefaultTestOptions
 	opts.JetStream = true
@@ -293,9 +299,8 @@ func BenchmarkConsumerThroughput(b *testing.B) {
 
 	domain := "hub"
 	ec := statefun.NewExportCommitter(js, domain)
-	_ = ec.CreateExportStream(100000, 512*1024*1024, 1*time.Hour, 1)
+	_ = ec.CreateExportStream(100000, 512*1024*1024, time.Hour, 1)
 
-	// Pre-publish b.N events
 	subject := fmt.Sprintf(statefun.ExportSubjectTmpl, domain)
 	event := statefun.ExportEvent{
 		TxID:   "bench-tx",
@@ -307,13 +312,23 @@ func BenchmarkConsumerThroughput(b *testing.B) {
 		_, _ = js.Publish(subject, data)
 	}
 
-	sub, _ := statefun.CreateExportConsumer(js, domain, "bench-consumer")
+	_ = statefun.CreateExportDumperStream(js, domain, "bench-dumper", 100000, 512*1024*1024, time.Hour)
+	dumperStreamName := fmt.Sprintf(statefun.ExportDumperStreamNameTmpl, domain, "bench-dumper")
+	consumerName := "bench-consumer"
+	_, _ = js.AddConsumer(dumperStreamName, &nats.ConsumerConfig{
+		Name:          consumerName,
+		Durable:       consumerName,
+		FilterSubject: subject,
+		AckPolicy:     nats.AckExplicitPolicy,
+		DeliverPolicy: nats.DeliverAllPolicy,
+	})
+	sub, _ := js.PullSubscribe(subject, "", nats.Bind(dumperStreamName, consumerName))
 
 	b.ResetTimer()
 
 	received := 0
 	for received < b.N {
-		msgs, err := sub.Fetch(100, nats.MaxWait(1*time.Second))
+		msgs, err := sub.Fetch(100, nats.MaxWait(time.Second))
 		if err != nil {
 			continue
 		}

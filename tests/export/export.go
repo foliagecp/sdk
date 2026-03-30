@@ -14,9 +14,9 @@ import (
 	"github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/cache"
 	lg "github.com/foliagecp/sdk/statefun/logger"
+	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/foliagecp/sdk/tests/export/dumper"
-	"github.com/nats-io/nats.go"
 )
 
 var (
@@ -28,69 +28,75 @@ var (
 func Start() {
 	system.GlobalPrometrics = system.NewPrometrics("", ":9901")
 
-	afterStart := func(ctx context.Context, runtime *statefun.Runtime) error {
+	// Connect to PostgreSQL before starting the runtime so the handler closure
+	// has a fully initialized pgDumper by the time export events start arriving.
+	bgCtx := context.Background()
+	pgDumper, err := dumper.NewPGDumper(bgCtx, PgURL)
+	if err != nil {
+		lg.Logf(lg.ErrorLevel, "Failed to connect to PostgreSQL: %s", err)
+		return
+	}
+	if err := pgDumper.InitSchema(bgCtx); err != nil {
+		lg.Logf(lg.ErrorLevel, "Failed to init PG schema: %s", err)
+		return
+	}
+	lg.Logln(lg.InfoLevel, "PostgreSQL schema initialized")
+
+	// eventsApplied is updated inside the Foliage handler goroutine.
+	var eventsApplied atomic.Int64
+
+	// pgExportHandler is a standard Foliage function type handler.
+	// It receives ExportEvents dispatched by the export bridge and writes them
+	// to PostgreSQL. ctx.Payload contains the full ExportEvent JSON.
+	pgExportHandler := func(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+		var event statefun.ExportEvent
+		if err := json.Unmarshal(ctx.Payload.ToBytes(), &event); err != nil {
+			lg.Logf(lg.ErrorLevel, "pgExportHandler: unmarshal payload: %s", err)
+			return
+		}
+		if applyErr := pgDumper.ApplyEvent(context.Background(), event); applyErr != nil {
+			lg.Logf(lg.ErrorLevel, "pgExportHandler: apply event tx=%s: %s", event.TxID, applyErr)
+			return
+		}
+		n := eventsApplied.Add(1)
+		lg.Logf(lg.DebugLevel, "pgExportHandler: applied tx=%s (%d ops), total=%d",
+			event.TxID, len(event.Ops), n)
+	}
+
+	// --- Runtime setup ---
+	cfg := statefun.NewRuntimeConfigSimple(NatsURL, "export_test").
+		UseJSDomainAsHubDomainName().
+		SetTLS(EnableTLS).
+		SetExportEnabled(true)
+
+	runtime, err := statefun.NewRuntime(*cfg)
+	if err != nil {
+		lg.Logf(lg.ErrorLevel, "Cannot create statefun runtime: %s", err)
+		return
+	}
+
+	graphCRUD.RegisterAllFunctionTypes(runtime)
+
+	// RegisterExportDumper wires the full pipeline:
+	//   ExportCommitter → export-hub-events stream
+	//   → per-dumper sourced stream (export-hub-pg-dumper-events)
+	//   → bridge goroutine dispatches Foliage signal → export.pg.handler function
+	//   → pgExportHandler → PostgreSQL
+	statefun.RegisterExportDumper(
+		runtime,
+		"pg-dumper",
+		"export.pg.handler",
+		pgExportHandler,
+		statefun.NewFunctionTypeConfig(),
+	)
+
+	// afterStart: perform CRUD operations and verify PG state.
+	afterStart := func(ctx context.Context, r *statefun.Runtime) error {
 		lg.Logln(lg.InfoLevel, "=== Export test: afterStart begin ===")
 
-		// --- Start PG Dumper consumer ---
-		pgDumper, err := dumper.NewPGDumper(ctx, PgURL)
-		if err != nil {
-			lg.Logf(lg.ErrorLevel, "Failed to connect to PostgreSQL: %s", err)
-			return err
-		}
-		if err := pgDumper.InitSchema(ctx); err != nil {
-			lg.Logf(lg.ErrorLevel, "Failed to init PG schema: %s", err)
-			return err
-		}
-		lg.Logln(lg.InfoLevel, "PostgreSQL schema initialized")
+		domainName := r.Domain.Name()
 
-		domainName := runtime.Domain.Name()
-
-		nc, err := nats.Connect(NatsURL)
-		if err != nil {
-			return fmt.Errorf("dumper NATS connect: %w", err)
-		}
-		js, err := nc.JetStream()
-		if err != nil {
-			return fmt.Errorf("dumper JetStream: %w", err)
-		}
-
-		// Use the SDK helper to create a durable pull consumer on the export stream.
-		sub, err := statefun.CreateExportConsumer(js, domainName, "pg-dumper")
-		if err != nil {
-			return fmt.Errorf("create export consumer: %w", err)
-		}
-
-		var eventsApplied atomic.Int64
-		go func() {
-			for {
-				msgs, fetchErr := sub.Fetch(32, nats.MaxWait(2*time.Second))
-				if fetchErr != nil {
-					// Timeout is normal when the stream is idle — just keep polling.
-					continue
-				}
-				for _, msg := range msgs {
-					var event statefun.ExportEvent
-					if jsonErr := json.Unmarshal(msg.Data, &event); jsonErr != nil {
-						lg.Logf(lg.ErrorLevel, "Dumper: failed to unmarshal event: %s", jsonErr)
-						_ = msg.Ack()
-						continue
-					}
-					if applyErr := pgDumper.ApplyEvent(context.Background(), event); applyErr != nil {
-						lg.Logf(lg.ErrorLevel, "Dumper: failed to apply event tx=%s: %s", event.TxID, applyErr)
-						_ = msg.Nak()
-						continue
-					}
-					n := eventsApplied.Add(1)
-					lg.Logf(lg.DebugLevel, "Dumper: applied event tx=%s (%d ops), total events: %d",
-						event.TxID, len(event.Ops), n)
-					_ = msg.Ack()
-				}
-			}
-		}()
-		lg.Logln(lg.InfoLevel, "PG Dumper consumer started")
-
-		// --- Perform CRUD operations ---
-		dbc, err := db.NewDBSyncClientFromRequestFunction(runtime.Request)
+		dbc, err := db.NewDBSyncClientFromRequestFunction(r.Request)
 		if err != nil {
 			return err
 		}
@@ -141,9 +147,9 @@ func Start() {
 		lg.Logln(lg.InfoLevel, "=== Deleting an object ===")
 		system.MsgOnErrorReturn(dbc.CMDB.ObjectDelete("srv-4"))
 
-		lg.Logln(lg.InfoLevel, "=== CRUD operations complete, waiting for export pipeline... ===")
+		lg.Logln(lg.InfoLevel, "=== CRUD complete, waiting for export pipeline... ===")
 
-		// Wait for WAL flush + export + PG apply
+		// Wait for WAL flush → ExportCommitter → bridge → Foliage signal → handler → PG.
 		time.Sleep(15 * time.Second)
 
 		// --- Verify PG state ---
@@ -163,7 +169,6 @@ func Start() {
 			lg.Logf(lg.InfoLevel, "Total links in PG: %d", linkCount)
 		}
 
-		// Check specific objects
 		testIDs := []string{"srv-0", "srv-1", "rack-A", "nic-0"}
 		for _, id := range testIDs {
 			fullID := domainName + "/" + id
@@ -175,7 +180,6 @@ func Start() {
 			}
 		}
 
-		// Check that deleted object is gone
 		deletedID := domainName + "/srv-4"
 		if _, err := pgDumper.ReadVertex(ctx, deletedID); err != nil {
 			lg.Logf(lg.InfoLevel, "Deleted vertex %s correctly absent from PG", deletedID)
@@ -194,18 +198,6 @@ func Start() {
 		return nil
 	}
 
-	cfg := statefun.NewRuntimeConfigSimple(NatsURL, "export_test").
-		UseJSDomainAsHubDomainName().
-		SetTLS(EnableTLS).
-		SetExportEnabled(true)
-
-	runtime, err := statefun.NewRuntime(*cfg)
-	if err != nil {
-		lg.Logf(lg.ErrorLevel, "Cannot create statefun runtime: %s", err)
-		return
-	}
-
-	graphCRUD.RegisterAllFunctionTypes(runtime)
 	runtime.RegisterOnAfterStartFunction(afterStart, true)
 
 	if err := runtime.Start(context.Background(), cache.NewCacheConfig("export_cache")); err != nil {

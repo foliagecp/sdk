@@ -13,6 +13,7 @@ import (
 	"github.com/foliagecp/sdk/embedded/graph/crud"
 	"github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/cache"
+	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/foliagecp/sdk/tests/export/dumper"
 	"github.com/nats-io/nats-server/v2/server"
@@ -92,7 +93,7 @@ func setupE2E(t *testing.T) *e2eEnv {
 
 	natsURL := srv.ClientURL()
 
-	// Create runtime with export enabled
+	// Runtime with export enabled
 	cfg := statefun.NewRuntimeConfigSimple(natsURL, "e2e_test").
 		SetExportEnabled(true)
 
@@ -101,7 +102,18 @@ func setupE2E(t *testing.T) *e2eEnv {
 
 	crud.RegisterAllFunctionTypes(rt)
 
-	// Direct NATS connection for dumper consumer
+	// Register the PG dumper as a Foliage function type wired to the export pipeline.
+	// The function receives ExportEvents via ctx.Payload and writes them to PostgreSQL.
+	pgHandler := func(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+		var event statefun.ExportEvent
+		if err := json.Unmarshal(ctx.Payload.ToBytes(), &event); err != nil {
+			return
+		}
+		_ = pgDumper.ApplyEvent(context.Background(), event)
+	}
+	statefun.RegisterExportDumper(rt, "e2e-pg-dumper", "export.pg.handler", pgHandler, statefun.NewFunctionTypeConfig())
+
+	// Separate NATS connection for direct stream inspection in tests
 	nc, err := nats.Connect(natsURL)
 	require.NoError(t, err)
 	t.Cleanup(func() { nc.Close() })
@@ -122,47 +134,15 @@ func setupE2E(t *testing.T) *e2eEnv {
 	return env
 }
 
-// startPipeline starts the runtime and the dumper consumer goroutine.
-// Returns a channel that signals when initial CRUD operations (done in afterStart) are complete.
+// startPipeline starts the runtime and runs afterStart CRUD operations.
+// Returns a channel that signals when CRUD operations are complete.
 func (env *e2eEnv) startPipeline(afterStart func(dbc *db.DBSyncClient) error) <-chan error {
 	crudDone := make(chan error, 1)
 
 	env.runtime.RegisterOnAfterStartFunction(func(ctx context.Context, r *statefun.Runtime) error {
 		env.domainName = r.Domain.Name()
 
-		// Start dumper consumer goroutine
-		exportStreamName := fmt.Sprintf(statefun.ExportStreamNameTmpl, env.domainName)
-		exportSubject := fmt.Sprintf(statefun.ExportSubjectTmpl, env.domainName)
-
-		consumerName := "e2e-pg-dumper"
-		_, err := env.js.AddConsumer(exportStreamName, &nats.ConsumerConfig{
-			Name:           consumerName,
-			Durable:        consumerName,
-			DeliverSubject: consumerName,
-			FilterSubject:  exportSubject,
-			AckPolicy:      nats.AckExplicitPolicy,
-		})
-		if err != nil {
-			return fmt.Errorf("create consumer: %w", err)
-		}
-
-		_, err = env.nc.Subscribe(consumerName, func(msg *nats.Msg) {
-			var event statefun.ExportEvent
-			if jsonErr := json.Unmarshal(msg.Data, &event); jsonErr != nil {
-				_ = msg.Ack()
-				return
-			}
-			if applyErr := env.pgDumper.ApplyEvent(context.Background(), event); applyErr != nil {
-				_ = msg.Nak()
-				return
-			}
-			_ = msg.Ack()
-		})
-		if err != nil {
-			return fmt.Errorf("subscribe: %w", err)
-		}
-
-		// Wait for runtime to be fully ready (isReady=true, subscriptions up)
+		// Wait for runtime to be fully ready before issuing CRUD operations
 		for i := 0; i < 30; i++ {
 			if r.IsActiveInstance() {
 				break
@@ -212,14 +192,10 @@ func TestE2E_TypesAndObjects(t *testing.T) {
 	env := setupE2E(t)
 
 	crudDone := env.startPipeline(func(dbc *db.DBSyncClient) error {
-		// Create types
 		system.MsgOnErrorReturn(dbc.CMDB.TypeCreate("server"))
 		system.MsgOnErrorReturn(dbc.CMDB.TypeCreate("rack"))
-
-		// Create type link
 		system.MsgOnErrorReturn(dbc.CMDB.TypesLinkCreate("server", "rack", "hosted_in", nil))
 
-		// Create objects
 		for i := 0; i < 3; i++ {
 			body := easyjson.NewJSONObjectWithKeyValue("name", easyjson.NewJSON(fmt.Sprintf("srv%d", i)))
 			system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate(fmt.Sprintf("srv-%d", i), "server", *body.GetPtr()))
@@ -228,7 +204,6 @@ func TestE2E_TypesAndObjects(t *testing.T) {
 		body := easyjson.NewJSONObjectWithKeyValue("location", easyjson.NewJSON("DC1"))
 		system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate("rack-A", "rack", *body.GetPtr()))
 
-		// Create object links
 		for i := 0; i < 3; i++ {
 			system.MsgOnErrorReturn(dbc.CMDB.ObjectsLinkCreate(
 				fmt.Sprintf("srv-%d", i), "rack-A",
@@ -248,14 +223,12 @@ func TestE2E_TypesAndObjects(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Wait for data to appear in PG (WAL flush ~5s + processing)
 	ok := env.waitForPG(func() bool {
 		count, _ := env.pgDumper.CountVertices(ctx)
-		return count >= 5 // at least types + objects root vertices
+		return count >= 5
 	}, 20*time.Second)
 	require.True(t, ok, "timeout waiting for vertices in PG")
 
-	// Verify object vertices exist
 	for i := 0; i < 3; i++ {
 		objID := fmt.Sprintf("%s/srv-%d", env.domainName, i)
 		body, err := env.pgDumper.ReadVertex(ctx, objID)
@@ -264,7 +237,6 @@ func TestE2E_TypesAndObjects(t *testing.T) {
 		}
 	}
 
-	// Verify links exist
 	linkOk := env.waitForPG(func() bool {
 		count, _ := env.pgDumper.CountLinks(ctx)
 		return count >= 3
@@ -287,7 +259,6 @@ func TestE2E_UpdateObject(t *testing.T) {
 		body1 := easyjson.NewJSONObjectWithKeyValue("status", easyjson.NewJSON("active"))
 		system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate("dev-1", "device", *body1.GetPtr()))
 
-		// Update body
 		body2 := easyjson.NewJSONObjectWithKeyValue("status", easyjson.NewJSON("maintenance"))
 		system.MsgOnErrorReturn(dbc.CMDB.ObjectUpdate("dev-1", *body2.GetPtr(), true))
 
@@ -304,7 +275,6 @@ func TestE2E_UpdateObject(t *testing.T) {
 	ctx := context.Background()
 	objID := env.domainName + "/dev-1"
 
-	// Wait for updated body in PG
 	ok := env.waitForPG(func() bool {
 		body, err := env.pgDumper.ReadVertex(ctx, objID)
 		if err != nil {
@@ -317,7 +287,6 @@ func TestE2E_UpdateObject(t *testing.T) {
 		body, _ := env.pgDumper.ReadVertex(ctx, objID)
 		t.Logf("Final body in PG: %s", string(body))
 	} else {
-		// Might still have the first version; check it exists at all
 		body, err := env.pgDumper.ReadVertex(ctx, objID)
 		if err == nil {
 			t.Logf("Body in PG (may not be latest): %s", string(body))
@@ -335,8 +304,6 @@ func TestE2E_DeleteObject(t *testing.T) {
 
 		body := easyjson.NewJSONObjectWithKeyValue("x", easyjson.NewJSON(1))
 		system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate("tmp-1", "temp", *body.GetPtr()))
-
-		// Delete it
 		system.MsgOnErrorReturn(dbc.CMDB.ObjectDelete("tmp-1"))
 
 		return nil
@@ -352,12 +319,9 @@ func TestE2E_DeleteObject(t *testing.T) {
 	ctx := context.Background()
 	objID := env.domainName + "/tmp-1"
 
-	// Wait for the vertex to appear and then disappear
-	// First wait for some data to flow through
 	time.Sleep(12 * time.Second) // WAL flush + processing
 
 	_, err := env.pgDumper.ReadVertex(ctx, objID)
-	// Either vertex was deleted or never appeared (both acceptable for delete)
 	t.Logf("Vertex %s after delete: err=%v", objID, err)
 
 	env.cancel()
@@ -387,7 +351,6 @@ func TestE2E_ConsistencyCheck(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Wait for some data to flow through the pipeline
 	ok := env.waitForPG(func() bool {
 		count, _ := env.pgDumper.CountVertices(ctx)
 		return count > 0
@@ -398,10 +361,8 @@ func TestE2E_ConsistencyCheck(t *testing.T) {
 	linkCount, _ := env.pgDumper.CountLinks(ctx)
 	t.Logf("Consistency check: %d vertices, %d links in PG", vertexCount, linkCount)
 
-	// Verify at least type + built-in vertices made it
 	assert.True(t, vertexCount > 0, "expected vertices in PG, got %d", vertexCount)
 
-	// Check which objects are present
 	found := 0
 	for i := 0; i < numObjects; i++ {
 		objID := fmt.Sprintf("%s/node-%d", env.domainName, i)
@@ -437,7 +398,6 @@ func TestE2E_DumperRestart(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Wait for some data to flow
 	ok := env.waitForPG(func() bool {
 		count, _ := env.pgDumper.CountVertices(ctx)
 		return count > 0
@@ -447,15 +407,32 @@ func TestE2E_DumperRestart(t *testing.T) {
 	count1, _ := env.pgDumper.CountVertices(ctx)
 	t.Logf("Vertices before 'restart': %d", count1)
 
-	// The dumper consumer is durable — if we were to restart it,
-	// it would continue from last acked position.
-	// This test verifies the durable consumer property via CreateExportConsumer
-	sub, err := statefun.CreateExportConsumer(env.js, env.domainName, "restart-test-consumer")
+	// Verify durable consumer property: create a separate per-dumper sourced stream
+	// for a "restart-test" dumper and verify it can replay all events from the beginning.
+	require.NoError(t, statefun.CreateExportDumperStream(
+		env.js, env.domainName, "restart-test",
+		1000, 64*1024*1024, time.Hour,
+	))
+
+	dumperStreamName := fmt.Sprintf(statefun.ExportDumperStreamNameTmpl, env.domainName, "restart-test")
+	exportSubject := fmt.Sprintf(statefun.ExportSubjectTmpl, env.domainName)
+	consumerName := "restart-test-consumer"
+
+	_, err := env.js.AddConsumer(dumperStreamName, &nats.ConsumerConfig{
+		Name:          consumerName,
+		Durable:       consumerName,
+		FilterSubject: exportSubject,
+		AckPolicy:     nats.AckExplicitPolicy,
+		DeliverPolicy: nats.DeliverAllPolicy,
+	})
 	require.NoError(t, err)
 
-	// This consumer should see events from the beginning (DeliverAll)
-	msgs, err := sub.Fetch(100, nats.MaxWait(3*time.Second))
-	if err == nil {
+	sub, err := env.js.PullSubscribe(exportSubject, "", nats.Bind(dumperStreamName, consumerName))
+	require.NoError(t, err)
+
+	// A new sourced-stream consumer with DeliverAll should replay all historical events.
+	msgs, fetchErr := sub.Fetch(100, nats.MaxWait(5*time.Second))
+	if fetchErr == nil {
 		t.Logf("Restart consumer got %d messages (full replay)", len(msgs))
 		assert.True(t, len(msgs) > 0, "new consumer should get historical events")
 		for _, msg := range msgs {
