@@ -1,8 +1,8 @@
 package statefun_test
 
 import (
-	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -44,19 +44,14 @@ func createTestExportStream(t *testing.T, js nats.JetStreamContext, domain strin
 
 func publishTestEvents(t *testing.T, js nats.JetStreamContext, domain string, count int) {
 	t.Helper()
-	subject := fmt.Sprintf(statefun.ExportSubjectTmpl, domain)
 	for i := 0; i < count; i++ {
-		event := statefun.ExportEvent{
-			TxID:      fmt.Sprintf("tx-%04d", i),
-			Domain:    domain,
-			Timestamp: time.Now().UnixNano(),
-			Ops: []statefun.ExportOp{
-				{Op: "vertex_put", ID: fmt.Sprintf("hub/v%04d", i), Body: json.RawMessage(fmt.Sprintf(`{"i":%d}`, i))},
-			},
-		}
-		data, err := json.Marshal(event)
-		require.NoError(t, err)
-		_, err = js.Publish(subject, data)
+		txID := fmt.Sprintf("tx-%04d", i)
+		subject := fmt.Sprintf(statefun.ExportSubjectTmpl, domain) + "." + txID
+		// Minimal buildNatsData wrapper: handler only needs ctx.Payload.
+		data := []byte(fmt.Sprintf(
+			`{"caller_typename":"","caller_id":"","payload":{"tx_id":%q,"domain":%q,"timestamp":0,"ops":[]}}`,
+			txID, domain))
+		_, err := js.Publish(subject, data)
 		require.NoError(t, err)
 	}
 }
@@ -65,22 +60,24 @@ func publishTestEvents(t *testing.T, js nats.JetStreamContext, domain string, co
 // bound to a durable consumer on that stream.
 func createDumperSub(t *testing.T, js nats.JetStreamContext, domain, dumperName string) *nats.Subscription {
 	t.Helper()
-	require.NoError(t, statefun.CreateExportDumperStream(js, domain, dumperName, 1000, 64*1024*1024, time.Hour))
+	// Generate a function type name matching the export-handler convention.
+	functionTypeName := "export." + dumperName + ".handler"
+	require.NoError(t, statefun.CreateExportDumperStream(js, domain, dumperName, functionTypeName, 1000, 64*1024*1024, time.Hour))
 
 	dumperStreamName := fmt.Sprintf(statefun.ExportDumperStreamNameTmpl, domain, dumperName)
-	exportSubject := fmt.Sprintf(statefun.ExportSubjectTmpl, domain)
+	filterSubject := fmt.Sprintf(statefun.ExportSubjectFilterTmpl, domain)
 	consumerName := dumperName + "-test"
 
 	_, err := js.AddConsumer(dumperStreamName, &nats.ConsumerConfig{
 		Name:          consumerName,
 		Durable:       consumerName,
-		FilterSubject: exportSubject,
+		FilterSubject: filterSubject,
 		AckPolicy:     nats.AckExplicitPolicy,
 		DeliverPolicy: nats.DeliverAllPolicy,
 	})
 	require.NoError(t, err)
 
-	sub, err := js.PullSubscribe(exportSubject, "", nats.Bind(dumperStreamName, consumerName))
+	sub, err := js.PullSubscribe(filterSubject, "", nats.Bind(dumperStreamName, consumerName))
 	require.NoError(t, err)
 	return sub
 }
@@ -108,9 +105,9 @@ func fetchAllEvents(t *testing.T, sub *nats.Subscription, expected int, timeout 
 			continue
 		}
 		for _, msg := range msgs {
-			var event statefun.ExportEvent
-			require.NoError(t, json.Unmarshal(msg.Data, &event))
-			events = append(events, event)
+			// Extract TxID from the last token of the message subject.
+			tokens := strings.Split(msg.Subject, ".")
+			events = append(events, statefun.ExportEvent{TxID: tokens[len(tokens)-1]})
 			require.NoError(t, msg.Ack())
 		}
 	}
@@ -199,7 +196,7 @@ func TestConsumer_Reconnect(t *testing.T) {
 
 	// Reconnect to the same durable consumer on the same sourced stream.
 	dumperStreamName := fmt.Sprintf(statefun.ExportDumperStreamNameTmpl, domain, "reconnect-dumper")
-	sub2, err := js.PullSubscribe(fmt.Sprintf(statefun.ExportSubjectTmpl, domain), "", nats.Bind(dumperStreamName, "reconnect-dumper-test"))
+	sub2, err := js.PullSubscribe(fmt.Sprintf(statefun.ExportSubjectFilterTmpl, domain), "", nats.Bind(dumperStreamName, "reconnect-dumper-test"))
 	require.NoError(t, err)
 
 	// Should continue from message 6, not restart from message 1.
@@ -273,7 +270,7 @@ func TestDeleteExportDumperStream(t *testing.T) {
 
 	domain := "hub"
 	createTestExportStream(t, js, domain)
-	require.NoError(t, statefun.CreateExportDumperStream(js, domain, "temp-dumper", 1000, 64*1024*1024, time.Hour))
+	require.NoError(t, statefun.CreateExportDumperStream(js, domain, "temp-dumper", "export.temp-dumper.handler", 1000, 64*1024*1024, time.Hour))
 
 	dumperStreamName := fmt.Sprintf(statefun.ExportDumperStreamNameTmpl, domain, "temp-dumper")
 	_, err := js.StreamInfo(dumperStreamName)
@@ -301,28 +298,24 @@ func BenchmarkConsumerThroughput(b *testing.B) {
 	ec := statefun.NewExportCommitter(js, domain)
 	_ = ec.CreateExportStream(100000, 512*1024*1024, time.Hour, 1)
 
-	subject := fmt.Sprintf(statefun.ExportSubjectTmpl, domain)
-	event := statefun.ExportEvent{
-		TxID:   "bench-tx",
-		Domain: domain,
-		Ops:    []statefun.ExportOp{{Op: "vertex_put", ID: "hub/v1", Body: json.RawMessage(`{"a":1}`)}},
-	}
-	data, _ := json.Marshal(event)
+	subject := fmt.Sprintf(statefun.ExportSubjectTmpl, domain) + ".bench-tx"
+	data := []byte(`{"caller_typename":"","caller_id":"","payload":{"tx_id":"bench-tx","domain":"hub","timestamp":0,"ops":[]}}`)
 	for i := 0; i < b.N; i++ {
 		_, _ = js.Publish(subject, data)
 	}
 
-	_ = statefun.CreateExportDumperStream(js, domain, "bench-dumper", 100000, 512*1024*1024, time.Hour)
+	_ = statefun.CreateExportDumperStream(js, domain, "bench-dumper", "export.bench-dumper.handler", 100000, 512*1024*1024, time.Hour)
 	dumperStreamName := fmt.Sprintf(statefun.ExportDumperStreamNameTmpl, domain, "bench-dumper")
 	consumerName := "bench-consumer"
+	filterSubject := fmt.Sprintf(statefun.ExportSubjectFilterTmpl, domain)
 	_, _ = js.AddConsumer(dumperStreamName, &nats.ConsumerConfig{
 		Name:          consumerName,
 		Durable:       consumerName,
-		FilterSubject: subject,
+		FilterSubject: filterSubject,
 		AckPolicy:     nats.AckExplicitPolicy,
 		DeliverPolicy: nats.DeliverAllPolicy,
 	})
-	sub, _ := js.PullSubscribe(subject, "", nats.Bind(dumperStreamName, consumerName))
+	sub, _ := js.PullSubscribe(filterSubject, "", nats.Bind(dumperStreamName, consumerName))
 
 	b.ResetTimer()
 

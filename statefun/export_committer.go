@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/statefun/cache"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/nats-io/nats.go"
@@ -15,6 +16,8 @@ import (
 const (
 	ExportStreamNameTmpl = "export-%s-events"
 	ExportSubjectTmpl    = "export.%s.events"
+	// for JetStream stream subjects filter
+	ExportSubjectFilterTmpl = "export.%s.events.*"
 
 	// --- Export stream defaults ---
 
@@ -113,7 +116,7 @@ func NewExportCommitter(js nats.JetStreamContext, domain string) *ExportCommitte
 func (ec *ExportCommitter) CreateExportStream(maxMsgs, maxBytes int64, maxAge time.Duration, replicasCount int) error {
 	sc := &nats.StreamConfig{
 		Name:      ec.streamName,
-		Subjects:  []string{ec.subject},
+		Subjects:  []string{ec.subject + ".*"},
 		Retention: nats.LimitsPolicy,
 		Replicas:  replicasCount,
 		MaxMsgs:   maxMsgs,
@@ -148,16 +151,24 @@ func (ec *ExportCommitter) ProcessTransaction(txID string, ops []WALOp, storePre
 		Ops:       semanticOps,
 	}
 
-	data, err := json.Marshal(event)
+	opsBytes, err := json.Marshal(event.Ops)
 	if err != nil {
-		return fmt.Errorf("failed to marshal export event: %w", err)
+		return fmt.Errorf("marshal ops: %w", err)
 	}
+	opsJSON, ok := easyjson.JSONFromBytes(opsBytes)
+	if !ok {
+		return fmt.Errorf("parse ops JSON")
+	}
+	payload := easyjson.NewJSONObject()
+	payload.SetByPath("tx_id", easyjson.NewJSON(event.TxID))
+	payload.SetByPath("domain", easyjson.NewJSON(event.Domain))
+	payload.SetByPath("timestamp", easyjson.NewJSON(event.Timestamp))
+	payload.SetByPath("ops", opsJSON)
 
-	if _, err := ec.js.Publish(ec.subject, data); err != nil {
+	if _, err := ec.js.Publish(ec.subject+"."+event.TxID, buildNatsData(ec.domain, "", "", &payload, nil, nil)); err != nil {
 		lg.Logf(lg.ErrorLevel, "ExportCommitter: failed to publish event for tx=%s: %s", txID, err)
 		return err
 	}
-
 	lg.Logf(lg.TraceLevel, "ExportCommitter: published %d semantic ops for tx=%s", len(semanticOps), txID)
 	return nil
 }

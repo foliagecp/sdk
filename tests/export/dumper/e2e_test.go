@@ -410,24 +410,24 @@ func TestE2E_DumperRestart(t *testing.T) {
 	// Verify durable consumer property: create a separate per-dumper sourced stream
 	// for a "restart-test" dumper and verify it can replay all events from the beginning.
 	require.NoError(t, statefun.CreateExportDumperStream(
-		env.js, env.domainName, "restart-test",
+		env.js, env.domainName, "restart-test", "export.restart-test.handler",
 		1000, 64*1024*1024, time.Hour,
 	))
 
 	dumperStreamName := fmt.Sprintf(statefun.ExportDumperStreamNameTmpl, env.domainName, "restart-test")
-	exportSubject := fmt.Sprintf(statefun.ExportSubjectTmpl, env.domainName)
+	filterSubject := fmt.Sprintf(statefun.ExportSubjectFilterTmpl, env.domainName)
 	consumerName := "restart-test-consumer"
 
 	_, err := env.js.AddConsumer(dumperStreamName, &nats.ConsumerConfig{
 		Name:          consumerName,
 		Durable:       consumerName,
-		FilterSubject: exportSubject,
+		FilterSubject: filterSubject,
 		AckPolicy:     nats.AckExplicitPolicy,
 		DeliverPolicy: nats.DeliverAllPolicy,
 	})
 	require.NoError(t, err)
 
-	sub, err := env.js.PullSubscribe(exportSubject, "", nats.Bind(dumperStreamName, consumerName))
+	sub, err := env.js.PullSubscribe(filterSubject, "", nats.Bind(dumperStreamName, consumerName))
 	require.NoError(t, err)
 
 	// A new sourced-stream consumer with DeliverAll should replay all historical events.
