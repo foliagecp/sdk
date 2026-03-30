@@ -36,10 +36,21 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 func afterStart(ctx context.Context, runtime *statefun.Runtime) error {
 	lg.Logln(lg.InfoLevel, "=== Export test: afterStart begin ===")
 
-	var err error
-	pgDumper, err = dumper.NewPGDumper(ctx, PgURL)
-	if err != nil {
-		return fmt.Errorf("connect to PostgreSQL: %w", err)
+	// Retry PG connection — the healthcheck marks postgres ready but the first
+	// TCP accept can still fail for a moment after pg_isready returns OK.
+	var pgErr error
+	for attempt := 1; attempt <= 10; attempt++ {
+		var d *dumper.PGDumper
+		d, pgErr = dumper.NewPGDumper(ctx, PgURL)
+		if pgErr == nil {
+			pgDumper = d
+			break
+		}
+		lg.Logf(lg.WarnLevel, "PG connect attempt %d/10: %s", attempt, pgErr)
+		time.Sleep(2 * time.Second)
+	}
+	if pgErr != nil {
+		return fmt.Errorf("connect to PostgreSQL after retries: %w", pgErr)
 	}
 	if err := pgDumper.InitSchema(ctx); err != nil {
 		return fmt.Errorf("init PG schema: %w", err)

@@ -16,6 +16,10 @@ var pgDumper *dumper.PGDumper
 // It receives ExportEvents from the export bridge via ctx.Payload and writes
 // them to PostgreSQL.
 func PGExportHandler(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	if pgDumper == nil {
+		lg.Logln(lg.WarnLevel, "PGExportHandler: pgDumper not ready yet, skipping event")
+		return
+	}
 	var event statefun.ExportEvent
 	if err := json.Unmarshal(ctx.Payload.ToBytes(), &event); err != nil {
 		lg.Logf(lg.ErrorLevel, "PGExportHandler: unmarshal payload: %s", err)
