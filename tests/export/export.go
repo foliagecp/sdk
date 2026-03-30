@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/foliagecp/easyjson"
@@ -43,8 +44,6 @@ func Start() {
 		lg.Logln(lg.InfoLevel, "PostgreSQL schema initialized")
 
 		domainName := runtime.Domain.Name()
-		exportStreamName := fmt.Sprintf(statefun.ExportStreamNameTmpl, domainName)
-		exportSubject := fmt.Sprintf(statefun.ExportSubjectTmpl, domainName)
 
 		nc, err := nats.Connect(NatsURL)
 		if err != nil {
@@ -55,39 +54,39 @@ func Start() {
 			return fmt.Errorf("dumper JetStream: %w", err)
 		}
 
-		consumerName := "pg-dumper"
-		_, err = js.AddConsumer(exportStreamName, &nats.ConsumerConfig{
-			Name:           consumerName,
-			Durable:        consumerName,
-			DeliverSubject: consumerName,
-			FilterSubject:  exportSubject,
-			AckPolicy:      nats.AckExplicitPolicy,
-		})
+		// Use the SDK helper to create a durable pull consumer on the export stream.
+		sub, err := statefun.CreateExportConsumer(js, domainName, "pg-dumper")
 		if err != nil {
 			return fmt.Errorf("create export consumer: %w", err)
 		}
 
-		eventsApplied := 0
-		_, err = nc.Subscribe(consumerName, func(msg *nats.Msg) {
-			var event statefun.ExportEvent
-			if jsonErr := json.Unmarshal(msg.Data, &event); jsonErr != nil {
-				lg.Logf(lg.ErrorLevel, "Dumper: failed to unmarshal event: %s", jsonErr)
-				_ = msg.Ack()
-				return
+		var eventsApplied atomic.Int64
+		go func() {
+			for {
+				msgs, fetchErr := sub.Fetch(32, nats.MaxWait(2*time.Second))
+				if fetchErr != nil {
+					// Timeout is normal when the stream is idle — just keep polling.
+					continue
+				}
+				for _, msg := range msgs {
+					var event statefun.ExportEvent
+					if jsonErr := json.Unmarshal(msg.Data, &event); jsonErr != nil {
+						lg.Logf(lg.ErrorLevel, "Dumper: failed to unmarshal event: %s", jsonErr)
+						_ = msg.Ack()
+						continue
+					}
+					if applyErr := pgDumper.ApplyEvent(context.Background(), event); applyErr != nil {
+						lg.Logf(lg.ErrorLevel, "Dumper: failed to apply event tx=%s: %s", event.TxID, applyErr)
+						_ = msg.Nak()
+						continue
+					}
+					n := eventsApplied.Add(1)
+					lg.Logf(lg.DebugLevel, "Dumper: applied event tx=%s (%d ops), total events: %d",
+						event.TxID, len(event.Ops), n)
+					_ = msg.Ack()
+				}
 			}
-			if applyErr := pgDumper.ApplyEvent(context.Background(), event); applyErr != nil {
-				lg.Logf(lg.ErrorLevel, "Dumper: failed to apply event tx=%s: %s", event.TxID, applyErr)
-				_ = msg.Nak()
-				return
-			}
-			eventsApplied++
-			lg.Logf(lg.DebugLevel, "Dumper: applied event tx=%s (%d ops), total events: %d",
-				event.TxID, len(event.Ops), eventsApplied)
-			_ = msg.Ack()
-		})
-		if err != nil {
-			return fmt.Errorf("subscribe export consumer: %w", err)
-		}
+		}()
 		lg.Logln(lg.InfoLevel, "PG Dumper consumer started")
 
 		// --- Perform CRUD operations ---
@@ -184,7 +183,7 @@ func Start() {
 			lg.Logf(lg.WarnLevel, "Deleted vertex %s still present in PG!", deletedID)
 		}
 
-		lg.Logf(lg.InfoLevel, "Total export events applied: %d", eventsApplied)
+		lg.Logf(lg.InfoLevel, "Total export events applied: %d", eventsApplied.Load())
 
 		if vertexCount > 0 {
 			lg.Logln(lg.InfoLevel, "=== EXPORT TEST PASSED ===")
