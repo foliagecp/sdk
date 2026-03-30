@@ -13,14 +13,25 @@ import (
 )
 
 const (
-	ExportStreamNameTmpl   = "export-%s-events"
-	ExportSubjectTmpl      = "export.%s.events"
-	ExportStreamMaxMsgs    = 100000
-	ExportStreamMaxBytes   = 1024 * 1024 * 512 // 512MB
-	ExportStreamMaxAge     = 72 * time.Hour
-	ExportEnabled          = false
-	walValueHeaderSize     = 9 // 8 bytes timestamp + 1 byte flag
-	walFlagDeleted    byte = 0x02
+	ExportStreamNameTmpl = "export-%s-events"
+	ExportSubjectTmpl    = "export.%s.events"
+
+	// --- Export stream defaults ---
+
+	// Retention cap on the main export events stream (per-domain).
+	ExportStreamMaxMsgs  = 100_000
+	ExportStreamMaxBytes = 512 * 1024 * 1024 // 512 MB
+	// How long to keep export events before they are discarded.
+	ExportStreamMaxAge = 72 * time.Hour
+
+	// ExportEnabled is the compile-time default; overridden by SetExportEnabled.
+	ExportEnabled = false
+
+	// --- WAL value format ---
+
+	// WAL values carry an 8-byte big-endian timestamp followed by a 1-byte flags field.
+	walValueHeaderSize     = 9
+	walFlagDeleted    byte = 0x02 // tombstone — entry was deleted
 )
 
 // WALOp represents a raw operation from the WAL.
@@ -110,9 +121,8 @@ func (ec *ExportCommitter) CreateExportStream(maxMsgs, maxBytes int64, maxAge ti
 		MaxAge:    maxAge,
 	}
 
-	// Check if stream already exists
 	if _, err := ec.js.StreamInfo(ec.streamName); err == nil {
-		return nil // stream already exists
+		return nil // already exists
 	}
 
 	_, err := ec.js.AddStream(sc)

@@ -129,22 +129,22 @@ func runExportBridge(ctx context.Context, runtime *Runtime, domain, dumperName, 
 		default:
 		}
 
-		msgs, fetchErr := sub.Fetch(32, nats.MaxWait(2*time.Second))
-		if fetchErr != nil {
+		msgs, err := sub.Fetch(32, nats.MaxWait(2*time.Second))
+		if err != nil {
 			// Timeout when the stream is idle — keep polling.
 			continue
 		}
 
 		for _, msg := range msgs {
 			var event ExportEvent
-			if unmarshalErr := json.Unmarshal(msg.Data, &event); unmarshalErr != nil {
-				lg.Logf(lg.ErrorLevel, "ExportBridge[%s]: unmarshal: %s", dumperName, unmarshalErr)
+			if err := json.Unmarshal(msg.Data, &event); err != nil {
+				lg.Logf(lg.ErrorLevel, "ExportBridge[%s]: unmarshal: %s", dumperName, err)
 				_ = msg.Ack()
 				continue
 			}
 
-			if dispatchErr := dispatchExportEventAsSignal(runtime, domain, functionTypeName, &event); dispatchErr != nil {
-				lg.Logf(lg.ErrorLevel, "ExportBridge[%s]: dispatch tx=%s: %s", dumperName, event.TxID, dispatchErr)
+			if err := dispatchExportEventAsSignal(runtime, domain, functionTypeName, &event); err != nil {
+				lg.Logf(lg.ErrorLevel, "ExportBridge[%s]: dispatch tx=%s: %s", dumperName, event.TxID, err)
 				_ = msg.Nak()
 				continue
 			}

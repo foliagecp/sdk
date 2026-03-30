@@ -3,9 +3,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"sync/atomic"
 	"time"
 
 	"github.com/foliagecp/easyjson"
@@ -14,7 +12,6 @@ import (
 	"github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/cache"
 	lg "github.com/foliagecp/sdk/statefun/logger"
-	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/foliagecp/sdk/tests/export/dumper"
 )
@@ -25,179 +22,145 @@ var (
 	EnableTLS = system.GetEnvMustProceed("ENABLE_TLS", false)
 )
 
-func Start() {
-	system.GlobalPrometrics = system.NewPrometrics("", ":9901")
+func RegisterFunctionTypes(runtime *statefun.Runtime) {
+	graphCRUD.RegisterAllFunctionTypes(runtime)
+	statefun.RegisterExportDumper(
+		runtime,
+		"pg-dumper",
+		"export.pg.handler",
+		PGExportHandler,
+		statefun.NewFunctionTypeConfig(),
+	)
+}
 
-	// Connect to PostgreSQL before starting the runtime so the handler closure
-	// has a fully initialized pgDumper by the time export events start arriving.
-	bgCtx := context.Background()
-	pgDumper, err := dumper.NewPGDumper(bgCtx, PgURL)
+func afterStart(ctx context.Context, runtime *statefun.Runtime) error {
+	lg.Logln(lg.InfoLevel, "=== Export test: afterStart begin ===")
+
+	var err error
+	pgDumper, err = dumper.NewPGDumper(ctx, PgURL)
 	if err != nil {
-		lg.Logf(lg.ErrorLevel, "Failed to connect to PostgreSQL: %s", err)
-		return
+		return fmt.Errorf("connect to PostgreSQL: %w", err)
 	}
-	if err := pgDumper.InitSchema(bgCtx); err != nil {
-		lg.Logf(lg.ErrorLevel, "Failed to init PG schema: %s", err)
-		return
+	if err := pgDumper.InitSchema(ctx); err != nil {
+		return fmt.Errorf("init PG schema: %w", err)
 	}
 	lg.Logln(lg.InfoLevel, "PostgreSQL schema initialized")
 
-	// eventsApplied is updated inside the Foliage handler goroutine.
-	var eventsApplied atomic.Int64
+	domainName := runtime.Domain.Name()
 
-	// pgExportHandler is a standard Foliage function type handler.
-	// It receives ExportEvents dispatched by the export bridge and writes them
-	// to PostgreSQL. ctx.Payload contains the full ExportEvent JSON.
-	pgExportHandler := func(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-		var event statefun.ExportEvent
-		if err := json.Unmarshal(ctx.Payload.ToBytes(), &event); err != nil {
-			lg.Logf(lg.ErrorLevel, "pgExportHandler: unmarshal payload: %s", err)
-			return
-		}
-		if applyErr := pgDumper.ApplyEvent(context.Background(), event); applyErr != nil {
-			lg.Logf(lg.ErrorLevel, "pgExportHandler: apply event tx=%s: %s", event.TxID, applyErr)
-			return
-		}
-		n := eventsApplied.Add(1)
-		lg.Logf(lg.DebugLevel, "pgExportHandler: applied tx=%s (%d ops), total=%d",
-			event.TxID, len(event.Ops), n)
+	dbc, err := db.NewDBSyncClientFromRequestFunction(runtime.Request)
+	if err != nil {
+		return err
 	}
 
-	// --- Runtime setup ---
-	cfg := statefun.NewRuntimeConfigSimple(NatsURL, "export_test").
+	lg.Logln(lg.InfoLevel, "=== Creating types ===")
+	system.MsgOnErrorReturn(dbc.CMDB.TypeCreate("server"))
+	system.MsgOnErrorReturn(dbc.CMDB.TypeCreate("rack"))
+	system.MsgOnErrorReturn(dbc.CMDB.TypeCreate("nic"))
+
+	lg.Logln(lg.InfoLevel, "=== Creating type links ===")
+	system.MsgOnErrorReturn(dbc.CMDB.TypesLinkCreate("server", "rack", "hosted_in", nil))
+	system.MsgOnErrorReturn(dbc.CMDB.TypesLinkCreate("server", "nic", "has_nic", nil))
+
+	lg.Logln(lg.InfoLevel, "=== Creating objects ===")
+	for i := 0; i < 5; i++ {
+		body := easyjson.NewJSONObjectWithKeyValue("name", easyjson.NewJSON(fmt.Sprintf("srv-%d", i)))
+		body.SetByPath("cpu", easyjson.NewJSON(4*(i+1)))
+		body.SetByPath("ram", easyjson.NewJSON(8*(i+1)))
+		system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate(fmt.Sprintf("srv-%d", i), "server", *body.GetPtr()))
+	}
+
+	rackBody := easyjson.NewJSONObjectWithKeyValue("location", easyjson.NewJSON("DC1-Row3"))
+	system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate("rack-A", "rack", *rackBody.GetPtr()))
+
+	for i := 0; i < 3; i++ {
+		nicBody := easyjson.NewJSONObjectWithKeyValue("speed", easyjson.NewJSON("10G"))
+		system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate(fmt.Sprintf("nic-%d", i), "nic", *nicBody.GetPtr()))
+	}
+
+	lg.Logln(lg.InfoLevel, "=== Creating object links ===")
+	for i := 0; i < 5; i++ {
+		system.MsgOnErrorReturn(dbc.CMDB.ObjectsLinkCreate(
+			fmt.Sprintf("srv-%d", i), "rack-A",
+			fmt.Sprintf("rack-link-%d", i), nil,
+		))
+	}
+	for i := 0; i < 3; i++ {
+		system.MsgOnErrorReturn(dbc.CMDB.ObjectsLinkCreate(
+			"srv-0", fmt.Sprintf("nic-%d", i),
+			fmt.Sprintf("nic-link-%d", i), nil,
+		))
+	}
+
+	lg.Logln(lg.InfoLevel, "=== Updating objects ===")
+	updateBody := easyjson.NewJSONObjectWithKeyValue("status", easyjson.NewJSON("active"))
+	system.MsgOnErrorReturn(dbc.CMDB.ObjectUpdate("srv-0", *updateBody.GetPtr(), false))
+
+	lg.Logln(lg.InfoLevel, "=== Deleting an object ===")
+	system.MsgOnErrorReturn(dbc.CMDB.ObjectDelete("srv-4"))
+
+	lg.Logln(lg.InfoLevel, "=== CRUD complete, waiting for export pipeline... ===")
+
+	// Wait for WAL flush → ExportCommitter → bridge → Foliage signal → handler → PG.
+	time.Sleep(15 * time.Second)
+
+	// --- Verify PG state ---
+	lg.Logln(lg.InfoLevel, "=== Verification ===")
+
+	vertexCount, err := pgDumper.CountVertices(ctx)
+	if err != nil {
+		lg.Logf(lg.ErrorLevel, "Failed to count vertices: %s", err)
+	} else {
+		lg.Logf(lg.InfoLevel, "Total vertices in PG: %d", vertexCount)
+	}
+
+	linkCount, err := pgDumper.CountLinks(ctx)
+	if err != nil {
+		lg.Logf(lg.ErrorLevel, "Failed to count links: %s", err)
+	} else {
+		lg.Logf(lg.InfoLevel, "Total links in PG: %d", linkCount)
+	}
+
+	testIDs := []string{"srv-0", "srv-1", "rack-A", "nic-0"}
+	for _, id := range testIDs {
+		fullID := domainName + "/" + id
+		body, err := pgDumper.ReadVertex(ctx, fullID)
+		if err != nil {
+			lg.Logf(lg.WarnLevel, "Vertex %s NOT found in PG: %s", fullID, err)
+		} else {
+			lg.Logf(lg.InfoLevel, "Vertex %s in PG: %s", fullID, string(body))
+		}
+	}
+
+	deletedID := domainName + "/srv-4"
+	if _, err := pgDumper.ReadVertex(ctx, deletedID); err != nil {
+		lg.Logf(lg.InfoLevel, "Deleted vertex %s correctly absent from PG", deletedID)
+	} else {
+		lg.Logf(lg.WarnLevel, "Deleted vertex %s still present in PG!", deletedID)
+	}
+
+	if vertexCount > 0 {
+		lg.Logln(lg.InfoLevel, "=== EXPORT TEST PASSED ===")
+	} else {
+		lg.Logln(lg.ErrorLevel, "=== EXPORT TEST FAILED: no vertices in PG ===")
+	}
+
+	return nil
+}
+
+func Start() {
+	system.GlobalPrometrics = system.NewPrometrics("", ":9901")
+
+	runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "export_test").
 		UseJSDomainAsHubDomainName().
 		SetTLS(EnableTLS).
-		SetExportEnabled(true)
-
-	runtime, err := statefun.NewRuntime(*cfg)
+		SetExportEnabled(true))
 	if err != nil {
 		lg.Logf(lg.ErrorLevel, "Cannot create statefun runtime: %s", err)
 		return
 	}
 
-	graphCRUD.RegisterAllFunctionTypes(runtime)
-
-	// RegisterExportDumper wires the full pipeline:
-	//   ExportCommitter → export-hub-events stream
-	//   → per-dumper sourced stream (export-hub-pg-dumper-events)
-	//   → bridge goroutine dispatches Foliage signal → export.pg.handler function
-	//   → pgExportHandler → PostgreSQL
-	statefun.RegisterExportDumper(
-		runtime,
-		"pg-dumper",
-		"export.pg.handler",
-		pgExportHandler,
-		statefun.NewFunctionTypeConfig(),
-	)
-
-	// afterStart: perform CRUD operations and verify PG state.
-	afterStart := func(ctx context.Context, r *statefun.Runtime) error {
-		lg.Logln(lg.InfoLevel, "=== Export test: afterStart begin ===")
-
-		domainName := r.Domain.Name()
-
-		dbc, err := db.NewDBSyncClientFromRequestFunction(r.Request)
-		if err != nil {
-			return err
-		}
-
-		lg.Logln(lg.InfoLevel, "=== Creating types ===")
-		system.MsgOnErrorReturn(dbc.CMDB.TypeCreate("server"))
-		system.MsgOnErrorReturn(dbc.CMDB.TypeCreate("rack"))
-		system.MsgOnErrorReturn(dbc.CMDB.TypeCreate("nic"))
-
-		lg.Logln(lg.InfoLevel, "=== Creating type links ===")
-		system.MsgOnErrorReturn(dbc.CMDB.TypesLinkCreate("server", "rack", "hosted_in", nil))
-		system.MsgOnErrorReturn(dbc.CMDB.TypesLinkCreate("server", "nic", "has_nic", nil))
-
-		lg.Logln(lg.InfoLevel, "=== Creating objects ===")
-		for i := 0; i < 5; i++ {
-			body := easyjson.NewJSONObjectWithKeyValue("name", easyjson.NewJSON(fmt.Sprintf("srv-%d", i)))
-			body.SetByPath("cpu", easyjson.NewJSON(4*(i+1)))
-			body.SetByPath("ram", easyjson.NewJSON(8*(i+1)))
-			system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate(fmt.Sprintf("srv-%d", i), "server", *body.GetPtr()))
-		}
-
-		rackBody := easyjson.NewJSONObjectWithKeyValue("location", easyjson.NewJSON("DC1-Row3"))
-		system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate("rack-A", "rack", *rackBody.GetPtr()))
-
-		for i := 0; i < 3; i++ {
-			nicBody := easyjson.NewJSONObjectWithKeyValue("speed", easyjson.NewJSON("10G"))
-			system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate(fmt.Sprintf("nic-%d", i), "nic", *nicBody.GetPtr()))
-		}
-
-		lg.Logln(lg.InfoLevel, "=== Creating object links ===")
-		for i := 0; i < 5; i++ {
-			system.MsgOnErrorReturn(dbc.CMDB.ObjectsLinkCreate(
-				fmt.Sprintf("srv-%d", i), "rack-A",
-				fmt.Sprintf("rack-link-%d", i), nil,
-			))
-		}
-		for i := 0; i < 3; i++ {
-			system.MsgOnErrorReturn(dbc.CMDB.ObjectsLinkCreate(
-				"srv-0", fmt.Sprintf("nic-%d", i),
-				fmt.Sprintf("nic-link-%d", i), nil,
-			))
-		}
-
-		lg.Logln(lg.InfoLevel, "=== Updating objects ===")
-		updateBody := easyjson.NewJSONObjectWithKeyValue("status", easyjson.NewJSON("active"))
-		system.MsgOnErrorReturn(dbc.CMDB.ObjectUpdate("srv-0", *updateBody.GetPtr(), false))
-
-		lg.Logln(lg.InfoLevel, "=== Deleting an object ===")
-		system.MsgOnErrorReturn(dbc.CMDB.ObjectDelete("srv-4"))
-
-		lg.Logln(lg.InfoLevel, "=== CRUD complete, waiting for export pipeline... ===")
-
-		// Wait for WAL flush → ExportCommitter → bridge → Foliage signal → handler → PG.
-		time.Sleep(15 * time.Second)
-
-		// --- Verify PG state ---
-		lg.Logln(lg.InfoLevel, "=== Verification ===")
-
-		vertexCount, err := pgDumper.CountVertices(ctx)
-		if err != nil {
-			lg.Logf(lg.ErrorLevel, "Failed to count vertices: %s", err)
-		} else {
-			lg.Logf(lg.InfoLevel, "Total vertices in PG: %d", vertexCount)
-		}
-
-		linkCount, err := pgDumper.CountLinks(ctx)
-		if err != nil {
-			lg.Logf(lg.ErrorLevel, "Failed to count links: %s", err)
-		} else {
-			lg.Logf(lg.InfoLevel, "Total links in PG: %d", linkCount)
-		}
-
-		testIDs := []string{"srv-0", "srv-1", "rack-A", "nic-0"}
-		for _, id := range testIDs {
-			fullID := domainName + "/" + id
-			body, err := pgDumper.ReadVertex(ctx, fullID)
-			if err != nil {
-				lg.Logf(lg.WarnLevel, "Vertex %s NOT found in PG: %s", fullID, err)
-			} else {
-				lg.Logf(lg.InfoLevel, "Vertex %s in PG: %s", fullID, string(body))
-			}
-		}
-
-		deletedID := domainName + "/srv-4"
-		if _, err := pgDumper.ReadVertex(ctx, deletedID); err != nil {
-			lg.Logf(lg.InfoLevel, "Deleted vertex %s correctly absent from PG", deletedID)
-		} else {
-			lg.Logf(lg.WarnLevel, "Deleted vertex %s still present in PG!", deletedID)
-		}
-
-		lg.Logf(lg.InfoLevel, "Total export events applied: %d", eventsApplied.Load())
-
-		if vertexCount > 0 {
-			lg.Logln(lg.InfoLevel, "=== EXPORT TEST PASSED ===")
-		} else {
-			lg.Logln(lg.ErrorLevel, "=== EXPORT TEST FAILED: no vertices in PG ===")
-		}
-
-		return nil
-	}
-
+	RegisterFunctionTypes(runtime)
 	runtime.RegisterOnAfterStartFunction(afterStart, true)
 
 	if err := runtime.Start(context.Background(), cache.NewCacheConfig("export_cache")); err != nil {
