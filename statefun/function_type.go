@@ -203,8 +203,8 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 			GetFunctionContext:        func() *easyjson.JSON { return ft.getContext(ft.name + "." + id) },
 			SetFunctionContext:        func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
 			SetContextExpirationAfter: func(after time.Duration) { ft.setContextExpirationAfter(ft.name+"."+id, after) },
-			GetObjectContext:          func() *easyjson.JSON { return ft.getContext(id) },
-			SetObjectContext:          func(context *easyjson.JSON) { ft.setContext(id, context) },
+			GetObjectContext:          func() *easyjson.JSON { return ft.getObjectContext(id) },
+			SetObjectContext:          func(context *easyjson.JSON) { ft.setObjectContext(id, context) },
 			GetObjectImplTypes:        func() (types []string, err error) { return ft.getObjectImplTypes(id) },
 			Domain:                    ft.runtime.Domain,
 			Self:                      sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
@@ -454,6 +454,30 @@ func (ft *FunctionType) setContext(keyValueID string, context *easyjson.JSON) {
 		ft.runtime.Domain.cache.DeleteValue(keyValueID, true, -1, "")
 	} else {
 		ft.runtime.Domain.cache.SetValueJSON(keyValueID, context, true, -1, "")
+	}
+}
+
+func (ft *FunctionType) getObjectContext(keyValueID string) *easyjson.JSON {
+	response, err := ft.runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", keyValueID, nil, nil)
+	if err == nil {
+		body := response.GetByPath("data.body") // response is OpMsg: {"status":..., "data":{"body":{...}}}
+		return &body
+	}
+	j := easyjson.NewJSONObject()
+	return &j
+}
+
+func (ft *FunctionType) setObjectContext(keyValueID string, context *easyjson.JSON) {
+	if context == nil {
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
+		system.MsgOnErrorReturn(ft.runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.delete", keyValueID, &payload, nil))
+	} else {
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
+		payload.SetByPath("replace", easyjson.NewJSON(true))
+		payload.SetByPath("body", *context)
+		system.MsgOnErrorReturn(ft.runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.update", keyValueID, &payload, nil))
 	}
 }
 
