@@ -1,4 +1,4 @@
-// Foliage export test — runtime + PG dumper integration.
+// Foliage export test — runtime + semantic PG dumper integration (high-level).
 package main
 
 import (
@@ -13,7 +13,7 @@ import (
 	"github.com/foliagecp/sdk/statefun/cache"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/foliagecp/sdk/statefun/system"
-	"github.com/foliagecp/sdk/tests/export/dumper"
+	"github.com/foliagecp/sdk/tests/export/pg_high_level/dumper"
 )
 
 var (
@@ -26,24 +26,21 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	graphCRUD.RegisterAllFunctionTypes(runtime)
 	statefun.RegisterExportDumper(
 		runtime,
-		"pg-dumper",
-		"export.pg.handler",
-		PGExportHandler,
+		"semantic-pg-dumper",
+		"export.semantic.pg.handler",
+		SemanticPGHandler,
 		statefun.NewFunctionTypeConfig(),
 	)
 }
 
 func afterStart(ctx context.Context, runtime *statefun.Runtime) error {
-	lg.Logln(lg.InfoLevel, "=== Export test: afterStart begin ===")
+	lg.Logln(lg.InfoLevel, "=== Semantic export test: afterStart begin ===")
 
-	// Retry PG connection — the healthcheck marks postgres ready but the first
-	// TCP accept can still fail for a moment after pg_isready returns OK.
 	var pgErr error
+	var pgDumper *dumper.SemanticPGDumper
 	for attempt := 1; attempt <= 10; attempt++ {
-		var d *dumper.PGDumper
-		d, pgErr = dumper.NewPGDumper(ctx, PgURL)
+		pgDumper, pgErr = dumper.NewSemanticPGDumper(ctx, PgURL)
 		if pgErr == nil {
-			pgDumper = d
 			break
 		}
 		lg.Logf(lg.WarnLevel, "PG connect attempt %d/10: %s", attempt, pgErr)
@@ -56,6 +53,8 @@ func afterStart(ctx context.Context, runtime *statefun.Runtime) error {
 		return fmt.Errorf("init PG schema: %w", err)
 	}
 	lg.Logln(lg.InfoLevel, "PostgreSQL schema initialized")
+
+	translator = statefun.NewSemanticTranslator(pgDumper)
 
 	domainName := runtime.Domain.Name()
 
@@ -80,10 +79,8 @@ func afterStart(ctx context.Context, runtime *statefun.Runtime) error {
 		body.SetByPath("ram", easyjson.NewJSON(8*(i+1)))
 		system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate(fmt.Sprintf("srv-%d", i), "server", *body.GetPtr()))
 	}
-
 	rackBody := easyjson.NewJSONObjectWithKeyValue("location", easyjson.NewJSON("DC1-Row3"))
 	system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate("rack-A", "rack", *rackBody.GetPtr()))
-
 	for i := 0; i < 3; i++ {
 		nicBody := easyjson.NewJSONObjectWithKeyValue("speed", easyjson.NewJSON("10G"))
 		system.MsgOnErrorReturn(dbc.CMDB.ObjectCreate(fmt.Sprintf("nic-%d", i), "nic", *nicBody.GetPtr()))
@@ -103,7 +100,7 @@ func afterStart(ctx context.Context, runtime *statefun.Runtime) error {
 		))
 	}
 
-	lg.Logln(lg.InfoLevel, "=== Updating objects ===")
+	lg.Logln(lg.InfoLevel, "=== Updating object ===")
 	updateBody := easyjson.NewJSONObjectWithKeyValue("status", easyjson.NewJSON("active"))
 	system.MsgOnErrorReturn(dbc.CMDB.ObjectUpdate("srv-0", *updateBody.GetPtr(), false))
 
@@ -111,49 +108,61 @@ func afterStart(ctx context.Context, runtime *statefun.Runtime) error {
 	system.MsgOnErrorReturn(dbc.CMDB.ObjectDelete("srv-4"))
 
 	lg.Logln(lg.InfoLevel, "=== CRUD complete, waiting for export pipeline... ===")
-
-	// Wait for WAL flush → ExportCommitter → bridge → Foliage signal → handler → PG.
 	time.Sleep(15 * time.Second)
 
-	// --- Verify PG state ---
+	// --- Verification ---
 	lg.Logln(lg.InfoLevel, "=== Verification ===")
 
-	vertexCount, err := pgDumper.CountVertices(ctx)
+	typeCount, err := pgDumper.CountTypes(ctx)
 	if err != nil {
-		lg.Logf(lg.ErrorLevel, "Failed to count vertices: %s", err)
+		lg.Logf(lg.ErrorLevel, "Failed to count types: %s", err)
 	} else {
-		lg.Logf(lg.InfoLevel, "Total vertices in PG: %d", vertexCount)
+		lg.Logf(lg.InfoLevel, "Types in PG: %d", typeCount)
 	}
 
-	linkCount, err := pgDumper.CountLinks(ctx)
+	objectCount, err := pgDumper.CountObjects(ctx)
 	if err != nil {
-		lg.Logf(lg.ErrorLevel, "Failed to count links: %s", err)
+		lg.Logf(lg.ErrorLevel, "Failed to count objects: %s", err)
 	} else {
-		lg.Logf(lg.InfoLevel, "Total links in PG: %d", linkCount)
+		lg.Logf(lg.InfoLevel, "Objects in PG: %d", objectCount)
+	}
+
+	typeLinkCount, err := pgDumper.CountTypeLinks(ctx)
+	if err != nil {
+		lg.Logf(lg.ErrorLevel, "Failed to count type links: %s", err)
+	} else {
+		lg.Logf(lg.InfoLevel, "Type links in PG: %d", typeLinkCount)
+	}
+
+	objectLinkCount, err := pgDumper.CountObjectLinks(ctx)
+	if err != nil {
+		lg.Logf(lg.ErrorLevel, "Failed to count object links: %s", err)
+	} else {
+		lg.Logf(lg.InfoLevel, "Object links in PG: %d", objectLinkCount)
 	}
 
 	testIDs := []string{"srv-0", "srv-1", "rack-A", "nic-0"}
 	for _, id := range testIDs {
 		fullID := domainName + "/" + id
-		body, err := pgDumper.ReadVertex(ctx, fullID)
+		typeID, body, err := pgDumper.ReadObject(ctx, fullID)
 		if err != nil {
-			lg.Logf(lg.WarnLevel, "Vertex %s NOT found in PG: %s", fullID, err)
+			lg.Logf(lg.WarnLevel, "Object %s NOT found in PG: %s", fullID, err)
 		} else {
-			lg.Logf(lg.InfoLevel, "Vertex %s in PG: %s", fullID, string(body))
+			lg.Logf(lg.InfoLevel, "Object %s → type=%s body=%s", fullID, typeID, string(body))
 		}
 	}
 
 	deletedID := domainName + "/srv-4"
-	if _, err := pgDumper.ReadVertex(ctx, deletedID); err != nil {
-		lg.Logf(lg.InfoLevel, "Deleted vertex %s correctly absent from PG", deletedID)
+	if _, _, err := pgDumper.ReadObject(ctx, deletedID); err != nil {
+		lg.Logf(lg.InfoLevel, "Deleted object %s correctly absent from PG", deletedID)
 	} else {
-		lg.Logf(lg.WarnLevel, "Deleted vertex %s still present in PG!", deletedID)
+		lg.Logf(lg.WarnLevel, "Deleted object %s still present in PG!", deletedID)
 	}
 
-	if vertexCount > 0 {
-		lg.Logln(lg.InfoLevel, "=== EXPORT TEST PASSED ===")
+	if objectCount > 0 {
+		lg.Logln(lg.InfoLevel, "=== SEMANTIC EXPORT TEST PASSED ===")
 	} else {
-		lg.Logln(lg.ErrorLevel, "=== EXPORT TEST FAILED: no vertices in PG ===")
+		lg.Logln(lg.ErrorLevel, "=== SEMANTIC EXPORT TEST FAILED: no objects in PG ===")
 	}
 
 	return nil
@@ -162,7 +171,7 @@ func afterStart(ctx context.Context, runtime *statefun.Runtime) error {
 func Start() {
 	system.GlobalPrometrics = system.NewPrometrics("", ":9901")
 
-	runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "export_test").
+	runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "semantic_export_test").
 		UseJSDomainAsHubDomainName().
 		SetTLS(EnableTLS).
 		SetExportEnabled(true))
@@ -174,7 +183,7 @@ func Start() {
 	RegisterFunctionTypes(runtime)
 	runtime.RegisterOnAfterStartFunction(afterStart, true)
 
-	if err := runtime.Start(context.Background(), cache.NewCacheConfig("export_cache")); err != nil {
+	if err := runtime.Start(context.Background(), cache.NewCacheConfig("semantic_export_cache")); err != nil {
 		lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s", err)
 	}
 }

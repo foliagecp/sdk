@@ -7,7 +7,7 @@ import (
 	"github.com/foliagecp/sdk/statefun"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
-	"github.com/foliagecp/sdk/tests/export/dumper"
+	"github.com/foliagecp/sdk/tests/export/pg_low_level/dumper"
 )
 
 var pgDumper *dumper.PGDumper

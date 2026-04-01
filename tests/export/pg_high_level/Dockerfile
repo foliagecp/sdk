@@ -6,7 +6,7 @@ COPY . .
 
 RUN go mod tidy
 
-RUN cd ./tests/export && go build -o /usr/bin/foliage-export-test
+RUN cd ./tests/export/pg_high_level && go build -o /usr/bin/foliage-semantic-export-test
 
 FROM ubuntu:22.04
 
@@ -16,4 +16,4 @@ RUN apt update && \
     apt install ca-certificates curl -y && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /usr/bin/foliage-export-test /usr/bin/
+COPY --from=builder /usr/bin/foliage-semantic-export-test /usr/bin/

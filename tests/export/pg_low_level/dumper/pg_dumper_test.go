@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/foliagecp/sdk/statefun"
-	"github.com/foliagecp/sdk/tests/export/dumper"
+	"github.com/foliagecp/sdk/tests/export/pg_low_level/dumper"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

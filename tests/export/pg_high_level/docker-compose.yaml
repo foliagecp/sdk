@@ -1,0 +1,54 @@
+version: "2.1"
+
+services:
+  nats:
+    image: nats:latest
+    command: -c /etc/nats/nats.conf
+    ports:
+      - "14222:4222"
+      - "16222:6222"
+      - "18222:8222"
+    volumes:
+       - ./configs/nats/:/etc/nats/
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "15432:5432"
+    environment:
+      POSTGRES_USER: foliage
+      POSTGRES_PASSWORD: foliage
+      POSTGRES_DB: foliage
+    volumes:
+      - ./configs/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U foliage -d foliage"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  io:
+    image: natsio/nats-box:latest
+    entrypoint:
+      - /bin/sh
+    tty: true
+    depends_on:
+      - nats
+
+  runtime:
+    image: foliage-sdk-tests-semantic-export:latest
+    command: /usr/bin/foliage-semantic-export-test -ll 6
+    ports:
+      - "19901:9901"
+    env_file: ./configs/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    build:
+      context: ../../..
+      dockerfile: tests/export/pg_high_level/Dockerfile
+    volumes:
+      - .:/foliage
+    stop_grace_period: 300s
