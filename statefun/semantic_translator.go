@@ -40,11 +40,14 @@ type SemanticHandler interface {
 	OnObjectDelete(id string) error
 
 	// --- Links between objects ---
-	OnObjectLinkPut(from, to, name string, body json.RawMessage, tags []string) error
+	// linkType is the semantic relationship type (e.g. "hosted_in", "has_nic").
+	OnObjectLinkPut(from, to, name, linkType string, body json.RawMessage, tags []string) error
 	OnObjectLinkDelete(from, name string) error
 
 	// --- Links between types ---
-	OnTypeLinkPut(from, to, name string, body json.RawMessage, tags []string) error
+	// linkType is the composition/interface type stored in the link body
+	// (e.g. "hosted_in") for __type graph links, or "__sub" for subtype links.
+	OnTypeLinkPut(from, to, name, linkType string, body json.RawMessage, tags []string) error
 	OnTypeLinkDelete(from, name string) error
 }
 
@@ -242,9 +245,9 @@ func (t *SemanticTranslator) dispatchLinkOp(op ExportOp) error {
 	case "link_put":
 		switch {
 		case fromKind == kindObject && toKind == kindObject:
-			return t.handler.OnObjectLinkPut(op.From, op.To, op.Name, op.Body, op.Tags)
+			return t.handler.OnObjectLinkPut(op.From, op.To, op.Name, op.LinkType, op.Body, op.Tags)
 		case fromKind == kindType && toKind == kindType:
-			return t.handler.OnTypeLinkPut(op.From, op.To, op.Name, op.Body, op.Tags)
+			return t.handler.OnTypeLinkPut(op.From, op.To, op.Name, typeLinkType(op), op.Body, op.Tags)
 		default:
 			// Mixed or unknown endpoints — skip.
 			return nil
@@ -262,4 +265,21 @@ func (t *SemanticTranslator) dispatchLinkOp(op ExportOp) error {
 	}
 
 	return nil
+}
+
+// typeLinkType returns the semantic link type for a type-to-type link.
+// For __type graph links the semantic type is stored in body["type"]
+// (set by TypesLinkCreate via the object_type parameter). For other link
+// types (e.g. __sub for subtype relationships) the graph link type is
+// returned as-is.
+func typeLinkType(op ExportOp) string {
+	if op.LinkType == cmdbToTypelink && len(op.Body) > 0 {
+		var b struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(op.Body, &b) == nil && b.Type != "" {
+			return b.Type
+		}
+	}
+	return op.LinkType
 }

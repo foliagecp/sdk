@@ -31,17 +31,17 @@ type objectPutCall struct {
 	body       string
 }
 type objectLinkPutCall struct {
-	from, to, name string
-	body           string
-	tags           []string
+	from, to, name, linkType string
+	body                     string
+	tags                     []string
 }
 type objectLinkDelCall struct {
 	from, name string
 }
 type typeLinkPutCall struct {
-	from, to, name string
-	body           string
-	tags           []string
+	from, to, name, linkType string
+	body                     string
+	tags                     []string
 }
 type typeLinkDelCall struct {
 	from, name string
@@ -63,16 +63,16 @@ func (m *mockHandler) OnObjectDelete(id string) error {
 	m.objectDeletes = append(m.objectDeletes, id)
 	return m.returnErr
 }
-func (m *mockHandler) OnObjectLinkPut(from, to, name string, body json.RawMessage, tags []string) error {
-	m.objectLinkPuts = append(m.objectLinkPuts, objectLinkPutCall{from, to, name, string(body), tags})
+func (m *mockHandler) OnObjectLinkPut(from, to, name, linkType string, body json.RawMessage, tags []string) error {
+	m.objectLinkPuts = append(m.objectLinkPuts, objectLinkPutCall{from, to, name, linkType, string(body), tags})
 	return m.returnErr
 }
 func (m *mockHandler) OnObjectLinkDelete(from, name string) error {
 	m.objectLinkDels = append(m.objectLinkDels, objectLinkDelCall{from, name})
 	return m.returnErr
 }
-func (m *mockHandler) OnTypeLinkPut(from, to, name string, body json.RawMessage, tags []string) error {
-	m.typeLinkPuts = append(m.typeLinkPuts, typeLinkPutCall{from, to, name, string(body), tags})
+func (m *mockHandler) OnTypeLinkPut(from, to, name, linkType string, body json.RawMessage, tags []string) error {
+	m.typeLinkPuts = append(m.typeLinkPuts, typeLinkPutCall{from, to, name, linkType, string(body), tags})
 	return m.returnErr
 }
 func (m *mockHandler) OnTypeLinkDelete(from, name string) error {
@@ -216,6 +216,7 @@ func TestSemanticTranslator_TypeLinkDispatch(t *testing.T) {
 	assert.Equal(t, "hub/server", h.typeLinkPuts[0].from)
 	assert.Equal(t, "hub/rack", h.typeLinkPuts[0].to)
 	assert.Equal(t, "hub/rack", h.typeLinkPuts[0].name)
+	assert.Equal(t, "hosted_in", h.typeLinkPuts[0].linkType)
 }
 
 // TestSemanticTranslator_ObjectLinkDispatch verifies that regular links between
@@ -244,6 +245,7 @@ func TestSemanticTranslator_ObjectLinkDispatch(t *testing.T) {
 	assert.Equal(t, "hub/srv-0", h.objectLinkPuts[0].from)
 	assert.Equal(t, "hub/rack-A", h.objectLinkPuts[0].to)
 	assert.Equal(t, "rack-link-0", h.objectLinkPuts[0].name)
+	assert.Equal(t, "hosted_in", h.objectLinkPuts[0].linkType)
 }
 
 // TestSemanticTranslator_ReverseLinksSkipped verifies that type→instance reverse

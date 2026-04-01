@@ -84,13 +84,16 @@ func (d *SemanticPGDumper) OnObjectDelete(id string) error {
 	return err
 }
 
-func (d *SemanticPGDumper) OnTypeLinkPut(from, to, name string, body json.RawMessage, _ []string) error {
+func (d *SemanticPGDumper) OnTypeLinkPut(from, to, name, linkType string, body json.RawMessage, tags []string) error {
 	b := jsonOrEmpty(body)
+	if tags == nil {
+		tags = []string{}
+	}
 	_, err := d.pool.Exec(d.ctx,
-		`INSERT INTO type_links (from_type, to_type, name, body)
-		 VALUES ($1, $2, $3, $4::jsonb)
-		 ON CONFLICT (from_type, name) DO UPDATE SET to_type = $2, body = $4::jsonb`,
-		from, to, name, b)
+		`INSERT INTO type_links (from_type, to_type, name, link_type, tags, body)
+		 VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+		 ON CONFLICT (from_type, name) DO UPDATE SET to_type = $2, link_type = $4, tags = $5, body = $6::jsonb`,
+		from, to, name, linkType, tags, b)
 	return err
 }
 
@@ -100,16 +103,16 @@ func (d *SemanticPGDumper) OnTypeLinkDelete(from, name string) error {
 	return err
 }
 
-func (d *SemanticPGDumper) OnObjectLinkPut(from, to, name string, body json.RawMessage, tags []string) error {
+func (d *SemanticPGDumper) OnObjectLinkPut(from, to, name, linkType string, body json.RawMessage, tags []string) error {
 	b := jsonOrEmpty(body)
 	if tags == nil {
 		tags = []string{}
 	}
 	_, err := d.pool.Exec(d.ctx,
-		`INSERT INTO object_links (from_obj, to_obj, name, tags, body)
-		 VALUES ($1, $2, $3, $4, $5::jsonb)
-		 ON CONFLICT (from_obj, name) DO UPDATE SET to_obj = $2, tags = $4, body = $5::jsonb`,
-		from, to, name, tags, b)
+		`INSERT INTO object_links (from_obj, to_obj, name, link_type, tags, body)
+		 VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+		 ON CONFLICT (from_obj, name) DO UPDATE SET to_obj = $2, link_type = $4, tags = $5, body = $6::jsonb`,
+		from, to, name, linkType, tags, b)
 	return err
 }
 
