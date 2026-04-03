@@ -372,6 +372,13 @@ func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDo
 	if err := dm.checkKvConsistency(ctx); err != nil {
 		return err
 	}
+
+	if dm.exportEnabled {
+		if err := dm.publishStartupSnapshot(ctx); err != nil {
+			lg.Logf(lg.WarnLevel, "Export startup snapshot failed (non-fatal): %s", err)
+		}
+	}
+
 	le.Trace(ctx, "Cache store inited!")
 
 	return nil
@@ -452,6 +459,46 @@ func (dm *Domain) checkKvConsistency(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+// publishStartupSnapshot reads all current KV entries and publishes them
+// directly to the export stream as a single "startup" transaction.
+// This allows the export dumper to rebuild its state after a restart without
+// waiting for a user-triggered write to arrive for each pre-existing entity.
+// The snapshot bypasses the WAL — KV is not modified.
+func (dm *Domain) publishStartupSnapshot(ctx context.Context) error {
+	storePrefix := dm.cache.GetStorePrefix()
+	pattern := storePrefix + ".>"
+
+	watchCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	watcher, err := dm.kv.Watch(pattern, nats.IgnoreDeletes(), nats.Context(watchCtx))
+	if err != nil {
+		return fmt.Errorf("startup snapshot watch: %w", err)
+	}
+	defer watcher.Stop()
+
+	var ops []WALOp
+	for entry := range watcher.Updates() {
+		if entry == nil {
+			break // nil = all historical entries delivered
+		}
+		ops = append(ops, WALOp{
+			OpType: cache.OpTypePUT,
+			Key:    entry.Key(),
+			Value:  entry.Value(),
+		})
+	}
+
+	if len(ops) == 0 {
+		lg.Logln(lg.DebugLevel, "Export startup snapshot: KV is empty, nothing to flush")
+		return nil
+	}
+
+	txID := fmt.Sprintf("startup-snapshot-%d", time.Now().UnixNano())
+	lg.Logf(lg.InfoLevel, "Export startup snapshot: flushing %d KV entries as tx=%s", len(ops), txID)
+	return dm.exportCommitter.ProcessTransaction(txID, ops, storePrefix)
 }
 
 func (dm *Domain) createIngressRouter() error {

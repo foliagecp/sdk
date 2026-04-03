@@ -20,6 +20,8 @@ var (
 	NatsURL   = system.GetEnvMustProceed("NATS_URL", "nats://nats:foliage@nats:4222")
 	PgURL     = system.GetEnvMustProceed("PG_URL", "postgres://foliage:foliage@postgres:5432/foliage?sslmode=disable")
 	EnableTLS = system.GetEnvMustProceed("ENABLE_TLS", false)
+
+	pgDumper *dumper.SemanticPGDumper
 )
 
 func RegisterFunctionTypes(runtime *statefun.Runtime) {
@@ -35,26 +37,6 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 
 func afterStart(ctx context.Context, runtime *statefun.Runtime) error {
 	lg.Logln(lg.InfoLevel, "=== Semantic export test: afterStart begin ===")
-
-	var pgErr error
-	var pgDumper *dumper.SemanticPGDumper
-	for attempt := 1; attempt <= 10; attempt++ {
-		pgDumper, pgErr = dumper.NewSemanticPGDumper(ctx, PgURL)
-		if pgErr == nil {
-			break
-		}
-		lg.Logf(lg.WarnLevel, "PG connect attempt %d/10: %s", attempt, pgErr)
-		time.Sleep(2 * time.Second)
-	}
-	if pgErr != nil {
-		return fmt.Errorf("connect to PostgreSQL after retries: %w", pgErr)
-	}
-	if err := pgDumper.InitSchema(ctx); err != nil {
-		return fmt.Errorf("init PG schema: %w", err)
-	}
-	lg.Logln(lg.InfoLevel, "PostgreSQL schema initialized")
-
-	translator = statefun.NewSemanticTranslator(pgDumper)
 
 	domainName := runtime.Domain.Name()
 
@@ -168,8 +150,39 @@ func afterStart(ctx context.Context, runtime *statefun.Runtime) error {
 	return nil
 }
 
+func initPGAndTranslator(ctx context.Context) error {
+	var pgErr error
+	for attempt := 1; attempt <= 10; attempt++ {
+		pgDumper, pgErr = dumper.NewSemanticPGDumper(ctx, PgURL)
+		if pgErr == nil {
+			break
+		}
+		lg.Logf(lg.WarnLevel, "PG connect attempt %d/10: %s", attempt, pgErr)
+		time.Sleep(2 * time.Second)
+	}
+	if pgErr != nil {
+		return fmt.Errorf("connect to PostgreSQL after retries: %w", pgErr)
+	}
+	if err := pgDumper.InitSchema(ctx); err != nil {
+		return fmt.Errorf("init PG schema: %w", err)
+	}
+	lg.Logln(lg.InfoLevel, "PostgreSQL schema initialized")
+	translator = statefun.NewSemanticTranslator(pgDumper)
+	lg.Logln(lg.InfoLevel, "SemanticTranslator initialized (ready before runtime.Start)")
+	return nil
+}
+
 func Start() {
 	system.GlobalPrometrics = system.NewPrometrics("", ":9901")
+
+	ctx := context.Background()
+
+	// Initialize PG and translator BEFORE runtime.Start so the startup snapshot
+	// (published during cache load) is processed correctly by SemanticPGHandler.
+	if err := initPGAndTranslator(ctx); err != nil {
+		lg.Logf(lg.ErrorLevel, "Cannot initialize PG/translator: %s", err)
+		return
+	}
 
 	runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "semantic_export_test").
 		UseJSDomainAsHubDomainName().
@@ -183,7 +196,7 @@ func Start() {
 	RegisterFunctionTypes(runtime)
 	runtime.RegisterOnAfterStartFunction(afterStart, true)
 
-	if err := runtime.Start(context.Background(), cache.NewCacheConfig("semantic_export_cache")); err != nil {
+	if err := runtime.Start(ctx, cache.NewCacheConfig("semantic_export_cache")); err != nil {
 		lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s", err)
 	}
 }
