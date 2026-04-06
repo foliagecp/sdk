@@ -159,7 +159,13 @@ func (csv *StoreValue) Put(value interface{}, updateInKV bool, customPutTime int
 	if customPutTime < 0 {
 		customPutTime = system.GetCurrentTimeNs()
 	}
-	csv.valueUpdateTime = customPutTime
+	// If entry is already dirty (syncNeeded=true, not yet collected by WAL),
+	// keep the older (smaller) timestamp so the WAL barrier won't skip it.
+	// Otherwise a concurrent overwrite with a newer opTime > barrierTime
+	// causes the WAL DFS traversal to miss this entry.
+	if !csv.syncNeeded || customPutTime < csv.valueUpdateTime {
+		csv.valueUpdateTime = customPutTime
+	}
 	csv.syncNeeded = updateInKV
 	csv.syncedWithKV = !updateInKV
 
@@ -226,7 +232,10 @@ func (csv *StoreValue) Delete(updateInKV bool, customDeleteTime int64) {
 	if customDeleteTime < 0 {
 		customDeleteTime = system.GetCurrentTimeNs()
 	}
-	csv.valueUpdateTime = customDeleteTime
+	// Same as Put: keep older timestamp if already dirty
+	if !csv.syncNeeded || customDeleteTime < csv.valueUpdateTime {
+		csv.valueUpdateTime = customDeleteTime
+	}
 	if updateInKV {
 		csv.purgeState = 1
 		csv.syncNeeded = true
@@ -875,7 +884,10 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 			actual.value = newValue
 			actual.valueExists = true
 			actual.purgeState = 0
-			actual.valueUpdateTime = customSetTime
+			// Same as Put: keep older timestamp if already dirty
+			if !actual.syncNeeded || customSetTime < actual.valueUpdateTime {
+				actual.valueUpdateTime = customSetTime
+			}
 			actual.syncNeeded = updateInKV
 			actual.syncedWithKV = !updateInKV
 
