@@ -300,6 +300,12 @@ type Store struct {
 	walWriteEnabled      atomic.Bool
 	transactionGenerator TransactionGenerator
 
+	// activeOps tracks in-flight write operations by opTime.
+	// key: int64 opTime, value: *atomic.Int32 (reference count).
+	// kvLazyWriter waits until all operations with opTime ≤ barrierTime
+	// have finished before forming a WAL transaction.
+	activeOps sync.Map
+
 	//write barrier state
 	backupBarrierTimestamp   int64
 	backupBarrierStatus      int32 // 0=unlocked, 1=locking, 2=locked
@@ -645,6 +651,10 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 						system.MsgOnErrorReturn(cs.updateBackupBarrierWithTimestamp(backupBarrierTimestamp))
 						le.Infof(ctx, "set barrier timestamp: %d", backupBarrierTimestamp)
 					}
+				}
+
+				for cs.HasActiveOperationsUpTo(barrierTime) {
+					time.Sleep(1 * time.Millisecond)
 				}
 
 				result := cs.traverseCacheForTransaction(txID, barrierTime, false)
@@ -1261,6 +1271,36 @@ func (cs *Store) GetStorePrefix() string {
 
 func (cs *Store) SetWALWriteEnabled(enabled bool) {
 	cs.walWriteEnabled.Store(enabled)
+}
+
+// MarkOperationActive increments the in-flight counter for the given opTime.
+func (cs *Store) MarkOperationActive(opTime int64) {
+	v, _ := cs.activeOps.LoadOrStore(opTime, new(atomic.Int32))
+	v.(*atomic.Int32).Add(1)
+}
+
+// MarkOperationDone decrements the in-flight counter for the given opTime.
+// When the counter reaches zero the entry is removed from the map.
+func (cs *Store) MarkOperationDone(opTime int64) {
+	if v, ok := cs.activeOps.Load(opTime); ok {
+		if v.(*atomic.Int32).Add(-1) == 0 {
+			cs.activeOps.Delete(opTime)
+		}
+	}
+}
+
+// HasActiveOperationsUpTo returns true if there is at least one in-flight
+// write operation whose opTime is ≤ barrierTime.
+func (cs *Store) HasActiveOperationsUpTo(barrierTime int64) bool {
+	found := false
+	cs.activeOps.Range(func(k, _ any) bool {
+		if k.(int64) <= barrierTime {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 // -----------------------------------

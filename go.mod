@@ -7,7 +7,7 @@ require (
 	github.com/PaesslerAG/gval v1.2.2
 	github.com/dop251/goja v0.0.0-20250630131328-58d95d85e994
 	github.com/emicklei/dot v1.6.1
-	github.com/foliagecp/easyjson v0.1.10
+	github.com/foliagecp/easyjson v0.1.11
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.5.5

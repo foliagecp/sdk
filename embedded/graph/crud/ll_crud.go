@@ -112,7 +112,7 @@ func operationKeysMutexLock(ctx *sfPlugins.StatefunContextProcessor, keys []stri
 	}
 	if lockedWriteAny {
 		ctx.Payload.SetByPath("__key_lock_time", easyjson.NewJSON(opTime))
-		// TODO: Add lock to cache write barrier by opTime here
+		ctx.Domain.Cache().MarkOperationActive(opTime)
 	}
 }
 
@@ -133,7 +133,7 @@ func operationKeysMutexUnlock(ctx *sfPlugins.StatefunContextProcessor) {
 		ctx.Payload.RemoveByPath("__key_locks")
 	}
 	if opTime, ok := ctx.Payload.GetByPath("__key_lock_time").AsInt64(); unlockedWriteAny && ok {
-		// TODO: Remove lock to cache write barrier by opTime here
+		ctx.Domain.Cache().MarkOperationDone(opTime)
 	}
 }
 
