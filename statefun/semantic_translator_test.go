@@ -593,6 +593,118 @@ func TestSemanticTranslator_EmptyEvent(t *testing.T) {
 	assert.Empty(t, h.typeLinkPuts)
 }
 
+// TestSemanticTranslator_BodyOnlyObjectLinkUpdate verifies that a link_put with
+// empty To and LinkType (body-only update, as produced by LLAPILinkUpdate) is
+// correctly dispatched using the target cached from the original link creation.
+func TestSemanticTranslator_BodyOnlyObjectLinkUpdate(t *testing.T) {
+	h := &mockHandler{}
+	tr := NewSemanticTranslator(h)
+
+	// Event 1: classify two objects and create a link between them.
+	require.NoError(t, tr.ProcessEvent(makeEvent(
+		linkPut("hub/root", "hub/types", "hub/types", "__types", "{}"),
+		linkPut("hub/root", "hub/objects", "hub/objects", "__objects", "{}"),
+		linkPut("hub/types", "hub/server", "hub/server", "__type", "{}"),
+		linkPut("hub/objects", "hub/srv-0", "hub/srv-0", "__object", "{}"),
+		linkPut("hub/objects", "hub/rack-A", "hub/rack-A", "__object", "{}"),
+		linkPut("hub/srv-0", "hub/server", "type", "__type", "{}"),
+		linkPut("hub/rack-A", "hub/server", "type", "__type", "{}"),
+		linkPut("hub/srv-0", "hub/rack-A", "rack-link-0", "hosted_in", `{"weight":1}`),
+	)))
+
+	h.objectLinkPuts = nil // reset
+
+	// Event 2: body-only update — To and LinkType are empty (target didn't change).
+	bodyOnly := ExportOp{
+		Op:   "link_put",
+		From: "hub/srv-0",
+		To:   "",
+		Name: "rack-link-0",
+		// LinkType intentionally empty — simulates WAL body-only update.
+		Body: json.RawMessage(`{"weight":2}`),
+	}
+	require.NoError(t, tr.ProcessEvent(makeEvent(bodyOnly)))
+
+	require.Len(t, h.objectLinkPuts, 1, "body-only update must not be dropped")
+	assert.Equal(t, "hub/srv-0", h.objectLinkPuts[0].from)
+	assert.Equal(t, "hub/rack-A", h.objectLinkPuts[0].to, "To must be restored from linkTargets")
+	assert.Equal(t, "rack-link-0", h.objectLinkPuts[0].name)
+	assert.Equal(t, "hosted_in", h.objectLinkPuts[0].linkType, "LinkType must be restored from linkTargets")
+	assert.Contains(t, h.objectLinkPuts[0].body, `"weight":2`)
+}
+
+// TestSemanticTranslator_BodyOnlyTypeLinkUpdate verifies that body-only link_put
+// for a type-to-type link is correctly dispatched with the cached target.
+func TestSemanticTranslator_BodyOnlyTypeLinkUpdate(t *testing.T) {
+	h := &mockHandler{}
+	tr := NewSemanticTranslator(h)
+
+	// Event 1: classify two types and create a type link.
+	require.NoError(t, tr.ProcessEvent(makeEvent(
+		linkPut("hub/root", "hub/types", "hub/types", "__types", "{}"),
+		linkPut("hub/types", "hub/server", "hub/server", "__type", "{}"),
+		linkPut("hub/types", "hub/rack", "hub/rack", "__type", "{}"),
+		linkPut("hub/server", "hub/rack", "hub/rack", "__type", `{"type":"hosted_in"}`),
+	)))
+
+	h.typeLinkPuts = nil // reset
+
+	// Event 2: body-only type link update (To and LinkType empty).
+	bodyOnly := ExportOp{
+		Op:   "link_put",
+		From: "hub/server",
+		To:   "",
+		Name: "hub/rack",
+		Body: json.RawMessage(`{"type":"hosted_in","meta":"updated"}`),
+	}
+	require.NoError(t, tr.ProcessEvent(makeEvent(bodyOnly)))
+
+	require.Len(t, h.typeLinkPuts, 1, "body-only type link update must not be dropped")
+	assert.Equal(t, "hub/server", h.typeLinkPuts[0].from)
+	assert.Equal(t, "hub/rack", h.typeLinkPuts[0].to, "To must be restored from linkTargets")
+	assert.Equal(t, "hosted_in", h.typeLinkPuts[0].linkType, "linkType must be extracted from body")
+}
+
+// TestSemanticTranslator_BodyOnlyLinkAfterDelete verifies that after a link_delete
+// the linkTargets entry is removed, so a subsequent body-only link_put for the
+// same name is not incorrectly dispatched using the stale target.
+func TestSemanticTranslator_BodyOnlyLinkAfterDelete(t *testing.T) {
+	h := &mockHandler{}
+	tr := NewSemanticTranslator(h)
+
+	// Event 1: classify objects and create link.
+	require.NoError(t, tr.ProcessEvent(makeEvent(
+		linkPut("hub/root", "hub/types", "hub/types", "__types", "{}"),
+		linkPut("hub/root", "hub/objects", "hub/objects", "__objects", "{}"),
+		linkPut("hub/types", "hub/server", "hub/server", "__type", "{}"),
+		linkPut("hub/objects", "hub/srv-0", "hub/srv-0", "__object", "{}"),
+		linkPut("hub/objects", "hub/rack-A", "hub/rack-A", "__object", "{}"),
+		linkPut("hub/srv-0", "hub/server", "type", "__type", "{}"),
+		linkPut("hub/rack-A", "hub/server", "type", "__type", "{}"),
+		linkPut("hub/srv-0", "hub/rack-A", "rack-link-0", "hosted_in", "{}"),
+	)))
+
+	// Event 2: delete the link — must purge linkTargets entry.
+	require.NoError(t, tr.ProcessEvent(makeEvent(
+		linkDelete("hub/srv-0", "rack-link-0"),
+	)))
+
+	h.objectLinkPuts = nil
+
+	// Event 3: body-only link_put with same name after deletion.
+	// There is no cached target, so it must be dropped (no From/To classification).
+	bodyOnly := ExportOp{
+		Op:   "link_put",
+		From: "hub/srv-0",
+		To:   "",
+		Name: "rack-link-0",
+		Body: json.RawMessage(`{"weight":99}`),
+	}
+	require.NoError(t, tr.ProcessEvent(makeEvent(bodyOnly)))
+
+	assert.Empty(t, h.objectLinkPuts, "stale body-only update after delete must be dropped")
+}
+
 // TestSemanticTranslator_ObjectLinkTags verifies that tags are forwarded to
 // OnObjectLinkPut.
 func TestSemanticTranslator_ObjectLinkTags(t *testing.T) {

@@ -165,7 +165,7 @@ func (ec *ExportCommitter) ProcessTransaction(txID string, ops []WALOp, storePre
 	payload.SetByPath("timestamp", easyjson.NewJSON(event.Timestamp))
 	payload.SetByPath("ops", opsJSON)
 
-	if _, err := ec.js.Publish(ec.subject+"."+event.TxID, buildNatsData(ec.domain, "", "", &payload, nil, nil)); err != nil {
+	if _, err := ec.js.Publish(ec.subject+".sink", buildNatsData(ec.domain, "", "", &payload, nil, nil)); err != nil {
 		lg.Logf(lg.ErrorLevel, "ExportCommitter: failed to publish event for tx=%s: %s", txID, err)
 		return err
 	}

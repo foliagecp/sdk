@@ -60,13 +60,21 @@ const (
 	kindType
 )
 
+// linkMeta caches the target and graph link type of a known link so that
+// body-only updates (where To and LinkType are empty in the ExportOp) can be
+// resolved correctly.
+type linkMeta struct {
+	to       string
+	linkType string
+}
+
 // SemanticTranslator translates raw ExportEvents into semantic SemanticHandler
 // calls by maintaining an in-memory registry of vertex classifications.
 //
 // Classification is derived from topology link types using a multi-sub-pass
 // algorithm within each event (see ProcessEvent for details). The registry
-// (kinds, objectTypes, typesHubs, objectsHubs) persists across events so that
-// incremental updates are handled correctly.
+// (kinds, objectTypes, typesHubs, objectsHubs, linkTargets) persists across
+// events so that incremental updates are handled correctly.
 //
 // Limitation: the registry is in-memory only. It is rebuilt from scratch on
 // restart via the normal event stream. If the dumper process restarts, the
@@ -79,6 +87,7 @@ type SemanticTranslator struct {
 	objectTypes map[string]string     // objectID → typeID
 	typesHubs   map[string]bool       // vertices identified as types-hubs (hub/types)
 	objectsHubs map[string]bool       // vertices identified as objects-hubs (hub/objects)
+	linkTargets map[string]linkMeta   // from+"\x00"+name → {to, linkType}
 	handler     SemanticHandler
 }
 
@@ -90,6 +99,7 @@ func NewSemanticTranslator(handler SemanticHandler) *SemanticTranslator {
 		objectTypes: make(map[string]string),
 		typesHubs:   make(map[string]bool),
 		objectsHubs: make(map[string]bool),
+		linkTargets: make(map[string]linkMeta),
 		handler:     handler,
 	}
 }
@@ -112,6 +122,17 @@ func NewSemanticTranslator(handler SemanticHandler) *SemanticTranslator {
 func (t *SemanticTranslator) ProcessEvent(event ExportEvent) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	// --- Pass 0: update linkTargets cache ---
+	// Persist (from, name) → {to, linkType} for all link_puts with a non-empty To
+	// so that body-only updates (where To/LinkType are absent in the ExportOp) can
+	// be resolved in dispatchLinkOp.
+	for _, op := range event.Ops {
+		key := op.From + "\x00" + op.Name
+		if op.Op == "link_put" && op.To != "" {
+			t.linkTargets[key] = linkMeta{to: op.To, linkType: op.LinkType}
+		}
+	}
 
 	// --- Pass 1, sub-pass 1a: identify hub vertices from structural link_puts ---
 	for _, op := range event.Ops {
@@ -169,11 +190,12 @@ func (t *SemanticTranslator) ProcessEvent(event ExportEvent) error {
 		}
 	}
 
-	// --- Pass 1, sub-pass 1e: remove kinds and objectTypes (link_delete) ---
+	// --- Pass 1, sub-pass 1e: remove kinds, objectTypes, and linkTargets (link_delete) ---
 	for _, op := range event.Ops {
 		if op.Op != "link_delete" {
 			continue
 		}
+		delete(t.linkTargets, op.From+"\x00"+op.Name)
 		switch op.LinkType {
 		case cmdbTypesTypelink:
 			delete(t.typesHubs, op.To)
@@ -238,6 +260,17 @@ func (t *SemanticTranslator) dispatchVertexDelete(op ExportOp) error {
 }
 
 func (t *SemanticTranslator) dispatchLinkOp(op ExportOp) error {
+	// Body-only link updates (LLAPILinkUpdate) do not re-write the target key, so
+	// op.To and op.LinkType may be empty. Restore them from the linkTargets cache.
+	if op.Op == "link_put" && op.To == "" {
+		if meta, ok := t.linkTargets[op.From+"\x00"+op.Name]; ok {
+			op.To = meta.to
+			if op.LinkType == "" {
+				op.LinkType = meta.linkType
+			}
+		}
+	}
+
 	fromKind := t.kinds[op.From]
 	toKind := t.kinds[op.To]
 
