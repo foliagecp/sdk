@@ -49,7 +49,8 @@ func TypeSetSubType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContext
 	}
 	childTypeWithDomain := ctx.Domain.CreateObjectIDWithHubDomain(childType, true)
 
-	operationKeysMutexLock(ctx, []string{selfID, childTypeWithDomain}, true)
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	operationKeysMutexLock(ctx, []string{selfID, childTypeWithDomain}, true, opTime)
 	defer operationKeysMutexUnlock(ctx)
 
 	link := easyjson.NewJSONObject()
@@ -84,7 +85,8 @@ func TypeRemoveSubType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	}
 	childTypeWithDomain := ctx.Domain.CreateObjectIDWithHubDomain(childType, true)
 
-	operationKeysMutexLock(ctx, []string{selfID, childTypeWithDomain}, true)
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	operationKeysMutexLock(ctx, []string{selfID, childTypeWithDomain}, true, opTime)
 	defer operationKeysMutexUnlock(ctx)
 
 	link := easyjson.NewJSONObject()
@@ -180,7 +182,8 @@ func DeleteObjectsLinkFromSuperTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugin
 	}
 	objectToID = ctx.Domain.CreateObjectIDWithThisDomain(objectToID, false)
 
-	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true)
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true, opTime)
 
 	fromObjectClaimType := ctx.Payload.GetByPath("from_super_type").AsStringDefault("")
 	toObjectClaimType := ctx.Payload.GetByPath("to_super_type").AsStringDefault("")

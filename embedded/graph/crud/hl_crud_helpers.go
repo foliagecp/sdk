@@ -133,7 +133,8 @@ func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfP
 
 	pattern := fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfID, linkType, ">")
 
-	operationKeysMutexLock(ctx, []string{selfID}, true)
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	operationKeysMutexLock(ctx, []string{selfID}, true, opTime)
 	keys := ctx.Domain.Cache().GetKeysByPattern(pattern)
 	if len(keys) > 0 {
 		for _, v := range keys {
