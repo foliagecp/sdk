@@ -91,46 +91,49 @@ func makeSequenceFreeParentBasedID(ctx *sfPlugins.StatefunContextProcessor, targ
 	return finalId
 }
 
-func operationKeysMutexLock(ctx *sfPlugins.StatefunContextProcessor, keys []string, writeOperation bool) {
-	//fmt.Printf("---- Graph Key Locking >>>> %s keys:[%s] %s\n", ctx.Self.Typename, strings.Join(keys, " "), ctx.Self.ID)
-	//fmt.Printf("---- caller %s:%s\n", ctx.Caller.Typename, ctx.Caller.ID)
+func operationKeysMutexLock(ctx *sfPlugins.StatefunContextProcessor, keys []string, writeOperation bool, opTime int64) {
 	keys = system.UniqueStrings(keys)
 	sort.Strings(keys)
+
+	lockedWriteAny := false
 	for _, k := range keys {
 		if writeOperation {
 			if !ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s.w", k)) {
-				//fmt.Printf("-- locking w key: %s\n", k)
 				graphIdKeyMutex.Lock(k)
 				ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.%s.w", k), easyjson.NewJSON(true))
+				lockedWriteAny = true
 			}
 		} else {
 			if !ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s", k)) {
-				//fmt.Printf("-- locking r key: %s\n", k)
 				graphIdKeyMutex.RLock(k)
 				ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.%s.r", k), easyjson.NewJSON(true))
 			}
 		}
 	}
-	//fmt.Printf("---- Graph Key Locked All\n")
+	if lockedWriteAny {
+		ctx.Payload.SetByPath("__key_lock_time", easyjson.NewJSON(opTime))
+		// TODO: Add lock to cache write barrier by opTime here
+	}
 }
 
 func operationKeysMutexUnlock(ctx *sfPlugins.StatefunContextProcessor) {
+	unlockedWriteAny := false
 	if ctx.Payload.PathExists("__key_locks") {
-		//fmt.Printf("---- Graph Key Unlocking <<<< %s %s\n", ctx.Self.Typename, ctx.Self.ID)
 		for _, k := range ctx.Payload.GetByPath("__key_locks").ObjectKeys() {
 			for _, t := range ctx.Payload.GetByPath(fmt.Sprintf("__key_locks.%s", k)).ObjectKeys() {
 				switch t {
 				case "w":
-					//fmt.Printf("-- unlocking w key: %s\n", k)
 					graphIdKeyMutex.Unlock(k)
+					unlockedWriteAny = true
 				case "r":
-					//fmt.Printf("-- unlocking r key: %s\n", k)
 					graphIdKeyMutex.RUnlock(k)
 				}
 			}
 		}
 		ctx.Payload.RemoveByPath("__key_locks")
-		//fmt.Printf("---- Graph Key Unlocked\n")
+	}
+	if opTime, ok := ctx.Payload.GetByPath("__key_lock_time").AsInt64(); unlockedWriteAny && ok {
+		// TODO: Remove lock to cache write barrier by opTime here
 	}
 }
 
@@ -159,7 +162,8 @@ func LLAPIVertexCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	selfID := getOriginalID(ctx.Self.ID)
 	om := sfMediators.NewOpMediator(ctx)
 
-	operationKeysMutexLock(ctx, []string{selfID}, true)
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	operationKeysMutexLock(ctx, []string{selfID}, true, opTime)
 	_, err := ctx.Domain.Cache().GetValueJSON(selfID)
 	if err == nil { // If vertex already exists
 		operationKeysMutexUnlock(ctx)
@@ -176,8 +180,6 @@ func LLAPIVertexCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	} else {
 		objectBody = easyjson.NewJSONObject()
 	}
-
-	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
 
 	ctx.Domain.Cache().SetValueJSON(selfID, &objectBody, true, opTime, "")
 	indexVertexBody(ctx, objectBody, opTime, false)
@@ -221,7 +223,7 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	payload := ctx.Payload
 	upsert := payload.GetByPath("upsert").AsBoolDefault(false)
 
-	operationKeysMutexLock(ctx, []string{selfID}, true)
+	operationKeysMutexLock(ctx, []string{selfID}, true, opTime)
 	_, err := ctx.Domain.Cache().GetValueJSON(selfID)
 	if err != nil { // If vertex does not exist
 		operationKeysMutexUnlock(ctx)
@@ -333,7 +335,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	}
 	// ----------------------------------------------------
 
-	operationKeysMutexLock(ctx, []string{selfID}, true)
+	operationKeysMutexLock(ctx, []string{selfID}, true, opTime)
 
 	var oldBody *easyjson.JSON = nil
 	if opStack != nil {
@@ -385,8 +387,9 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	om := sfMediators.NewOpMediator(ctx)
 
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
 	if details {
-		operationKeysMutexLock(ctx, []string{selfID}, false)
+		operationKeysMutexLock(ctx, []string{selfID}, false, opTime)
 	}
 	j, err := ctx.Domain.Cache().GetValueJSON(selfID)
 	if err != nil { // If vertex does not exist
@@ -560,7 +563,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			return
 		}
 
-		operationKeysMutexLock(ctx, []string{selfID, toId}, true)
+		operationKeysMutexLock(ctx, []string{selfID, toId}, true, opTime)
 
 		if !forceCreate {
 			// Check if link with this name already exists --------------
@@ -695,7 +698,7 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	}
 	//operationKeysMutexUnlock(ctx)
 
-	operationKeysMutexLock(ctx, []string{selfID, toId}, true)
+	operationKeysMutexLock(ctx, []string{selfID, toId}, true, opTime)
 
 	oldLinkBody, err := ctx.Domain.Cache().GetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName))
 	if err != nil {
@@ -819,7 +822,7 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		}
 		//operationKeysMutexUnlock(ctx)
 
-		operationKeysMutexLock(ctx, []string{selfID, toId}, true)
+		operationKeysMutexLock(ctx, []string{selfID, toId}, true, opTime)
 
 		oldLinkBody, err := ctx.Domain.Cache().GetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName))
 		if err != nil {
@@ -921,8 +924,9 @@ func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 
 	details := ctx.Payload.GetByPath("details").AsBoolDefault(false)
 
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
 	if details {
-		operationKeysMutexLock(ctx, []string{selfID, toId}, false)
+		operationKeysMutexLock(ctx, []string{selfID, toId}, false, opTime)
 	}
 
 	linkBody, err := ctx.Domain.Cache().GetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName))
