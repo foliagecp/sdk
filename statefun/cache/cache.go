@@ -333,10 +333,11 @@ type maintenanceResult struct {
 	allBeforeBackupBarrierSynced bool
 }
 
-// publishDirtyOp publishes a WAL operation immediately at write time and
-// registers the timestamp as a pending transaction. The kvLazyWriter will
-// later commit these transactions when all operations ≤ txTime are done.
-func (cs *Store) publishDirtyOp(writeTime int64, key string, csv *StoreValue, opType OpType) {
+// publishDirtyOp publishes a pre-serialized WAL operation immediately and
+// registers the timestamp as a pending transaction. No locks taken — caller
+// provides ready-to-send bytes. The kvLazyWriter will later commit these
+// transactions when all operations ≤ txTime are done.
+func (cs *Store) publishDirtyOp(writeTime int64, key string, csv *StoreValue, opType OpType, finalBytes []byte) {
 	if cs.transactionGenerator == nil || !cs.walWriteEnabled.Load() {
 		return
 	}
@@ -344,41 +345,11 @@ func (cs *Store) publishDirtyOp(writeTime int64, key string, csv *StoreValue, op
 		return
 	}
 
-	le := lg.GetLogger()
-
-	// Serialize value under lock
-	csv.Lock("publishDirtyOp")
-	var finalBytes []byte
-	timeBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(timeBytes, uint64(writeTime))
-
-	if csv.valueExists {
-		var flag uint8
-		var dataBytes []byte
-		switch csv.valueType {
-		case typeByteArray:
-			flag = FlagBytesAppend
-			dataBytes = csv.value.([]byte)
-		case typeJson:
-			flag = FlagJSONAppend
-			dataBytes = csv.value.(*easyjson.JSON).ToBytes()
-		default:
-			le.Errorf(cs.ctx, "publishDirtyOp: unknown type for key=%s", key)
-			csv.Unlock("publishDirtyOp")
-			return
-		}
-		header := append(timeBytes, flag)
-		finalBytes = append(header, dataBytes...)
-	} else {
-		finalBytes = append(timeBytes, FlagDeleted)
-	}
-	csv.Unlock("publishDirtyOp")
-
 	txID := strconv.FormatInt(writeTime, 10)
 	storeKey := cs.toStoreKey(key)
 
 	if err := cs.transactionGenerator.PublishOperation(txID, writeTime, opType, storeKey, finalBytes); err != nil {
-		le.Errorf(cs.ctx, "publishDirtyOp: failed for key=%s: %s", key, err)
+		lg.Logf(lg.ErrorLevel, "publishDirtyOp: failed for key=%s: %s", key, err)
 		return // syncNeeded stays true — DFS/shutdown will pick it up
 	}
 
@@ -392,6 +363,14 @@ func (cs *Store) publishDirtyOp(writeTime int64, key string, csv *StoreValue, op
 	// Register pending transaction (increment ops count)
 	v, _ := cs.pendingTxs.LoadOrStore(writeTime, new(atomic.Int32))
 	v.(*atomic.Int32).Add(1)
+}
+
+// serializeForWAL builds the WAL entry bytes: [8-byte timestamp][1-byte flag][payload]
+func serializeForWAL(writeTime int64, flag uint8, data []byte) []byte {
+	timeBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(timeBytes, uint64(writeTime))
+	header := append(timeBytes, flag)
+	return append(header, data...)
 }
 
 func (cs *Store) traverseCacheForTransaction(
@@ -1026,7 +1005,7 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 		actual, loaded := parent.StoreChild(keyLastToken, candidate)
 		if !loaded {
 			if updateInKV {
-				cs.publishDirtyOp(customSetTime, key, candidate, OpTypePUT)
+				cs.publishDirtyOp(customSetTime, key, candidate, OpTypePUT, serializeForWAL(customSetTime, FlagBytesAppend, newValue))
 			}
 			return true // created for the first time
 		}
@@ -1049,7 +1028,7 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 			}
 			actual.Unlock("SetValueIfDoesNotExist")
 			if updateInKV {
-				cs.publishDirtyOp(customSetTime, key, actual, OpTypePUT)
+				cs.publishDirtyOp(customSetTime, key, actual, OpTypePUT, serializeForWAL(customSetTime, FlagBytesAppend, newValue))
 			}
 			return true
 		}
@@ -1076,7 +1055,7 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 				csv.SetValueType(typeByteArray)
 				csv.Put(value, updateInKV, customSetTime)
 				if updateInKV {
-					cs.publishDirtyOp(customSetTime, key, csv, OpTypePUT)
+					cs.publishDirtyOp(customSetTime, key, csv, OpTypePUT, serializeForWAL(customSetTime, FlagBytesAppend, value))
 				}
 			} else {
 				csvUpdate = &StoreValue{
@@ -1095,7 +1074,7 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 					if loaded {
 						target = actual
 					}
-					cs.publishDirtyOp(customSetTime, key, target, OpTypePUT)
+					cs.publishDirtyOp(customSetTime, key, target, OpTypePUT, serializeForWAL(customSetTime, FlagBytesAppend, value))
 				}
 			}
 		}
@@ -1123,11 +1102,16 @@ func (cs *Store) SetValueJSON(key string, originValue *easyjson.JSON, updateInKV
 
 	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
 		value := originValue.Clone().GetPtr()
+		// Pre-serialize before any locks — reuse for WAL publish
+		var walBytes []byte
+		if updateInKV {
+			walBytes = serializeForWAL(customSetTime, FlagJSONAppend, originValue.ToBytes())
+		}
 		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
 			csv.SetValueType(typeJson)
 			csv.Put(value, updateInKV, customSetTime)
 			if updateInKV {
-				cs.publishDirtyOp(customSetTime, key, csv, OpTypePUT)
+				cs.publishDirtyOp(customSetTime, key, csv, OpTypePUT, walBytes)
 			}
 		} else {
 			csvUpdate := &StoreValue{
@@ -1150,7 +1134,7 @@ func (cs *Store) SetValueJSON(key string, originValue *easyjson.JSON, updateInKV
 				if loaded {
 					target = actual
 				}
-				cs.publishDirtyOp(customSetTime, key, target, OpTypePUT)
+				cs.publishDirtyOp(customSetTime, key, target, OpTypePUT, walBytes)
 			}
 		}
 	}
@@ -1175,7 +1159,7 @@ func (cs *Store) DeleteValue(key string, updateInKV bool, customDeleteTime int64
 				if exists {
 					csv.Delete(updateInKV, customDeleteTime)
 					if updateInKV {
-						cs.publishDirtyOp(customDeleteTime, key, csv, OpTypeDelete)
+						cs.publishDirtyOp(customDeleteTime, key, csv, OpTypeDelete, serializeForWAL(customDeleteTime, FlagDeleted, nil))
 					}
 				}
 			}
