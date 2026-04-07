@@ -71,7 +71,6 @@ type StoreValue struct {
 	valueUpdateTime                int64
 	storeMutex                     sync.RWMutex
 	notifyUpdates                  sync.Map
-	syncNeeded                     bool
 	syncedWithKV                   bool
 }
 
@@ -161,7 +160,6 @@ func (csv *StoreValue) Put(value interface{}, updateInKV bool, customPutTime int
 		customPutTime = system.GetCurrentTimeNs()
 	}
 	csv.valueUpdateTime = customPutTime
-	csv.syncNeeded = updateInKV
 	csv.syncedWithKV = !updateInKV
 
 	if csv.parent != nil {
@@ -192,7 +190,7 @@ func (csv *StoreValue) collectGarbage() {
 		noNotifySubscribers = false
 		return false
 	})
-	canBeDeletedFromParent = csv.purgeState == 2 && csv.store.Len() == 0 && !csv.syncNeeded && csv.syncedWithKV && noNotifySubscribers
+	canBeDeletedFromParent = csv.purgeState == 2 && csv.store.Len() == 0 && csv.syncedWithKV && noNotifySubscribers
 	csv.Unlock("collectGarbage")
 
 	if csv.parent != nil && canBeDeletedFromParent {
@@ -211,7 +209,7 @@ func (csv *StoreValue) TryPurgeReady() bool {
 }
 
 func (csv *StoreValue) TryPurgeConfirm() bool {
-	if !csv.syncNeeded && csv.syncedWithKV && csv.purgeState == 1 {
+	if csv.syncedWithKV && csv.purgeState == 1 {
 		csv.purgeState = 2
 		return true
 	}
@@ -230,11 +228,9 @@ func (csv *StoreValue) Delete(updateInKV bool, customDeleteTime int64) {
 	csv.valueUpdateTime = customDeleteTime
 	if updateInKV {
 		csv.purgeState = 1
-		csv.syncNeeded = true
 		csv.syncedWithKV = false
 	} else {
 		csv.purgeState = 2
-		csv.syncNeeded = false
 		csv.syncedWithKV = true
 	}
 	csv.Unlock("Delete")
@@ -257,14 +253,13 @@ func (csv *StoreValue) SetValueType(valueType uint8) {
 	csv.valueType = valueType
 }
 
-func (csv *StoreValue) syncState() (bool, int64, bool, bool) {
-	csv.RLock("kvLazyWriter read")
+func (csv *StoreValue) syncState() (bool, int64, bool) {
+	csv.RLock("syncState")
 	ve := csv.valueExists
 	vut := csv.valueUpdateTime
-	sn := csv.syncNeeded
 	sw := csv.syncedWithKV
-	csv.RUnlock("kvLazyWriter read")
-	return ve, vut, sn, sw
+	csv.RUnlock("syncState")
+	return ve, vut, sw
 }
 
 type TransactionOperator struct {
@@ -320,14 +315,6 @@ type Store struct {
 	Synced                   chan struct{}
 }
 
-type traverseResult struct {
-	opsCount                     int
-	traverseCount                int
-	iterationSyncedCount         int
-	lruTimes                     []int64
-	allBeforeBackupBarrierSynced bool
-}
-
 type maintenanceResult struct {
 	lruTimes                     []int64
 	allBeforeBackupBarrierSynced bool
@@ -337,7 +324,7 @@ type maintenanceResult struct {
 // registers the timestamp as a pending transaction. No locks taken — caller
 // provides ready-to-send bytes. The kvLazyWriter will later commit these
 // transactions when all operations ≤ txTime are done.
-func (cs *Store) publishDirtyOp(writeTime int64, key string, csv *StoreValue, opType OpType, finalBytes []byte) {
+func (cs *Store) publishDirtyOp(writeTime int64, key string, opType OpType, finalBytes []byte) {
 	if cs.transactionGenerator == nil || !cs.walWriteEnabled.Load() {
 		return
 	}
@@ -350,15 +337,8 @@ func (cs *Store) publishDirtyOp(writeTime int64, key string, csv *StoreValue, op
 
 	if err := cs.transactionGenerator.PublishOperation(txID, writeTime, opType, storeKey, finalBytes); err != nil {
 		lg.Logf(lg.ErrorLevel, "publishDirtyOp: failed for key=%s: %s", key, err)
-		return // syncNeeded stays true — DFS/shutdown will pick it up
+		return // publish failed — pending TX won't include this op
 	}
-
-	// Mark syncNeeded=false — data is now in WAL stream
-	csv.Lock("publishDirtyOp")
-	if writeTime == csv.valueUpdateTime {
-		csv.syncNeeded = false
-	}
-	csv.Unlock("publishDirtyOp")
 
 	// Register pending transaction (increment ops count)
 	v, _ := cs.pendingTxs.LoadOrStore(writeTime, new(atomic.Int32))
@@ -371,160 +351,6 @@ func serializeForWAL(writeTime int64, flag uint8, data []byte) []byte {
 	binary.BigEndian.PutUint64(timeBytes, uint64(writeTime))
 	header := append(timeBytes, flag)
 	return append(header, data...)
-}
-
-func (cs *Store) traverseCacheForTransaction(
-	txID string,
-	barrierTime int64,
-	ignoreBarrier bool,
-) *traverseResult {
-	le := lg.GetLogger()
-	result := &traverseResult{
-		opsCount:                     0,
-		traverseCount:                0,
-		iterationSyncedCount:         0,
-		lruTimes:                     []int64{},
-		allBeforeBackupBarrierSynced: true,
-	}
-
-	var backupBarrierTimestamp int64
-	var backupBarrierStatus int32
-	if !ignoreBarrier {
-		backupBarrierTimestamp, backupBarrierStatus = cs.getBackupBarrierState()
-	}
-
-	cacheStoreValueStack := []*StoreValue{cs.rootValue}
-	suffixPathsStack := []string{""}
-	depthsStack := []int{0}
-
-	for len(cacheStoreValueStack) > 0 {
-		lastID := len(cacheStoreValueStack) - 1
-
-		currentStoreValue := cacheStoreValueStack[lastID]
-		result.traverseCount++
-
-		currentStoreValue.RLock("kvLazyWriter")
-		result.lruTimes = append(result.lruTimes, currentStoreValue.valueUpdateTime)
-		currentStoreValue.RUnlock("kvLazyWriter")
-
-		currentSuffix := suffixPathsStack[lastID]
-		currentDepth := depthsStack[lastID]
-
-		cacheStoreValueStack = cacheStoreValueStack[:lastID]
-		suffixPathsStack = suffixPathsStack[:lastID]
-		depthsStack = depthsStack[:lastID]
-
-		noChildren := true
-		currentStoreValue.Range(func(key, value interface{}) bool {
-			noChildren = false
-
-			var newSuffix string
-			if currentDepth == 0 {
-				newSuffix = currentSuffix + key.(string)
-			} else {
-				newSuffix = currentSuffix + "." + key.(string)
-			}
-
-			csvChild := value.(*StoreValue)
-
-			if backupBarrierStatus == BackupBarrierStatusLocking {
-				ve, vut, sn, sw := csvChild.syncState()
-				if ve && vut > 0 && vut <= backupBarrierTimestamp {
-					if sn || !sw {
-						result.allBeforeBackupBarrierSynced = false
-					}
-				}
-			}
-
-			var valueUpdateTime int64 = 0
-			var opType OpType
-			var finalBytes []byte = nil
-
-			csvChild.Lock("kvLazyWriter")
-			if csvChild.syncNeeded {
-				valueUpdateTime = csvChild.valueUpdateTime
-				timeBytes := make([]byte, 8)
-				binary.BigEndian.PutUint64(timeBytes, uint64(valueUpdateTime))
-				if csvChild.valueExists {
-					var flag uint8
-					var dataBytes []byte
-					switch csvChild.valueType {
-					case typeByteArray:
-						flag = FlagBytesAppend
-						dataBytes = csvChild.value.([]byte)
-					case typeJson:
-						flag = FlagJSONAppend
-						dataBytes = csvChild.value.(*easyjson.JSON).ToBytes()
-					default:
-						le.Errorf(cs.ctx, "Unknown type for key=%s, value=%v", newSuffix, csvChild.value)
-						csvChild.Unlock("kvLazyWriter")
-						cacheStoreValueStack = append(cacheStoreValueStack, value.(*StoreValue))
-						suffixPathsStack = append(suffixPathsStack, newSuffix)
-						depthsStack = append(depthsStack, currentDepth+1)
-						return true
-					}
-					header := append(timeBytes, flag)
-					finalBytes = append(header, dataBytes...)
-					opType = OpTypePUT
-				} else {
-					finalBytes = append(timeBytes, FlagDeleted)
-					opType = OpTypeDelete
-				}
-			} else {
-				if csvChild.valueUpdateTime > 0 && csvChild.valueUpdateTime <= cs.lruTresholdTime && csvChild.purgeState == 0 {
-					currentStoreValue.ConsistencyLoss(system.GetCurrentTimeNs())
-					csvChild.TryPurgeReady()
-					csvChild.TryPurgeConfirm()
-				}
-			}
-			csvChild.Unlock("kvLazyWriter")
-
-			if finalBytes != nil {
-				result.iterationSyncedCount++
-				keyStr := key.(string)
-
-				if !ignoreBarrier {
-					if valueUpdateTime > barrierTime {
-						cacheStoreValueStack = append(cacheStoreValueStack, value.(*StoreValue))
-						suffixPathsStack = append(suffixPathsStack, newSuffix)
-						depthsStack = append(depthsStack, currentDepth+1)
-						return true
-					}
-
-					if err := cs.checkBackupBarrierInfoBeforeWrite(valueUpdateTime); err != nil {
-						le.Tracef(cs.ctx, "skipping write for key=%s due to barrier: %v", keyStr, err)
-						cacheStoreValueStack = append(cacheStoreValueStack, value.(*StoreValue))
-						suffixPathsStack = append(suffixPathsStack, newSuffix)
-						depthsStack = append(depthsStack, currentDepth+1)
-						return true
-					}
-				}
-
-				if err := cs.transactionGenerator.PublishOperation(txID, valueUpdateTime, opType, cs.toStoreKey(newSuffix), finalBytes); err != nil {
-					le.Errorf(cs.ctx, "Store kvLazyWriter cannot publish WAL operation for key=%s: %s", keyStr, err)
-				} else {
-					result.opsCount++
-					csvChild.Lock("kvLazyWriter")
-					if valueUpdateTime == csvChild.valueUpdateTime {
-						csvChild.syncNeeded = false
-					}
-					csvChild.Unlock("kvLazyWriter")
-				}
-			}
-
-			cacheStoreValueStack = append(cacheStoreValueStack, value.(*StoreValue))
-			suffixPathsStack = append(suffixPathsStack, newSuffix)
-			depthsStack = append(depthsStack, currentDepth+1)
-
-			return true
-		})
-
-		if noChildren {
-			currentStoreValue.collectGarbage()
-		}
-	}
-
-	return result
 }
 
 // traverseCacheForMaintenance performs a DFS without collecting/publishing WAL
@@ -554,9 +380,9 @@ func (cs *Store) traverseCacheForMaintenance() *maintenanceResult {
 			csvChild := value.(*StoreValue)
 
 			if backupBarrierStatus == BackupBarrierStatusLocking {
-				ve, vut, sn, sw := csvChild.syncState()
+				ve, vut, sw := csvChild.syncState()
 				if ve && vut > 0 && vut <= backupBarrierTimestamp {
-					if sn || !sw {
+					if !sw {
 						result.allBeforeBackupBarrierSynced = false
 					}
 				}
@@ -564,12 +390,10 @@ func (cs *Store) traverseCacheForMaintenance() *maintenanceResult {
 
 			// LRU purge check
 			csvChild.Lock("maintenance")
-			if !csvChild.syncNeeded {
-				if csvChild.valueUpdateTime > 0 && csvChild.valueUpdateTime <= cs.lruTresholdTime && csvChild.purgeState == 0 {
-					csvChild.parent.ConsistencyLoss(system.GetCurrentTimeNs())
-					csvChild.TryPurgeReady()
-					csvChild.TryPurgeConfirm()
-				}
+			if csvChild.valueUpdateTime > 0 && csvChild.valueUpdateTime <= cs.lruTresholdTime && csvChild.purgeState == 0 {
+				csvChild.parent.ConsistencyLoss(system.GetCurrentTimeNs())
+				csvChild.TryPurgeReady()
+				csvChild.TryPurgeConfirm()
 			}
 			csvChild.Unlock("maintenance")
 
@@ -600,8 +424,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 			storeConsistencyWithKVLossTime: 0,
 			valueExists:                    false,
 			purgeState:                     0,
-			syncNeeded:                     false,
-			syncedWithKV:                   true,
+						syncedWithKV:                   true,
 			valueUpdateTime:                -1,
 		},
 		lruTresholdTime:             0,
@@ -827,20 +650,28 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 			}
 
 			if shutdownStatus == shutdownStatusWaiting {
-				txID := cs.transactionGenerator.GenerateTransactionID()
-				le.Debugf(ctx, "Final shutdown transaction %s - collecting all pending operations", txID)
-
-				result := cs.traverseCacheForTransaction(txID, 0, true)
-
-				if result.opsCount > 0 {
-					le.Debugf(ctx, "Final transaction %s: traversed=%d nodes, opsCount=%d", txID, result.traverseCount, result.opsCount)
-					le.Debugf(ctx, "Publishing final WAL commit for tx=%s with %d operations", txID, result.opsCount)
-					if err := cs.transactionGenerator.PublishCommit(txID, result.opsCount); err != nil {
-						le.Errorf(ctx, "Store kvLazyWriter cannot publish final WAL commit for tx=%s: %s", txID, err)
+				// Commit all remaining pending transactions — ops are already in WAL.
+				var pendingTimes []int64
+				cs.pendingTxs.Range(func(k, _ any) bool {
+					pendingTimes = append(pendingTimes, k.(int64))
+					return true
+				})
+				if len(pendingTimes) > 0 {
+					sort.Slice(pendingTimes, func(i, j int) bool { return pendingTimes[i] < pendingTimes[j] })
+					for _, txTime := range pendingTimes {
+						v, ok := cs.pendingTxs.Load(txTime)
+						if !ok {
+							continue
+						}
+						opsCount := int(v.(*atomic.Int32).Load())
+						txID := strconv.FormatInt(txTime, 10)
+						le.Debugf(ctx, "Shutdown: committing pending tx=%s with %d ops", txID, opsCount)
+						if err := cs.transactionGenerator.PublishCommit(txID, opsCount); err != nil {
+							le.Errorf(ctx, "Shutdown: cannot publish WAL commit for tx=%s: %s", txID, err)
+						}
+						cs.pendingTxs.Delete(txTime)
 					}
-				}
-
-				if result.iterationSyncedCount == 0 {
+				} else {
 					shutdownStatus = shutdownStatusReady
 				}
 			}
@@ -999,13 +830,13 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 		candidate := &StoreValue{
 			value: newValue, store: system.SharedMapMustNewHashed(8),
 			valueExists: true, purgeState: 0,
-			syncNeeded: updateInKV, syncedWithKV: !updateInKV,
+			syncedWithKV: !updateInKV,
 			valueUpdateTime: customSetTime,
 		}
 		actual, loaded := parent.StoreChild(keyLastToken, candidate)
 		if !loaded {
 			if updateInKV {
-				cs.publishDirtyOp(customSetTime, key, candidate, OpTypePUT, serializeForWAL(customSetTime, FlagBytesAppend, newValue))
+				cs.publishDirtyOp(customSetTime, key, OpTypePUT, serializeForWAL(customSetTime, FlagBytesAppend, newValue))
 			}
 			return true // created for the first time
 		}
@@ -1017,8 +848,7 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 			actual.valueExists = true
 			actual.purgeState = 0
 			actual.valueUpdateTime = customSetTime
-			actual.syncNeeded = updateInKV
-			actual.syncedWithKV = !updateInKV
+						actual.syncedWithKV = !updateInKV
 
 			if actual.parent != nil {
 				actual.parent.notifyUpdates.Range(func(_, v interface{}) bool {
@@ -1028,7 +858,7 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 			}
 			actual.Unlock("SetValueIfDoesNotExist")
 			if updateInKV {
-				cs.publishDirtyOp(customSetTime, key, actual, OpTypePUT, serializeForWAL(customSetTime, FlagBytesAppend, newValue))
+				cs.publishDirtyOp(customSetTime, key, OpTypePUT, serializeForWAL(customSetTime, FlagBytesAppend, newValue))
 			}
 			return true
 		}
@@ -1055,13 +885,13 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 				csv.SetValueType(typeByteArray)
 				csv.Put(value, updateInKV, customSetTime)
 				if updateInKV {
-					cs.publishDirtyOp(customSetTime, key, csv, OpTypePUT, serializeForWAL(customSetTime, FlagBytesAppend, value))
+					cs.publishDirtyOp(customSetTime, key, OpTypePUT, serializeForWAL(customSetTime, FlagBytesAppend, value))
 				}
 			} else {
 				csvUpdate = &StoreValue{
 					value: value, store: system.SharedMapMustNewHashed(8),
 					valueExists: true, purgeState: 0, valueType: typeByteArray,
-					syncNeeded: updateInKV, syncedWithKV: !updateInKV,
+					syncedWithKV: !updateInKV,
 					valueUpdateTime: customSetTime,
 				}
 				actual, loaded := parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate)
@@ -1070,11 +900,7 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 					actual.Put(value, updateInKV, customSetTime)
 				}
 				if updateInKV {
-					target := csvUpdate
-					if loaded {
-						target = actual
-					}
-					cs.publishDirtyOp(customSetTime, key, target, OpTypePUT, serializeForWAL(customSetTime, FlagBytesAppend, value))
+					cs.publishDirtyOp(customSetTime, key, OpTypePUT, serializeForWAL(customSetTime, FlagBytesAppend, value))
 				}
 			}
 		}
@@ -1111,7 +937,7 @@ func (cs *Store) SetValueJSON(key string, originValue *easyjson.JSON, updateInKV
 			csv.SetValueType(typeJson)
 			csv.Put(value, updateInKV, customSetTime)
 			if updateInKV {
-				cs.publishDirtyOp(customSetTime, key, csv, OpTypePUT, walBytes)
+				cs.publishDirtyOp(customSetTime, key, OpTypePUT, walBytes)
 			}
 		} else {
 			csvUpdate := &StoreValue{
@@ -1120,8 +946,7 @@ func (cs *Store) SetValueJSON(key string, originValue *easyjson.JSON, updateInKV
 				valueExists:     true,
 				valueType:       typeJson,
 				purgeState:      0,
-				syncNeeded:      updateInKV,
-				syncedWithKV:    !updateInKV,
+								syncedWithKV:    !updateInKV,
 				valueUpdateTime: customSetTime,
 			}
 			actual, loaded := parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate)
@@ -1130,11 +955,7 @@ func (cs *Store) SetValueJSON(key string, originValue *easyjson.JSON, updateInKV
 				actual.Put(value, updateInKV, customSetTime)
 			}
 			if updateInKV {
-				target := csvUpdate
-				if loaded {
-					target = actual
-				}
-				cs.publishDirtyOp(customSetTime, key, target, OpTypePUT, walBytes)
+				cs.publishDirtyOp(customSetTime, key, OpTypePUT, walBytes)
 			}
 		}
 	}
@@ -1159,7 +980,7 @@ func (cs *Store) DeleteValue(key string, updateInKV bool, customDeleteTime int64
 				if exists {
 					csv.Delete(updateInKV, customDeleteTime)
 					if updateInKV {
-						cs.publishDirtyOp(customDeleteTime, key, csv, OpTypeDelete, serializeForWAL(customDeleteTime, FlagDeleted, nil))
+						cs.publishDirtyOp(customDeleteTime, key, OpTypeDelete, serializeForWAL(customDeleteTime, FlagDeleted, nil))
 					}
 				}
 			}
@@ -1361,8 +1182,7 @@ func (cs *Store) getLastKeyTokenAndItsParentCacheStoreValue(key string, createIf
 					storeConsistencyWithKVLossTime: 0,
 					valueExists:                    false,
 					purgeState:                     0,
-					syncNeeded:                     false,
-					syncedWithKV:                   true,
+										syncedWithKV:                   true,
 					valueUpdateTime:                system.GetCurrentTimeNs(),
 				}
 				actual, _ := currentStoreLevel.StoreChild(tokens[currentTokenID], &csv)
