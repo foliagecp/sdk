@@ -338,19 +338,13 @@ func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDo
 		if err := dm.createTraceStream(); err != nil {
 			return err
 		}
-		if err := dm.createWALOperationsStream(); err != nil {
-			return err
-		}
 		if err := dm.createWALCommitsStream(); err != nil {
 			return err
 		}
 	}
 
-	// Create export-dedicated WAL streams (parallel pipeline)
+	// Create export-dedicated WAL stream (parallel pipeline)
 	if dm.exportEnabled {
-		if err := dm.createWALExportOpsStream(); err != nil {
-			return err
-		}
 		if err := dm.createWALExportCommitsStream(); err != nil {
 			return err
 		}
@@ -616,32 +610,10 @@ func (dm *Domain) createTraceStream() error {
 	return dm.createStreamIfNotExists(sc)
 }
 
-func (dm *Domain) createWALOperationsStream() error {
-	sc := &nats.StreamConfig{
-		Name:      WALOperationsStreamName,
-		Subjects:  []string{WALOperationsSubject},
-		Retention: nats.WorkQueuePolicy,
-		MaxAge:    24 * time.Hour,
-		Replicas:  dm.sysSC.replicasCount,
-	}
-	return dm.createStreamIfNotExists(sc)
-}
-
 func (dm *Domain) createWALCommitsStream() error {
 	sc := &nats.StreamConfig{
 		Name:      WALCommitsStreamName,
 		Subjects:  []string{WALCommitsSubject},
-		Retention: nats.WorkQueuePolicy,
-		MaxAge:    24 * time.Hour,
-		Replicas:  dm.sysSC.replicasCount,
-	}
-	return dm.createStreamIfNotExists(sc)
-}
-
-func (dm *Domain) createWALExportOpsStream() error {
-	sc := &nats.StreamConfig{
-		Name:      WALExportOpsStreamName,
-		Subjects:  []string{WALExportOpsSubject},
 		Retention: nats.WorkQueuePolicy,
 		MaxAge:    24 * time.Hour,
 		Replicas:  dm.sysSC.replicasCount,
@@ -766,12 +738,8 @@ func dlqMsgBuilder(subject, stream, domain, errorMsg string, data []byte) *nats.
 	return dlqMsg
 }
 
-func (dm *Domain) PublishOperation(txID string, opTime int64, opType cache.OpType, key string, value []byte) error {
-	return dm.publishWALOperation(txID, opTime, opType, key, value)
-}
-
-func (dm *Domain) PublishCommit(txID string, opsCount int) error {
-	return dm.publishWALCommit(txID, opsCount)
+func (dm *Domain) PublishTransaction(txID string, ops []cache.WALOp) error {
+	return dm.publishWALTransaction(txID, ops)
 }
 
 func (dm *Domain) GenerateTransactionID() string {
