@@ -136,7 +136,8 @@ func (dm *Domain) runTransactionCommitter(ctx context.Context, ready chan struct
 				return
 			}
 
-			lg.Logf(lg.TraceLevel, "TransactionCommitter: processing commit for tx_id=%s", txID)
+			expectedOps, _ := strconv.Atoi(msg.Header.Get("ops_count"))
+			lg.Logf(lg.TraceLevel, "TransactionCommitter: processing commit for tx_id=%s, ops_count=%d", txID, expectedOps)
 
 			// Backup barrier pause
 			for dm.isBackupBarrierActive() {
@@ -144,7 +145,7 @@ func (dm *Domain) runTransactionCommitter(ctx context.Context, ready chan struct
 				time.Sleep(200 * time.Millisecond)
 			}
 
-			if err := dm.applyTransactionOperations(ctx, txID); err != nil {
+			if err := dm.applyTransactionOperations(ctx, txID, expectedOps); err != nil {
 				if errors.Is(err, errTransactionAlreadyApplied) {
 					lg.Logf(lg.DebugLevel, "TransactionCommitter: transaction %s already applied, acking", txID)
 					system.MsgOnErrorReturn(msg.Ack())
@@ -222,7 +223,7 @@ func (dm *Domain) runTransactionCommitter(ctx context.Context, ready chan struct
 	}
 }
 
-func (dm *Domain) applyTransactionOperations(ctx context.Context, txID string) error {
+func (dm *Domain) applyTransactionOperations(ctx context.Context, txID string, expectedOps int) error {
 	opsSubject := fmt.Sprintf("wal.ops.%s.%s", dm.kv.Bucket(), txID)
 	consumerName := "TX_OPS_" + dm.kv.Bucket() + "_" + txID
 
@@ -330,6 +331,10 @@ func (dm *Domain) applyTransactionOperations(ctx context.Context, txID string) e
 			totalOps++
 			system.MsgOnErrorReturn(msg.Ack())
 		}
+		if expectedOps > 0 && totalOps >= expectedOps {
+			lg.Logf(lg.TraceLevel, "applyTransactionOperations: all %d expected operations received for tx_id=%s", expectedOps, txID)
+			break
+		}
 	}
 
 	lg.Logf(lg.TraceLevel, "applyTransactionOperations: all operations processed, deleting consumer %s", consumerName)
@@ -408,14 +413,16 @@ func (dm *Domain) publishWALOperation(txID string, opTime int64, opType cache.Op
 	return nil
 }
 
-func (dm *Domain) publishWALCommit(txID string) error {
+func (dm *Domain) publishWALCommit(txID string, opsCount int) error {
 	subject := fmt.Sprintf("wal.commits.%s", dm.kv.Bucket())
+	opsCountStr := strconv.Itoa(opsCount)
 
 	msg := nats.NewMsg(subject)
 	msg.Header.Set("tx_id", txID)
+	msg.Header.Set("ops_count", opsCountStr)
 	msg.Header.Set("commit_time", strconv.FormatInt(time.Now().UnixNano(), 10))
 
-	lg.Logf(lg.TraceLevel, "Publishing WAL commit: tx=%s, subject=%s", txID, subject)
+	lg.Logf(lg.TraceLevel, "Publishing WAL commit: tx=%s, ops_count=%d, subject=%s", txID, opsCount, subject)
 
 	if _, err := dm.js.PublishMsg(msg); err != nil {
 		lg.Logf(lg.ErrorLevel, "Failed to publish WAL commit: %s", err)
@@ -427,6 +434,7 @@ func (dm *Domain) publishWALCommit(txID string) error {
 		exportSubject := fmt.Sprintf("wal.export.commits.%s", dm.kv.Bucket())
 		exportMsg := nats.NewMsg(exportSubject)
 		exportMsg.Header.Set("tx_id", txID)
+		exportMsg.Header.Set("ops_count", opsCountStr)
 		exportMsg.Header.Set("commit_time", msg.Header.Get("commit_time"))
 		if _, err := dm.js.PublishMsg(exportMsg); err != nil {
 			lg.Logf(lg.WarnLevel, "Failed to publish export WAL commit (non-fatal): %s", err)
@@ -475,9 +483,10 @@ func (dm *Domain) startExportCommitter(ctx context.Context) error {
 				return
 			}
 
-			lg.Logf(lg.TraceLevel, "ExportCommitter: processing tx_id=%s", txID)
+			expectedOps, _ := strconv.Atoi(msg.Header.Get("ops_count"))
+			lg.Logf(lg.TraceLevel, "ExportCommitter: processing tx_id=%s, ops_count=%d", txID, expectedOps)
 
-			exportOps, err := dm.fetchExportOps(txID)
+			exportOps, err := dm.fetchExportOps(txID, expectedOps)
 			if err != nil {
 				lg.Logf(lg.WarnLevel, "ExportCommitter: failed to fetch ops for tx=%s: %s", txID, err)
 				system.MsgOnErrorReturn(msg.Nak())
@@ -508,8 +517,9 @@ func (dm *Domain) startExportCommitter(ctx context.Context) error {
 }
 
 // fetchExportOps reads all WAL operations for a transaction from the
-// export-dedicated ops stream.
-func (dm *Domain) fetchExportOps(txID string) ([]WALOp, error) {
+// export-dedicated ops stream. If expectedOps > 0, stops immediately after
+// receiving that many operations instead of waiting for a fetch timeout.
+func (dm *Domain) fetchExportOps(txID string, expectedOps int) ([]WALOp, error) {
 	opsSubject := fmt.Sprintf("wal.export.ops.%s.%s", dm.kv.Bucket(), txID)
 	consumerName := "TX_EXPORT_OPS_" + dm.kv.Bucket() + "_" + txID
 
@@ -555,6 +565,9 @@ func (dm *Domain) fetchExportOps(txID string) ([]WALOp, error) {
 				})
 			}
 			system.MsgOnErrorReturn(msg.Ack())
+		}
+		if expectedOps > 0 && len(ops) >= expectedOps {
+			break
 		}
 	}
 

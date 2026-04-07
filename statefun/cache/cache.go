@@ -671,7 +671,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 				if result.opsCount > 0 {
 					le.Tracef(ctx, "Transaction %s: traversed=%d nodes, opsCount=%d", txID, result.traverseCount, result.opsCount)
 					le.Tracef(ctx, "Publishing WAL commit for tx=%s with %d operations", txID, result.opsCount)
-					if err := cs.transactionGenerator.PublishCommit(txID); err != nil {
+					if err := cs.transactionGenerator.PublishCommit(txID, result.opsCount); err != nil {
 						le.Errorf(ctx, "Store kvLazyWriter cannot publish WAL commit for tx=%s: %s", txID, err)
 					}
 				}
@@ -706,7 +706,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 				if result.opsCount > 0 {
 					le.Debugf(ctx, "Final transaction %s: traversed=%d nodes, opsCount=%d", txID, result.traverseCount, result.opsCount)
 					le.Debugf(ctx, "Publishing final WAL commit for tx=%s with %d operations", txID, result.opsCount)
-					if err := cs.transactionGenerator.PublishCommit(txID); err != nil {
+					if err := cs.transactionGenerator.PublishCommit(txID, result.opsCount); err != nil {
 						le.Errorf(ctx, "Store kvLazyWriter cannot publish final WAL commit for tx=%s: %s", txID, err)
 					}
 				}
@@ -1269,7 +1269,7 @@ const ConsistencyKey = "__kv_consistent__"
 
 type TransactionGenerator interface {
 	PublishOperation(txID string, opTime int64, opType OpType, key string, value []byte) error
-	PublishCommit(txID string) error
+	PublishCommit(txID string, opsCount int) error
 	GenerateTransactionID() string
 }
 

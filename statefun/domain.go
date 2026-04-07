@@ -770,8 +770,8 @@ func (dm *Domain) PublishOperation(txID string, opTime int64, opType cache.OpTyp
 	return dm.publishWALOperation(txID, opTime, opType, key, value)
 }
 
-func (dm *Domain) PublishCommit(txID string) error {
-	return dm.publishWALCommit(txID)
+func (dm *Domain) PublishCommit(txID string, opsCount int) error {
+	return dm.publishWALCommit(txID, opsCount)
 }
 
 func (dm *Domain) GenerateTransactionID() string {
