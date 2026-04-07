@@ -607,8 +607,9 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 					}
 				}
 
-				// FAST PATH: publish pending transactions in time order.
-				// Ops were appended directly by publishDirtyOp into pendingTxs.
+				// FAST PATH: batch and publish pending transactions in time order.
+				// Accumulate ops from multiple small txs until we reach walBatchMinOps,
+				// then publish as a single merged transaction (txID = latest time in batch).
 				var pendingTimes []int64
 				cs.pendingTxs.Range(func(k, _ any) bool {
 					pendingTimes = append(pendingTimes, k.(int64))
@@ -616,6 +617,10 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 				})
 				if len(pendingTimes) > 0 {
 					sort.Slice(pendingTimes, func(i, j int) bool { return pendingTimes[i] < pendingTimes[j] })
+
+					var batchOps []WALOp
+					var batchTimes []int64
+
 					for _, txTime := range pendingTimes {
 						if cs.HasActiveOperationsUpTo(txTime) {
 							break // earlier ops still in-flight — stop to preserve order
@@ -628,14 +633,36 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 							continue
 						}
 						ops := v.(*pendingTx).Collect()
+						batchOps = append(batchOps, ops...)
+						batchTimes = append(batchTimes, txTime)
 
-						txID := strconv.FormatInt(txTime, 10)
-						le.Tracef(ctx, "Publishing tx=%s with %d ops", txID, len(ops))
-						if err := cs.transactionGenerator.PublishTransaction(txID, ops); err != nil {
-							le.Errorf(ctx, "kvLazyWriter: cannot publish tx=%s: %s", txID, err)
-							break // retry next iteration, preserve order
+						if len(batchOps) >= cacheConfig.walBatchMinOps {
+							// Publish batch — txID is the latest time in the batch
+							txID := strconv.FormatInt(txTime, 10)
+							le.Tracef(ctx, "Publishing batched tx=%s with %d ops (%d txs merged)", txID, len(batchOps), len(batchTimes))
+							if err := cs.transactionGenerator.PublishTransaction(txID, batchOps); err != nil {
+								le.Errorf(ctx, "kvLazyWriter: cannot publish tx=%s: %s", txID, err)
+								break // retry next iteration
+							}
+							for _, t := range batchTimes {
+								cs.pendingTxs.Delete(t)
+							}
+							batchOps = nil
+							batchTimes = nil
 						}
-						cs.pendingTxs.Delete(txTime)
+					}
+
+					// Publish remaining batch if any ops accumulated
+					if len(batchOps) > 0 {
+						txID := strconv.FormatInt(batchTimes[len(batchTimes)-1], 10)
+						le.Tracef(ctx, "Publishing batched tx=%s with %d ops (%d txs merged)", txID, len(batchOps), len(batchTimes))
+						if err := cs.transactionGenerator.PublishTransaction(txID, batchOps); err != nil {
+							le.Errorf(ctx, "kvLazyWriter: cannot publish tx=%s: %s", txID, err)
+						} else {
+							for _, t := range batchTimes {
+								cs.pendingTxs.Delete(t)
+							}
+						}
 					}
 				}
 
