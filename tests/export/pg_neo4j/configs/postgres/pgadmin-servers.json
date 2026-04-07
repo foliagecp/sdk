@@ -1,0 +1,13 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "Foliage",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "foliage",
+      "Username": "foliage",
+      "SSLMode": "prefer"
+    }
+  }
+}

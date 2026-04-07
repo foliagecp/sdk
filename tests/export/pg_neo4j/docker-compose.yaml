@@ -1,0 +1,88 @@
+version: "2.1"
+
+services:
+  nats:
+    image: nats:latest
+    command: -c /etc/nats/nats.conf
+    ports:
+      - "14222:4222"
+      - "16222:6222"
+      - "18222:8222"
+    volumes:
+       - ./configs/nats/:/etc/nats/
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "15432:5432"
+    environment:
+      POSTGRES_USER: foliage
+      POSTGRES_PASSWORD: foliage
+      POSTGRES_DB: foliage
+    volumes:
+      - ./configs/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U foliage -d foliage"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  neo4j:
+    image: neo4j:5
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/foliage123
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p foliage123 'RETURN 1' || exit 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: foliage
+      PGADMIN_SERVER_JSON_FILE: /pgadmin4/servers.json
+    ports:
+      - "5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./configs/postgres/pgadmin-servers.json:/pgadmin4/servers.json:ro
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  io:
+    image: natsio/nats-box:latest
+    entrypoint:
+      - /bin/sh
+    tty: true
+    depends_on:
+      - nats
+
+  runtime:
+    image: foliage-sdk-tests-pg-neo4j-export:latest
+    command: /usr/bin/foliage-pg-neo4j-export-test -ll 6
+    ports:
+      - "19901:9901"
+    env_file: ./configs/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    build:
+      context: ../../..
+      dockerfile: tests/export/pg_neo4j/Dockerfile
+    volumes:
+      - .:/foliage
+    stop_grace_period: 300s
