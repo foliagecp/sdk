@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -12,8 +13,9 @@ import (
 // events (types, objects, type links, object links) to PostgreSQL using the
 // high-level schema (types / objects / type_links / object_links).
 type SemanticPGDumper struct {
-	pool *pgxpool.Pool
-	ctx  context.Context
+	pool  *pgxpool.Pool
+	ctx   context.Context
+	batch *pgx.Batch // accumulated queries, flushed in CommitBatch
 }
 
 // NewSemanticPGDumper creates a new SemanticPGDumper connected to the given PostgreSQL URL.
@@ -40,48 +42,69 @@ func (d *SemanticPGDumper) Close() {
 	d.pool.Close()
 }
 
+// --- Batch support ---
+// BeginBatch starts accumulating queries. CommitBatch sends them all
+// to PostgreSQL in a single network round-trip via pgx.Batch.
+
+func (d *SemanticPGDumper) BeginBatch() {
+	d.batch = &pgx.Batch{}
+}
+
+func (d *SemanticPGDumper) CommitBatch() error {
+	b := d.batch
+	d.batch = nil
+	if b == nil || b.Len() == 0 {
+		return nil
+	}
+	br := d.pool.SendBatch(d.ctx, b)
+	defer br.Close()
+	for i := 0; i < b.Len(); i++ {
+		if _, err := br.Exec(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // --- SemanticHandler implementation ---
 
 func (d *SemanticPGDumper) OnTypePut(id string, body json.RawMessage) error {
 	b := jsonOrEmpty(body)
-	_, err := d.pool.Exec(d.ctx,
+	d.batch.Queue(
 		`INSERT INTO types (id, body) VALUES ($1, $2::jsonb)
 		 ON CONFLICT (id) DO UPDATE SET body = $2::jsonb`,
 		id, b)
-	return err
+	return nil
 }
 
 func (d *SemanticPGDumper) OnTypeDelete(id string) error {
-	_, err := d.pool.Exec(d.ctx, `DELETE FROM types WHERE id = $1`, id)
-	return err
+	d.batch.Queue(`DELETE FROM types WHERE id = $1`, id)
+	return nil
 }
 
 func (d *SemanticPGDumper) OnObjectPut(id, typeID string, body json.RawMessage) error {
 	b := jsonOrEmpty(body)
 	// Ensure referenced type exists (insert with empty body if not yet seen).
 	if typeID != "" {
-		_, err := d.pool.Exec(d.ctx,
+		d.batch.Queue(
 			`INSERT INTO types (id) VALUES ($1) ON CONFLICT DO NOTHING`,
 			typeID)
-		if err != nil {
-			return err
-		}
 	}
 
 	typeIDPtr := &typeID
 	if typeID == "" {
 		typeIDPtr = nil
 	}
-	_, err := d.pool.Exec(d.ctx,
+	d.batch.Queue(
 		`INSERT INTO objects (id, type_id, body) VALUES ($1, $2, $3::jsonb)
 		 ON CONFLICT (id) DO UPDATE SET type_id = $2, body = $3::jsonb`,
 		id, typeIDPtr, b)
-	return err
+	return nil
 }
 
 func (d *SemanticPGDumper) OnObjectDelete(id string) error {
-	_, err := d.pool.Exec(d.ctx, `DELETE FROM objects WHERE id = $1`, id)
-	return err
+	d.batch.Queue(`DELETE FROM objects WHERE id = $1`, id)
+	return nil
 }
 
 func (d *SemanticPGDumper) OnTypeLinkPut(from, to, name, linkType string, body json.RawMessage, tags []string) error {
@@ -89,18 +112,18 @@ func (d *SemanticPGDumper) OnTypeLinkPut(from, to, name, linkType string, body j
 	if tags == nil {
 		tags = []string{}
 	}
-	_, err := d.pool.Exec(d.ctx,
+	d.batch.Queue(
 		`INSERT INTO type_links (from_type, to_type, name, link_type, tags, body)
 		 VALUES ($1, $2, $3, $4, $5, $6::jsonb)
 		 ON CONFLICT (from_type, name) DO UPDATE SET to_type = $2, link_type = $4, tags = $5, body = $6::jsonb`,
 		from, to, name, linkType, tags, b)
-	return err
+	return nil
 }
 
 func (d *SemanticPGDumper) OnTypeLinkDelete(from, name string) error {
-	_, err := d.pool.Exec(d.ctx,
+	d.batch.Queue(
 		`DELETE FROM type_links WHERE from_type = $1 AND name = $2`, from, name)
-	return err
+	return nil
 }
 
 func (d *SemanticPGDumper) OnObjectLinkPut(from, to, name, linkType string, body json.RawMessage, tags []string) error {
@@ -108,18 +131,18 @@ func (d *SemanticPGDumper) OnObjectLinkPut(from, to, name, linkType string, body
 	if tags == nil {
 		tags = []string{}
 	}
-	_, err := d.pool.Exec(d.ctx,
+	d.batch.Queue(
 		`INSERT INTO object_links (from_obj, to_obj, name, link_type, tags, body)
 		 VALUES ($1, $2, $3, $4, $5, $6::jsonb)
 		 ON CONFLICT (from_obj, name) DO UPDATE SET to_obj = $2, link_type = $4, tags = $5, body = $6::jsonb`,
 		from, to, name, linkType, tags, b)
-	return err
+	return nil
 }
 
 func (d *SemanticPGDumper) OnObjectLinkDelete(from, name string) error {
-	_, err := d.pool.Exec(d.ctx,
+	d.batch.Queue(
 		`DELETE FROM object_links WHERE from_obj = $1 AND name = $2`, from, name)
-	return err
+	return nil
 }
 
 // --- Helpers ---
