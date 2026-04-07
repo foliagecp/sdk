@@ -302,22 +302,11 @@ type Store struct {
 	// have finished before forming a WAL transaction.
 	activeOps sync.Map
 
-	// pendingTxs accumulates WAL ops per transaction. Each write appends to
-	// the tx's ops slice. kvLazyWriter publishes the full tx as a single
-	// message when all in-flight operations are done.
+	// pendingTxs accumulates WAL ops per transaction. Each write appends
+	// directly via sync.Map.Store. kvLazyWriter publishes the full tx as
+	// a single message when all in-flight operations are done.
 	// key: int64 (timestamp/txID), value: *pendingTx
 	pendingTxs sync.Map
-
-	// walAccumCh is the queue for the WAL accumulator goroutine.
-	// publishDirtyOp enqueues ops here; the accumulator appends them to
-	// the corresponding pendingTx. No NATS publish at this stage.
-	walAccumCh chan walPublishRequest
-
-	// pendingAccumulates tracks how many ops are queued but not yet
-	// accumulated into pendingTxs per txTime. Incremented before enqueue,
-	// decremented after accumulation. kvLazyWriter won't commit a TX
-	// until its count reaches 0.
-	pendingAccumulates sync.Map
 
 	//write barrier state
 	backupBarrierTimestamp   int64
@@ -331,17 +320,25 @@ type maintenanceResult struct {
 	allBeforeBackupBarrierSynced bool
 }
 
-type walPublishRequest struct {
-	writeTime int64
-	storeKey  string
-	opType    OpType
-	data      []byte // [8-byte timestamp][1-byte flag][payload]
-}
-
 // pendingTx accumulates ops for a single WAL transaction.
+// Mutex protects the slice to guarantee strict append order.
 type pendingTx struct {
 	mu  sync.Mutex
 	ops []WALOp
+}
+
+func (ptx *pendingTx) Add(op WALOp) {
+	ptx.mu.Lock()
+	ptx.ops = append(ptx.ops, op)
+	ptx.mu.Unlock()
+}
+
+func (ptx *pendingTx) Collect() []WALOp {
+	ptx.mu.Lock()
+	result := make([]WALOp, len(ptx.ops))
+	copy(result, ptx.ops)
+	ptx.mu.Unlock()
+	return result
 }
 
 // WALOp represents a single operation within a WAL transaction.
@@ -352,8 +349,8 @@ type WALOp struct {
 	Value  []byte
 }
 
-// publishDirtyOp enqueues a WAL op to the accumulator goroutine.
-// Increments pendingAccumulates BEFORE enqueue to prevent premature commit.
+// publishDirtyOp appends a WAL op to the pending transaction for writeTime.
+// Lock-free — uses sync.Map internally.
 func (cs *Store) publishDirtyOp(writeTime int64, key string, opType OpType, finalBytes []byte) {
 	if cs.transactionGenerator == nil || !cs.walWriteEnabled.Load() {
 		return
@@ -362,41 +359,12 @@ func (cs *Store) publishDirtyOp(writeTime int64, key string, opType OpType, fina
 		return
 	}
 
-	// Mark pending accumulate BEFORE enqueue — prevents premature commit
-	pp, _ := cs.pendingAccumulates.LoadOrStore(writeTime, new(atomic.Int32))
-	pp.(*atomic.Int32).Add(1)
-
-	cs.walAccumCh <- walPublishRequest{
-		writeTime: writeTime,
-		storeKey:  cs.toStoreKey(key),
-		opType:    opType,
-		data:      finalBytes,
-	}
-}
-
-// walAccumulator is the single goroutine that drains walAccumCh and appends
-// ops to the corresponding pendingTx. No NATS publish here — that happens
-// when kvLazyWriter commits the transaction as a single message.
-func (cs *Store) walAccumulator() {
-	for req := range cs.walAccumCh {
-		// Append op to pending tx
-		v, _ := cs.pendingTxs.LoadOrStore(req.writeTime, &pendingTx{})
-		ptx := v.(*pendingTx)
-		ptx.mu.Lock()
-		ptx.ops = append(ptx.ops, WALOp{
-			OpType: string(req.opType),
-			Key:    req.storeKey,
-			Value:  req.data,
-		})
-		ptx.mu.Unlock()
-
-		// Unmark pending accumulate
-		if pa, ok := cs.pendingAccumulates.Load(req.writeTime); ok {
-			if pa.(*atomic.Int32).Add(-1) == 0 {
-				cs.pendingAccumulates.Delete(req.writeTime)
-			}
-		}
-	}
+	v, _ := cs.pendingTxs.LoadOrStore(writeTime, &pendingTx{})
+	v.(*pendingTx).Add(WALOp{
+		OpType: string(opType),
+		Key:    cs.toStoreKey(key),
+		Value:  finalBytes,
+	})
 }
 
 // serializeForWAL builds the WAL entry bytes: [8-byte timestamp][1-byte flag][payload]
@@ -485,8 +453,6 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 		valuesInCache:               0,
 		transactionsMutex:           &sync.Mutex{},
 		getKeysByPatternFromKVMutex: &sync.Mutex{},
-
-		walAccumCh: make(chan walPublishRequest, 10000),
 
 		//barrier init
 		backupBarrierTimestamp:   0,
@@ -642,8 +608,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 				}
 
 				// FAST PATH: publish pending transactions in time order.
-				// Ops were accumulated by walAccumulator into pendingTxs.
-				// Publish each tx as a single message with all ops included.
+				// Ops were appended directly by publishDirtyOp into pendingTxs.
 				var pendingTimes []int64
 				cs.pendingTxs.Range(func(k, _ any) bool {
 					pendingTimes = append(pendingTimes, k.(int64))
@@ -655,9 +620,6 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 						if cs.HasActiveOperationsUpTo(txTime) {
 							break // earlier ops still in-flight — stop to preserve order
 						}
-						if cs.hasPendingAccumulates(txTime) {
-							break // ops still being accumulated — stop to preserve order
-						}
 						if err := cs.checkBackupBarrierInfoBeforeWrite(txTime); err != nil {
 							break // backup barrier — stop
 						}
@@ -665,11 +627,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 						if !ok {
 							continue
 						}
-						ptx := v.(*pendingTx)
-						ptx.mu.Lock()
-						ops := make([]WALOp, len(ptx.ops))
-						copy(ops, ptx.ops)
-						ptx.mu.Unlock()
+						ops := v.(*pendingTx).Collect()
 
 						txID := strconv.FormatInt(txTime, 10)
 						le.Tracef(ctx, "Publishing tx=%s with %d ops", txID, len(ops))
@@ -711,17 +669,6 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 			}
 
 			if shutdownStatus == shutdownStatusWaiting {
-				// Wait for all in-flight accumulates to complete
-				allAccumulated := true
-				cs.pendingAccumulates.Range(func(_, _ any) bool {
-					allAccumulated = false
-					return false
-				})
-				if !allAccumulated {
-					time.Sleep(1 * time.Millisecond)
-					continue
-				}
-
 				// Publish all remaining pending transactions.
 				var pendingTimes []int64
 				cs.pendingTxs.Range(func(k, _ any) bool {
@@ -735,11 +682,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 						if !ok {
 							continue
 						}
-						ptx := v.(*pendingTx)
-						ptx.mu.Lock()
-						ops := make([]WALOp, len(ptx.ops))
-						copy(ops, ptx.ops)
-						ptx.mu.Unlock()
+						ops := v.(*pendingTx).Collect()
 
 						txID := strconv.FormatInt(txTime, 10)
 						le.Debugf(ctx, "Shutdown: publishing tx=%s with %d ops", txID, len(ops))
@@ -755,7 +698,6 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 		}
 	}
 	go storeUpdatesHandler(&cs)
-	go cs.walAccumulator()
 	go kvLazyWriterWithWAL(&cs)
 	<-initChan
 	return &cs
@@ -1358,15 +1300,6 @@ func (cs *Store) MarkOperationDone(opTime int64) {
 			cs.activeOps.Delete(opTime)
 		}
 	}
-}
-
-// hasPendingAccumulates returns true if there are still in-flight WAL
-// accumulate requests for the given txTime (ops queued but not yet added to pendingTx).
-func (cs *Store) hasPendingAccumulates(txTime int64) bool {
-	if v, ok := cs.pendingAccumulates.Load(txTime); ok {
-		return v.(*atomic.Int32).Load() > 0
-	}
-	return false
 }
 
 // HasActiveOperationsUpTo returns true if there is at least one in-flight
