@@ -20,6 +20,8 @@ type mockHandler struct {
 	typeLinkPuts    []typeLinkPutCall
 	typeLinkDels    []typeLinkDelCall
 	returnErr       error
+	batchStarted    int
+	batchCommitted  int
 }
 
 type typePutCall struct {
@@ -45,6 +47,14 @@ type typeLinkPutCall struct {
 }
 type typeLinkDelCall struct {
 	from, name string
+}
+
+func (m *mockHandler) BeginBatch() {
+	m.batchStarted++
+}
+func (m *mockHandler) CommitBatch() error {
+	m.batchCommitted++
+	return m.returnErr
 }
 
 func (m *mockHandler) OnTypePut(id string, body json.RawMessage) error {
@@ -733,4 +743,29 @@ func TestSemanticTranslator_ObjectLinkTags(t *testing.T) {
 
 	require.Len(t, h.objectLinkPuts, 1)
 	assert.Equal(t, []string{"primary", "active"}, h.objectLinkPuts[0].tags)
+}
+
+// TestSemanticTranslator_BatchWrap verifies that ProcessEvent calls
+// BeginBatch before dispatching and CommitBatch after all dispatches.
+func TestSemanticTranslator_BatchWrap(t *testing.T) {
+	h := &mockHandler{}
+	tr := NewSemanticTranslator(h)
+
+	// Two events — each must get its own Begin/Commit pair.
+	require.NoError(t, tr.ProcessEvent(makeEvent(
+		linkPut("hub/root", "hub/types", "hub/types", "__types", "{}"),
+		linkPut("hub/root", "hub/objects", "hub/objects", "__objects", "{}"),
+		linkPut("hub/types", "hub/device", "hub/device", "__type", "{}"),
+		vertexPut("hub/device", "{}"),
+	)))
+	assert.Equal(t, 1, h.batchStarted)
+	assert.Equal(t, 1, h.batchCommitted)
+
+	require.NoError(t, tr.ProcessEvent(makeEvent(
+		linkPut("hub/objects", "hub/dev-1", "hub/dev-1", "__object", "{}"),
+		linkPut("hub/dev-1", "hub/device", "type", "__type", "{}"),
+		vertexPut("hub/dev-1", `{"ip":"10.0.0.1"}`),
+	)))
+	assert.Equal(t, 2, h.batchStarted)
+	assert.Equal(t, 2, h.batchCommitted)
 }

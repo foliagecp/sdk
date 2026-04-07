@@ -30,6 +30,10 @@ const (
 // are silently skipped — they will appear in the next event once the topology
 // links arrive.
 type SemanticHandler interface {
+	// --- Batch mode ---
+	BeginBatch()
+	CommitBatch() error
+
 	// --- Types ---
 	OnTypePut(id string, body json.RawMessage) error
 	OnTypeDelete(id string) error
@@ -122,6 +126,8 @@ func NewSemanticTranslator(handler SemanticHandler) *SemanticTranslator {
 func (t *SemanticTranslator) ProcessEvent(event ExportEvent) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	t.handler.BeginBatch()
 
 	// --- Pass 0: update linkTargets cache ---
 	// Persist (from, name) → {to, linkType} for all link_puts with a non-empty To
@@ -232,7 +238,7 @@ func (t *SemanticTranslator) ProcessEvent(event ExportEvent) error {
 		}
 	}
 
-	return nil
+	return t.handler.CommitBatch()
 }
 
 func (t *SemanticTranslator) dispatchVertexPut(op ExportOp) error {
