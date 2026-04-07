@@ -308,6 +308,16 @@ type Store struct {
 	// and publishes commits — O(pending_count) instead of O(all_nodes) DFS.
 	pendingTxs sync.Map
 
+	// walPublishCh is the queue for the single WAL publisher goroutine.
+	// publishDirtyOp enqueues ops here; the publisher goroutine drains it
+	// and calls PublishOperation sequentially, preserving write order.
+	walPublishCh chan walPublishRequest
+
+	// pendingPublishes tracks how many ops are queued but not yet published
+	// per txTime. Incremented when enqueuing, decremented after publish.
+	// kvLazyWriter won't commit a TX until its count reaches 0.
+	pendingPublishes sync.Map
+
 	//write barrier state
 	backupBarrierTimestamp   int64
 	backupBarrierStatus      int32 // 0=unlocked, 1=locking, 2=locked
@@ -320,10 +330,15 @@ type maintenanceResult struct {
 	allBeforeBackupBarrierSynced bool
 }
 
-// publishDirtyOp publishes a pre-serialized WAL operation immediately and
-// registers the timestamp as a pending transaction. No locks taken — caller
-// provides ready-to-send bytes. The kvLazyWriter will later commit these
-// transactions when all operations ≤ txTime are done.
+type walPublishRequest struct {
+	writeTime int64
+	key       string
+	opType    OpType
+	data      []byte
+}
+
+// publishDirtyOp enqueues a WAL publish request to the publisher goroutine.
+// Increments pendingPublishes BEFORE enqueue to prevent premature commit.
 func (cs *Store) publishDirtyOp(writeTime int64, key string, opType OpType, finalBytes []byte) {
 	if cs.transactionGenerator == nil || !cs.walWriteEnabled.Load() {
 		return
@@ -332,17 +347,40 @@ func (cs *Store) publishDirtyOp(writeTime int64, key string, opType OpType, fina
 		return
 	}
 
-	txID := strconv.FormatInt(writeTime, 10)
-	storeKey := cs.toStoreKey(key)
+	// Mark pending publish BEFORE enqueue — prevents premature commit
+	pp, _ := cs.pendingPublishes.LoadOrStore(writeTime, new(atomic.Int32))
+	pp.(*atomic.Int32).Add(1)
 
-	if err := cs.transactionGenerator.PublishOperation(txID, writeTime, opType, storeKey, finalBytes); err != nil {
-		lg.Logf(lg.ErrorLevel, "publishDirtyOp: failed for key=%s: %s", key, err)
-		return // publish failed — pending TX won't include this op
+	cs.walPublishCh <- walPublishRequest{
+		writeTime: writeTime,
+		key:       key,
+		opType:    opType,
+		data:      finalBytes,
 	}
+}
 
-	// Register pending transaction (increment ops count)
-	v, _ := cs.pendingTxs.LoadOrStore(writeTime, new(atomic.Int32))
-	v.(*atomic.Int32).Add(1)
+// walPublisher is the single goroutine that drains walPublishCh and publishes
+// WAL operations sequentially. Preserves write order and avoids goroutine sprawl.
+func (cs *Store) walPublisher() {
+	for req := range cs.walPublishCh {
+		txID := strconv.FormatInt(req.writeTime, 10)
+		storeKey := cs.toStoreKey(req.key)
+
+		if err := cs.transactionGenerator.PublishOperation(txID, req.writeTime, req.opType, storeKey, req.data); err != nil {
+			lg.Logf(lg.ErrorLevel, "walPublisher: failed for key=%s: %s", req.key, err)
+		} else {
+			// Register pending transaction (increment ops count)
+			v, _ := cs.pendingTxs.LoadOrStore(req.writeTime, new(atomic.Int32))
+			v.(*atomic.Int32).Add(1)
+		}
+
+		// Unmark pending publish
+		if v, ok := cs.pendingPublishes.Load(req.writeTime); ok {
+			if v.(*atomic.Int32).Add(-1) == 0 {
+				cs.pendingPublishes.Delete(req.writeTime)
+			}
+		}
+	}
 }
 
 // serializeForWAL builds the WAL entry bytes: [8-byte timestamp][1-byte flag][payload]
@@ -431,6 +469,8 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 		valuesInCache:               0,
 		transactionsMutex:           &sync.Mutex{},
 		getKeysByPatternFromKVMutex: &sync.Mutex{},
+
+		walPublishCh: make(chan walPublishRequest, 10000),
 
 		//barrier init
 		backupBarrierTimestamp:   0,
@@ -600,6 +640,9 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 						if cs.HasActiveOperationsUpTo(txTime) {
 							break // earlier ops still in-flight — stop to preserve order
 						}
+						if cs.hasPendingPublishes(txTime) {
+							break // ops still being published async — stop to preserve order
+						}
 						// Backup barrier: don't commit transactions newer than barrier timestamp.
 						// Ops are already in WAL stream but without commit they won't be applied to KV.
 						if err := cs.checkBackupBarrierInfoBeforeWrite(txTime); err != nil {
@@ -650,6 +693,17 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 			}
 
 			if shutdownStatus == shutdownStatusWaiting {
+				// Wait for all in-flight publishes to complete
+				allPublished := true
+				cs.pendingPublishes.Range(func(_, _ any) bool {
+					allPublished = false
+					return false
+				})
+				if !allPublished {
+					time.Sleep(1 * time.Millisecond)
+					continue
+				}
+
 				// Commit all remaining pending transactions — ops are already in WAL.
 				var pendingTimes []int64
 				cs.pendingTxs.Range(func(k, _ any) bool {
@@ -678,6 +732,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 		}
 	}
 	go storeUpdatesHandler(&cs)
+	go cs.walPublisher()
 	go kvLazyWriterWithWAL(&cs)
 	<-initChan
 	return &cs
@@ -1279,6 +1334,15 @@ func (cs *Store) MarkOperationDone(opTime int64) {
 			cs.activeOps.Delete(opTime)
 		}
 	}
+}
+
+// hasPendingPublishes returns true if there are still in-flight WAL publish
+// requests for the given txTime (ops queued but not yet sent to NATS).
+func (cs *Store) hasPendingPublishes(txTime int64) bool {
+	if v, ok := cs.pendingPublishes.Load(txTime); ok {
+		return v.(*atomic.Int32).Load() > 0
+	}
+	return false
 }
 
 // HasActiveOperationsUpTo returns true if there is at least one in-flight
