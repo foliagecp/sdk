@@ -29,7 +29,7 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 		"pg-dumper",
 		"export.pg.handler",
 		PGExportHandler,
-		statefun.NewFunctionTypeConfig(),
+		statefun.NewFunctionTypeConfig().SetMaxAckPending(1),
 	)
 }
 

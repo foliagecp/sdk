@@ -31,7 +31,7 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 		"semantic-pg-dumper",
 		"export.semantic.pg.handler",
 		SemanticPGHandler,
-		statefun.NewFunctionTypeConfig(),
+		statefun.NewFunctionTypeConfig().SetMaxAckPending(1),
 	)
 }
 

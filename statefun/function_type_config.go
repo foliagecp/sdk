@@ -19,6 +19,7 @@ const (
 type FunctionTypeConfig struct {
 	msgAckWaitMs             int
 	msgMaxDeliver            int
+	maxAckPending            int // -1 = not set (use NATS default)
 	idChannelSize            int
 	balanceNeeded            bool
 	mutexLifeTimeSec         int
@@ -33,6 +34,7 @@ func NewFunctionTypeConfig() *FunctionTypeConfig {
 	ft := &FunctionTypeConfig{
 		msgAckWaitMs:             MsgAckWaitTimeoutMs,
 		msgMaxDeliver:            msgMaxDeliver,
+		maxAckPending:            -1, // not set by default
 		idChannelSize:            system.GetEnvMustProceed[int]("DEFAULT_FT_ID_CHANNEL_SIZE", IdChannelSize),
 		balanceNeeded:            BalanceNeeded,
 		mutexLifeTimeSec:         MutexLifetimeSec,
@@ -53,6 +55,11 @@ func (ftc *FunctionTypeConfig) SetMsgAckWaitMs(msgAckWaitMs int) *FunctionTypeCo
 
 func (ftc *FunctionTypeConfig) SetMsgMaxDeliver(msgMaxDeliver int) *FunctionTypeConfig {
 	ftc.msgMaxDeliver = msgMaxDeliver
+	return ftc
+}
+
+func (ftc *FunctionTypeConfig) SetMaxAckPending(maxAckPending int) *FunctionTypeConfig {
+	ftc.maxAckPending = maxAckPending
 	return ftc
 }
 
