@@ -346,6 +346,16 @@ func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDo
 		}
 	}
 
+	// Create export-dedicated WAL streams (parallel pipeline)
+	if dm.exportEnabled {
+		if err := dm.createWALExportOpsStream(); err != nil {
+			return err
+		}
+		if err := dm.createWALExportCommitsStream(); err != nil {
+			return err
+		}
+	}
+
 	// Create export stream if enabled
 	if dm.exportEnabled {
 		dm.exportCommitter = NewExportCommitter(dm.js, dm.name)
@@ -374,6 +384,9 @@ func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDo
 	}
 
 	if dm.exportEnabled {
+		if err := dm.startExportCommitter(ctx); err != nil {
+			lg.Logf(lg.WarnLevel, "ExportCommitter pipeline failed to start (non-fatal): %s", err)
+		}
 		if err := dm.publishStartupSnapshot(ctx); err != nil {
 			lg.Logf(lg.WarnLevel, "Export startup snapshot failed (non-fatal): %s", err)
 		}
@@ -618,6 +631,28 @@ func (dm *Domain) createWALCommitsStream() error {
 	sc := &nats.StreamConfig{
 		Name:      WALCommitsStreamName,
 		Subjects:  []string{WALCommitsSubject},
+		Retention: nats.WorkQueuePolicy,
+		MaxAge:    24 * time.Hour,
+		Replicas:  dm.sysSC.replicasCount,
+	}
+	return dm.createStreamIfNotExists(sc)
+}
+
+func (dm *Domain) createWALExportOpsStream() error {
+	sc := &nats.StreamConfig{
+		Name:      WALExportOpsStreamName,
+		Subjects:  []string{WALExportOpsSubject},
+		Retention: nats.WorkQueuePolicy,
+		MaxAge:    24 * time.Hour,
+		Replicas:  dm.sysSC.replicasCount,
+	}
+	return dm.createStreamIfNotExists(sc)
+}
+
+func (dm *Domain) createWALExportCommitsStream() error {
+	sc := &nats.StreamConfig{
+		Name:      WALExportCommitsStreamName,
+		Subjects:  []string{WALExportCommitsSubject},
 		Retention: nats.WorkQueuePolicy,
 		MaxAge:    24 * time.Hour,
 		Replicas:  dm.sysSC.replicasCount,

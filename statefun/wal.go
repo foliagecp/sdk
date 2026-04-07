@@ -24,6 +24,13 @@ const (
 	WALCommitsSubject       = "wal.commits.*"
 	CommitterDurableName    = "TRANSACTION_COMMITTER_CONSUMER"
 
+	// Export-dedicated streams — parallel pipeline for export committer.
+	WALExportOpsStreamName    = "wal_export_operations"
+	WALExportCommitsStreamName = "wal_export_commits"
+	WALExportOpsSubject       = "wal.export.ops.*.*"
+	WALExportCommitsSubject   = "wal.export.commits.*"
+	ExportCommitterDurableName = "EXPORT_COMMITTER_CONSUMER"
+
 	// --- Commit consumer (TransactionCommitter) ---
 
 	// How long NATS waits for Ack before redelivering a commit message.
@@ -262,7 +269,6 @@ func (dm *Domain) applyTransactionOperations(ctx context.Context, txID string) e
 	}()
 
 	totalOps := 0
-	var exportOps []WALOp
 
 	for {
 		msgs, err := sub.Fetch(opsFetchBatchSize, nats.MaxWait(opsFetchTimeout))
@@ -322,25 +328,7 @@ func (dm *Domain) applyTransactionOperations(ctx context.Context, txID string) e
 			}
 
 			totalOps++
-			if dm.exportCommitter != nil {
-				exportOps = append(exportOps, WALOp{
-					OpType: opType,
-					Key:    key,
-					Value:  msg.Data,
-				})
-			}
 			system.MsgOnErrorReturn(msg.Ack())
-		}
-	}
-
-	// Publish export events after all KV operations succeed
-	if dm.exportCommitter != nil && len(exportOps) > 0 {
-		storePrefix := cache.KVStorePrefix
-		if dm.cache != nil {
-			storePrefix = dm.cache.GetStorePrefix()
-		}
-		if err := dm.exportCommitter.ProcessTransaction(txID, exportOps, storePrefix); err != nil {
-			lg.Logf(lg.WarnLevel, "ExportCommitter: failed to process tx=%s (non-fatal): %s", txID, err)
 		}
 	}
 
@@ -402,6 +390,21 @@ func (dm *Domain) publishWALOperation(txID string, opTime int64, opType cache.Op
 		lg.Logf(lg.ErrorLevel, "Failed to publish WAL operation: %s", err)
 		return err
 	}
+
+	// Duplicate to export stream for parallel export pipeline
+	if dm.exportEnabled {
+		exportSubject := fmt.Sprintf("wal.export.ops.%s.%s", dm.kv.Bucket(), txID)
+		exportMsg := nats.NewMsg(exportSubject)
+		exportMsg.Header.Set("tx_id", txID)
+		exportMsg.Header.Set("op_time", strconv.FormatInt(opTime, 10))
+		exportMsg.Header.Set("op_type", opType)
+		exportMsg.Header.Set("key", key)
+		exportMsg.Data = value
+		if _, err := dm.js.PublishMsg(exportMsg); err != nil {
+			lg.Logf(lg.WarnLevel, "Failed to publish export WAL operation (non-fatal): %s", err)
+		}
+	}
+
 	return nil
 }
 
@@ -418,5 +421,143 @@ func (dm *Domain) publishWALCommit(txID string) error {
 		lg.Logf(lg.ErrorLevel, "Failed to publish WAL commit: %s", err)
 		return err
 	}
+
+	// Duplicate to export commits stream for parallel export pipeline
+	if dm.exportEnabled {
+		exportSubject := fmt.Sprintf("wal.export.commits.%s", dm.kv.Bucket())
+		exportMsg := nats.NewMsg(exportSubject)
+		exportMsg.Header.Set("tx_id", txID)
+		exportMsg.Header.Set("commit_time", msg.Header.Get("commit_time"))
+		if _, err := dm.js.PublishMsg(exportMsg); err != nil {
+			lg.Logf(lg.WarnLevel, "Failed to publish export WAL commit (non-fatal): %s", err)
+		}
+	}
+
 	return nil
+}
+
+// startExportCommitter runs a parallel pipeline that reads WAL transactions
+// from the export-dedicated streams and publishes them to the export committer.
+// It is independent of the KV apply pipeline (TransactionCommitter) and is not
+// blocked by sequential KV Put latency.
+func (dm *Domain) startExportCommitter(ctx context.Context) error {
+	if dm.exportCommitter == nil {
+		return nil
+	}
+
+	commitSubject := fmt.Sprintf("wal.export.commits.%s", dm.kv.Bucket())
+	consumerName := ExportCommitterDurableName + "-" + dm.kv.Bucket()
+
+	lg.Logf(lg.DebugLevel, "ExportCommitter pipeline starting for bucket=%s", dm.kv.Bucket())
+
+	_, err := dm.js.AddConsumer(WALExportCommitsStreamName, &nats.ConsumerConfig{
+		Name:           consumerName,
+		Durable:        consumerName,
+		DeliverSubject: consumerName,
+		DeliverGroup:   consumerName + "-group",
+		FilterSubject:  commitSubject,
+		AckPolicy:      nats.AckExplicitPolicy,
+		AckWait:        commitAckWait,
+		MaxDeliver:     commitMaxDeliver,
+		MaxAckPending:  1,
+	})
+	if err != nil && !errors.Is(err, nats.ErrConsumerNameAlreadyInUse) {
+		return fmt.Errorf("ExportCommitter: failed to create consumer: %w", err)
+	}
+
+	_, err = dm.js.QueueSubscribe(
+		commitSubject,
+		consumerName+"-group",
+		func(msg *nats.Msg) {
+			txID := msg.Header.Get("tx_id")
+			if txID == "" {
+				system.MsgOnErrorReturn(msg.Ack())
+				return
+			}
+
+			lg.Logf(lg.TraceLevel, "ExportCommitter: processing tx_id=%s", txID)
+
+			exportOps, err := dm.fetchExportOps(txID)
+			if err != nil {
+				lg.Logf(lg.WarnLevel, "ExportCommitter: failed to fetch ops for tx=%s: %s", txID, err)
+				system.MsgOnErrorReturn(msg.Nak())
+				return
+			}
+
+			if len(exportOps) > 0 {
+				storePrefix := cache.KVStorePrefix
+				if dm.cache != nil {
+					storePrefix = dm.cache.GetStorePrefix()
+				}
+				if err := dm.exportCommitter.ProcessTransaction(txID, exportOps, storePrefix); err != nil {
+					lg.Logf(lg.WarnLevel, "ExportCommitter: ProcessTransaction failed for tx=%s (non-fatal): %s", txID, err)
+				}
+			}
+
+			system.MsgOnErrorReturn(msg.Ack())
+		},
+		nats.Bind(WALExportCommitsStreamName, consumerName),
+		nats.ManualAck(),
+	)
+	if err != nil {
+		return fmt.Errorf("ExportCommitter: failed to subscribe: %w", err)
+	}
+
+	lg.Logf(lg.DebugLevel, "ExportCommitter pipeline started")
+	return nil
+}
+
+// fetchExportOps reads all WAL operations for a transaction from the
+// export-dedicated ops stream.
+func (dm *Domain) fetchExportOps(txID string) ([]WALOp, error) {
+	opsSubject := fmt.Sprintf("wal.export.ops.%s.%s", dm.kv.Bucket(), txID)
+	consumerName := "TX_EXPORT_OPS_" + dm.kv.Bucket() + "_" + txID
+
+	if _, err := dm.js.AddConsumer(WALExportOpsStreamName, &nats.ConsumerConfig{
+		Name:          consumerName,
+		Durable:       consumerName,
+		FilterSubject: opsSubject,
+		AckPolicy:     nats.AckExplicitPolicy,
+		AckWait:       opsAckWait,
+		MaxDeliver:    opsMaxDeliver,
+	}); err != nil && !errors.Is(err, nats.ErrConsumerNameAlreadyInUse) {
+		return nil, fmt.Errorf("failed to create export ops consumer: %w", err)
+	}
+
+	sub, err := dm.js.PullSubscribe(opsSubject, consumerName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to subscribe to export ops: %w", err)
+	}
+	defer func() {
+		system.MsgOnErrorReturn(sub.Unsubscribe())
+	}()
+
+	var ops []WALOp
+	for {
+		msgs, err := sub.Fetch(opsFetchBatchSize, nats.MaxWait(opsFetchTimeout))
+		if err != nil {
+			if errors.Is(err, nats.ErrTimeout) {
+				break
+			}
+			return nil, fmt.Errorf("fetch error: %w", err)
+		}
+		if len(msgs) == 0 {
+			break
+		}
+		for _, msg := range msgs {
+			opType := msg.Header.Get("op_type")
+			key := msg.Header.Get("key")
+			if key != "" {
+				ops = append(ops, WALOp{
+					OpType: opType,
+					Key:    key,
+					Value:  msg.Data,
+				})
+			}
+			system.MsgOnErrorReturn(msg.Ack())
+		}
+	}
+
+	system.MsgOnErrorReturn(dm.js.DeleteConsumer(WALExportOpsStreamName, consumerName))
+	return ops, nil
 }
