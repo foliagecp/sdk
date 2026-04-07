@@ -765,14 +765,13 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 			}
 
 			if shutdownStatus == shutdownStatusNone {
-				waitTimer := time.NewTimer(time.Duration(cacheConfig.walTransactionWaitPeriodMS) * time.Millisecond)
+				// Check for shutdown signal
 				select {
 				case <-cs.ctx.Done():
-					waitTimer.Stop()
 					le.Debugf(ctx, "cache got shutdown signal")
 					shutdownStatus = shutdownStatusWaiting
 					continue
-				case <-waitTimer.C:
+				default:
 				}
 
 				backupBarrierTimestamp, backupBarrierStatus := cs.getBackupBarrierState()

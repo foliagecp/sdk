@@ -6,7 +6,6 @@ const (
 	LevelSubscriptionNotificationsBufferMaxSize = 30000 // ~16Mb: elemenets := 16 * 1024 * 1024 / (64 + 512), where 512 - avg value size, 64 - avg key size
 	LazyWriterValueProcessDelayMkS              = 500
 	LazyWriterRepeatDelayMkS                    = 100000
-	WalTransactionWaitPeriodMS                  = 1000
 )
 
 type Config struct {
@@ -16,7 +15,6 @@ type Config struct {
 	levelSubscriptionNotificationsBufferMaxSize int
 	lazyWriterValueProcessDelayMkS              int
 	lazyWriterRepeatDelayMkS                    int
-	walTransactionWaitPeriodMS                  int
 }
 
 func NewCacheConfig(id string) *Config {
@@ -27,7 +25,6 @@ func NewCacheConfig(id string) *Config {
 		levelSubscriptionNotificationsBufferMaxSize: LevelSubscriptionNotificationsBufferMaxSize,
 		lazyWriterValueProcessDelayMkS:              LazyWriterValueProcessDelayMkS,
 		lazyWriterRepeatDelayMkS:                    LazyWriterRepeatDelayMkS,
-		walTransactionWaitPeriodMS:                  WalTransactionWaitPeriodMS,
 	}
 }
 
