@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/embedded/graph/crud"
 
 	"github.com/PaesslerAG/gval"
@@ -81,6 +82,30 @@ var filterParseLanguage = gval.NewLanguage(gval.Base(), gval.PropositionalLogic(
 		}
 		return NewFilterDataWithOneFeature(filterFeature{"l_has", value}), nil
 	}),
+	gval.Function("v_array_has", func(args ...interface{}) (interface{}, error) { // vertex body array element filter
+		if len(args) != 4 {
+			return nil, fmt.Errorf("required args are: key; element type; operation; target value;")
+		}
+		value := map[string]string{
+			"key":          args[0].(string),
+			"value_type":   args[1].(string), // "numeric", "string", "bool"
+			"operation":    args[2].(string), // "==", "!=", ">", "<"
+			"target_value": args[3].(string),
+		}
+		return NewFilterDataWithOneFeature(filterFeature{"v_array_has", value}), nil
+	}),
+	gval.Function("l_array_has", func(args ...interface{}) (interface{}, error) { // link body array element filter
+		if len(args) != 4 {
+			return nil, fmt.Errorf("required args are: key; element type; operation; target value;")
+		}
+		value := map[string]string{
+			"key":          args[0].(string),
+			"value_type":   args[1].(string), // "numeric", "string", "bool"
+			"operation":    args[2].(string), // "==", "!=", ">", "<"
+			"target_value": args[3].(string),
+		}
+		return NewFilterDataWithOneFeature(filterFeature{"l_array_has", value}), nil
+	}),
 )
 
 type filterFeature struct {
@@ -110,9 +135,29 @@ func NewFilterDataWithOneFeature(feature filterFeature) *FilterData {
 	return filterData
 }
 
+// replaceColonsOutsideQuotes replaces ':' with '_' only outside of double-quoted strings,
+// so that filter function names like v:has become v_has while values like "aa:bb:cc" stay intact.
+func replaceColonsOutsideQuotes(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inQuotes := false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if ch == '"' {
+			inQuotes = !inQuotes
+			b.WriteByte(ch)
+		} else if ch == ':' && !inQuotes {
+			b.WriteByte('_')
+		} else {
+			b.WriteByte(ch)
+		}
+	}
+	return b.String()
+}
+
 func ParseFilter(filterQuery string) (*FilterData, error) {
 	filterQuery = strings.ReplaceAll(filterQuery, `'`, `"`) // Allow to use single quotes
-	filterQuery = strings.ReplaceAll(filterQuery, `:`, `_`) // Allow to use colon
+	filterQuery = replaceColonsOutsideQuotes(filterQuery)    // Replace colons in function names (v:has -> v_has) but not inside quoted values
 	value, err := filterParseLanguage.Evaluate(filterQuery, nil)
 	if err != nil {
 		return nil, err
@@ -191,13 +236,23 @@ func GetSpecificLinkIndices(cacheStore *cache.Store, fromObjectID string, linkNa
 func IsVertexBodyHasIndexValue(cacheStore *cache.Store, vertexId, key, valueType, operation, targetValue string) bool {
 	typeStr := strings.ToLower(valueType)[:1]
 	indexKeys := cacheStore.GetKeysByPattern(fmt.Sprintf(crud.VertexBodyValueIndexPrefPattern+crud.KeySuff2Pattern, vertexId, typeStr, key))
-	return IsIndexedKeyMeetsRequirements(cacheStore, indexKeys, typeStr, operation, targetValue)
+	if len(indexKeys) > 0 {
+		return IsIndexedKeyMeetsRequirements(cacheStore, indexKeys, typeStr, operation, targetValue)
+	}
+	// Fallback: no index found, read body directly and check value by path
+	body, err := cacheStore.GetValueJSON(vertexId)
+	return isBodyValueMeetsRequirements(body, err, key, typeStr, operation, targetValue)
 }
 
 func IsLinkBodyHasIndexValue(cacheStore *cache.Store, fromVertexId, linkName, key, valueType, operation, targetValue string) bool {
 	typeStr := strings.ToLower(valueType)[:1]
 	indexKeys := cacheStore.GetKeysByPattern(fmt.Sprintf(crud.LinkBodyValueIndexPrefPattern+crud.KeySuff3Pattern, fromVertexId, linkName, typeStr, key))
-	return IsIndexedKeyMeetsRequirements(cacheStore, indexKeys, typeStr, operation, targetValue)
+	if len(indexKeys) > 0 {
+		return IsIndexedKeyMeetsRequirements(cacheStore, indexKeys, typeStr, operation, targetValue)
+	}
+	// Fallback: no index found, read link body directly and check value by path
+	body, err := cacheStore.GetValueJSON(fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.KeySuff1Pattern, fromVertexId, linkName))
+	return isBodyValueMeetsRequirements(body, err, key, typeStr, operation, targetValue)
 }
 
 func IsIndexedKeyMeetsRequirements(cacheStore *cache.Store, indexKeys []string, typeStr, operation, targetValue string) bool {
@@ -248,6 +303,153 @@ func IsIndexedKeyMeetsRequirements(cacheStore *cache.Store, indexKeys []string, 
 	return false
 }
 
+func isBodyValueMeetsRequirements(body *easyjson.JSON, err error, key, typeStr, operation, targetValue string) bool {
+	if err != nil || body == nil {
+		return false
+	}
+	value := body.GetByPath(key)
+	switch typeStr {
+	case "b":
+		if !value.IsBool() {
+			return false
+		}
+		valBool := value.AsBoolDefault(false)
+		targetValBool := system.Str2Bool(targetValue)
+		switch operation {
+		case "==":
+			return valBool == targetValBool
+		default:
+			return valBool != targetValBool
+		}
+	case "n":
+		if !value.IsNumeric() {
+			return false
+		}
+		valNumeric := value.AsNumericDefault(0)
+		targetValNumeric := system.StringToFloat(targetValue)
+		switch operation {
+		case "==":
+			return valNumeric == targetValNumeric
+		case "!=":
+			return valNumeric != targetValNumeric
+		case "<":
+			return valNumeric < targetValNumeric
+		case ">":
+			return valNumeric > targetValNumeric
+		}
+	case "s":
+		if !value.IsString() {
+			return false
+		}
+		valString := value.AsStringDefault("")
+		switch operation {
+		case "==":
+			return valString == targetValue
+		case "!=":
+			return valString != targetValue
+		case "<":
+			return strings.Contains(targetValue, valString)
+		case ">":
+			return strings.Contains(valString, targetValue)
+		}
+	}
+	return false
+}
+
+func isArrayElementMeetsRequirements(arr easyjson.JSON, typeStr, operation, targetValue string) bool {
+	if !arr.IsArray() {
+		return false
+	}
+	elements, ok := arr.AsArray()
+	if !ok {
+		return false
+	}
+	targetNumeric := system.StringToFloat(targetValue)
+	targetBool := system.Str2Bool(targetValue)
+	for _, elem := range elements {
+		elemJSON := easyjson.NewJSON(elem)
+		switch typeStr {
+		case "b":
+			if elemJSON.IsBool() {
+				valBool := elemJSON.AsBoolDefault(false)
+				switch operation {
+				case "==":
+					if valBool == targetBool {
+						return true
+					}
+				default:
+					if valBool != targetBool {
+						return true
+					}
+				}
+			}
+		case "n":
+			if elemJSON.IsNumeric() {
+				valNumeric := elemJSON.AsNumericDefault(0)
+				switch operation {
+				case "==":
+					if valNumeric == targetNumeric {
+						return true
+					}
+				case "!=":
+					if valNumeric != targetNumeric {
+						return true
+					}
+				case "<":
+					if valNumeric < targetNumeric {
+						return true
+					}
+				case ">":
+					if valNumeric > targetNumeric {
+						return true
+					}
+				}
+			}
+		case "s":
+			if elemJSON.IsString() {
+				valString := elemJSON.AsStringDefault("")
+				switch operation {
+				case "==":
+					if valString == targetValue {
+						return true
+					}
+				case "!=":
+					if valString != targetValue {
+						return true
+					}
+				case "<":
+					if strings.Contains(targetValue, valString) {
+						return true
+					}
+				case ">":
+					if strings.Contains(valString, targetValue) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+func IsVertexBodyHasArrayValue(cacheStore *cache.Store, vertexId, key, valueType, operation, targetValue string) bool {
+	typeStr := strings.ToLower(valueType)[:1]
+	body, err := cacheStore.GetValueJSON(vertexId)
+	if err != nil || body == nil {
+		return false
+	}
+	return isArrayElementMeetsRequirements(body.GetByPath(key), typeStr, operation, targetValue)
+}
+
+func IsLinkBodyHasArrayValue(cacheStore *cache.Store, fromVertexId, linkName, key, valueType, operation, targetValue string) bool {
+	typeStr := strings.ToLower(valueType)[:1]
+	body, err := cacheStore.GetValueJSON(fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.KeySuff1Pattern, fromVertexId, linkName))
+	if err != nil || body == nil {
+		return false
+	}
+	return isArrayElementMeetsRequirements(body.GetByPath(key), typeStr, operation, targetValue)
+}
+
 func IsLinkSatifiesFilterCreteria(cacheStore *cache.Store, fromVertexId string, toVertexId string, linkName string, linkFilterQuery string) bool {
 	if len(linkFilterQuery) == 0 {
 		return true
@@ -283,6 +485,20 @@ func IsLinkSatifiesFilterCreteria(cacheStore *cache.Store, fromVertexId string, 
 								featuresFromDisjunctionFound = false
 								break
 							}
+						}
+					}
+				}
+				if len(tokens) == 3 && tokens[1] == "array" && tokens[2] == "has" {
+					if tokens[0] == "v" {
+						if !IsVertexBodyHasArrayValue(cacheStore, toVertexId, feature.value["key"], feature.value["value_type"], feature.value["operation"], feature.value["target_value"]) {
+							featuresFromDisjunctionFound = false
+							break
+						}
+					}
+					if tokens[0] == "l" {
+						if !IsLinkBodyHasArrayValue(cacheStore, fromVertexId, linkName, feature.value["key"], feature.value["value_type"], feature.value["operation"], feature.value["target_value"]) {
+							featuresFromDisjunctionFound = false
+							break
 						}
 					}
 				}
