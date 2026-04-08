@@ -10,61 +10,36 @@ Foliage Processing Language (FPL) is a query language of the Foliage core that e
 
 ---
 
-## Updates to JPGQL
+## JPGQL Filtering Functions
 
-### Syntax Changes
+All filtering functions include a prefix that specifies whether the function refers to a link (`l:` / `l_`) or a vertex (`v:` / `v_`).
 
-Compared to the previous version, JPGQL syntax has undergone a slight modification. All filtering functions must now include a prefix that specifies whether the function refers to a link (`l:` / `l_`) or a vertex (`v:` / `v_`). For example:
+### Link Filters
 
-**Old Syntax:**
-```txt
-.*[type('__object')]
-```
+- `l:type('<link should have type name>')` - filter by link type
+- `l:tags('<tag1>', '<tag2>', ...)` - filter by link tags (all must match)
+- `l:has('<key>', '<value_type>', '<operation>', '<value>')` - filter by link body field
+- `l:array:has('<key>', '<value_type>', '<operation>', '<value>')` - filter by element in link body array
 
-**New Syntax:**
-```txt
-.*[l:type('__object')]
-```
-or
-```txt
-.*[l_type('__object')]
-```
+### Vertex Filters
 
----
+- `v:has('<key>', '<value_type>', '<operation>', '<value>')` - filter by vertex body field
+- `v:array:has('<key>', '<value_type>', '<operation>', '<value>')` - filter by element in vertex body array
 
-### New Filtering Functions
+### Filter parameters
 
-#### Existing Link Filtering Functions
+| Parameter | Description | Values |
+|-----------|-------------|--------|
+| `key` | Field path in body, supports dot-notation for nested access | `'hostname'`, `'info.mac'`, `'config.vlans'` |
+| `value_type` | Data type of the value (or array element type for `array:has`) | `'numeric'`, `'string'`, `'bool'` |
+| `operation` | Comparison operator | `'=='`, `'!='`, `'>'`, `'<'` |
+| `value` | Target value to compare against | `'spine'`, `'9000'`, `'aa:bb:cc'` |
 
-- `l:type('<link should have type name>')`
-- `l:tags('<link should have tag1 name>', '<and link should have tag2 name>', '<and link should have tag3 name>',...)`
+**String operators:** `==` exact match, `!=` not equal, `>` value contains target (substring), `<` target contains value (substring).
 
-#### New Filtering Functions for Links and Vertices by Indexed `body` Fields
+**Indexing:** top-level scalar body fields are auto-indexed for fast lookup. Nested fields and arrays use direct body read (fallback) which is correct but slower on large graphs.
 
-- `l:has('<body's first level key name>', '<key value type: numeric|string|bool>', '<compare op: <, >, ==, !=>', '<value>')`
-- `v:has('<body's first level key name>', '<key value type: numeric|string|bool>', '<compare op: <, >, ==, !=>', '<value>')`
-
----
-
-## Examples
-
-### For CLI
-
-```bash
-./foliage-cli gwalk to pak1/scala_hlm_hw-server && ./foliage-cli gwalk query ".*[l:type('__object')]"
-./foliage-cli gwalk to pak1/scala_hlm_hw-server && ./foliage-cli gwalk query ".*[l:type('__object')].*[l:type('scala_hlm_hw_disk')]"
-./foliage-cli gwalk to pak1/scala_hlm_hw-server && ./foliage-cli gwalk query ".*[v:has('hostname','string','>','cluster')]"
-./foliage-cli gwalk to pak1/scala_hlm_hw-server && ./foliage-cli gwalk query ".*[l:type('__object') && v:has('hostname','string','>','bc')]"
-```
-
-### For NATS
-
-```bash
-nats -s nats://nats:foliage@nats:4222 req request.pak1.functions.graph.api.query.jpgql.ctra.pak1/scala_hlm_hw-server '{"payload":{"query":".*[l:type('__object')]"}}'
-nats -s nats://nats:foliage@nats:4222 req request.pak1.functions.graph.api.query.jpgql.ctra.pak1/scala_hlm_hw-server '{"payload":{"query":".*[l:type('__object')].*[l:type('scala_hlm_hw_disk')]"}}'
-nats -s nats://nats:foliage@nats:4222 req request.pak1.functions.graph.api.query.jpgql.ctra.pak1/scala_hlm_hw-server '{"payload":{"query":".*[v:has('hostname','string','>','cluster')]"}}'
-nats -s nats://nats:foliage@nats:4222 req request.pak1.functions.graph.api.query.jpgql.ctra.pak1/scala_hlm_hw-server '{"payload":{"query":".*[l:type('__object') && v:has('hostname','string','>','bc')]"}}'
-```
+For full JPGQL syntax reference see [jpgql.md](./jpgql.md).
 
 ---
 
@@ -120,57 +95,59 @@ This function takes UUIDs from FPL and returns their bodies in an array. It can 
 
 ## FPL Query Examples
 
+FPL is a synchronous request/reply function. Send a NATS request to `request.<domain>.functions.graph.api.query.fpl.<object_id>`. The domain prefix in the object ID is optional — if omitted, the default domain is used automatically.
+
 ```bash
-nats -s nats://nats:foliage@nats:4222 req request.pak1.functions.graph.api.query.fpl.root "$(jq -n '
+nats -s nats://nats:foliage@nats:4222 req request.hub.functions.graph.api.query.fpl.root "$(jq -n '
 {
-   "payload": {
-      "jpgql_uoi": [
-         [
-            {
-               "jpgql": ".*[v:has(\"hostname\",\"string\",\">\",\"cluster\")]",
-               "from_uuid": "pak1/scala_hlm_hw-server"
-            }
-         ],
-         [
-            {
-               "jpgql": ".*[v:has(\"hostname\",\"string\",\">\",\"bc\")]",
-               "from_uuid": "pak1/scala_hlm_hw-server"
-            }
-         ]
-      ],
-      "sort": "dsc"
-   }
+    "payload": {
+        "jpgql_uoi": [
+            [
+                {
+                    "jpgql": ".*[v:has(\"hostname\",\"string\",\">\",\"cluster\")]",
+                    "from_uuid": "pak1/scala_hlm_hw-server"
+                }
+            ],
+            [
+                {
+                    "jpgql": ".*[v:has(\"hostname\",\"string\",\">\",\"bc\")]",
+                    "from_uuid": "pak1/scala_hlm_hw-server"
+                }
+            ]
+        ],
+        "sort": "dsc"
+    }
 }
 ')" | jq '.'
 ```
 
 ```bash
-nats -s nats://nats:foliage@nats:4222 req request.pak1.functions.graph.api.query.fpl.root "$(jq -n '
+nats -s nats://nats:foliage@nats:4222 req request.hub.functions.graph.api.query.fpl.root "$(jq -n '
 {
-   "payload": {
-      "jpgql_uoi": [
-         [
-            {
-               "jpgql": ".*[v:has(\"hostname\",\"string\",\">\",\"cluster\")]",
-               "from_uuid": "pak1/scala_hlm_hw-server"
-            }
-         ],
-         [
-            {
-               "jpgql": ".*[v:has(\"hostname\",\"string\",\">\",\"bc\")]",
-               "from_uuid": "pak1/scala_hlm_hw-server"
-            }
-         ]
-      ],
-      "post_processor_func": {
-         "name": "functions.graph.api.query.fpl.pp.vbody",
-         "data": {
-            "sort_by_field": [
-               "body.hostname:asc"
+    "payload": {
+        "jpgql_uoi": [
+            [
+                {
+                    "jpgql": ".*[v:has(\"hostname\",\"string\",\">\",\"cluster\")]",
+                    "from_uuid": "pak1/scala_hlm_hw-server"
+                }
+            ],
+            [
+                {
+                    "jpgql": ".*[v:has(\"hostname\",\"string\",\">\",\"bc\")]",
+                    "from_uuid": "pak1/scala_hlm_hw-server"
+                }
             ]
-         }
-      }
-   }
+        ],
+        "post_processor_func": {
+            "name": "functions.graph.api.query.fpl.pp.vbody",
+            "data": {
+                "sort_by_field": [
+                    "body.hostname:asc"
+                ]
+            }
+        }
+    }
 }
 ')" | jq '.'
 ```
