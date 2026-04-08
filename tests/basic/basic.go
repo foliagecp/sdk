@@ -50,6 +50,8 @@ var (
 	RequestReplyTest bool = system.GetEnvMustProceed("REQUEST_REPLY_TEST", true)
 	// TriggersTest - test the Foliage cmdb crud triggers
 	TriggersTest bool = system.GetEnvMustProceed("TRIGGERS_TEST", true)
+	// FilterQueriesTest - test v_has fallback, v_array_has, l_has fallback, l_array_has
+	FilterQueriesTest bool = system.GetEnvMustProceed("FILTER_QUERIES_TEST", true)
 	// KVMuticesTestDurationSec - key/value mutices test duration
 
 	dbClient db.DBSyncClient
@@ -187,6 +189,9 @@ func Start() {
 		}
 		if CreateSimpleGraphTest {
 			CreateTestGraph(runtime)
+		}
+		if FilterQueriesTest && CreateSimpleGraphTest {
+			RunFilterQueries(runtime)
 		}
 
 		body := easyjson.NewJSONObjectWithKeyValue("search_fields", easyjson.NewJSON([]string{"f1.f11", "f2"}))
