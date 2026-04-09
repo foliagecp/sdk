@@ -331,6 +331,16 @@ func (cmdb CMDBSyncClient) ObjectRead(name string) (easyjson.JSON, error) {
 	return om.Data, OpErrorFromOpMsg(om)
 }
 
+func (cmdb CMDBSyncClient) ObjectReadV2(name string) (easyjson.JSON, error) {
+	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
+	payload.SetByPath("details_v2", easyjson.NewJSON(true))
+	options := easyjson.NewJSONObject()
+	options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
+	om := sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.object.read", seqFree(name), &payload, &options))
+	return om.Data, OpErrorFromOpMsg(om)
+}
+
 // ------------------------------------------------------------------------------------------------
 
 func (cmdb CMDBSyncClient) TypesLinkCreate(from, to, objectLinkType string, tags []string, body ...easyjson.JSON) error {

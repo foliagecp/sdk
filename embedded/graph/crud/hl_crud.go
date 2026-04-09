@@ -383,9 +383,15 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
  */
 func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
+	detailsV2 := ctx.Payload.GetByPath("details_v2").AsBoolDefault(false)
 
 	om := sfMediators.NewOpMediator(ctx)
-	payload := easyjson.NewJSONObjectWithKeyValue("details", easyjson.NewJSON(true))
+	payload := easyjson.NewJSONObject()
+	if detailsV2 {
+		payload.SetByPath("details_v2", easyjson.NewJSON(true))
+	} else {
+		payload.SetByPath("details", easyjson.NewJSON(true))
+	}
 
 	operationKeysMutexLock(ctx, []string{selfID}, false)
 	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &payload), ctx.Options))
@@ -402,13 +408,26 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 
 	objectType := ""
 	toObjects := []string{}
-	for i := 0; i < m.Data.GetByPath("links.out.names").ArraySize(); i++ {
-		tp := m.Data.GetByPath("links.out.types").ArrayElement(i).AsStringDefault("")
-		toId := m.Data.GetByPath("links.out.ids").ArrayElement(i).AsStringDefault("")
-		if tp == TO_TYPELINK {
-			objectType = toId
-		} else {
-			toObjects = append(toObjects, toId)
+	if detailsV2 {
+		for i := 0; i < m.Data.GetByPath("links.out").ArraySize(); i++ {
+			link := m.Data.GetByPath("links.out").ArrayElement(i)
+			tp := link.GetByPath("type").AsStringDefault("")
+			toId := link.GetByPath("to").AsStringDefault("")
+			if tp == TO_TYPELINK {
+				objectType = toId
+			} else {
+				toObjects = append(toObjects, toId)
+			}
+		}
+	} else {
+		for i := 0; i < m.Data.GetByPath("links.out.names").ArraySize(); i++ {
+			tp := m.Data.GetByPath("links.out.types").ArrayElement(i).AsStringDefault("")
+			toId := m.Data.GetByPath("links.out.ids").ArrayElement(i).AsStringDefault("")
+			if tp == TO_TYPELINK {
+				objectType = toId
+			} else {
+				toObjects = append(toObjects, toId)
+			}
 		}
 	}
 	if len(objectType) == 0 {

@@ -379,7 +379,8 @@ Reply:
 			op_stack: json array - optional
 */
 func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-	details := ctx.Payload.GetByPath("details").AsBoolDefault(false)
+	detailsV2 := ctx.Payload.GetByPath("details_v2").AsBoolDefault(false)
+	details := detailsV2 || ctx.Payload.GetByPath("details").AsBoolDefault(false)
 
 	selfID := getOriginalID(ctx.Self.ID)
 
@@ -402,29 +403,60 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	result := easyjson.NewJSONObjectWithKeyValue("body", *j)
 
 	if details {
-		outLinkNames := []string{}
-		outLinkTypes := []string{}
-		outLinkIds := []string{}
 		outLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, selfID, ">"))
-		for _, outLinkKey := range outLinkKeys {
-			linkKeyTokens := strings.Split(outLinkKey, ".")
-			linkName := linkKeyTokens[len(linkKeyTokens)-1]
-			outLinkNames = append(outLinkNames, linkName)
 
-			linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, selfID, linkName))
-			brokenTarget := true
-			if err == nil {
-				tokens := strings.Split(string(linkTargetBytes), ".")
-				if len(tokens) == 2 {
-					brokenTarget = false
-					outLinkTypes = append(outLinkTypes, tokens[0])
-					outLinkIds = append(outLinkIds, tokens[1])
+		if detailsV2 {
+			// Structured format: links.out as array of {to, name, type} objects
+			outLinks := easyjson.NewJSONArray()
+			for _, outLinkKey := range outLinkKeys {
+				linkKeyTokens := strings.Split(outLinkKey, ".")
+				linkName := linkKeyTokens[len(linkKeyTokens)-1]
+
+				toId := ""
+				linkType := ""
+				linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, selfID, linkName))
+				if err == nil {
+					tokens := strings.Split(string(linkTargetBytes), ".")
+					if len(tokens) == 2 {
+						linkType = tokens[0]
+						toId = tokens[1]
+					}
+				}
+
+				outLinkJson := easyjson.NewJSONObjectWithKeyValue("to", easyjson.NewJSON(toId))
+				outLinkJson.SetByPath("name", easyjson.NewJSON(linkName))
+				outLinkJson.SetByPath("type", easyjson.NewJSON(linkType))
+				outLinks.AddToArray(outLinkJson)
+			}
+			result.SetByPath("links.out", outLinks)
+		} else {
+			// Legacy format: links.out as parallel arrays {names, types, ids}
+			outLinkNames := []string{}
+			outLinkTypes := []string{}
+			outLinkIds := []string{}
+			for _, outLinkKey := range outLinkKeys {
+				linkKeyTokens := strings.Split(outLinkKey, ".")
+				linkName := linkKeyTokens[len(linkKeyTokens)-1]
+				outLinkNames = append(outLinkNames, linkName)
+
+				linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, selfID, linkName))
+				brokenTarget := true
+				if err == nil {
+					tokens := strings.Split(string(linkTargetBytes), ".")
+					if len(tokens) == 2 {
+						brokenTarget = false
+						outLinkTypes = append(outLinkTypes, tokens[0])
+						outLinkIds = append(outLinkIds, tokens[1])
+					}
+				}
+				if brokenTarget {
+					outLinkTypes = append(outLinkTypes, "")
+					outLinkIds = append(outLinkIds, "")
 				}
 			}
-			if brokenTarget {
-				outLinkTypes = append(outLinkTypes, "")
-				outLinkIds = append(outLinkIds, "")
-			}
+			result.SetByPath("links.out.names", easyjson.NewJSON(outLinkNames))
+			result.SetByPath("links.out.types", easyjson.NewJSON(outLinkTypes))
+			result.SetByPath("links.out.ids", easyjson.NewJSON(outLinkIds))
 		}
 
 		inLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff1Pattern, selfID, ">"))
@@ -447,10 +479,6 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			inLinkJson.SetByPath("type", easyjson.NewJSON(linkType))
 			inLinks.AddToArray(inLinkJson)
 		}
-
-		result.SetByPath("links.out.names", easyjson.NewJSON(outLinkNames))
-		result.SetByPath("links.out.types", easyjson.NewJSON(outLinkTypes))
-		result.SetByPath("links.out.ids", easyjson.NewJSON(outLinkIds))
 
 		result.SetByPath("links.in", inLinks)
 	}

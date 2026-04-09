@@ -73,6 +73,12 @@ func (gc GraphSyncClient) VertexRead(id string, details ...bool) (easyjson.JSON,
 	return om.Data, OpErrorFromOpMsg(om)
 }
 
+func (gc GraphSyncClient) VertexReadDetailsV2(id string) (easyjson.JSON, error) {
+	payload := easyjson.NewJSONObjectWithKeyValue("details_v2", easyjson.NewJSON(true))
+	om := sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.vertex.read", seqFree(id), &payload, nil))
+	return om.Data, OpErrorFromOpMsg(om)
+}
+
 func (gc GraphSyncClient) VerticesLinkCreate(from, to, linkName, linkType string, tags []string, body ...easyjson.JSON) error {
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
