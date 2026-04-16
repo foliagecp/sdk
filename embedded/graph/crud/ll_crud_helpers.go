@@ -93,6 +93,8 @@ func resultWithOpStack(existingResult *easyjson.JSON, opStack *easyjson.JSON) ea
 func getFullLinkInfoFromSpecifiedIdentifier(ctx *sfPlugins.StatefunContextProcessor) (linkType, linkName, toId string, linkExists bool) {
 	selfID := getOriginalID(ctx.Self.ID)
 	if linkName, ok := ctx.Payload.GetByPath("name").AsString(); ok {
+		linkName = ctx.Domain.GetObjectIDWithoutDomain(linkName)
+
 		linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, selfID, linkName))
 		if err != nil {
 			return "", "", "", false
@@ -110,7 +112,7 @@ func getFullLinkInfoFromSpecifiedIdentifier(ctx *sfPlugins.StatefunContextProces
 			if lt, ok := ctx.Payload.GetByPath("type").AsString(); ok {
 				linkNameBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfID, lt, toVertexId))
 				if err == nil {
-					return ctx.Domain.GetObjectIDWithoutDomain(lt), string(linkNameBytes), toVertexId, true
+					return ctx.Domain.GetObjectIDWithoutDomain(lt), ctx.Domain.GetObjectIDWithoutDomain(string(linkNameBytes)), toVertexId, true
 				}
 			}
 		}

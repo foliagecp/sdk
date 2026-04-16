@@ -579,6 +579,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			om.AggregateOpMsg(sfMediators.OpMsgFailed("name is not defined")).Reply()
 			return
 		}
+		linkName = ctx.Domain.GetObjectIDWithoutDomain(linkName)
 
 		var linkType string
 		if s, ok := payload.GetByPath("type").AsString(); ok {
