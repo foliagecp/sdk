@@ -52,7 +52,7 @@ type Runtime struct {
 	glce int64 // Global last call ended - time of last call of last function handling id of any function type
 	gc   int64 // Global counter - max total id handlers for all function types
 
-	isReady                      bool
+	isReady                      atomic.Bool
 	shutdown                     chan struct{}
 	gs                           *GracefulShutdown
 	functionsStopCh              chan struct{}
@@ -81,7 +81,6 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		config:                     config,
 		registeredFunctionTypes:    make(map[string]*FunctionType),
 		canRegisterNewFunctionType: true,
-		isReady:                    false,
 		shutdown:                   make(chan struct{}),
 		functionsStopCh:            make(chan struct{}),
 	}
@@ -280,7 +279,7 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 	go r.runGarbageCollector(r.gs.ctxPhaseThree)
 
 	// Set Runtime ready
-	r.isReady = true
+	r.isReady.Store(true)
 
 	// Wait for shutdown signal.
 	<-r.shutdown
