@@ -298,7 +298,7 @@ type Store struct {
 	// walWriteEnabled - true for active instance
 	// only active instances can write to WAL streams
 	walWriteEnabled      atomic.Bool
-	transactionGenerator TransactionGenerator
+	transactionGenerator atomic.Pointer[TransactionGenerator]
 
 	//write barrier state
 	backupBarrierTimestamp   int64
@@ -442,7 +442,7 @@ func (cs *Store) traverseCacheForTransaction(
 					}
 				}
 
-				if err := cs.transactionGenerator.PublishOperation(txID, valueUpdateTime, opType, cs.toStoreKey(newSuffix), finalBytes); err != nil {
+				if err := cs.getTransactionGenerator().PublishOperation(txID, valueUpdateTime, opType, cs.toStoreKey(newSuffix), finalBytes); err != nil {
 					le.Errorf(cs.ctx, "Store kvLazyWriter cannot publish WAL operation for key=%s: %s", keyStr, err)
 				} else {
 					result.opsCount++
@@ -607,7 +607,8 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 				return
 			}
 
-			if cs.transactionGenerator == nil {
+			tg := cs.getTransactionGenerator()
+			if tg == nil {
 				if time.Since(lastWALNotReadyLogAt) >= skipLogInterval {
 					le.Tracef(ctx, "WAL is not ready, skip this iteration")
 					lastWALNotReadyLogAt = time.Now()
@@ -652,7 +653,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 				if result.opsCount > 0 {
 					le.Tracef(ctx, "Transaction %s: traversed=%d nodes, opsCount=%d", txID, result.traverseCount, result.opsCount)
 					le.Tracef(ctx, "Publishing WAL commit for tx=%s with %d operations", txID, result.opsCount)
-					if err := cs.transactionGenerator.PublishCommit(txID); err != nil {
+					if err := tg.PublishCommit(txID); err != nil {
 						le.Errorf(ctx, "Store kvLazyWriter cannot publish WAL commit for tx=%s: %s", txID, err)
 					}
 				}
@@ -679,7 +680,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 			}
 
 			if shutdownStatus == shutdownStatusWaiting {
-				txID := cs.transactionGenerator.GenerateTransactionID()
+				txID := tg.GenerateTransactionID()
 				le.Debugf(ctx, "Final shutdown transaction %s - collecting all pending operations", txID)
 
 				result := cs.traverseCacheForTransaction(txID, 0, true)
@@ -687,7 +688,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 				if result.opsCount > 0 {
 					le.Debugf(ctx, "Final transaction %s: traversed=%d nodes, opsCount=%d", txID, result.traverseCount, result.opsCount)
 					le.Debugf(ctx, "Publishing final WAL commit for tx=%s with %d operations", txID, result.opsCount)
-					if err := cs.transactionGenerator.PublishCommit(txID); err != nil {
+					if err := tg.PublishCommit(txID); err != nil {
 						le.Errorf(ctx, "Store kvLazyWriter cannot publish final WAL commit for tx=%s: %s", txID, err)
 					}
 				}
@@ -1252,7 +1253,16 @@ type TransactionGenerator interface {
 }
 
 func (cs *Store) SetTransactionGenerator(tg TransactionGenerator) {
-	cs.transactionGenerator = tg
+	cs.transactionGenerator.Store(&tg)
+}
+
+// getTransactionGenerator atomically loads the current TransactionGenerator.
+// Returns nil if not set yet.
+func (cs *Store) getTransactionGenerator() TransactionGenerator {
+	if p := cs.transactionGenerator.Load(); p != nil {
+		return *p
+	}
+	return nil
 }
 
 func (cs *Store) SetWALWriteEnabled(enabled bool) {
