@@ -146,11 +146,7 @@ func (l *Logger) SetOptions(
 	reportCaller bool,
 	jsonFormat bool,
 ) {
-	optionsMu.Lock()
-	defer optionsMu.Unlock()
-
-	l.levelVar.Set(level)
-	l.reportCaller = reportCaller
+	l.levelVar.Set(level) // LevelVar is internally thread-safe (atomic)
 
 	handlerOpts := &slog.HandlerOptions{
 		AddSource: reportCaller,
@@ -172,7 +168,10 @@ func (l *Logger) SetOptions(
 		handler = slog.NewTextHandler(output, handlerOpts)
 	}
 
+	l.mu.Lock()
+	l.reportCaller = reportCaller
 	l.slogger = slog.New(handler)
+	l.mu.Unlock()
 }
 
 func (l *Logger) SetLevel(level LogLevel) {
@@ -182,21 +181,22 @@ func (l *Logger) SetLevel(level LogLevel) {
 // With returns a new Logger with the given fields added to its context
 // Allows for `nested` logger creation
 func (l *Logger) With(fields map[string]interface{}) *Logger {
+	newFields := make(map[string]interface{})
+
+	l.mu.RLock()
 	newLogger := &Logger{
 		slogger:      l.slogger,
 		levelVar:     l.levelVar,
 		reportCaller: l.reportCaller,
-		fields:       make(map[string]interface{}),
+		fields:       newFields,
 	}
-
-	l.mu.RLock()
 	for k, v := range l.fields {
-		newLogger.fields[k] = v
+		newFields[k] = v
 	}
 	l.mu.RUnlock()
 
 	for k, v := range fields {
-		newLogger.fields[k] = v
+		newFields[k] = v
 	}
 
 	return newLogger
@@ -212,9 +212,11 @@ func (l *Logger) log(ctx context.Context, level LogLevel, msg string, args ...in
 		return
 	}
 
-	attrs := make([]slog.Attr, 0, len(l.fields)+len(args)/2+1) // +1 for potential caller
-
+	// Snapshot all logger state under a single RLock, release before I/O.
 	l.mu.RLock()
+	slogger := l.slogger
+	reportCaller := l.reportCaller
+	attrs := make([]slog.Attr, 0, len(l.fields)+len(args)/2+1) // +1 for potential caller
 	for k, v := range l.fields {
 		attrs = append(attrs, slog.Any(k, v))
 	}
@@ -227,14 +229,14 @@ func (l *Logger) log(ctx context.Context, level LogLevel, msg string, args ...in
 		}
 	}
 
-	if l.reportCaller {
+	if reportCaller {
 		_, file, line, ok := runtime.Caller(skipStackFrames)
 		if ok {
 			attrs = append(attrs, slog.String("caller", fmt.Sprintf("%s:%d", file, line)))
 		}
 	}
 
-	l.slogger.LogAttrs(ctx, level, msg, attrs...)
+	slogger.LogAttrs(ctx, level, msg, attrs...)
 
 	if level == PanicLevel {
 		panic(msg)
