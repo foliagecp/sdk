@@ -45,6 +45,7 @@ type Runtime struct {
 	Domain *Domain
 
 	registeredFunctionTypes       map[string]*FunctionType
+	ftMu                          sync.RWMutex // protects registeredFunctionTypes
 	canRegisterNewFunctionType    bool
 	onAfterStartFunctionsWithMode []onAfterStartFunctionWithMode
 
@@ -65,6 +66,13 @@ type Runtime struct {
 type GracefulShutdown struct {
 	phase atomic.Uint32
 	mu    sync.RWMutex
+
+	// phaseTransitionMu serializes the transition from ShutdownPhaseNone to any
+	// shutdown phase with long-running state-change operations (e.g. dynamic
+	// function type registration). Hold RLock while performing work that must
+	// not start once shutdown has begun; Lock is taken before flipping the
+	// phase so that the shutdown waits for all in-flight operations to finish.
+	phaseTransitionMu sync.RWMutex
 
 	cancelPhaseOne   context.CancelFunc
 	cancelPhaseTwo   context.CancelFunc
@@ -172,12 +180,13 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 		<-sig
 		if !r.config.isActiveInstance {
 			logger.Debugf(ctx, "Runtime is not active. Shutting down immediately")
+			r.gs.beginShutdownPhaseOne()
 			r.gs.cancelAllContexts()
 			r.Shutdown()
 			return
 		}
 		startShutdown := time.Now()
-		r.gs.setPhase(ShutdownPhaseOne)
+		r.gs.beginShutdownPhaseOne()
 		logger.Debugf(ctx, "Received shutdown signal, shutting down gracefully...")
 		logger.Debugf(ctx, "Shutdown currentPhase 1")
 		r.gs.cancelPhaseOne()
@@ -304,6 +313,7 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 
 func (r *Runtime) drainSignalSubscriptions() {
 	var wg sync.WaitGroup
+	r.ftMu.RLock()
 	for ftName, ft := range r.registeredFunctionTypes {
 		wg.Add(1)
 		go func(name string, ft *FunctionType) {
@@ -311,6 +321,7 @@ func (r *Runtime) drainSignalSubscriptions() {
 			ft.stopSignalSubscription()
 		}(ftName, ft)
 	}
+	r.ftMu.RUnlock()
 	wg.Wait()
 }
 
@@ -329,6 +340,16 @@ func NewGracefulShutdown(rootCtx context.Context) *GracefulShutdown {
 
 func (gs *GracefulShutdown) setPhase(phase ShutdownPhase) {
 	gs.phase.Store(phase)
+}
+
+// beginShutdownPhaseOne atomically transitions from ShutdownPhaseNone to
+// ShutdownPhaseOne. It takes phaseTransitionMu in write mode, which blocks
+// until all in-flight state-change operations (holding RLock) complete, then
+// flips the phase. Once this returns, no new state-change operation can start.
+func (gs *GracefulShutdown) beginShutdownPhaseOne() {
+	gs.phaseTransitionMu.Lock()
+	defer gs.phaseTransitionMu.Unlock()
+	gs.setPhase(ShutdownPhaseOne)
 }
 
 func (gs *GracefulShutdown) currentPhase() ShutdownPhase {
@@ -374,6 +395,8 @@ func (r *Runtime) createStreams(ctx context.Context) error {
 		existingStreams = append(existingStreams, info.Config.Name)
 	}
 
+	r.ftMu.RLock()
+	defer r.ftMu.RUnlock()
 	for _, ft := range r.registeredFunctionTypes {
 		if ft.config.IsSignalProviderAllowed(sfPlugins.JetstreamGlobalSignal) {
 			if !contains(existingStreams, ft.getStreamName()) {
@@ -398,18 +421,26 @@ func (r *Runtime) createStreams(ctx context.Context) error {
 
 // handleSingleInstanceFunctions manages single-instance function locks.
 func (r *Runtime) handleSingleInstanceFunctions(ctx context.Context, revisions map[string]uint64) error {
-	for ftName, ft := range r.registeredFunctionTypes {
+	// Snapshot under RLock to avoid holding it across KeyMutexLock (which does NATS I/O)
+	r.ftMu.RLock()
+	ftSnapshot := make([]*FunctionType, 0, len(r.registeredFunctionTypes))
+	for _, ft := range r.registeredFunctionTypes {
+		ftSnapshot = append(ftSnapshot, ft)
+	}
+	r.ftMu.RUnlock()
+
+	for _, ft := range ftSnapshot {
 		if !ft.config.multipleInstancesAllowed {
-			revID, err := KeyMutexLock(ctx, r, system.GetHashStr(ftName), true)
+			revID, err := KeyMutexLock(ctx, r, system.GetHashStr(ft.name), true)
 			if err != nil {
 				if errors.Is(err, ErrMutexLocked) {
 					lg.Logf(lg.WarnLevel, "Function type %s is already running elsewhere; skipping", ft.name)
-					revisions[ftName] = 0 // 0 means that the function is already running elsewhere
+					revisions[ft.name] = 0 // 0 means that the function is already running elsewhere
 					continue
 				}
 				return err
 			}
-			revisions[ftName] = revID
+			revisions[ft.name] = revID
 		}
 	}
 
@@ -422,7 +453,15 @@ func (r *Runtime) handleSingleInstanceFunctions(ctx context.Context, revisions m
 
 // startFunctionSubscriptions starts the function subscriptions based on the configuration.
 func (r *Runtime) startFunctionSubscriptions(ctx context.Context, revisions map[string]uint64) error {
+	// Snapshot under RLock to avoid holding it during NATS subscription I/O
+	r.ftMu.RLock()
+	ftSnapshot := make([]*FunctionType, 0, len(r.registeredFunctionTypes))
 	for _, ft := range r.registeredFunctionTypes {
+		ftSnapshot = append(ftSnapshot, ft)
+	}
+	r.ftMu.RUnlock()
+
+	for _, ft := range ftSnapshot {
 		if !ft.config.multipleInstancesAllowed {
 			revision, exist := revisions[ft.name]
 			if !exist {
@@ -435,21 +474,16 @@ func (r *Runtime) startFunctionSubscriptions(ctx context.Context, revisions map[
 			}
 		}
 
-		if ft.config.IsSignalProviderAllowed(sfPlugins.JetstreamGlobalSignal) {
-			if err := AddSignalSourceJetstreamQueuePushConsumer(ft); err != nil {
-				return err
-			}
-		}
-		if ft.config.IsRequestProviderAllowed(sfPlugins.NatsCoreGlobalRequest) {
-			if err := AddRequestSourceNatsCore(ft); err != nil {
-				return err
-			}
+		if err := ft.startSubscriptions(); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
 func (r *Runtime) stopFunctionSubscriptions(ctx context.Context) {
+	r.ftMu.RLock()
+	defer r.ftMu.RUnlock()
 	for _, ft := range r.registeredFunctionTypes {
 		ft.stopSignalSubscription()
 		ft.stopRequestSubscription()
@@ -458,6 +492,7 @@ func (r *Runtime) stopFunctionSubscriptions(ctx context.Context) {
 
 func (r *Runtime) dropAllFunctionPendingTasks() {
 	totalDropped := 0
+	r.ftMu.RLock()
 	for _, ft := range r.registeredFunctionTypes {
 		dropped := ft.sfWorkerPool.DropPendingTasks()
 		totalDropped += dropped
@@ -465,6 +500,7 @@ func (r *Runtime) dropAllFunctionPendingTasks() {
 			lg.Logf(lg.DebugLevel, "Dropped %d pending tasks for function %s on passive transition", dropped, ft.name)
 		}
 	}
+	r.ftMu.RUnlock()
 	if totalDropped > 0 {
 		lg.Logf(lg.DebugLevel, "Dropped %d pending tasks in total on passive transition", totalDropped)
 	}
@@ -522,6 +558,7 @@ func (r *Runtime) collectGarbage() {
 	isShutdown := r.gs.currentPhase() == ShutdownPhaseTwo
 	functionsReadyForStop := isShutdown
 
+	r.ftMu.RLock()
 	for _, ft := range r.registeredFunctionTypes {
 		collected, running := ft.gc(r.config.functionTypeIDLifetimeMs)
 		totalGarbageCollected += collected
@@ -541,12 +578,15 @@ func (r *Runtime) collectGarbage() {
 			ft.lastMsgTimeNs.Store(uint64(system.GetCurrentTimeNs()))
 		}
 	}
+	r.ftMu.RUnlock()
 
 	if functionsReadyForStop {
 		lg.GetLogger().Infof(context.TODO(), "all functions are ready for stop")
+		r.ftMu.RLock()
 		for _, ft := range r.registeredFunctionTypes {
 			ft.stopRequestSubscription()
 		}
+		r.ftMu.RUnlock()
 		r.gs.setPhase(ShutdownPhaseThree)
 		r.functionsStopCh <- struct{}{}
 	}

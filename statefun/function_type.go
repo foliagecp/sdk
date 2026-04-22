@@ -2,6 +2,7 @@ package statefun
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -62,17 +63,149 @@ func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHa
 	}
 	if runtime.canRegisterNewFunctionType {
 		ft.sfWorkerPool = NewSFWorkerPool(ft, config.functionWorkerPoolConfig)
+		runtime.ftMu.Lock()
 		runtime.registeredFunctionTypes[ft.name] = ft
+		runtime.ftMu.Unlock()
 	} else {
-		lg.Logf(lg.ErrorLevel, "Function type '%s' is not registered. Ensure that all function types are registered before starting the runtime.", ft.name)
+		lg.Logf(lg.ErrorLevel, "Function type '%s' is not registered. Ensure that all function types are registered before starting the runtime, or use RegisterDynamicFunctionType.", ft.name)
 	}
 	return ft
+}
+
+// RegisterDynamicFunctionType registers a function type after the runtime has already started.
+// Returns an error if:
+//   - runtime has not started yet (use NewFunctionType instead),
+//   - runtime is shutting down,
+//   - a function type with the same name is already registered,
+//   - JetStream stream / NATS subscription creation fails.
+//
+// On success the function type is fully operational: worker pool is running and NATS
+// subscriptions (according to the config) are live.
+//
+// Note: in active/passive HA mode this method will still register the function type
+// locally, but subscriptions will be created only when this instance is active.
+// If the instance is passive, subscriptions will be set up later by the lifecycle
+// updater when it transitions to active.
+func RegisterDynamicFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHandler, config FunctionTypeConfig) (*FunctionType, error) {
+	if !runtime.isReady.Load() {
+		return nil, fmt.Errorf("runtime has not started yet; use NewFunctionType for compile-time registration")
+	}
+
+	// Hold phaseTransitionMu in read mode for the entire registration so that
+	// a concurrent shutdown waits for us to finish (or we see shutdown started
+	// and abort before doing any work).
+	runtime.gs.phaseTransitionMu.RLock()
+	defer runtime.gs.phaseTransitionMu.RUnlock()
+
+	if runtime.gs.currentPhase() != ShutdownPhaseNone {
+		return nil, fmt.Errorf("runtime is shutting down; cannot register new function type '%s'", name)
+	}
+
+	ft := &FunctionType{
+		runtime:      runtime,
+		name:         name,
+		subject:      fmt.Sprintf(DomainIngressSubjectsTmpl, runtime.Domain.name, fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, runtime.Domain.name, name, "*")),
+		logicHandler: logicHandler,
+		idKeyMutex:   system.NewKeyMutex(),
+		config:       config,
+		tokens:       *system.NewTokenBucket(config.functionWorkerPoolConfig.MaxWorkers + config.functionWorkerPoolConfig.TaskQueueLen),
+		shutdownCh:   make(chan struct{}, 1),
+	}
+	ft.sfWorkerPool = NewSFWorkerPool(ft, config.functionWorkerPoolConfig)
+
+	// Register in map (check uniqueness atomically)
+	runtime.ftMu.Lock()
+	if _, exists := runtime.registeredFunctionTypes[name]; exists {
+		runtime.ftMu.Unlock()
+		return nil, fmt.Errorf("function type '%s' is already registered", name)
+	}
+	runtime.registeredFunctionTypes[name] = ft
+	runtime.ftMu.Unlock()
+
+	// Rollback helper in case any subsequent step fails
+	rollback := func() {
+		runtime.ftMu.Lock()
+		delete(runtime.registeredFunctionTypes, name)
+		runtime.ftMu.Unlock()
+	}
+
+	// Ensure JetStream stream exists for signal-enabled functions
+	if ft.config.IsSignalProviderAllowed(sfPlugins.JetstreamGlobalSignal) {
+		streamName := ft.getStreamName()
+		streamExists := false
+		for info := range runtime.js.StreamsInfo() {
+			if info.Config.Name == streamName {
+				streamExists = true
+				break
+			}
+		}
+		if !streamExists {
+			if _, err := runtime.js.AddStream(&nats.StreamConfig{
+				Name:      streamName,
+				Subjects:  []string{ft.subject},
+				Retention: nats.InterestPolicy,
+				Replicas:  runtime.Domain.ftSC.replicasCount,
+				MaxMsgs:   runtime.Domain.ftSC.maxMsgs,
+				MaxBytes:  runtime.Domain.ftSC.maxBytes,
+				MaxAge:    runtime.Domain.ftSC.maxAge,
+			}); err != nil {
+				rollback()
+				return nil, fmt.Errorf("failed to create JetStream stream for function type '%s': %w", name, err)
+			}
+		}
+	}
+
+	// For single-instance FT: try to acquire the distributed lock.
+	// If lock is already taken by another runtime — register locally but don't subscribe.
+	singleInstanceLocked := true // true means "this instance owns the lock (or FT is multi-instance)"
+	if !ft.config.multipleInstancesAllowed {
+		_, err := KeyMutexLock(runtime.gs.ctxPhaseThree, runtime, system.GetHashStr(name), true)
+		if err != nil {
+			if errors.Is(err, ErrMutexLocked) {
+				lg.Logf(lg.WarnLevel, "Dynamic function type '%s' is single-instance and already running on another runtime; registered locally but subscriptions not started", name)
+				singleInstanceLocked = false
+			} else {
+				rollback()
+				return nil, fmt.Errorf("failed to acquire single-instance lock for '%s': %w", name, err)
+			}
+		}
+	}
+
+	// Start NATS subscriptions only if this runtime is active and (for single-instance) owns the lock.
+	runtime.activeInstanceMu.RLock()
+	isActive := runtime.config.isActiveInstance
+	runtime.activeInstanceMu.RUnlock()
+
+	if isActive && singleInstanceLocked {
+		if err := ft.startSubscriptions(); err != nil {
+			rollback()
+			return nil, fmt.Errorf("failed to start subscriptions for function type '%s': %w", name, err)
+		}
+	}
+
+	return ft, nil
 }
 
 // --------------------------------------------------------------------------------------------------------------------
 
 func (ft *FunctionType) SetExecutor(alias string, content string, constructor func(alias string, source string) sfPlugins.StatefunExecutor) error {
 	ft.executor = sfPlugins.NewTypenameExecutor(alias, content, constructor)
+	return nil
+}
+
+// startSubscriptions creates NATS signal/request subscriptions according to the FT config.
+// Used both at runtime startup and for dynamically registered function types.
+func (ft *FunctionType) startSubscriptions() error {
+	if ft.config.IsSignalProviderAllowed(sfPlugins.JetstreamGlobalSignal) {
+		if err := AddSignalSourceJetstreamQueuePushConsumer(ft); err != nil {
+			return err
+		}
+	}
+	if ft.config.IsRequestProviderAllowed(sfPlugins.NatsCoreGlobalRequest) {
+		if err := AddRequestSourceNatsCore(ft); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
