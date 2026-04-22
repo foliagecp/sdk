@@ -208,6 +208,39 @@ func Start() {
 		b.SetByPath("f2", easyjson.NewJSON(119))
 		system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("test3", "typeb", b))
 
+		// Create linked objects for details_v2 testing
+		lg.Logln(lg.DebugLevel, ">>> Creating linked CMDB objects for details_v2 test")
+
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeCreate("server", easyjson.NewJSONObject()))
+		system.MsgOnErrorReturn(dbClient.CMDB.TypeCreate("interface", easyjson.NewJSONObject()))
+		system.MsgOnErrorReturn(dbClient.CMDB.TypesLinkCreate("server", "interface", "server#interface#has", nil))
+
+		srvBody := easyjson.NewJSONObject()
+		srvBody.SetByPath("hostname", easyjson.NewJSON("srv-01"))
+		srvBody.SetByPath("role", easyjson.NewJSON("spine"))
+		system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("srv-01", "server", srvBody))
+
+		iface1Body := easyjson.NewJSONObject()
+		iface1Body.SetByPath("name", easyjson.NewJSON("eth0"))
+		iface1Body.SetByPath("speed", easyjson.NewJSON(10000))
+		system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("iface-eth0", "interface", iface1Body))
+
+		iface2Body := easyjson.NewJSONObject()
+		iface2Body.SetByPath("name", easyjson.NewJSON("eth1"))
+		iface2Body.SetByPath("speed", easyjson.NewJSON(25000))
+		system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("iface-eth1", "interface", iface2Body))
+
+		linkBody := easyjson.NewJSONObjectWithKeyValue("status", easyjson.NewJSON("up"))
+		system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkCreate("srv-01", "iface-eth0", "has-eth0", nil, linkBody))
+		linkBody2 := easyjson.NewJSONObjectWithKeyValue("status", easyjson.NewJSON("down"))
+		system.MsgOnErrorReturn(dbClient.CMDB.ObjectsLinkCreate("srv-01", "iface-eth1", "has-eth1", nil, linkBody2))
+
+		lg.Logln(lg.DebugLevel, "<<< Linked CMDB objects created: srv-01 -> iface-eth0, iface-eth1")
+
+		// Dynamic function registration test: after 30s, register a new function type
+		// and invoke it. Runs in a goroutine so it doesn't block other after-start logic.
+		go RunDynamicFunctionTest(runtime)
+
 		dbClient.CMDB.ShadowObjectCanBeRecevier = true
 		system.MsgOnErrorReturn(dbClient.CMDB.TypeUpdate("shadow-object", body, true, true))
 		system.MsgOnErrorReturn(dbClient.CMDB.ObjectCreate("otherhub#stest1", "shadow-object", b))
