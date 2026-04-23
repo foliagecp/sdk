@@ -109,7 +109,13 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 				defer wg.Done()
 
 				payload := easyjson.NewJSONObjectWithKeyValue("query", easyjson.NewJSON(jpgqlQuery.request))
-				om := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.query.jpgql.ctra", jpgqlQuery.uuid, &payload, nil))
+				// Append a unique "===<id>" suffix to bypass the FT per-id mutex
+				// in jpgql.ctra. getOriginalID() inside JPGQL strips the suffix,
+				// so graph/cache operations target the same vertex, but the
+				// FunctionType scheduler treats each call as an independent id,
+				// enabling true parallel execution across multiple FPL workers.
+				jpgqlCallID := jpgqlQuery.uuid + "===" + system.GetUniqueStrID()
+				om := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.query.jpgql.ctra", jpgqlCallID, &payload, nil))
 
 				if om.Status == sfMediators.SYNC_OP_STATUS_OK {
 					intersectionUUIDsMutex.Lock()
@@ -150,7 +156,10 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 		if ctx.Payload.PathExists("post_processor_func.data") {
 			postProcessorPayload.SetByPath("data", ctx.Payload.GetByPath("post_processor_func.data"))
 		}
-		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, postProcessorFunc, ctx.Self.ID, &postProcessorPayload, nil))).Reply()
+		// Same "===<uid>" trick as for jpgql.ctra above — lets multiple concurrent
+		// FPL requests reach the post-processor without serializing on its FT mutex.
+		ppCallID := ctx.Self.ID + "===" + system.GetUniqueStrID()
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, postProcessorFunc, ppCallID, &postProcessorPayload, nil))).Reply()
 		return
 	}
 
@@ -183,7 +192,7 @@ func PostProcessorVertexBody(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Statef
 	var uuiDataMutex sync.Mutex
 	for i, uuid := range uuids {
 		wg.Add(1)
-		go func() {
+		go func(i int, uuid string) {
 			defer wg.Done()
 
 			payload := easyjson.NewJSONObject()
@@ -197,9 +206,9 @@ func PostProcessorVertexBody(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Statef
 				uuidDatas[i] = easyjson.NewJSONObject().GetPtr()
 			}
 			uuidDatas[i].SetByPath("uuid", easyjson.NewJSON(uuid))
-		}()
-		wg.Wait()
+		}(i, uuid)
 	}
+	wg.Wait()
 
 	if sortFields, ok := ctx.Payload.GetByPath("data.sort_by_field").AsArrayString(); ok {
 		uuidDatas = system.SortJSONs(uuidDatas, sortFields)
