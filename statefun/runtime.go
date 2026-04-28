@@ -178,7 +178,7 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 		<-sig
-		if !r.config.isActiveInstance {
+		if !r.IsActiveInstance() {
 			logger.Debugf(ctx, "Runtime is not active. Shutting down immediately")
 			r.gs.beginShutdownPhaseOne()
 			r.gs.cancelAllContexts()
@@ -220,7 +220,7 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 
 		<-r.Domain.cache.Synced
 
-		if r.config.isActiveInstance {
+		if r.IsActiveInstance() {
 			logger.Debugf(ctx, "Shutdown - waiting for transaction committer")
 			<-r.Domain.shutdown
 		}
@@ -253,7 +253,7 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 		if err != nil {
 			if errors.Is(err, ErrMutexLocked) {
 				logger.Debugf(ctx, "Cant lock. Another runtime is already active")
-				r.config.isActiveInstance = false
+				r.setActiveInstance(false)
 			} else {
 				return err
 			}
@@ -264,11 +264,11 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 			}()
 		}
 	} else {
-		r.config.isActiveInstance = true
+		r.setActiveInstance(true)
 	}
 
 	// if active - can publish to WAL, passive - can not
-	r.Domain.Cache().SetWALWriteEnabled(r.config.isActiveInstance)
+	r.Domain.Cache().SetWALWriteEnabled(r.IsActiveInstance())
 
 	// Handle single-instance functions.
 	singleInstanceFunctionRevisions := make(map[string]uint64)
@@ -277,7 +277,7 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 	}
 
 	// Start function subscriptions.
-	if r.config.isActiveInstance {
+	if r.IsActiveInstance() {
 		if err := r.startFunctionSubscriptions(ctx, singleInstanceFunctionRevisions); err != nil {
 			return err
 		}
@@ -619,7 +619,7 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 
 	//release all functions
 	releaseAllLocks := func(ctx context.Context, runtime *Runtime, revisions map[string]uint64) {
-		if runtime.config.isActiveInstance {
+		if runtime.IsActiveInstance() {
 			for ftName, revID := range revisions {
 				system.MsgOnErrorReturn(KeyMutexUnlock(ctx, runtime, system.GetHashStr(ftName), revID))
 			}
@@ -633,7 +633,7 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 	becomePassive := func(cause string) {
 		lg.Logf(lg.WarnLevel, "%s, becoming passive", cause)
 		r.activeInstanceMu.Lock()
-		r.config.isActiveInstance = false
+		r.setActiveInstance(false)
 		r.config.activeRevID = 0
 		r.activeInstanceMu.Unlock()
 		r.Domain.Cache().SetWALWriteEnabled(false)
@@ -665,7 +665,7 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 					r.config.activeRevID = newRevID
 				}
 
-				if r.config.isActiveInstance {
+				if r.IsActiveInstance() {
 					// Already active — nothing to do
 				} else if kvConsistencyCheck != nil {
 					// Activating: consistency check in progress, lock is being refreshed above
@@ -676,13 +676,13 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 							lg.Logf(lg.ErrorLevel, "KV consistency check failed: %v", err)
 							system.MsgOnErrorReturn(KeyMutexUnlock(ctx, r, system.GetHashStr(RuntimeName), r.config.activeRevID))
 							r.activeInstanceMu.Lock()
-							r.config.isActiveInstance = false
+							r.setActiveInstance(false)
 							r.config.activeRevID = 0
 							r.activeInstanceMu.Unlock()
 						} else {
 							lg.Logf(lg.DebugLevel, "KV consistent, fully active now")
 							r.activeInstanceMu.Lock()
-							r.config.isActiveInstance = true
+							r.setActiveInstance(true)
 							r.activeInstanceMu.Unlock()
 							r.Domain.Cache().SetWALWriteEnabled(true)
 							r.gs.resetPhaseOneCtx()
@@ -708,7 +708,7 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 					}
 				}
 			} else {
-				r.config.isActiveInstance = true
+				r.setActiveInstance(true)
 			}
 
 			tryLock := func(ftName string) {
@@ -720,7 +720,7 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 				}
 			}
 
-			if r.config.isActiveInstance {
+			if r.IsActiveInstance() {
 				for ftName, revID := range revisions {
 					if revID == 0 {
 						tryLock(ftName)
@@ -757,7 +757,15 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 // IsActiveInstance indicates whether this runtime instance currently owns
 // the active role in HA mode
 func (r *Runtime) IsActiveInstance() bool {
+	r.activeInstanceMu.RLock()
+	defer r.activeInstanceMu.RUnlock()
 	return r.config.isActiveInstance
+}
+
+func (r *Runtime) setActiveInstance(active bool) {
+	r.activeInstanceMu.Lock()
+	defer r.activeInstanceMu.Unlock()
+	r.config.isActiveInstance = active
 }
 
 // contains checks if a slice contains a particular string.

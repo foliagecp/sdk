@@ -371,7 +371,8 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 	case sfPlugins.AutoRequestSelect:
 		selection := sfPlugins.NatsCoreGlobalRequest
 		if shadowObjectCanBeReceiver || !r.Domain.IsShadowObject(targetID) {
-			if r.functionTypeIsReadyForGoLangCommunication(targetTypename, true, targetID) == 0 {
+			if r.functionTypeIsReadyForGoLangCommunication(targetTypename, true, targetID) == 0 &&
+				r.IsActiveInstance() {
 				selection = sfPlugins.GolangLocalRequest
 			}
 		}

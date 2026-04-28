@@ -172,9 +172,7 @@ func RegisterDynamicFunctionType(runtime *Runtime, name string, logicHandler Fun
 	}
 
 	// Start NATS subscriptions only if this runtime is active and (for single-instance) owns the lock.
-	runtime.activeInstanceMu.RLock()
-	isActive := runtime.config.isActiveInstance
-	runtime.activeInstanceMu.RUnlock()
+	isActive := runtime.IsActiveInstance()
 
 	if isActive && singleInstanceLocked {
 		if err := ft.startSubscriptions(); err != nil {
