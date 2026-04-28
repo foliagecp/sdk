@@ -393,6 +393,9 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 		if msg.AckCallback != nil {
 			msg.AckCallback(true) // we dont want to redeliver this
 		}
+		if msg.RefusalCallback != nil {
+			msg.RefusalCallback(true) // request will close immediately
+		}
 		lg.Logf(lg.DebugLevel, sendMsgFuncErrorMsg, ft.name, id, "runtime is passive")
 		return
 	}
