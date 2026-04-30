@@ -591,8 +591,10 @@ func (ft *FunctionType) setContext(keyValueID string, context *easyjson.JSON) {
 func (ft *FunctionType) getObjectContext(keyValueID string) *easyjson.JSON {
 	response, err := ft.runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", keyValueID, nil, nil)
 	if err == nil {
-		body := response.GetByPath("data.body") // response is OpMsg: {"status":..., "data":{"body":{...}}}
-		return &body
+		body := response.GetByPath("data.body")
+		if body.IsObject() {
+			return &body
+		}
 	}
 	j := easyjson.NewJSONObject()
 	return &j
