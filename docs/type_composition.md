@@ -8,6 +8,7 @@
   - [Implementation Details](#implementation-details)
   - [API Reference](#api-reference)
     - [Create SuperType-Based Object Link](#create-supertype-based-object-link)
+    - [Update SuperType-Based Object Link](#update-supertype-based-object-link)
     - [Delete SuperType-Based Object Link](#delete-supertype-based-object-link)
     - [Set SubType Relation](#set-subtype-relation)
     - [Remove SubType Relation](#remove-subtype-relation)
@@ -24,6 +25,7 @@
 - [Set SubType](#set-subtype)
 - [Remove SubType](#remove-subtype)
 - [Create SuperType-Based Object Link](#create-supertype-based-object-link-1)
+- [Update SuperType-Based Object Link](#update-supertype-based-object-link-1)
 - [Delete SuperType-Based Object Link](#delete-supertype-based-object-link-1)
 
 ---
@@ -100,6 +102,35 @@ For each high-level operation, you can invoke via NATS CLI or via the Go client 
       payload.SetByPath("tags", easyjson.NewJSON(tags))
   }
   err := cmdb.ObjectsLinkSuperTypeCreate(from, to, fromClaimType, toClaimType, linkName, tags, payload)
+  ```
+
+### Update SuperType-Based Object Link
+
+Updates a supertype-based object link if it exists, or creates it if it does not. Body update semantics match `ObjectsLinkUpdate`: `replace=false` merges the provided body into the existing link body, while `replace=true` replaces the body.
+
+* **NATS Subject**: `functions.cmdb.api.objects.link.supertype.update`
+* **Go Client**: `cmdb.ObjectsLinkSuperTypeUpdate(from, to, fromClaimType, toClaimType, name, tags, body, replace)`
+* **NATS Payload**:
+
+  ```json
+  {
+    "to":             "<target object ID>",
+    "from_super_type":"<superTypeA>",
+    "to_super_type":  "<superTypeB>",
+    "name":           "<linkName>",
+    "body":           { /* optional JSON */ },
+    "tags":           [ /* optional tags */ ],
+    "replace":        false
+  }
+  ```
+
+  `name` is optional and defaults to the target object ID. The operation always uses upsert semantics.
+
+* **Go Payload Construction**:
+
+  ```go
+  body := easyjson.NewJSONObjectWithKeyValue("state", easyjson.NewJSON("updated"))
+  err := cmdb.ObjectsLinkSuperTypeUpdate(from, to, fromClaimType, toClaimType, linkName, tags, body, false)
   ```
 
 ### Delete SuperType-Based Object Link
@@ -248,17 +279,32 @@ cmdb.TypesLinkDelete("typeA","typeB")
 ## NATS CLI Examples
 
 ```bash
-# Create subtype relationship
-nats req request.hub.functions.cmdb.api.type.subtype.set '{"payload":{"sub_type":"typeC"}}'
+# Create the types used by the example
+nats req request.hub.functions.cmdb.api.type.create.typeA '{"payload":{"body":{}}}'
+nats req request.hub.functions.cmdb.api.type.create.typeB '{"payload":{"body":{}}}'
+nats req request.hub.functions.cmdb.api.type.create.typeC '{"payload":{"body":{}}}'
 
-# Remove subtype relationship
-nats req request.hub.functions.cmdb.api.type.subtype.remove '{"payload":{"sub_type":"typeC"}}'
+# Create subtype relationship: typeC is a subtype of typeA
+nats req request.hub.functions.cmdb.api.type.subtype.set.typeA '{"payload":{"sub_type":"typeC"}}'
 
-# Create supertype-based object link
-nats req request.hub.functions.cmdb.api.objects.link.supertype.create '{"to":"b","from_super_type":"typeA","to_super_type":"typeB","name":"linkCB","body":{},"tags":[]}'
+# Allow object links from typeA to typeB
+nats req request.hub.functions.cmdb.api.types.link.create.typeA '{"payload":{"to":"typeB","object_type":"typeA-typeB"}}'
+
+# Create objects: c has typeC, b has typeB
+nats req request.hub.functions.cmdb.api.object.create.c '{"payload":{"origin_type":"typeC","body":{}}}'
+nats req request.hub.functions.cmdb.api.object.create.b '{"payload":{"origin_type":"typeB","body":{}}}'
+
+# Create supertype-based object link c -> b through claimed types typeA -> typeB
+nats req request.hub.functions.cmdb.api.objects.link.supertype.create.c '{"payload":{"to":"b","from_super_type":"typeA","to_super_type":"typeB","name":"linkCB","body":{},"tags":[]}}'
+
+# Update or create the same supertype-based object link
+nats req request.hub.functions.cmdb.api.objects.link.supertype.update.c '{"payload":{"to":"b","from_super_type":"typeA","to_super_type":"typeB","name":"linkCB","body":{"cb_state":"updated"},"replace":false}}'
 
 # Delete supertype-based object link
-nats req request.hub.functions.cmdb.api.objects.link.supertype.delete '{"to":"b","from_super_type":"typeA","to_super_type":"typeB"}'
+nats req request.hub.functions.cmdb.api.objects.link.supertype.delete.c '{"payload":{"to":"b","from_super_type":"typeA","to_super_type":"typeB"}}'
+
+# Remove subtype relationship
+nats req request.hub.functions.cmdb.api.type.subtype.remove.typeA '{"payload":{"sub_type":"typeC"}}'
 ```
 
 ## Go Client API Examples
@@ -268,23 +314,28 @@ nats req request.hub.functions.cmdb.api.objects.link.supertype.delete '{"to":"b"
 cmdb.TypeSetSubType("typeA", "typeC")
 cmdb.TypeRemoveSubType("typeA", "typeC")
 
-// Create and delete supertype-based object link
+// Create, update, and delete supertype-based object link
 cmdb.ObjectsLinkSuperTypeCreate("c", "b", "typeA", "typeB", "linkCB", nil, payloadCB)
+cmdb.ObjectsLinkSuperTypeUpdate("c", "b", "typeA", "typeB", "linkCB", nil, easyjson.NewJSONObjectWithKeyValue("cb_state", easyjson.NewJSON("updated")), false)
 cmdb.ObjectsLinkSuperTypeDelete("c", "b", "typeA", "typeB")
 ```
 
 # Set SubType
 
-nats req request.hub.functions.cmdb.api.type.subtype.set '{"payload":{"parent":"typeA","sub\_type":"typeC"}}'
+nats req request.hub.functions.cmdb.api.type.subtype.set.typeA '{"payload":{"sub_type":"typeC"}}'
 
 # Remove SubType
 
-nats req request.hub.functions.cmdb.api.type.subtype.remove '{"payload":{"parent":"typeA","sub\_type":"typeC"}}'
+nats req request.hub.functions.cmdb.api.type.subtype.remove.typeA '{"payload":{"sub_type":"typeC"}}'
 
 # Create SuperType-Based Object Link
 
-nats req request.hub.functions.cmdb.api.objects.link.supertype.create '{"payload": {"objA":"c","objB":"b","superTypeA":"typeA","superTypeB":"typeB","linkName":"linkCB","opts"\:null,"payload":{"cb\_state":"created"}} }'
+nats req request.hub.functions.cmdb.api.objects.link.supertype.create.c '{"payload":{"to":"b","from_super_type":"typeA","to_super_type":"typeB","name":"linkCB","body":{"cb_state":"created"}}}'
+
+# Update SuperType-Based Object Link
+
+nats req request.hub.functions.cmdb.api.objects.link.supertype.update.c '{"payload":{"to":"b","from_super_type":"typeA","to_super_type":"typeB","name":"linkCB","body":{"cb_state":"updated"},"replace":false}}'
 
 # Delete SuperType-Based Object Link
 
-nats req request.hub.functions.cmdb.api.objects.link.supertype.delete '{"payload": {"objA":"c","objB":"b","superTypeA":"typeA","superTypeB":"typeB","linkName":"linkCB"} }'
+nats req request.hub.functions.cmdb.api.objects.link.supertype.delete.c '{"payload":{"to":"b","from_super_type":"typeA","to_super_type":"typeB"}}'
