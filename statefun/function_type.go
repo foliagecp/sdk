@@ -567,7 +567,7 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 		return true
 	})
 	if garbageCollected > 0 && handlersRunning == 0 {
-		lg.Logf(lg.TraceLevel, ">>>>>>>>>>>>>> Garbage collected for typename %s - no id handlers left", ft.name)
+		lg.Logf(lg.TraceLevel, "Garbage collected for typename %s - no id handlers left", ft.name)
 	}
 	return
 }

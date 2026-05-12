@@ -135,7 +135,7 @@ func (wp *SFWorkerPool) manager() {
 			wp.workers++
 			wp.wg.Add(1)
 			wp.mu.Unlock()
-			logger.Logln(logger.DebugLevel, ">>>>>>>>>>>>>> + WP %s GROW: %d", wp.ft.name, wp.workers)
+			logger.Logln(logger.DebugLevel, "WP %s GROW: %d", wp.ft.name, wp.workers)
 			go wp.worker()
 		} else {
 			wp.mu.Unlock()
@@ -228,7 +228,7 @@ func (wp *SFWorkerPool) worker() {
 		wp.workers--
 		wp.wg.Done()
 		wp.mu.Unlock()
-		logger.Logln(logger.DebugLevel, ">>>>>>>>>>>>>> - WP %s SHRINK: %d", wp.ft.name, wp.workers)
+		logger.Logln(logger.DebugLevel, "WP %s SHRINK: %d", wp.ft.name, wp.workers)
 	}()
 
 	timer := time.NewTimer(wp.idleTimeout)

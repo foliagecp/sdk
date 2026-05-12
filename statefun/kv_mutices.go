@@ -28,7 +28,7 @@ func KeyMutexLock(ctx context.Context, runtime *Runtime, key string, errorOnLock
 	mutexResetLock := func(keyMutex string, now int64) (uint64, error) {
 		lockRevisionID, err := kv.Put(keyMutex, system.Int64ToBytes(now))
 		if err == nil {
-			le.Tracef(ctx, "============== Locked %s", keyMutex)
+			le.Tracef(ctx, "Locked %s", keyMutex)
 			return lockRevisionID, nil
 		}
 		return 0, err
@@ -43,7 +43,7 @@ func KeyMutexLock(ctx context.Context, runtime *Runtime, key string, errorOnLock
 			}
 			return 0, err // Terminate with error
 		}
-		le.Tracef(ctx, "============== Locked %s", entry.Key())
+		le.Tracef(ctx, "Locked %s", entry.Key())
 		return lockRevisionID, nil // Successfully locked
 	}
 	getKeyWatch := func(keyMutex string) (nats.KeyWatcher, error) {
@@ -65,7 +65,7 @@ func KeyMutexLock(ctx context.Context, runtime *Runtime, key string, errorOnLock
 						return
 					}
 					if lockTime+int64(runtime.config.kvMutexLifeTimeSec)*int64(time.Second) < system.GetCurrentTimeNs() {
-						le.Tracef(ctx, "======================= WAITING FOR UNLOCK DONE (MUTEX IS DEAD)")
+						le.Trace(ctx, "Waiting for unlock done (mutex is dead)")
 						releaseKeyWatch(w)
 						return
 					}
@@ -81,7 +81,7 @@ func KeyMutexLock(ctx context.Context, runtime *Runtime, key string, errorOnLock
 
 	keyMutex := key + ".mutex"
 	mutexResetLockNeeded := false
-	le.Tracef(ctx, "============== Locking %s", keyMutex)
+	le.Tracef(ctx, "Locking %s", keyMutex)
 	for {
 		now := system.GetCurrentTimeNs()
 
@@ -143,7 +143,7 @@ func KeyMutexLockUpdate(ctx context.Context, runtime *Runtime, key string, lockR
 		if err != nil {
 			return 0, err
 		}
-		le.Tracef(ctx, "============== Updated %s", keyMutex)
+		le.Tracef(ctx, "Updated %s", keyMutex)
 		return revId, err
 	} else {
 		return 0, fmt.Errorf("Context mutex for key=%s was already unlocked", key)
@@ -174,7 +174,7 @@ func KeyMutexUnlock(ctx context.Context, runtime *Runtime, key string, lockRevis
 	} else {
 		le.Warnf(ctx, "Context mutex for key=%s was already unlocked!", key)
 	}
-	le.Tracef(ctx, "============== Unlocked %s", keyMutex)
+	le.Tracef(ctx, "Unlocked %s", keyMutex)
 	return nil // Successfully unlocked
 }
 
