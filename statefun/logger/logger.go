@@ -82,6 +82,17 @@ func SetDefaultOptions(
 	optionsMu.Unlock()
 }
 
+// SetDefaultOptions sets global logger's full options
+//
+// Deprecated.
+func SetDefaultOptionsFull(
+	options Options,
+) {
+	optionsMu.Lock()
+	defaultOptions = options
+	optionsMu.Unlock()
+}
+
 // GetLogger returns the global logger instance
 func GetLogger() *Logger {
 	globalMu.RLock()
