@@ -109,6 +109,34 @@ func (s *CrudAtomicityTestSuite) cmdbObjectsLinkCreate(from, to, name string) *e
 	return res
 }
 
+// cmdbObjectsLinkSuperTypeCreate creates a cross-pack link via the
+// SuperType-flavoured API (functions.cmdb.api.objects.link.supertype.create).
+// The compound link type stored in KV becomes "<fromClaim>#<toClaim>#<rel>"
+// where <rel> is the objectLinkType of the (fromClaim, toClaim) TypesLink.
+func (s *CrudAtomicityTestSuite) cmdbObjectsLinkSuperTypeCreate(from, to, name, fromClaim, toClaim string) *easyjson.JSON {
+	payload := easyjson.NewJSONObject()
+	payload.SetByPath("to", easyjson.NewJSON(to))
+	payload.SetByPath("name", easyjson.NewJSON(name))
+	payload.SetByPath("from_super_type", easyjson.NewJSON(fromClaim))
+	payload.SetByPath("to_super_type", easyjson.NewJSON(toClaim))
+	payload.SetByPath("body", easyjson.NewJSONObject())
+	res, err := s.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.objects.link.supertype.create", from, &payload, nil)
+	s.NoError(err)
+	return res
+}
+
+// cmdbObjectsLinkSuperTypeDelete deletes the cross-pack link via the
+// SuperType-flavoured API.
+func (s *CrudAtomicityTestSuite) cmdbObjectsLinkSuperTypeDelete(from, to, fromClaim, toClaim string) *easyjson.JSON {
+	payload := easyjson.NewJSONObject()
+	payload.SetByPath("to", easyjson.NewJSON(to))
+	payload.SetByPath("from_super_type", easyjson.NewJSON(fromClaim))
+	payload.SetByPath("to_super_type", easyjson.NewJSON(toClaim))
+	res, err := s.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.objects.link.supertype.delete", from, &payload, nil)
+	s.NoError(err)
+	return res
+}
+
 // vertexExists checks if a vertex body exists in the cache.
 func (s *CrudAtomicityTestSuite) vertexExists(id string) bool {
 	_, err := s.CacheValue(id)
@@ -373,4 +401,84 @@ func (s *CrudAtomicityTestSuite) Test_D3_ObjectsLinkOp_ReadAmplification() {
 	// read-amplification bug (D3).
 	s.LessOrEqualf(got, int64(1),
 		"read amplification (D3): a single CreateObjectsLink triggered %d object.read calls (expected ≤1)", got)
+}
+
+// -----------------------------------------------------------------------------
+// Defect 2 — SuperType (cross-pack) idempotency
+//
+// These tests mirror Test_D2 but exercise the SuperType-flavoured HL API
+// (functions.cmdb.api.objects.link.supertype.{create,delete}) that osm-app
+// actually uses for cross-pack edges. The plain DeleteObjectsLink was fixed
+// in commit 838f7c7, but DeleteObjectsLinkFromSuperTypes still routes
+// through isObjectLinkPermittedForClaimedTypes which requires BOTH endpoints
+// to be type-resolvable and therefore fails when the target object has been
+// deleted — even though the underlying LL link.delete is idempotent. This is
+// Symptom A from the original bug report.
+// -----------------------------------------------------------------------------
+
+// Test_D2_super_DeleteObjectsLinkFromSuperTypes_IdempotentWhenTargetDeleted is
+// the SuperType counterpart of Test_D2_DeleteObjectsLink_FailsWhenTargetDeleted.
+// Workflow:
+//   - set up CMDB schema TypeA → TypeB
+//   - create obj-a (TypeA), obj-b (TypeB) and cross-pack link via SuperType create
+//   - delete obj-b through ObjectDelete (its __type link goes away)
+//   - call SuperType-delete from obj-a → obj-b
+//
+// Correct behaviour: ok / idle (no edge to delete). Currently the call returns
+// failed with "no object link from type X to type Y" because
+// isObjectLinkPermittedForClaimedTypes cannot resolve obj-b's type.
+func (s *CrudAtomicityTestSuite) Test_D2_super_DeleteObjectsLinkFromSuperTypes_IdempotentWhenTargetDeleted() {
+	s.bootstrap()
+
+	s.cmdbTypeCreate("TypeD2sA")
+	s.cmdbTypeCreate("TypeD2sB")
+	s.cmdbTypesLink("TypeD2sA", "TypeD2sB", "d2s-link")
+
+	s.Equal("ok", s.cmdbObjectCreate("obj-a-d2s", "TypeD2sA").GetByPath("status").AsStringDefault(""))
+	s.Equal("ok", s.cmdbObjectCreate("obj-b-d2s", "TypeD2sB").GetByPath("status").AsStringDefault(""))
+
+	createRes := s.cmdbObjectsLinkSuperTypeCreate("obj-a-d2s", "obj-b-d2s", "edge-d2s", "TypeD2sA", "TypeD2sB")
+	s.Equal("ok", createRes.GetByPath("status").AsStringDefault(""),
+		"supertype link create must succeed in happy path: %s", createRes.ToString())
+
+	// Tear down the target. ObjectDelete removes obj-b-d2s and its CMDB
+	// structural links; obj-a-d2s still has the dangling out-edge in KV.
+	delObj := easyjson.NewJSONObject()
+	delRes, err := s.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.delete", "obj-b-d2s", &delObj, nil)
+	s.NoError(err)
+	s.T().Logf("object.delete obj-b-d2s → status=%q", delRes.GetByPath("status").AsStringDefault(""))
+
+	// SuperType-delete on the half-gone edge must be idempotent.
+	hlRes := s.cmdbObjectsLinkSuperTypeDelete("obj-a-d2s", "obj-b-d2s", "TypeD2sA", "TypeD2sB")
+	hlStatus := hlRes.GetByPath("status").AsStringDefault("")
+	s.T().Logf("HL DeleteObjectsLinkFromSuperTypes → status=%q details=%q",
+		hlStatus, hlRes.GetByPath("details").AsStringDefault(""))
+
+	s.Containsf([]string{"ok", "idle"}, hlStatus,
+		"HL DeleteObjectsLinkFromSuperTypes must be idempotent like LL link.delete (D2 cross-pack): got %q", hlStatus)
+}
+
+// Test_D2_super_CreateObjectsLinkFromSuperTypes_FailsWhenSchemaMissing covers
+// the configuration-error half of the distinct-errors story from the
+// follow-up brief: a SuperType *create* against a TypesLink schema that does
+// not exist must return failed (caller treats it as a config error, not a
+// transient miss to retry). This is the corresponding asymmetry to the
+// idempotency requirement on the delete path — a regression here would mean
+// silently inventing edges between types the schema does not allow.
+func (s *CrudAtomicityTestSuite) Test_D2_super_CreateObjectsLinkFromSuperTypes_FailsWhenSchemaMissing() {
+	s.bootstrap()
+
+	s.cmdbTypeCreate("TypeD2sX")
+	s.cmdbTypeCreate("TypeD2sY")
+	// NOTE: NO types.link.create between X and Y — schema is intentionally absent.
+
+	s.Equal("ok", s.cmdbObjectCreate("obj-a-d2sx", "TypeD2sX").GetByPath("status").AsStringDefault(""))
+	s.Equal("ok", s.cmdbObjectCreate("obj-b-d2sy", "TypeD2sY").GetByPath("status").AsStringDefault(""))
+
+	res := s.cmdbObjectsLinkSuperTypeCreate("obj-a-d2sx", "obj-b-d2sy", "edge-d2sxy", "TypeD2sX", "TypeD2sY")
+	status := res.GetByPath("status").AsStringDefault("")
+	s.T().Logf("create with missing schema → status=%q details=%q",
+		status, res.GetByPath("details").AsStringDefault(""))
+	s.Equalf("failed", status,
+		"SuperType-create against a missing TypesLink schema must fail (config error), got %q", status)
 }
