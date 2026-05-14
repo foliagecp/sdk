@@ -66,6 +66,55 @@ func addLinkOpToOpStack(opStack *easyjson.JSON, opName string, fromVertexId stri
 	return false
 }
 
+// rollbackOpStack walks an op_stack in reverse order and best-effort inverts
+// each recorded LL operation by calling the matching LL counter-operation.
+// Used by HL CRUD wrappers (e.g. CreateObject) to undo partial work when a
+// multi-step pipeline fails mid-flight. Errors from inverse calls are
+// intentionally swallowed — the goal is to bring the graph as close as
+// possible to its pre-call state, not to add a second failure mode on top
+// of the original one.
+//
+// Currently supported inverses:
+//   functions.graph.api.vertex.create -> functions.graph.api.vertex.delete
+//   functions.graph.api.link.create   -> functions.graph.api.link.delete
+//
+// Update/delete inverses are intentionally not handled here yet — only HL
+// wrappers that emit the two ops above use this helper today. Extend the
+// switch when more inverse pairs are needed.
+func rollbackOpStack(ctx *sfPlugins.StatefunContextProcessor, opStack *easyjson.JSON) {
+	if opStack == nil || !opStack.IsArray() {
+		return
+	}
+	n := opStack.ArraySize()
+	for i := n - 1; i >= 0; i-- {
+		entry := opStack.ArrayElement(i)
+		op := entry.GetByPath("op").AsStringDefault("")
+		switch op {
+		case "functions.graph.api.vertex.create":
+			id := entry.GetByPath("id").AsStringDefault("")
+			if id == "" {
+				continue
+			}
+			payload := easyjson.NewJSONObject()
+			_, _ = ctx.Request(sfPlugins.AutoRequestSelect,
+				"functions.graph.api.vertex.delete",
+				makeSequenceFreeParentBasedID(ctx, id),
+				injectParentHoldsLocks(ctx, &payload), nil)
+		case "functions.graph.api.link.create":
+			from := entry.GetByPath("from").AsStringDefault("")
+			name := entry.GetByPath("name").AsStringDefault("")
+			if from == "" || name == "" {
+				continue
+			}
+			payload := easyjson.NewJSONObjectWithKeyValue("name", easyjson.NewJSON(name))
+			_, _ = ctx.Request(sfPlugins.AutoRequestSelect,
+				"functions.graph.api.link.delete",
+				makeSequenceFreeParentBasedID(ctx, from),
+				injectParentHoldsLocks(ctx, &payload), nil)
+		}
+	}
+}
+
 func mergeOpStack(opStackRecepient *easyjson.JSON, opStackDonor *easyjson.JSON) bool {
 	if opStackRecepient != nil && opStackRecepient.IsArray() && opStackDonor != nil && opStackDonor.IsArray() {
 		for i := 0; i < opStackDonor.ArraySize(); i++ {

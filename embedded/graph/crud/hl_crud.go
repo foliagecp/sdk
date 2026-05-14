@@ -247,15 +247,27 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	options.SetByPath("op_stack", easyjson.NewJSON(true))
 
 	operationKeysMutexLock(ctx, []string{builtInObjectsVertexId, selfID, originType}, true)
+
+	// rollbackStack accumulates the op_stack of every step that succeeded.
+	// If a later step fails we walk this stack in reverse and invoke the
+	// matching LL inverse for each entry, leaving the graph close to its
+	// pre-call state instead of in the half-built "object without __type
+	// link" trap that breaks subsequent recovery.
+	rollbackStack := easyjson.NewJSONArray()
+
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, ctx.Payload), &options)))
 
 	targetReply := om.GetLastSyncOp().Data
 	var opStack *easyjson.JSON
 	if targetReply.PathExists("op_stack") {
 		opStack = targetReply.GetByPathPtr("op_stack")
+		mergeOpStack(&rollbackStack, opStack)
 	}
 
-	if !(om.GetStatus() == sfMediators.SYNC_OP_STATUS_INCOMPLETE) {
+	// Only proceed to the link-create pipeline if vertex.create actually
+	// succeeded — earlier code accepted FAILED too because it only filtered
+	// out INCOMPLETE.
+	if om.GetStatus() == sfMediators.SYNC_OP_STATUS_OK {
 		type _link struct {
 			from, to, name, lt string
 		}
@@ -275,12 +287,28 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 			link.SetByPath("force", easyjson.NewJSON(true))
 			link.SetByPath("op_time", easyjson.NewJSON(opTime))
 
-			//fmt.Println("             Create object's link:", l.from, l.to, l.lt)
 			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", makeSequenceFreeParentBasedID(ctx, l.from), injectParentHoldsLocks(ctx, &link), ctx.Options)))
-			if om.GetStatus() == sfMediators.SYNC_OP_STATUS_INCOMPLETE {
-				break // Operation cannot be completed fully, interrupt where it is now and go to the end
+
+			// Record what actually got created so we can undo it if needed.
+			lastReply := om.GetLastSyncOp().Data
+			if lastReply.PathExists("op_stack") {
+				mergeOpStack(&rollbackStack, lastReply.GetByPathPtr("op_stack"))
+			}
+
+			if om.GetStatus() != sfMediators.SYNC_OP_STATUS_OK {
+				break // any non-OK terminates the pipeline; do NOT continue to next link
 			}
 		}
+	}
+
+	// If the multi-step pipeline did not fully succeed, roll back recorded ops.
+	// Best-effort: any failure during rollback is logged but not propagated.
+	if om.GetStatus() != sfMediators.SYNC_OP_STATUS_OK {
+		rollbackOpStack(ctx, &rollbackStack)
+		cacheDeleteObjectType(selfID) // type cache must not claim the partial state
+		operationKeysMutexUnlock(ctx)
+		replyWithoutOpStack(om, ctx, targetReply)
+		return
 	}
 
 	operationKeysMutexUnlock(ctx)
@@ -288,10 +316,7 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	if opStack != nil {
 		executeTriggersFromLLOpStack(ctx, opStack, "", "")
 	}
-
-	if om.GetStatus() == sfMediators.SYNC_OP_STATUS_OK {
-		cacheSetObjectType(selfID, originType)
-	}
+	cacheSetObjectType(selfID, originType)
 
 	replyWithoutOpStack(om, ctx, targetReply)
 }
@@ -319,16 +344,60 @@ func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 
 	if upsert {
 		ctx.Payload.RemoveByPath("upsert")
-		if _, err := findObjectType(ctx, selfID); err != nil { // Object does not exist
-			if ctx.Payload.GetByPath("origin_type").IsString() {
+		if _, err := findObjectType(ctx, selfID); err != nil {
+			// Object's __type cannot be resolved. Three sub-cases:
+			//   (a) origin_type missing in payload → cannot upsert at all.
+			//   (b) vertex truly absent → original CreateObject path.
+			//   (c) vertex exists but the __type link is missing — orphan from
+			//       a partial failure or a bare LL link.delete. Self-heal by
+			//       restoring just the CMDB structural links with force=true,
+			//       then fall through to the regular vertex.update for body.
+			originTypeShort, hasOriginType := ctx.Payload.GetByPath("origin_type").AsString()
+			if !hasOriginType {
+				operationKeysMutexUnlock(ctx)
+				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("object with id=%s does exist, upsert=true but origin_type is not specified", selfID))).Reply()
+				return
+			}
+
+			vertexID := ctx.Domain.CreateObjectIDWithThisDomain(selfID, false)
+			_, vertexErr := ctx.Domain.Cache().GetValueJSON(vertexID)
+			vertexExists := vertexErr == nil
+
+			if !vertexExists {
+				// (b) Object truly absent — delegate to ObjectCreate.
 				om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.create", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, ctx.Payload), ctx.Options)))
 				operationKeysMutexUnlock(ctx)
 				replyWithoutOpStack(om, ctx)
-			} else {
-				operationKeysMutexUnlock(ctx)
-				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("object with id=%s does exist, upsert=true but origin_type is not specified", selfID))).Reply()
+				return
 			}
-			return
+
+			// (c) Orphan repair — restore the three CMDB invariant links so
+			// the object becomes resolvable again. force=true makes each
+			// link.create idempotent: a missing link is created, an existing
+			// one is silently overwritten with its (empty) body.
+			originType := ctx.Domain.CreateObjectIDWithHubDomain(originTypeShort, true)
+			builtInObjectsVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false)
+			type _link struct {
+				from, to, name, lt string
+			}
+			repairLinks := []_link{
+				{from: builtInObjectsVertexId, to: selfID, name: selfID, lt: OBJECT_TYPELINK},
+				{from: selfID, name: "type", to: originType, lt: TO_TYPELINK},
+				{from: originType, name: selfID, to: selfID, lt: OBJECT_TYPELINK},
+			}
+			for _, l := range repairLinks {
+				link := easyjson.NewJSONObject()
+				link.SetByPath("to", easyjson.NewJSON(l.to))
+				link.SetByPath("name", easyjson.NewJSON(l.name))
+				link.SetByPath("type", easyjson.NewJSON(l.lt))
+				link.SetByPath("body", easyjson.NewJSONObject())
+				link.SetByPath("force", easyjson.NewJSON(true))
+				link.SetByPath("op_time", easyjson.NewJSON(opTime))
+				_, _ = ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", makeSequenceFreeParentBasedID(ctx, l.from), injectParentHoldsLocks(ctx, &link), ctx.Options)
+			}
+			cacheSetObjectType(selfID, originType)
+			// Fall through to the regular vertex.update path so the body is
+			// also refreshed.
 		}
 	}
 	// ----------------------------------------------------
