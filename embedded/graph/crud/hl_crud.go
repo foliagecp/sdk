@@ -812,11 +812,22 @@ func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	options.SetByPath("op_stack", easyjson.NewJSON(true))
 
 	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true)
-	_, _, linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, selfID, objectToID)
-	if err != nil {
-		operationKeysMutexUnlock(ctx)
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
-		return
+
+	// Hot path: cheap KV-only resolution. Falls back to the schema-based
+	// resolver only when the edge does not yet exist (upsert / cold path).
+	linkName, linkType, edgeExists := resolveLinkBetweenTwoObjects(ctx, selfID, objectToID)
+	if !edgeExists {
+		_, _, lt, err := getReferenceLinkTypeBetweenTwoObjects(ctx, selfID, objectToID)
+		if err != nil {
+			operationKeysMutexUnlock(ctx)
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
+			return
+		}
+		linkType = lt
+	} else if !objectLink.PathExists("name") && linkName != "" {
+		// Prefer the resolved link name when the caller did not provide one,
+		// so LL link.update can target the edge unambiguously.
+		objectLink.SetByPath("name", easyjson.NewJSON(linkName))
 	}
 
 	objectLink.SetByPath("type", easyjson.NewJSON(linkType))
@@ -852,15 +863,19 @@ func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	objectToID = ctx.Domain.CreateObjectIDWithThisDomain(objectToID, false)
 
 	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true)
-	_, _, linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, selfID, objectToID)
-	if err != nil {
+
+	// Cheap KV-only resolution of (linkName, linkType) for the existing edge.
+	// No object.read calls; idempotent if the edge is already gone.
+	linkName, linkType, edgeExists := resolveLinkBetweenTwoObjects(ctx, selfID, objectToID)
+	if !edgeExists {
 		operationKeysMutexUnlock(ctx)
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
+		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("object link from=%s to=%s does not exist", selfID, objectToID))).Reply()
 		return
 	}
 
 	objectLink := easyjson.NewJSONObject()
 	objectLink.SetByPath("to", easyjson.NewJSON(objectToID))
+	objectLink.SetByPath("name", easyjson.NewJSON(linkName))
 	objectLink.SetByPath("type", easyjson.NewJSON(linkType))
 	objectLink.SetByPath("op_time", easyjson.NewJSON(opTime))
 

@@ -183,6 +183,21 @@ func findObjectType(ctx *sfPlugins.StatefunContextProcessor, objectID string) (s
 		return t, nil
 	}
 
+	// Fast path: read the object's __type out-link directly from KV.
+	// Every CMDB object has an out-link named "type" of type TO_TYPELINK
+	// pointing to its type vertex (see CreateObject in hl_crud.go). The
+	// OutLinkTargetKeyPrefPattern value is "<linkType>.<toId>", so we can
+	// derive the object's type without any object.read round-trip.
+	if val, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, objectID, "type")); err == nil {
+		parts := strings.SplitN(string(val), ".", 2)
+		if len(parts) == 2 && parts[0] == TO_TYPELINK && parts[1] != "" {
+			cacheSetObjectType(objectID, parts[1])
+			return parts[1], nil
+		}
+	}
+
+	// Slow path: fall back to the full object.read (used when the __type
+	// link is missing locally — e.g. shadow objects or fresh failover).
 	options := easyjson.NewJSONObject()
 	if ctx.Options != nil {
 		options = ctx.Options.Clone()
@@ -246,6 +261,41 @@ func getReferenceLinkTypeBetweenTwoObjects(ctx *sfPlugins.StatefunContextProcess
 	}
 	s, e := getObjectsLinkTypeFromTypesLink(ctx, fromType, toType)
 	return fromType, toType, s, e
+}
+
+// resolveLinkBetweenTwoObjects resolves (linkName, linkType) for the existing
+// (fromObjectId -> toObjectId) edge using only KV indices. Performs NO
+// object.read calls — the link type is parsed straight out of the
+// OutLinkTypeKeyPrefPattern entries that LLAPILinkCreate writes at edge
+// creation time.
+//
+// Returns (linkName, linkType, true) for the first matching edge, or
+// ("", "", false) if no such edge exists. Both fromObjectId and toObjectId
+// must already include their domain prefix (the same form used to construct
+// KV keys in ll_crud.go).
+func resolveLinkBetweenTwoObjects(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId string) (string, string, bool) {
+	prefix := fmt.Sprintf(OutLinkTypeKeyPrefPattern, fromObjectId) // "<from>.ltype."
+	suffix := "." + toObjectId
+	keys := ctx.Domain.Cache().GetKeysByPattern(prefix + ">")
+	for _, k := range keys {
+		if !strings.HasPrefix(k, prefix) || !strings.HasSuffix(k, suffix) {
+			continue
+		}
+		linkType := k[len(prefix) : len(k)-len(suffix)]
+		if linkType == "" {
+			continue
+		}
+		nameBytes, err := ctx.Domain.Cache().GetValue(k)
+		if err != nil {
+			continue
+		}
+		linkName := string(nameBytes)
+		if linkName == "" {
+			continue
+		}
+		return linkName, linkType, true
+	}
+	return "", "", false
 }
 
 func getObjectsLinkTypeFromTypesLink(ctx *sfPlugins.StatefunContextProcessor, fromType, toType string) (string, error) {

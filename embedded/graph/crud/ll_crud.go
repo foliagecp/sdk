@@ -838,7 +838,23 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		linkType, linkName, toId, linkExists := getFullLinkInfoFromSpecifiedIdentifier(ctx)
 		if !linkExists {
 			//operationKeysMutexUnlock(ctx)
-			om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with name=%s does not exist", ctx.Self.ID, linkName))).Reply()
+			// linkName may have been wiped by the lookup helper when no match
+			// was found; preserve the original identifier from payload for a
+			// useful idle message.
+			requestedName := ctx.Payload.GetByPath("name").AsStringDefault("")
+			requestedTo := ctx.Payload.GetByPath("to").AsStringDefault("")
+			requestedType := ctx.Payload.GetByPath("type").AsStringDefault("")
+			descriptor := ""
+			if requestedName != "" {
+				descriptor = fmt.Sprintf("name=%s", requestedName)
+			} else if requestedTo != "" && requestedType != "" {
+				descriptor = fmt.Sprintf("type=%s to=%s", requestedType, requestedTo)
+			} else if requestedTo != "" {
+				descriptor = fmt.Sprintf("to=%s", requestedTo)
+			} else {
+				descriptor = "(no identifier provided)"
+			}
+			om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with %s does not exist", ctx.Self.ID, descriptor))).Reply()
 			return
 		}
 		if !validLinkName.MatchString(linkName) {
