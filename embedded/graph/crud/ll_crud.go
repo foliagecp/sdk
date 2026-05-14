@@ -891,6 +891,14 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, selfID, linkName), true, opTime, "")
 		// ----------------------------------
 
+		// If this was the __type link of a CMDB object, invalidate the cached
+		// (objectID -> typeID) mapping. Without this, findObjectType would
+		// keep returning the stale type and HL CMDB operations would falsely
+		// believe the invariant still holds.
+		if linkType == TO_TYPELINK {
+			cacheDeleteObjectType(selfID)
+		}
+
 		//fmt.Println("delete vertex out link: ", selfID, toId)
 
 		addLinkOpToOpStack(opStack, ctx.Self.Typename, selfID, toId, linkName, linkType, oldLinkBody, nil)
