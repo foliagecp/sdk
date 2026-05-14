@@ -2,6 +2,7 @@ package crud
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/statefun"
@@ -261,24 +262,37 @@ func DeleteObjectsLinkFromSuperTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugin
 
 	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true)
 
-	fromObjectClaimType := ctx.Payload.GetByPath("from_super_type").AsStringDefault("")
-	toObjectClaimType := ctx.Payload.GetByPath("to_super_type").AsStringDefault("")
-
-	fromObjectClaimType = ctx.Domain.CreateObjectIDWithHubDomain(fromObjectClaimType, true)
-	toObjectClaimType = ctx.Domain.CreateObjectIDWithHubDomain(toObjectClaimType, true)
-
-	objectLinkType := isObjectLinkPermittedForClaimedTypes(ctx, selfID, objectToID, fromObjectClaimType, toObjectClaimType)
-	if len(objectLinkType) == 0 {
+	// Resolve the existing edge by KV only — no object.read. For delete the
+	// type-claim/schema check is intentionally NOT performed: if the physical
+	// edge is gone (target deleted, partial cleanup, etc.) deletion is a
+	// no-op and must return idle, matching the LL link.delete contract.
+	linkName, linkType, edgeExists := resolveLinkBetweenTwoObjects(ctx, selfID, objectToID)
+	if !edgeExists {
 		operationKeysMutexUnlock(ctx)
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("no object link from type %s to type %s", fromObjectClaimType, toObjectClaimType))).Reply()
+		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("object link from=%s to=%s does not exist", selfID, objectToID))).Reply()
 		return
 	}
 
-	finalLinkType := ctx.Domain.GetObjectIDWithoutDomain(fromObjectClaimType) + "#" + ctx.Domain.GetObjectIDWithoutDomain(toObjectClaimType) + "#" + objectLinkType
+	// Cross-pack edges store a compound type "<fromClaim>#<toClaim>#<rel>".
+	// If the existing edge claims something different from what the caller
+	// requested, treat it as "the requested edge does not exist" — idle.
+	// This prevents an unrelated edge with the same (from, to) from being
+	// deleted by a SuperType-delete that targets a different claim pair.
+	fromClaimShort := ctx.Domain.GetObjectIDWithoutDomain(
+		ctx.Domain.CreateObjectIDWithHubDomain(ctx.Payload.GetByPath("from_super_type").AsStringDefault(""), true))
+	toClaimShort := ctx.Domain.GetObjectIDWithoutDomain(
+		ctx.Domain.CreateObjectIDWithHubDomain(ctx.Payload.GetByPath("to_super_type").AsStringDefault(""), true))
+	tokens := strings.Split(linkType, "#")
+	if len(tokens) != 3 || tokens[0] != fromClaimShort || tokens[1] != toClaimShort {
+		operationKeysMutexUnlock(ctx)
+		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("object link from=%s to=%s with claimed types (%s,%s) does not exist", selfID, objectToID, fromClaimShort, toClaimShort))).Reply()
+		return
+	}
 
 	objectLink := easyjson.NewJSONObject()
 	objectLink.SetByPath("to", easyjson.NewJSON(objectToID))
-	objectLink.SetByPath("type", easyjson.NewJSON(finalLinkType))
+	objectLink.SetByPath("name", easyjson.NewJSON(linkName))
+	objectLink.SetByPath("type", easyjson.NewJSON(linkType))
 	objectLink.SetByPath("op_time", easyjson.NewJSON(opTime))
 
 	options := ctx.Options.Clone()
