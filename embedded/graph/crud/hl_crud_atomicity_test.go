@@ -109,6 +109,17 @@ func (s *CrudAtomicityTestSuite) cmdbObjectsLinkCreate(from, to, name string) *e
 	return res
 }
 
+// cmdbTypeSetSubtype declares `child` as a sub-type of `parent`, enabling
+// the SuperType machinery to treat objects of `child` as also being of
+// `parent` for type-claim purposes.
+func (s *CrudAtomicityTestSuite) cmdbTypeSetSubtype(parent, child string) {
+	payload := easyjson.NewJSONObjectWithKeyValue("sub_type", easyjson.NewJSON(child))
+	res, err := s.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.subtype.set", parent, &payload, nil)
+	s.NoError(err)
+	s.Equalf("ok", res.GetByPath("status").AsStringDefault(""),
+		"type.subtype.set %q→%q must succeed, got: %s", parent, child, res.ToString())
+}
+
 // cmdbObjectsLinkSuperTypeCreate creates a cross-pack link via the
 // SuperType-flavoured API (functions.cmdb.api.objects.link.supertype.create).
 // The compound link type stored in KV becomes "<fromClaim>#<toClaim>#<rel>"
@@ -481,4 +492,68 @@ func (s *CrudAtomicityTestSuite) Test_D2_super_CreateObjectsLinkFromSuperTypes_F
 		status, res.GetByPath("details").AsStringDefault(""))
 	s.Equalf("failed", status,
 		"SuperType-create against a missing TypesLink schema must fail (config error), got %q", status)
+}
+
+// Test_D2_super_DeleteObjectsLinkFromSuperTypes_SelectsCorrectEdge_WhenMultipleCompoundTypesExist
+// pins down a non-determinism in the previous SuperType-delete fix.
+//
+// When two SuperType edges share the same (from, to) object pair but have
+// different compound types (different fromClaim/toClaim pairs), the helper
+// resolveLinkBetweenTwoObjects returned the FIRST matching key from the
+// cache pattern scan — an order which is undefined for a sharded map.
+// DeleteObjectsLinkFromSuperTypes then compared the compound type of that
+// arbitrary edge with the caller's claim and:
+//   - if it matched by luck → the targeted edge was deleted (correct);
+//   - if it didn't → the call returned idle and the targeted edge stayed
+//     in the graph (incorrect).
+//
+// The fix must look specifically for the edge whose compound type starts
+// with "<fromClaim>#<toClaim>#" and ignore every other (from→to) edge.
+func (s *CrudAtomicityTestSuite) Test_D2_super_DeleteObjectsLinkFromSuperTypes_SelectsCorrectEdge_WhenMultipleCompoundTypesExist() {
+	s.bootstrap()
+
+	// Two independent parent-type pairs, each with its own schema link.
+	s.cmdbTypeCreate("D2MTypeX")
+	s.cmdbTypeCreate("D2MTypeY")
+	s.cmdbTypeCreate("D2MTypeP")
+	s.cmdbTypeCreate("D2MTypeQ")
+	s.cmdbTypeCreate("D2MChildA") // will inherit from X and Y
+	s.cmdbTypeCreate("D2MChildB") // will inherit from P and Q
+
+	s.cmdbTypeSetSubtype("D2MTypeX", "D2MChildA")
+	s.cmdbTypeSetSubtype("D2MTypeY", "D2MChildA")
+	s.cmdbTypeSetSubtype("D2MTypeP", "D2MChildB")
+	s.cmdbTypeSetSubtype("D2MTypeQ", "D2MChildB")
+
+	s.cmdbTypesLink("D2MTypeX", "D2MTypeP", "xp-link")
+	s.cmdbTypesLink("D2MTypeY", "D2MTypeQ", "yq-link")
+
+	s.Equal("ok", s.cmdbObjectCreate("obj-a-d2m", "D2MChildA").GetByPath("status").AsStringDefault(""))
+	s.Equal("ok", s.cmdbObjectCreate("obj-b-d2m", "D2MChildB").GetByPath("status").AsStringDefault(""))
+
+	// Create two SuperType edges between the same object pair.
+	resXP := s.cmdbObjectsLinkSuperTypeCreate("obj-a-d2m", "obj-b-d2m", "edge-xp", "D2MTypeX", "D2MTypeP")
+	s.Equalf("ok", resXP.GetByPath("status").AsStringDefault(""),
+		"supertype create (X,P) must succeed: %s", resXP.ToString())
+
+	resYQ := s.cmdbObjectsLinkSuperTypeCreate("obj-a-d2m", "obj-b-d2m", "edge-yq", "D2MTypeY", "D2MTypeQ")
+	s.Equalf("ok", resYQ.GetByPath("status").AsStringDefault(""),
+		"supertype create (Y,Q) must succeed: %s", resYQ.ToString())
+
+	// Both edges must be present before the targeted delete.
+	s.True(s.hasOutLinkOfType("obj-a-d2m", "D2MTypeX#D2MTypeP#xp-link"), "edge X#P must exist before delete")
+	s.True(s.hasOutLinkOfType("obj-a-d2m", "D2MTypeY#D2MTypeQ#yq-link"), "edge Y#Q must exist before delete")
+
+	// Delete only the (Y,Q) edge.
+	delRes := s.cmdbObjectsLinkSuperTypeDelete("obj-a-d2m", "obj-b-d2m", "D2MTypeY", "D2MTypeQ")
+	delStatus := delRes.GetByPath("status").AsStringDefault("")
+	s.T().Logf("SuperType delete (Y,Q) → status=%q details=%q", delStatus, delRes.GetByPath("details").AsStringDefault(""))
+	s.Containsf([]string{"ok", "idle"}, delStatus,
+		"delete of (Y,Q) edge must succeed: got %q", delStatus)
+
+	// Y#Q edge must be gone; X#P edge must survive untouched.
+	s.False(s.hasOutLinkOfType("obj-a-d2m", "D2MTypeY#D2MTypeQ#yq-link"),
+		"edge Y#Q must be removed after SuperType delete targeting (Y,Q)")
+	s.True(s.hasOutLinkOfType("obj-a-d2m", "D2MTypeX#D2MTypeP#xp-link"),
+		"edge X#P must survive: delete targeted (Y,Q) only")
 }

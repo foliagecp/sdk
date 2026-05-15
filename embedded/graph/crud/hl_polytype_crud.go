@@ -2,7 +2,6 @@ package crud
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/statefun"
@@ -98,7 +97,6 @@ func TypeRemoveSubType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		target: childTypeWithDomain,
 	}
 	data := PolyTypeGoalPrepare(ctx, goal)
-	fmt.Println("     TypeRemoveSubType:", data)
 	PolyTypeGoalFinalize(ctx, data)
 
 	om.Reply()
@@ -260,30 +258,28 @@ func DeleteObjectsLinkFromSuperTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugin
 	}
 	objectToID = ctx.Domain.CreateObjectIDWithThisDomain(objectToID, false)
 
-	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true)
-
-	// Resolve the existing edge by KV only — no object.read. For delete the
-	// type-claim/schema check is intentionally NOT performed: if the physical
-	// edge is gone (target deleted, partial cleanup, etc.) deletion is a
-	// no-op and must return idle, matching the LL link.delete contract.
-	linkName, linkType, edgeExists := resolveLinkBetweenTwoObjects(ctx, selfID, objectToID)
-	if !edgeExists {
-		operationKeysMutexUnlock(ctx)
-		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("object link from=%s to=%s does not exist", selfID, objectToID))).Reply()
-		return
-	}
-
 	// Cross-pack edges store a compound type "<fromClaim>#<toClaim>#<rel>".
-	// If the existing edge claims something different from what the caller
-	// requested, treat it as "the requested edge does not exist" — idle.
-	// This prevents an unrelated edge with the same (from, to) from being
-	// deleted by a SuperType-delete that targets a different claim pair.
+	// Between the same (from, to) object pair there can be multiple such
+	// edges with DIFFERENT claim pairs (and therefore different compound
+	// prefixes). We MUST pick the edge whose compound type starts with
+	// "<fromClaim>#<toClaim>#" matching the caller's claim — anything else
+	// is a different cross-pack edge and must be left alone.
+	//
+	// The previous implementation called resolveLinkBetweenTwoObjects (which
+	// returns the first key from a sharded-map scan) and verified the claim
+	// post-hoc; that was non-deterministic and could silently leave the
+	// targeted edge in the graph while returning idle.
 	fromClaimShort := ctx.Domain.GetObjectIDWithoutDomain(
 		ctx.Domain.CreateObjectIDWithHubDomain(ctx.Payload.GetByPath("from_super_type").AsStringDefault(""), true))
 	toClaimShort := ctx.Domain.GetObjectIDWithoutDomain(
 		ctx.Domain.CreateObjectIDWithHubDomain(ctx.Payload.GetByPath("to_super_type").AsStringDefault(""), true))
-	tokens := strings.Split(linkType, "#")
-	if len(tokens) != 3 || tokens[0] != fromClaimShort || tokens[1] != toClaimShort {
+	compoundPrefix := fromClaimShort + "#" + toClaimShort + "#"
+
+	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true)
+
+	// Resolve the SPECIFIC edge by KV only (no object.read).
+	linkName, linkType, edgeExists := resolveLinkBetweenTwoObjectsByTypePrefix(ctx, selfID, objectToID, compoundPrefix)
+	if !edgeExists {
 		operationKeysMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("object link from=%s to=%s with claimed types (%s,%s) does not exist", selfID, objectToID, fromClaimShort, toClaimShort))).Reply()
 		return

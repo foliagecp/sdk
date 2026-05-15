@@ -274,6 +274,22 @@ func getReferenceLinkTypeBetweenTwoObjects(ctx *sfPlugins.StatefunContextProcess
 // must already include their domain prefix (the same form used to construct
 // KV keys in ll_crud.go).
 func resolveLinkBetweenTwoObjects(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId string) (string, string, bool) {
+	return resolveLinkBetweenTwoObjectsByTypePrefix(ctx, fromObjectId, toObjectId, "")
+}
+
+// resolveLinkBetweenTwoObjectsByTypePrefix is the claim-aware variant of
+// resolveLinkBetweenTwoObjects. It returns the first edge whose linkType
+// starts with linkTypePrefix; with an empty prefix it behaves exactly like
+// resolveLinkBetweenTwoObjects.
+//
+// This MUST be used by the SuperType-flavoured HL APIs: between the same
+// (from, to) object pair there can legitimately be multiple cross-pack
+// edges with different compound types ("<fromClaim>#<toClaim>#<rel>"), and
+// the order returned by GetKeysByPattern over a sharded map is not stable.
+// Picking the "first" key and then checking the claim post-hoc is a
+// non-deterministic bug: the targeted edge can stay in the graph while
+// the call returns idle.
+func resolveLinkBetweenTwoObjectsByTypePrefix(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId, linkTypePrefix string) (string, string, bool) {
 	prefix := fmt.Sprintf(OutLinkTypeKeyPrefPattern, fromObjectId) // "<from>.ltype."
 	suffix := "." + toObjectId
 	keys := ctx.Domain.Cache().GetKeysByPattern(prefix + ">")
@@ -283,6 +299,9 @@ func resolveLinkBetweenTwoObjects(ctx *sfPlugins.StatefunContextProcessor, fromO
 		}
 		linkType := k[len(prefix) : len(k)-len(suffix)]
 		if linkType == "" {
+			continue
+		}
+		if linkTypePrefix != "" && !strings.HasPrefix(linkType, linkTypePrefix) {
 			continue
 		}
 		nameBytes, err := ctx.Domain.Cache().GetValue(k)
