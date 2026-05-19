@@ -418,6 +418,24 @@ func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 
 /*
  */
+// DeleteObject drives the LL vertex.delete pipeline and dispatches CMDB
+// triggers keyed by the object's type.
+//
+// Orphan tolerance (Option 1B from the D4 triage): if findObjectType
+// cannot resolve the type, we check the cache directly for the vertex
+// body. Two recoverable sub-cases:
+//
+//   (a) vertex truly absent — there is nothing to delete, reply IDLE
+//       (idempotent no-op).
+//   (b) vertex body is present but the type is unresolvable — this is
+//       the orphan state left behind by a partial LL vertex.delete or
+//       a bare LL link.delete on a __type link. We STILL drive
+//       vertex.delete to clean up the body; triggers are skipped
+//       because there is no type context to dispatch them under.
+//
+// Without this branch, an orphan would permanently reject every
+// subsequent ObjectDelete with "has no type" — exactly the symptom from
+// the production bug report.
 func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
 
@@ -429,9 +447,22 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	operationKeysMutexLock(ctx, []string{selfID}, true)
 	objectType, err := findObjectType(ctx, selfID)
 	if err != nil {
-		operationKeysMutexUnlock(ctx)
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
-		return
+		// Probe the cache directly: with Option 1A applied, ReadObject
+		// returns IDLE for both "vertex missing" and "vertex is an orphan",
+		// so findObjectType's error text alone cannot distinguish them.
+		vertexID := ctx.Domain.CreateObjectIDWithThisDomain(selfID, false)
+		_, vertexErr := ctx.Domain.Cache().GetValueJSON(vertexID)
+		if vertexErr != nil {
+			// (a) Vertex truly absent — idempotent IDLE.
+			operationKeysMutexUnlock(ctx)
+			om.AggregateOpMsg(sfMediators.OpMsgIdle(err.Error())).Reply()
+			return
+		}
+		// (b) Orphan: clear stale cached type and fall through with empty
+		// objectType. vertex.delete still runs; trigger dispatch is
+		// skipped below because objectType == "".
+		cacheDeleteObjectType(selfID)
+		objectType = ""
 	}
 
 	options := ctx.Options.Clone()
@@ -439,7 +470,11 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.delete", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, ctx.Payload), &options)))
 	operationKeysMutexUnlock(ctx)
-	if om.GetLastSyncOp().Data.PathExists("op_stack") {
+	// Triggers can only be dispatched when we know the type. For orphans
+	// (objectType == "") there is no meaningful type context to fire
+	// delete-triggers under, so skip the trigger pass entirely. Body
+	// cleanup is still what matters.
+	if objectType != "" && om.GetLastSyncOp().Data.PathExists("op_stack") {
 		j := om.GetLastSyncOp().Data.GetByPathPtr("op_stack")
 		executeTriggersFromLLOpStack(ctx, j, selfID, objectType)
 	}
@@ -500,7 +535,25 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 		}
 	}
 	if len(objectType) == 0 {
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("object with id=%s has no type", selfID)))
+		// Orphan vertex: body is present in KV but the __type out-link is
+		// gone. This can happen after a partial vertex.delete (link cleanup
+		// loop fails mid-flight or the runtime loses leadership between the
+		// WAL flush that committed link.deletes and the WAL flush that was
+		// supposed to commit the body delete — see Causes 1/2/3 in the D4
+		// triage). Externally, an orphan is indistinguishable from a missing
+		// object: it cannot be resolved as a CMDB object, has no triggers,
+		// no type. Surface it as IDLE ("not found") rather than as a hard
+		// FAILED with "has no type" — this:
+		//   - keeps every read caller on the existing "missing object"
+		//     code path (no special handling required);
+		//   - makes the client-side IDLE→ErrNotFound mapping work for
+		//     orphans too;
+		//   - stops the noisy "has no type" error storms that show up in
+		//     production whenever an orphan is touched repeatedly.
+		// The body itself is cleaned up by Option 1B (DeleteObject)
+		// when something — HLMB rebuild, user code, manual operator
+		// action — issues a delete against this id.
+		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("object with id=%s does not exist", selfID)))
 		system.MsgOnErrorReturn(om.ReplyWithData(easyjson.NewJSONObject().GetPtr()))
 		return
 	}
