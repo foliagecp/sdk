@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -12,6 +13,16 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// ErrNotFound is returned by Read-flavoured client calls when the underlying
+// CMDB / graph entity does not exist. It wraps the "idle" status produced by
+// the SDK's OpMediator for read paths where IDLE semantically means "not
+// found" rather than "no-op success".
+//
+// Callers should prefer `errors.Is(err, db.ErrNotFound)` to distinguish a
+// missing entity from other failures. The original status code and details
+// from the SDK are still accessible by unwrapping into *OpError.
+var ErrNotFound = errors.New("db_client: entity not found")
+
 type OpError struct {
 	StatusCode int
 	Details    string
@@ -21,9 +32,43 @@ func (oe *OpError) Error() string {
 	return fmt.Sprintf("db_client operation failed with status %d: %s", oe.StatusCode, oe.Details)
 }
 
+// OpErrorFromOpMsg is the LENIENT mapping used by Create / Update / Delete
+// client wrappers. It treats both OK and IDLE as success (returns nil),
+// because for those operations IDLE means "the requested state is already
+// satisfied" — e.g. deleting an already-missing entity is idempotent.
+//
+// DO NOT use this from Read paths: for reads, IDLE means "not found" and
+// must not be swallowed silently. Use OpErrorFromOpMsgStrict instead.
 func OpErrorFromOpMsg(om sfMediators.OpMsg) error {
 	if om.Status == sfMediators.SYNC_OP_STATUS_OK || om.Status == sfMediators.SYNC_OP_STATUS_IDLE {
 		return nil
+	}
+	return &OpError{om.Status, om.Details}
+}
+
+// OpErrorFromOpMsgStrict is the STRICT mapping used by Read-flavoured client
+// wrappers. It returns nil only for OK; IDLE is surfaced as ErrNotFound
+// (wrapped via %w so callers can `errors.Is(err, ErrNotFound)`); all other
+// statuses become an *OpError exactly as in OpErrorFromOpMsg.
+//
+// Rationale: the lenient mapping (OK || IDLE -> nil) is correct for write
+// paths where IDLE = "no-op, already satisfied". For reads however, IDLE is
+// emitted by HL/LL when the target entity does not exist, and returning nil
+// would force every caller to also inspect the returned JSON for emptiness
+// to distinguish "found, empty body" from "not found". Surfacing IDLE as a
+// typed error fixes that footgun while keeping the original details visible
+// for any caller still relying on substring matching against the message
+// (e.g. legacy `strings.Contains(err.Error(), "does not exist")` checks).
+func OpErrorFromOpMsgStrict(om sfMediators.OpMsg) error {
+	if om.Status == sfMediators.SYNC_OP_STATUS_OK {
+		return nil
+	}
+	if om.Status == sfMediators.SYNC_OP_STATUS_IDLE {
+		details := om.Details
+		if details == "" {
+			details = "idle"
+		}
+		return fmt.Errorf("%w: %s", ErrNotFound, details)
 	}
 	return &OpError{om.Status, om.Details}
 }

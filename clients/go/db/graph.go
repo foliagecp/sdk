@@ -70,13 +70,13 @@ func (gc GraphSyncClient) VertexRead(id string, details ...bool) (easyjson.JSON,
 		payload.SetByPath("details", easyjson.NewJSON(details[0]))
 	}
 	om := sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.vertex.read", seqFree(id), &payload, nil))
-	return om.Data, OpErrorFromOpMsg(om)
+	return om.Data, OpErrorFromOpMsgStrict(om)
 }
 
 func (gc GraphSyncClient) VertexReadDetailsV2(id string) (easyjson.JSON, error) {
 	payload := easyjson.NewJSONObjectWithKeyValue("details_v2", easyjson.NewJSON(true))
 	om := sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.vertex.read", seqFree(id), &payload, nil))
-	return om.Data, OpErrorFromOpMsg(om)
+	return om.Data, OpErrorFromOpMsgStrict(om)
 }
 
 func (gc GraphSyncClient) VerticesLinkCreate(from, to, linkName, linkType string, tags []string, body ...easyjson.JSON) error {
@@ -162,7 +162,7 @@ func (gc GraphSyncClient) VerticesLinkRead(from, linkName string, details ...boo
 	}
 
 	om := sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.link.read", seqFree(from), &payload, nil))
-	return om.Data, OpErrorFromOpMsg(om)
+	return om.Data, OpErrorFromOpMsgStrict(om)
 }
 
 func (gc GraphSyncClient) VerticesLinkReadByToAndType(from, to, linkType string, details ...bool) (easyjson.JSON, error) {
@@ -174,5 +174,5 @@ func (gc GraphSyncClient) VerticesLinkReadByToAndType(from, to, linkType string,
 	}
 
 	om := sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.link.read", seqFree(from), &payload, nil))
-	return om.Data, OpErrorFromOpMsg(om)
+	return om.Data, OpErrorFromOpMsgStrict(om)
 }

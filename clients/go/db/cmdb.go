@@ -257,7 +257,7 @@ func (cmdb CMDBSyncClient) TypeRead(name string) (easyjson.JSON, error) {
 	options := easyjson.NewJSONObject()
 	options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
 	om := sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.type.read", seqFree(name), nil, &options))
-	return om.Data, OpErrorFromOpMsg(om)
+	return om.Data, OpErrorFromOpMsgStrict(om)
 }
 
 func (cmdb CMDBSyncClient) ObjectCreate(objectID, originType string, body ...easyjson.JSON) error {
@@ -328,7 +328,7 @@ func (cmdb CMDBSyncClient) ObjectRead(name string) (easyjson.JSON, error) {
 	options := easyjson.NewJSONObject()
 	options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
 	om := sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.object.read", seqFree(name), &payload, &options))
-	return om.Data, OpErrorFromOpMsg(om)
+	return om.Data, OpErrorFromOpMsgStrict(om)
 }
 
 func (cmdb CMDBSyncClient) ObjectReadV2(name string) (easyjson.JSON, error) {
@@ -338,7 +338,7 @@ func (cmdb CMDBSyncClient) ObjectReadV2(name string) (easyjson.JSON, error) {
 	options := easyjson.NewJSONObject()
 	options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
 	om := sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.object.read", seqFree(name), &payload, &options))
-	return om.Data, OpErrorFromOpMsg(om)
+	return om.Data, OpErrorFromOpMsgStrict(om)
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -397,7 +397,7 @@ func (cmdb CMDBSyncClient) TypesLinkRead(from, to string) (easyjson.JSON, error)
 	options := easyjson.NewJSONObject()
 	options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
 	om := sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.types.link.read", seqFree(from), &payload, &options))
-	return om.Data, OpErrorFromOpMsg(om)
+	return om.Data, OpErrorFromOpMsgStrict(om)
 }
 
 func (cmdb CMDBSyncClient) ObjectsLinkCreate(from, to, name string, tags []string, body ...easyjson.JSON) error {
@@ -485,7 +485,7 @@ func (cmdb CMDBSyncClient) ObjectsLinkRead(from, to string) (easyjson.JSON, erro
 	options := easyjson.NewJSONObject()
 	options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
 	om := sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.objects.link.read", seqFree(from), &payload, &options))
-	return om.Data, OpErrorFromOpMsg(om)
+	return om.Data, OpErrorFromOpMsgStrict(om)
 }
 
 // ------------------------------------------------------------------------------------------------
