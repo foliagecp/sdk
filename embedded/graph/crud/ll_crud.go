@@ -160,8 +160,7 @@ func LLAPIVertexCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	om := sfMediators.NewOpMediator(ctx)
 
 	operationKeysMutexLock(ctx, []string{selfID}, true)
-	_, err := ctx.Domain.Cache().GetValueJSON(selfID)
-	if err == nil { // If vertex already exists
+	if ctx.Domain.Cache().ExistsJson(selfID) { // If vertex already exists
 		operationKeysMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s already exists", selfID))).Reply()
 		return
@@ -222,8 +221,7 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	upsert := payload.GetByPath("upsert").AsBoolDefault(false)
 
 	operationKeysMutexLock(ctx, []string{selfID}, true)
-	_, err := ctx.Domain.Cache().GetValueJSON(selfID)
-	if err != nil { // If vertex does not exist
+	if !ctx.Domain.Cache().ExistsJson(selfID) { // If vertex does not exist
 		operationKeysMutexUnlock(ctx)
 		if upsert {
 			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, ctx.Payload), ctx.Options)))
@@ -286,8 +284,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	om := sfMediators.NewOpMediator(ctx)
 
-	_, err := ctx.Domain.Cache().GetValueJSON(selfID)
-	if err != nil { // If vertex does not exist
+	if !ctx.Domain.Cache().ExistsJson(selfID) { // If vertex does not exist
 		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("vertex with id=%s does not exist", selfID))).Reply()
 		return
 	}
@@ -526,8 +523,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	forceCreate := ctx.Payload.GetByPath("force").AsBoolDefault(false)
 
-	_, err := ctx.Domain.Cache().GetValueJSON(selfID)
-	if err != nil { // If vertex does not exist
+	if !ctx.Domain.Cache().ExistsJson(selfID) { // If vertex does not exist
 		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s does not exist", selfID))).Reply()
 		return
 	}
@@ -593,16 +589,14 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 		if !forceCreate {
 			// Check if link with this name already exists --------------
-			_, err := ctx.Domain.Cache().GetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName))
-			if err == nil {
+			if ctx.Domain.Cache().ExistsJson(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName)) {
 				operationKeysMutexUnlock(ctx)
 				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s already exists", selfID, linkName))).Reply()
 				return
 			}
 			// ----------------------------------------------------------
 			// Check if link with this type "type" to "to" already exists
-			_, err = ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfID, linkType, toId))
-			if err == nil {
+			if ctx.Domain.Cache().Exists(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfID, linkType, toId)) {
 				operationKeysMutexUnlock(ctx)
 				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link from=%s with name=%s to=%s with type=%s already exists, two vertices can have a link with this type and direction only once", selfID, linkName, toId, linkType))).Reply()
 				return

@@ -360,8 +360,7 @@ func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 			}
 
 			vertexID := ctx.Domain.CreateObjectIDWithThisDomain(selfID, false)
-			_, vertexErr := ctx.Domain.Cache().GetValueJSON(vertexID)
-			vertexExists := vertexErr == nil
+			vertexExists := ctx.Domain.Cache().ExistsJson(vertexID)
 
 			if !vertexExists {
 				// (b) Object truly absent — delegate to ObjectCreate.
@@ -451,8 +450,7 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 		// returns IDLE for both "vertex missing" and "vertex is an orphan",
 		// so findObjectType's error text alone cannot distinguish them.
 		vertexID := ctx.Domain.CreateObjectIDWithThisDomain(selfID, false)
-		_, vertexErr := ctx.Domain.Cache().GetValueJSON(vertexID)
-		if vertexErr != nil {
+		if !ctx.Domain.Cache().ExistsJson(vertexID) {
 			// (a) Vertex truly absent — idempotent IDLE.
 			operationKeysMutexUnlock(ctx)
 			om.AggregateOpMsg(sfMediators.OpMsgIdle(err.Error())).Reply()

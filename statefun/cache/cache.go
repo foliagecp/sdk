@@ -778,6 +778,60 @@ func (cs *Store) GetValue(key string) ([]byte, error) {
 	return result, resultError
 }
 
+// Exists reports whether a byte-typed value is currently stored under key.
+// Mirrors GetValue: if the underlying value is JSON-typed, a WarnLevel
+// log entry directs the caller to ExistsJson, but existence is still
+// reported truthfully (the entry does exist, the caller is just probing
+// it via the wrong type-affinity API).
+//
+// Compared to "_, err := cache.GetValue(key); err == nil" the saving is
+// the avoided []byte allocation / JSON serialization that GetValue would
+// otherwise perform on the value just to throw it away.
+func (cs *Store) Exists(key string) bool {
+	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, false); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
+		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
+			csv.RLock("Exists")
+			defer csv.RUnlock("Exists")
+			if !csv.ValueExists() {
+				return false
+			}
+			if csv.valueType == typeJson {
+				lg.Logf(lg.WarnLevel, "Value for key=%s is JSON, use ExistsJson method", key)
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// ExistsJson reports whether a JSON-typed value is currently stored under
+// key. Mirrors GetValueJSON: if the underlying value is byte-typed, a
+// WarnLevel log entry directs the caller to Exists, but existence is
+// still reported truthfully.
+//
+// Compared to "_, err := cache.GetValueJSON(key); err == nil" the saving
+// is the avoided JSON Clone that GetValueJSON would otherwise perform on
+// the value just to throw it away. For large vertex bodies this saves
+// O(N nodes) allocations on every existence probe (vertex.create /
+// vertex.update / vertex.delete / orphan probes call this exact pattern
+// in hl_crud.go and ll_crud.go).
+func (cs *Store) ExistsJson(key string) bool {
+	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, false); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
+		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
+			csv.RLock("ExistsJson")
+			defer csv.RUnlock("ExistsJson")
+			if !csv.ValueExists() {
+				return false
+			}
+			if csv.valueType == typeByteArray {
+				lg.Logf(lg.WarnLevel, "Value for key=%s is []byte, use Exists method", key)
+			}
+			return true
+		}
+	}
+	return false
+}
+
 func (cs *Store) GetValueJSON(key string) (*easyjson.JSON, error) {
 	var result *easyjson.JSON
 	var resultError error
