@@ -67,6 +67,16 @@ func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 
 	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", makeSequenceFreeParentBasedID(ctx, typesVertexId), injectParentHoldsLocks(ctx, &link), nil))
 	operationKeysMutexUnlock(ctx)
+	// Defense-in-depth: drop any cached object-triggers entry for this
+	// type. Today getTypeTriggers does not cache transient failures so a
+	// stale entry can only arise if the type was previously created,
+	// observed, deleted (cache cleared) and now re-created — DeleteType
+	// already handles the clear, so this is a no-op in well-behaved
+	// flows. The call is kept symmetric with CreateTypesLink's
+	// invalidation below, so that a future change to getTypeTriggers
+	// that adds negative caching for "type does not yet exist" cannot
+	// silently break this code path.
+	cacheInvalidateTypeObjectTriggers(selfID)
 	om.AggregateOpMsg(m).Reply()
 }
 
@@ -108,6 +118,10 @@ func UpdateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 
 	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.update", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, ctx.Payload), nil))
 	operationKeysMutexUnlock(ctx)
+
+	// Type body may carry the triggers section — invalidate the trigger
+	// cache so the next CRUD hot path observes the latest registration.
+	cacheInvalidateTypeObjectTriggers(selfID)
 
 	om.AggregateOpMsg(m)
 	om.Reply()
@@ -156,6 +170,11 @@ func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	om.AggregateOpMsg(m)
 
 	cachePurgeTypeEdgesForType(selfID)
+	// Drop any cached object-trigger entry for this type AND every
+	// link-trigger entry that mentions it as either endpoint (those
+	// TypesLinks are gone with the type).
+	cacheInvalidateTypeObjectTriggers(selfID)
+	cachePurgeLinkTriggersForType(selfID)
 
 	PolyTypeGoalFinalize(ctx, polyTypeData)
 
@@ -646,6 +665,9 @@ func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	if om.GetStatus() == sfMediators.SYNC_OP_STATUS_OK {
 		cacheSetTypeEdge(selfID, toType, objectLinkType)
 	}
+	// A new TypesLink may carry a triggers section in its body —
+	// invalidate any negative entry produced by a prior failed lookup.
+	cacheInvalidateLinkTriggers(selfID, toType)
 
 	om.Reply()
 }
@@ -715,6 +737,9 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			}
 		}
 	}
+	// Body may carry a triggers section change — drop cached entry so
+	// the next dispatch reloads.
+	cacheInvalidateLinkTriggers(selfID, toType)
 
 	om.Reply()
 }
@@ -785,6 +810,9 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	operationKeysMutexUnlock(ctx)
 
 	cacheDeleteTypeEdge(selfID, toType)
+	// TypesLink is gone — drop its cached trigger metadata so a future
+	// re-create starts from a clean slate.
+	cacheInvalidateLinkTriggers(selfID, toType)
 
 	PolyTypeGoalFinalize(ctx, polyTypeData)
 

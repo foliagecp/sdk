@@ -103,38 +103,47 @@ func executeObjectTriggers(ctx *sfPlugins.StatefunContextProcessor, objectID str
 }
 
 func executeLinkTriggers(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId, fromObjectType, toObjectType, linkType string, oldLinkBody, newLinkBody *easyjson.JSON, tt int /*0 - create, 1 - update, 2 - delete, 3 - read*/) {
-	typesLinkBody, err := getLinkBody(ctx, fromObjectType, toObjectType)
-	if err != nil || typesLinkBody == nil {
+	info, ok := getLinkTriggersInfo(ctx, fromObjectType, toObjectType)
+	if !ok || info == nil {
+		// TypesLink does not exist or could not be loaded — nothing to dispatch.
 		return
 	}
-	triggers := typesLinkBody.GetByPath("triggers")
-	referenceLinkType := typesLinkBody.GetByPath("type").AsStringDefault("")
+	if info.triggers == nil || !info.triggers.IsNonEmptyObject() {
+		// Cached negative — no triggers configured on this TypesLink.
+		return
+	}
+	if info.referenceLinkType != linkType {
+		// Trigger metadata refers to a different object-link-type than
+		// the one actually crossed — skip (this is how the original
+		// uncached code behaved).
+		return
+	}
+	if tt < 0 || tt >= 4 {
+		return
+	}
 
-	if err == nil && triggers.IsNonEmptyObject() && len(referenceLinkType) > 0 && tt >= 0 && tt < 4 {
-		elems := []string{"create", "update", "delete", "read"}
-		var functions []string
-		if arr, ok := triggers.GetByPath(elems[tt]).AsArrayString(); ok {
-			functions = arr
-		}
+	elems := []string{"create", "update", "delete", "read"}
+	var functions []string
+	if arr, ok := info.triggers.GetByPath(elems[tt]).AsArrayString(); ok {
+		functions = arr
+	}
+	if len(functions) == 0 {
+		return
+	}
 
-		if err != nil || referenceLinkType != linkType {
-			return
-		}
+	triggerData := easyjson.NewJSONObject()
+	triggerData.SetByPath("to", easyjson.NewJSON(toObjectId))
+	triggerData.SetByPath("type", easyjson.NewJSON(linkType))
+	if oldLinkBody != nil {
+		triggerData.SetByPath("old_body", *oldLinkBody)
+	}
+	if newLinkBody != nil {
+		triggerData.SetByPath("new_body", *newLinkBody)
+	}
+	payload := easyjson.NewJSONObject()
+	payload.SetByPath(fmt.Sprintf("trigger.link.%s", elems[tt]), triggerData)
 
-		triggerData := easyjson.NewJSONObject()
-		triggerData.SetByPath("to", easyjson.NewJSON(toObjectId))
-		triggerData.SetByPath("type", easyjson.NewJSON(linkType))
-		if oldLinkBody != nil {
-			triggerData.SetByPath("old_body", *oldLinkBody)
-		}
-		if newLinkBody != nil {
-			triggerData.SetByPath("new_body", *newLinkBody)
-		}
-		payload := easyjson.NewJSONObject()
-		payload.SetByPath(fmt.Sprintf("trigger.link.%s", elems[tt]), triggerData)
-
-		for _, f := range functions {
-			system.MsgOnErrorReturn(ctx.Signal(sfPlugins.JetstreamGlobalSignal, f, fromObjectId, &payload, nil))
-		}
+	for _, f := range functions {
+		system.MsgOnErrorReturn(ctx.Signal(sfPlugins.JetstreamGlobalSignal, f, fromObjectId, &payload, nil))
 	}
 }

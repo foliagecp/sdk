@@ -34,7 +34,94 @@ var (
 	objectTypeCache sync.Map
 	// key: fromType -> *sync.Map(toType -> objectLinkType)
 	type2TypeObjectLinkTypeCache sync.Map
+
+	// Trigger caches for the executeTriggersFromLLOpStack hot path.
+	// Without these, every op in the LL op-stack costs a full
+	// vertex.read (object triggers) or link.read (link triggers) round
+	// trip just to discover the type's triggers section — for HLMB-style
+	// massive CRUD that is N×NATS round trips per op_stack walk.
+	//
+	// Both caches store the result of the last server-side load and are
+	// invalidated when the underlying type / TypesLink body is mutated
+	// (UpdateType / DeleteType / *TypesLink*). The cached payload is
+	// already trigger-shaped (object: *easyjson.JSON of triggers section;
+	// link: triggers + referenceLinkType) so the hot path needs zero
+	// further KV reads to decide whether to fire a Signal.
+	//
+	// Value sentinel: nil *easyjson.JSON means "known to have no
+	// triggers" — a positive negative cache that lets us skip without
+	// re-hitting NATS.
+
+	// key: typeName -> *easyjson.JSON (triggers section; nil = none)
+	typeObjectTriggersCache sync.Map
+	// key: fromType + "|" + toType -> *linkTriggersInfo
+	typesLinkTriggersCache sync.Map
 )
+
+// linkTriggersInfo is the trigger-relevant subset of a TypesLink body,
+// pre-extracted at load time so the hot path needs no further JSON
+// traversal beyond fetching the cached value.
+//
+// triggers == nil means the TypesLink either has no triggers section
+// or it is empty — equivalent to "fire nothing".
+type linkTriggersInfo struct {
+	triggers          *easyjson.JSON
+	referenceLinkType string
+}
+
+func cacheGetTypeObjectTriggers(typeName string) (*easyjson.JSON, bool) {
+	if v, ok := typeObjectTriggersCache.Load(typeName); ok {
+		j, _ := v.(*easyjson.JSON)
+		return j, true
+	}
+	return nil, false
+}
+
+// cacheSetTypeObjectTriggers stores the triggers section for typeName.
+// Pass nil to record "known to have no triggers" — the negative cache
+// that lets the hot path skip the vertex.read for trigger-less types.
+func cacheSetTypeObjectTriggers(typeName string, triggers *easyjson.JSON) {
+	typeObjectTriggersCache.Store(typeName, triggers)
+}
+
+func cacheInvalidateTypeObjectTriggers(typeName string) {
+	typeObjectTriggersCache.Delete(typeName)
+}
+
+func cacheGetLinkTriggers(fromType, toType string) (*linkTriggersInfo, bool) {
+	if v, ok := typesLinkTriggersCache.Load(fromType + "|" + toType); ok {
+		info, _ := v.(*linkTriggersInfo)
+		return info, true
+	}
+	return nil, false
+}
+
+// cacheSetLinkTriggers stores trigger info for (fromType, toType).
+// Pass info with triggers=nil to record "no link triggers here".
+func cacheSetLinkTriggers(fromType, toType string, info *linkTriggersInfo) {
+	typesLinkTriggersCache.Store(fromType+"|"+toType, info)
+}
+
+func cacheInvalidateLinkTriggers(fromType, toType string) {
+	typesLinkTriggersCache.Delete(fromType + "|" + toType)
+}
+
+// cachePurgeLinkTriggersForType drops every cached link-triggers entry
+// involving typeName as either endpoint. Used when an entire type is
+// removed (DeleteType cascades through every TypesLink it participates
+// in).
+func cachePurgeLinkTriggersForType(typeName string) {
+	prefix := typeName + "|"
+	suffix := "|" + typeName
+	typesLinkTriggersCache.Range(func(k, _ any) bool {
+		if s, ok := k.(string); ok {
+			if strings.HasPrefix(s, prefix) || strings.HasSuffix(s, suffix) {
+				typesLinkTriggersCache.Delete(s)
+			}
+		}
+		return true
+	})
+}
 
 func cacheGetObjectType(objectID string) (string, bool) {
 	if v, ok := objectTypeCache.Load(objectID); ok {
@@ -162,16 +249,73 @@ func DeleteObjectFilteredOutLinksStatefun(_ sfPlugins.StatefunExecutor, ctx *sfP
 
 // ------------------------------------------------------------------------------------------------
 
+// getTypeTriggers returns the triggers section of typeName's CMDB type
+// body. Result is cached per typeName in typeObjectTriggersCache; the
+// cache is invalidated by UpdateType / DeleteType so a fresh write to
+// the type's body is observable on the next call.
+//
+// Returns an empty JSON object (not nil) when the type has no triggers
+// — callers use .IsNonEmptyObject() to decide whether to dispatch.
 func getTypeTriggers(ctx *sfPlugins.StatefunContextProcessor, typeName string) *easyjson.JSON {
-	/*options := easyjson.NewJSONObject()
-	if ctx.Options != nil {
-		options = ctx.Options.Clone()
-	}*/
-	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", makeSequenceFreeParentBasedID(ctx, typeName), injectParentHoldsLocks(ctx, nil), nil))
-	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
-		return som.Data.GetByPath("body.triggers").GetPtr()
+	if cached, ok := cacheGetTypeObjectTriggers(typeName); ok {
+		if cached == nil {
+			return easyjson.NewJSONObject().GetPtr()
+		}
+		return cached
 	}
+
+	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", makeSequenceFreeParentBasedID(ctx, typeName), injectParentHoldsLocks(ctx, nil), nil))
+	if som.Status != sfMediators.SYNC_OP_STATUS_OK {
+		// Transient failure — do not poison the cache.
+		return easyjson.NewJSONObject().GetPtr()
+	}
+
+	triggers := som.Data.GetByPath("body.triggers")
+	if triggers.IsNonEmptyObject() {
+		cloned := triggers.Clone()
+		ptr := &cloned
+		cacheSetTypeObjectTriggers(typeName, ptr)
+		return ptr
+	}
+	// Negative caching: remember that this type has no triggers so the
+	// next hot-path call short-circuits without another vertex.read.
+	cacheSetTypeObjectTriggers(typeName, nil)
 	return easyjson.NewJSONObject().GetPtr()
+}
+
+// getLinkTriggersInfo returns trigger metadata for the (fromType,
+// toType) TypesLink. Result is cached per pair in
+// typesLinkTriggersCache; invalidated by CreateTypesLink /
+// UpdateTypesLink / DeleteTypesLink / DeleteType.
+//
+// Returns (nil, false) when the TypesLink does not exist (caller treats
+// this as "no triggers, no validation possible") or when the load
+// transiently fails. Returns (info, true) on success — info.triggers
+// may itself be nil to denote "no triggers section".
+func getLinkTriggersInfo(ctx *sfPlugins.StatefunContextProcessor, fromType, toType string) (*linkTriggersInfo, bool) {
+	if info, ok := cacheGetLinkTriggers(fromType, toType); ok {
+		return info, info != nil
+	}
+
+	body, err := getLinkBody(ctx, fromType, toType)
+	if err != nil || body == nil {
+		// Transient or missing — store negative entry so the next call
+		// does not retry the NATS round-trip. The negative entry is
+		// cleared on TypesLinkCreate, which is the only way it can
+		// become positive again.
+		cacheSetLinkTriggers(fromType, toType, nil)
+		return nil, false
+	}
+
+	info := &linkTriggersInfo{
+		referenceLinkType: body.GetByPath("type").AsStringDefault(""),
+	}
+	if triggers := body.GetByPath("triggers"); triggers.IsNonEmptyObject() {
+		cloned := triggers.Clone()
+		info.triggers = &cloned
+	}
+	cacheSetLinkTriggers(fromType, toType, info)
+	return info, true
 }
 
 func FindObjectType(ctx *sfPlugins.StatefunContextProcessor, objectID string) (string, error) {
