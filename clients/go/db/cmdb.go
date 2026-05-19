@@ -9,6 +9,7 @@ import (
 	sfp "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
+	"golang.org/x/sync/singleflight"
 )
 
 type TriggerType = string
@@ -23,6 +24,29 @@ const (
 type CMDBSyncClient struct {
 	request                   sfp.SFRequestFunc
 	ShadowObjectCanBeRecevier bool
+
+	// readFlight deduplicates concurrent identical Read calls in this
+	// client instance. Multiple goroutines issuing the same ObjectRead
+	// (etc.) collapse into a single NATS round-trip; remaining waiters
+	// receive a Clone of the result so they can mutate it independently.
+	//
+	// The field is a *singleflight.Group rather than a value because
+	// CMDBSyncClient methods are value-receivers — copying the struct
+	// (which happens on every method call) would otherwise duplicate
+	// the in-flight map and defeat the deduplication. With a pointer,
+	// every copy shares the same Group.
+	//
+	// IMPORTANT: deduplication is in-flight only. Once Do returns the
+	// entry is removed and the next Read starts a fresh call — so a
+	// stale read is impossible. The group is per-client-instance, so
+	// two clients in the same process do not share each other's
+	// in-flight reads — which matches existing expectations: clients
+	// are independent abstractions.
+	//
+	// When nil (e.g. struct constructed directly without the New...
+	// constructor) the Read wrappers fall back to direct request calls
+	// and no deduplication happens — correctness is preserved.
+	readFlight *singleflight.Group
 }
 
 func NewCMDBSyncClient(NatsURL string, NatsRequestTimeoutSec int, HubDomainName string) (CMDBSyncClient, error) {
@@ -44,7 +68,7 @@ func NewCMDBSyncClientFromRequestFunction(request sfp.SFRequestFunc) (CMDBSyncCl
 	if request == nil {
 		return CMDBSyncClient{}, fmt.Errorf("request must not be nil")
 	}
-	return CMDBSyncClient{request: request}, nil
+	return CMDBSyncClient{request: request, readFlight: &singleflight.Group{}}, nil
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -254,10 +278,12 @@ func (cmdb CMDBSyncClient) TypeDelete(name string) error {
 }
 
 func (cmdb CMDBSyncClient) TypeRead(name string) (easyjson.JSON, error) {
-	options := easyjson.NewJSONObject()
-	options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
-	om := sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.type.read", seqFree(name), nil, &options))
-	return om.Data, OpErrorFromOpMsgStrict(om)
+	return doRead(cmdb.readFlight, "TypeRead:"+name, func() (any, error) {
+		options := easyjson.NewJSONObject()
+		options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
+		om := sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.type.read", seqFree(name), nil, &options))
+		return readResult{data: om.Data, err: OpErrorFromOpMsgStrict(om)}, nil
+	})
 }
 
 func (cmdb CMDBSyncClient) ObjectCreate(objectID, originType string, body ...easyjson.JSON) error {
@@ -323,22 +349,29 @@ func (cmdb CMDBSyncClient) ObjectDeleteWithDetails(id string) (easyjson.JSON, er
 }
 
 func (cmdb CMDBSyncClient) ObjectRead(name string) (easyjson.JSON, error) {
-	payload := easyjson.NewJSONObject()
-	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
-	options := easyjson.NewJSONObject()
-	options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
-	om := sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.object.read", seqFree(name), &payload, &options))
-	return om.Data, OpErrorFromOpMsgStrict(om)
+	// Key shape includes ":v1" so a concurrent ObjectReadV2 on the
+	// same id does not collapse into this call — the two endpoints
+	// produce different response shapes.
+	return doRead(cmdb.readFlight, "ObjectRead:v1:"+name, func() (any, error) {
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
+		options := easyjson.NewJSONObject()
+		options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
+		om := sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.object.read", seqFree(name), &payload, &options))
+		return readResult{data: om.Data, err: OpErrorFromOpMsgStrict(om)}, nil
+	})
 }
 
 func (cmdb CMDBSyncClient) ObjectReadV2(name string) (easyjson.JSON, error) {
-	payload := easyjson.NewJSONObject()
-	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
-	payload.SetByPath("details_v2", easyjson.NewJSON(true))
-	options := easyjson.NewJSONObject()
-	options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
-	om := sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.object.read", seqFree(name), &payload, &options))
-	return om.Data, OpErrorFromOpMsgStrict(om)
+	return doRead(cmdb.readFlight, "ObjectRead:v2:"+name, func() (any, error) {
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
+		payload.SetByPath("details_v2", easyjson.NewJSON(true))
+		options := easyjson.NewJSONObject()
+		options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
+		om := sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.object.read", seqFree(name), &payload, &options))
+		return readResult{data: om.Data, err: OpErrorFromOpMsgStrict(om)}, nil
+	})
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -391,13 +424,15 @@ func (cmdb CMDBSyncClient) TypesLinkDelete(from, to string) error {
 }
 
 func (cmdb CMDBSyncClient) TypesLinkRead(from, to string) (easyjson.JSON, error) {
-	payload := easyjson.NewJSONObject()
-	payload.SetByPath("to", easyjson.NewJSON(to))
+	return doRead(cmdb.readFlight, "TypesLinkRead:"+from+"|"+to, func() (any, error) {
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("to", easyjson.NewJSON(to))
 
-	options := easyjson.NewJSONObject()
-	options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
-	om := sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.types.link.read", seqFree(from), &payload, &options))
-	return om.Data, OpErrorFromOpMsgStrict(om)
+		options := easyjson.NewJSONObject()
+		options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
+		om := sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.types.link.read", seqFree(from), &payload, &options))
+		return readResult{data: om.Data, err: OpErrorFromOpMsgStrict(om)}, nil
+	})
 }
 
 func (cmdb CMDBSyncClient) ObjectsLinkCreate(from, to, name string, tags []string, body ...easyjson.JSON) error {
@@ -479,13 +514,15 @@ func (cmdb CMDBSyncClient) ObjectsLinkDeleteWithDetails(from, to string) (easyjs
 }
 
 func (cmdb CMDBSyncClient) ObjectsLinkRead(from, to string) (easyjson.JSON, error) {
-	payload := easyjson.NewJSONObject()
-	payload.SetByPath("to", easyjson.NewJSON(to))
+	return doRead(cmdb.readFlight, "ObjectsLinkRead:"+from+"|"+to, func() (any, error) {
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("to", easyjson.NewJSON(to))
 
-	options := easyjson.NewJSONObject()
-	options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
-	om := sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.objects.link.read", seqFree(from), &payload, &options))
-	return om.Data, OpErrorFromOpMsgStrict(om)
+		options := easyjson.NewJSONObject()
+		options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
+		om := sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.objects.link.read", seqFree(from), &payload, &options))
+		return readResult{data: om.Data, err: OpErrorFromOpMsgStrict(om)}, nil
+	})
 }
 
 // ------------------------------------------------------------------------------------------------

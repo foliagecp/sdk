@@ -16,6 +16,7 @@ require (
 	github.com/stretchr/testify v1.9.0
 	github.com/testcontainers/testcontainers-go v0.33.0
 	github.com/vektah/gqlparser/v2 v2.5.16
+	golang.org/x/sync v0.7.0
 )
 
 require (

@@ -11,7 +11,54 @@ import (
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfp "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/nats-io/nats.go"
+	"golang.org/x/sync/singleflight"
 )
+
+// readResult is the payload returned by every Read wrapper through its
+// singleflight group. We carry the (data, err) tuple verbatim so that
+// the calling Read method can surface them exactly as the underlying
+// SDK request did — IDLE/ErrNotFound included.
+//
+// IMPORTANT: callers of singleflight-deduplicated reads MUST clone the
+// returned data before mutating it. Several waiters arriving on the
+// same in-flight call share the same JSON pointer; without a Clone()
+// at the surface boundary, one waiter's SetByPath could be observed
+// by another. Read wrappers in this package handle the clone for the
+// caller — see ObjectRead / VertexRead / etc.
+type readResult struct {
+	data easyjson.JSON
+	err  error
+}
+
+// doRead runs fn under the given singleflight group keyed by `key` and
+// returns a fresh (cloned) data + the original error, isolating
+// concurrent waiters from each other's mutations.
+//
+// The inner fn must return readResult inside the any-typed first
+// return; the error second return is reserved for unrecoverable
+// singleflight-level failures, which the SDK request path does not
+// produce — application-level errors travel inside readResult.err so
+// they propagate to every waiter on the in-flight call.
+//
+// When group is nil (client constructed without the New... factory,
+// so readFlight was never initialized) doRead falls back to a direct
+// fn invocation — no deduplication, but correctness preserved.
+func doRead(group *singleflight.Group, key string, fn func() (any, error)) (easyjson.JSON, error) {
+	if group == nil {
+		v, _ := fn()
+		r, ok := v.(readResult)
+		if !ok {
+			return easyjson.NewJSONNull(), fmt.Errorf("db_client: read inner produced unexpected type %T", v)
+		}
+		return r.data, r.err
+	}
+	v, _, _ := group.Do(key, fn)
+	r, ok := v.(readResult)
+	if !ok {
+		return easyjson.NewJSONNull(), fmt.Errorf("db_client: singleflight inner produced unexpected type %T", v)
+	}
+	return r.data.Clone(), r.err
+}
 
 // ErrNotFound is returned by Read-flavoured client calls when the underlying
 // CMDB / graph entity does not exist. It wraps the "idle" status produced by
