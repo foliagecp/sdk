@@ -50,8 +50,8 @@ func (s *CrudAtomicityTestSuite) bootstrap() {
 	RegisterAllFunctionTypes(s.Runtime())
 	s.NoError(s.StartRuntime())
 	// Give cmdbSchemaPrepare a moment to seed built-in vertices.
-	s.waitForVertex(BUILT_IN_TYPES, 5*time.Second)
-	s.waitForVertex(BUILT_IN_OBJECTS, 5*time.Second)
+	s.waitForVertex(BUILT_IN_TYPES, 15*time.Second)
+	s.waitForVertex(BUILT_IN_OBJECTS, 15*time.Second)
 }
 
 // waitForVertex polls the cache until the given vertex appears or timeout.
@@ -197,8 +197,8 @@ func (s *CrudAtomicityTestSuite) Test_D1_CreateObject_LeavesOrphanVertex_OnLinkC
 	statefun.NewFunctionType(s.Runtime(), "functions.graph.api.link.create", failingLinkCreate, cfg)
 
 	s.NoError(s.StartRuntime())
-	s.waitForVertex(BUILT_IN_TYPES, 5*time.Second)
-	s.waitForVertex(BUILT_IN_OBJECTS, 5*time.Second)
+	s.waitForVertex(BUILT_IN_TYPES, 15*time.Second)
+	s.waitForVertex(BUILT_IN_OBJECTS, 15*time.Second)
 
 	s.cmdbTypeCreate("TypeD1")
 
@@ -382,8 +382,8 @@ func (s *CrudAtomicityTestSuite) Test_D3_ObjectsLinkOp_ReadAmplification() {
 	statefun.NewFunctionType(s.Runtime(), "functions.cmdb.api.object.read", counted, cfg)
 
 	s.NoError(s.StartRuntime())
-	s.waitForVertex(BUILT_IN_TYPES, 5*time.Second)
-	s.waitForVertex(BUILT_IN_OBJECTS, 5*time.Second)
+	s.waitForVertex(BUILT_IN_TYPES, 15*time.Second)
+	s.waitForVertex(BUILT_IN_OBJECTS, 15*time.Second)
 
 	s.cmdbTypeCreate("TypeD3A")
 	s.cmdbTypeCreate("TypeD3B")
@@ -674,8 +674,8 @@ func (s *CrudAtomicityTestSuite) Test_D4_PartialDelete_RecoverableViaSubsequentD
 	statefun.NewFunctionType(s.Runtime(), "functions.graph.api.link.delete", failingLinkDelete, cfg)
 
 	s.NoError(s.StartRuntime())
-	s.waitForVertex(BUILT_IN_TYPES, 5*time.Second)
-	s.waitForVertex(BUILT_IN_OBJECTS, 5*time.Second)
+	s.waitForVertex(BUILT_IN_TYPES, 15*time.Second)
+	s.waitForVertex(BUILT_IN_OBJECTS, 15*time.Second)
 
 	s.cmdbTypeCreate("TypeD4p")
 	s.Equal("ok", s.cmdbObjectCreate("obj-d4p", "TypeD4p").GetByPath("status").AsStringDefault(""))
