@@ -1,0 +1,2 @@
+-- High-level schema is created by SemanticPGDumper.InitSchema()
+-- This file is intentionally empty.

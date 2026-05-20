@@ -44,9 +44,9 @@ func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	if typeOperationRedirectedToHub(ctx) {
 		return
 	}
-	operationKeysMutexLock(ctx, []string{selfID, typesVertexId}, true)
-
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	operationKeysMutexLock(ctx, []string{selfID, typesVertexId}, true, opTime)
+
 	ctx.Payload.SetByPath("op_time", easyjson.NewJSON(opTime))
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -94,9 +94,9 @@ func UpdateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 		return
 	}
 
-	operationKeysMutexLock(ctx, []string{selfID}, true)
-
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	operationKeysMutexLock(ctx, []string{selfID}, true, opTime)
+
 	ctx.Payload.SetByPath("op_time", easyjson.NewJSON(opTime))
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -136,9 +136,9 @@ func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 		return
 	}
 
-	operationKeysMutexLock(ctx, []string{selfID}, true)
-
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	operationKeysMutexLock(ctx, []string{selfID}, true, opTime)
+
 	ctx.Payload.SetByPath("op_time", easyjson.NewJSON(opTime))
 
 	goal := PolyTypeCascadeDeleteGoalType{
@@ -195,7 +195,9 @@ func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProces
 	payload := easyjson.NewJSONObjectWithKeyValue("details", easyjson.NewJSON(true))
 
 	RecalculateInheritanceCacheForTypeAtSelfIDIfNeeded(ctx) // Will try to do operationKeysMutexLock(ctx, []string{selfID}, true) that's why it is before operationKeysMutexLock(ctx, []string{selfID}, false), otherwise deadlock appears
-	operationKeysMutexLock(ctx, []string{selfID}, false)
+
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	operationKeysMutexLock(ctx, []string{selfID}, false, opTime)
 
 	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &payload), ctx.Options))
 	operationKeysMutexUnlock(ctx)
@@ -259,13 +261,13 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	originType = ctx.Domain.CreateObjectIDWithHubDomain(originType, true)
 	builtInObjectsVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false)
 
-	opTime := ctx.Payload.GetByPath("op_time").AsNumericDefault(-1)
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
 	ctx.Payload.SetByPath("op_time", easyjson.NewJSON(opTime))
 
 	options := ctx.Options.Clone()
 	options.SetByPath("op_stack", easyjson.NewJSON(true))
 
-	operationKeysMutexLock(ctx, []string{builtInObjectsVertexId, selfID, originType}, true)
+	operationKeysMutexLock(ctx, []string{builtInObjectsVertexId, selfID, originType}, true, opTime)
 
 	// rollbackStack accumulates the op_stack of every step that succeeded.
 	// If a later step fails we walk this stack in reverse and invoke the
@@ -359,7 +361,7 @@ func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	// Handle upsert request ------------------------------
 	upsert := ctx.Payload.GetByPath("upsert").AsBoolDefault(false)
 
-	operationKeysMutexLock(ctx, []string{selfID}, true)
+	operationKeysMutexLock(ctx, []string{selfID}, true, opTime)
 
 	if upsert {
 		ctx.Payload.RemoveByPath("upsert")
@@ -462,7 +464,7 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 
 	om := sfMediators.NewOpMediator(ctx)
 
-	operationKeysMutexLock(ctx, []string{selfID}, true)
+	operationKeysMutexLock(ctx, []string{selfID}, true, opTime)
 	objectType, err := findObjectType(ctx, selfID)
 	if err != nil {
 		// Probe the cache directly: with Option 1A applied, ReadObject
@@ -514,7 +516,8 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 		payload.SetByPath("details", easyjson.NewJSON(true))
 	}
 
-	operationKeysMutexLock(ctx, []string{selfID}, false)
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	operationKeysMutexLock(ctx, []string{selfID}, false, opTime)
 	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &payload), ctx.Options))
 	operationKeysMutexUnlock(ctx)
 
@@ -658,7 +661,7 @@ func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	link.SetByPath("body.type", easyjson.NewJSON(objectLinkType))
 	link.SetByPath("op_time", easyjson.NewJSON(opTime))
 
-	operationKeysMutexLock(ctx, []string{selfID, toType}, true)
+	operationKeysMutexLock(ctx, []string{selfID, toType}, true, opTime)
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &link), ctx.Options)))
 	operationKeysMutexUnlock(ctx)
 
@@ -726,7 +729,7 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	}
 	link.SetByPath("op_time", easyjson.NewJSON(opTime))
 
-	operationKeysMutexLock(ctx, []string{selfID, toType}, true)
+	operationKeysMutexLock(ctx, []string{selfID, toType}, true, opTime)
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.update", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &link), ctx.Options)))
 	operationKeysMutexUnlock(ctx)
 
@@ -772,7 +775,7 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	}
 	toType = ctx.Domain.CreateObjectIDWithHubDomain(toType, true)
 
-	operationKeysMutexLock(ctx, []string{selfID, toType}, true)
+	operationKeysMutexLock(ctx, []string{selfID, toType}, true, opTime)
 
 	originLinkType, err := getObjectsLinkTypeFromTypesLink(ctx, selfID, toType)
 	if err != nil {
@@ -848,7 +851,8 @@ func ReadTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 	payload.SetByPath("type", easyjson.NewJSON(TO_TYPELINK))
 	payload.SetByPath("details", easyjson.NewJSON(true))
 
-	operationKeysMutexLock(ctx, []string{selfID, toType}, false)
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	operationKeysMutexLock(ctx, []string{selfID, toType}, false, opTime)
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &payload), ctx.Options)))
 	operationKeysMutexUnlock(ctx)
 
@@ -884,7 +888,7 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		linkName = objectToID
 	}
 
-	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true)
+	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true, opTime)
 	_, _, linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, selfID, objectToID)
 	if err != nil {
 		operationKeysMutexUnlock(ctx)
@@ -959,7 +963,7 @@ func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	options := ctx.Options.Clone()
 	options.SetByPath("op_stack", easyjson.NewJSON(true))
 
-	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true)
+	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true, opTime)
 
 	// Hot path: cheap KV-only resolution. Falls back to the schema-based
 	// resolver only when the edge does not yet exist (upsert / cold path).
@@ -1010,7 +1014,7 @@ func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	}
 	objectToID = ctx.Domain.CreateObjectIDWithThisDomain(objectToID, false)
 
-	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true)
+	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true, opTime)
 
 	// Cheap KV-only resolution of (linkName, linkType) for the existing edge.
 	// No object.read calls; idempotent if the edge is already gone.
@@ -1056,7 +1060,8 @@ func ReadObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	}
 	objectToID = ctx.Domain.CreateObjectIDWithThisDomain(objectToID, false)
 
-	operationKeysMutexLock(ctx, []string{selfID, objectToID}, false)
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	operationKeysMutexLock(ctx, []string{selfID, objectToID}, false, opTime)
 	fromObjectType, toObjectType, linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, selfID, objectToID)
 	if err != nil {
 		operationKeysMutexUnlock(ctx)

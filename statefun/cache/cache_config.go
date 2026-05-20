@@ -6,7 +6,7 @@ const (
 	LevelSubscriptionNotificationsBufferMaxSize = 30000 // ~16Mb: elemenets := 16 * 1024 * 1024 / (64 + 512), where 512 - avg value size, 64 - avg key size
 	LazyWriterValueProcessDelayMkS              = 500
 	LazyWriterRepeatDelayMkS                    = 100000
-	WalTransactionWaitPeriodMS                  = 5000
+	WalBatchMinOps                              = 100 // min ops to accumulate before publishing a WAL transaction
 )
 
 type Config struct {
@@ -16,7 +16,7 @@ type Config struct {
 	levelSubscriptionNotificationsBufferMaxSize int
 	lazyWriterValueProcessDelayMkS              int
 	lazyWriterRepeatDelayMkS                    int
-	walTransactionWaitPeriodMS                  int
+	walBatchMinOps                              int
 }
 
 func NewCacheConfig(id string) *Config {
@@ -27,7 +27,7 @@ func NewCacheConfig(id string) *Config {
 		levelSubscriptionNotificationsBufferMaxSize: LevelSubscriptionNotificationsBufferMaxSize,
 		lazyWriterValueProcessDelayMkS:              LazyWriterValueProcessDelayMkS,
 		lazyWriterRepeatDelayMkS:                    LazyWriterRepeatDelayMkS,
-		walTransactionWaitPeriodMS:                  WalTransactionWaitPeriodMS,
+		walBatchMinOps:                              WalBatchMinOps,
 	}
 }
 
@@ -58,4 +58,13 @@ func (cc *Config) SetLazyWriterValueProcessDelayMkS(lazyWriterValueProcessDelayM
 func (cc *Config) SetLazyWriterRepeatDelayMkS(lazyWriterRepeatDelayMkS int) *Config {
 	cc.lazyWriterRepeatDelayMkS = lazyWriterRepeatDelayMkS
 	return cc
+}
+
+func (cc *Config) SetWalBatchMinOps(walBatchMinOps int) *Config {
+	cc.walBatchMinOps = walBatchMinOps
+	return cc
+}
+
+func (cc *Config) GetKVStorePrefix() string {
+	return cc.kvStorePrefix
 }

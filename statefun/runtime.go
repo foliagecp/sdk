@@ -157,6 +157,14 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 	}
 	r.config.desiredHUBDomainName = r.Domain.hubDomainName
 
+	r.Domain.exportEnabled = config.exportEnabled
+	r.Domain.exportSC = streamConfig{
+		replicasCount: config.natsReplicasCount,
+		maxMsgs:       config.exportStreamMaxMsgs,
+		maxBytes:      config.exportStreamMaxBytes,
+		maxAge:        config.exportStreamMaxAge,
+	}
+
 	return r, nil
 }
 

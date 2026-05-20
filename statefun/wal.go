@@ -2,6 +2,7 @@ package statefun
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -18,47 +19,23 @@ import (
 var errTransactionAlreadyApplied = fmt.Errorf("transaction already applied by another runtime")
 
 const (
-	WALOperationsStreamName = "wal_operations"
 	WALCommitsStreamName    = "wal_commits"
-	WALOperationsSubject    = "wal.ops.*.*"
 	WALCommitsSubject       = "wal.commits.*"
 	CommitterDurableName    = "TRANSACTION_COMMITTER_CONSUMER"
 
-	// --- Commit consumer (TransactionCommitter) ---
+	// Export-dedicated stream — parallel pipeline for export committer.
+	WALExportCommitsStreamName = "wal_export_commits"
+	WALExportCommitsSubject   = "wal.export.commits.*"
+	ExportCommitterDurableName = "EXPORT_COMMITTER_CONSUMER"
 
-	// How long NATS waits for Ack before redelivering a commit message.
-	commitAckWait = 5 * time.Second
-
-	// How many times NATS retries an unacked commit before sending to DLQ.
+	// --- Transaction consumer ---
+	commitAckWait    = 5 * time.Second
 	commitMaxDeliver = 5
 
-	// --- Operations consumer (per-transaction) ---
-
-	// How long NATS waits for Ack on each operation batch.
-	opsAckWait = 10 * time.Second
-
-	// Fewer retries than commits: if a single op fails 3 times, the KV is likely
-	// unavailable and the whole transaction will be retried via commit redelivery.
-	opsMaxDeliver = 3
-
-	// Number of operation messages to fetch per pull batch.
-	// 100 balances throughput (fewer round-trips) vs memory (buffered messages).
-	opsFetchBatchSize = 100
-
-	// How long to wait for a batch before returning what's available.
-	opsFetchTimeout = 1 * time.Second
-
 	// --- Shutdown drain ---
-
-	// How often to poll for remaining pending commits during shutdown.
 	shutdownPollInterval = 200 * time.Millisecond
-
-	// How often to log "still waiting" during shutdown drain.
-	shutdownLogInterval = 5 * time.Second
-
-	// Max time to wait for pending transactions during shutdown.
-	// After this, shutdown proceeds with data loss warning.
-	shutdownMaxWait = 30 * time.Second
+	shutdownLogInterval  = 5 * time.Second
+	shutdownMaxWait      = 30 * time.Second
 )
 
 func (dm *Domain) TransactionCommitter(ctx context.Context) error {
@@ -129,7 +106,15 @@ func (dm *Domain) runTransactionCommitter(ctx context.Context, ready chan struct
 				return
 			}
 
-			lg.Logf(lg.TraceLevel, "TransactionCommitter: processing commit for tx_id=%s", txID)
+			// Parse ops from message body
+			var ops []cache.WALOp
+			if err := json.Unmarshal(msg.Data, &ops); err != nil {
+				lg.Logf(lg.ErrorLevel, "TransactionCommitter: failed to unmarshal ops for tx=%s: %s", txID, err)
+				system.MsgOnErrorReturn(msg.Ack())
+				return
+			}
+
+			lg.Logf(lg.TraceLevel, "TransactionCommitter: processing tx_id=%s, ops=%d", txID, len(ops))
 
 			// Backup barrier pause
 			for dm.isBackupBarrierActive() {
@@ -137,13 +122,7 @@ func (dm *Domain) runTransactionCommitter(ctx context.Context, ready chan struct
 				time.Sleep(200 * time.Millisecond)
 			}
 
-			if err := dm.applyTransactionOperations(ctx, txID); err != nil {
-				if errors.Is(err, errTransactionAlreadyApplied) {
-					lg.Logf(lg.DebugLevel, "TransactionCommitter: transaction %s already applied, acking", txID)
-					system.MsgOnErrorReturn(msg.Ack())
-					processedCount++
-					return
-				}
+			if err := dm.applyTransactionOps(ops, txID); err != nil {
 				lg.Logf(lg.ErrorLevel, "TransactionCommitter: failed to apply transaction %s: %s", txID, err)
 				system.MsgOnErrorReturn(msg.Nak())
 				return
@@ -215,119 +194,33 @@ func (dm *Domain) runTransactionCommitter(ctx context.Context, ready chan struct
 	}
 }
 
-func (dm *Domain) applyTransactionOperations(ctx context.Context, txID string) error {
-	opsSubject := fmt.Sprintf("wal.ops.%s.%s", dm.kv.Bucket(), txID)
-	consumerName := "TX_OPS_" + dm.kv.Bucket() + "_" + txID
-
-	lg.Logf(lg.TraceLevel, "applyTransactionOperations: processing tx_id=%s, subject=%s", txID, opsSubject)
-
-	info, err := dm.js.ConsumerInfo(WALOperationsStreamName, consumerName)
-	if err != nil || info == nil {
-		lg.Logf(lg.TraceLevel, "Consumer %s not found, creating new one", consumerName)
-
-		consumerConfig := &nats.ConsumerConfig{
-			Name:          consumerName,
-			Durable:       consumerName,
-			FilterSubject: opsSubject,
-			AckPolicy:     nats.AckExplicitPolicy,
-			AckWait:       opsAckWait,
-			MaxDeliver:    opsMaxDeliver,
+// applyTransactionOps applies WAL operations from the transaction message body to KV store.
+func (dm *Domain) applyTransactionOps(ops []cache.WALOp, txID string) error {
+	for _, op := range ops {
+		if op.Key == "" {
+			continue
 		}
-
-		if _, err = dm.js.AddConsumer(WALOperationsStreamName, consumerConfig); err != nil {
-			lg.Logf(lg.ErrorLevel, "Failed to create consumer: %s", err)
-			return fmt.Errorf("failed to create operations consumer: %w", err)
-		}
-		lg.Logf(lg.TraceLevel, "Created durable consumer %s", consumerName)
-	} else {
-		lg.Logf(lg.TraceLevel, "Reusing existing consumer %s", consumerName)
-	}
-
-	sub, err := dm.js.PullSubscribe(opsSubject, consumerName)
-	if err != nil {
-		if errors.Is(err, nats.ErrConsumerDeleted) {
-			lg.Logf(lg.DebugLevel, "Per-tx consumer %s already deleted, transaction applied by another runtime", consumerName)
-			return errTransactionAlreadyApplied
-		}
-		lg.Logf(lg.ErrorLevel, "Failed to create subscription: %s", err)
-		return fmt.Errorf("failed to subscribe to operations: %w", err)
-	}
-
-	if !sub.IsValid() {
-		return fmt.Errorf("subscription invalid after creation")
-	}
-
-	defer func() {
-		system.MsgOnErrorReturn(sub.Unsubscribe())
-	}()
-
-	totalOps := 0
-
-	for {
-		msgs, err := sub.Fetch(opsFetchBatchSize, nats.MaxWait(opsFetchTimeout))
-		if err != nil {
-			if errors.Is(err, nats.ErrTimeout) {
-				lg.Logf(lg.TraceLevel, "applyTransactionOperations: finished, processed %d operations for tx_id=%s", totalOps, txID)
-				break
-			}
-			if errors.Is(err, nats.ErrConsumerDeleted) {
-				lg.Logf(lg.DebugLevel, "Per-tx consumer deleted during fetch, transaction applied by another runtime (tx_id=%s)", txID)
-				return errTransactionAlreadyApplied
-			}
-			return fmt.Errorf("failed to fetch operations: %w", err)
-		}
-
-		if len(msgs) == 0 {
-			lg.Logf(lg.TraceLevel, "applyTransactionOperations: no more messages, processed %d operations for tx_id=%s", totalOps, txID)
-			break
-		}
-
-		//lg.GetLogger().Tracef(ctx, "applyTransactionOperations: fetched %d operations for tx_id=%s", len(msgs), txID)
-
-		for _, msg := range msgs {
-			opType := msg.Header.Get("op_type")
-			key := msg.Header.Get("key")
-
-			if key == "" {
-				lg.Logf(lg.WarnLevel, "Operation without key in transaction %s", txID)
-				system.MsgOnErrorReturn(msg.Ack())
-				continue
-			}
-
-			var kvErr error
-			switch opType {
-			case cache.OpTypePUT:
-				_, kvErr = customNatsKv.KVPut(dm.js, dm.kv, key, msg.Data)
-			case cache.OpTypeDelete:
-				kvErr = customNatsKv.KVDelete(dm.js, dm.kv, key)
-				if kvErr != nil {
-					errMsg := kvErr.Error()
-					if errors.Is(kvErr, nats.ErrKeyNotFound) ||
-						strings.Contains(errMsg, "message not found") ||
-						strings.Contains(errMsg, "key not found") {
-						kvErr = nil
-					}
-				}
-			default:
-				lg.Logf(lg.TraceLevel, "Unknown operation type %s in transaction %s", opType, txID)
-				system.MsgOnErrorReturn(msg.Ack())
-				continue
-			}
-
+		var kvErr error
+		switch op.OpType {
+		case cache.OpTypePUT:
+			_, kvErr = customNatsKv.KVPut(dm.js, dm.kv, op.Key, op.Value)
+		case cache.OpTypeDelete:
+			kvErr = customNatsKv.KVDelete(dm.js, dm.kv, op.Key)
 			if kvErr != nil {
-				lg.Logf(lg.ErrorLevel, "Failed to apply operation to KV: %s", kvErr)
-				system.MsgOnErrorReturn(msg.Nak())
-				return fmt.Errorf("failed to apply operation: %w", kvErr)
+				errMsg := kvErr.Error()
+				if errors.Is(kvErr, nats.ErrKeyNotFound) ||
+					strings.Contains(errMsg, "message not found") ||
+					strings.Contains(errMsg, "key not found") {
+					kvErr = nil
+				}
 			}
-
-			totalOps++
-			system.MsgOnErrorReturn(msg.Ack())
+		default:
+			continue
+		}
+		if kvErr != nil {
+			return fmt.Errorf("KV apply failed for key=%s: %w", op.Key, kvErr)
 		}
 	}
-
-	lg.Logf(lg.TraceLevel, "applyTransactionOperations: all operations processed, deleting consumer %s", consumerName)
-	system.MsgOnErrorReturn(dm.js.DeleteConsumer(WALOperationsStreamName, consumerName))
-
 	return nil
 }
 
@@ -369,35 +262,118 @@ func generateTransactionID() string {
 	return fmt.Sprintf("%d", system.GetCurrentTimeNs())
 }
 
-func (dm *Domain) publishWALOperation(txID string, opTime int64, opType cache.OpType, key string, value []byte) error {
-	subject := fmt.Sprintf("wal.ops.%s.%s", dm.kv.Bucket(), txID)
-
-	msg := nats.NewMsg(subject)
-	msg.Header.Set("tx_id", txID)
-	msg.Header.Set("op_time", strconv.FormatInt(opTime, 10))
-	msg.Header.Set("op_type", opType)
-	msg.Header.Set("key", key)
-	msg.Data = value
-
-	if _, err := dm.js.PublishMsg(msg); err != nil {
-		lg.Logf(lg.ErrorLevel, "Failed to publish WAL operation: %s", err)
-		return err
-	}
-	return nil
-}
-
-func (dm *Domain) publishWALCommit(txID string) error {
+// publishWALTransaction publishes a complete WAL transaction as a single message.
+// The message body contains JSON-serialized ops. Headers carry tx_id and ops_count.
+func (dm *Domain) publishWALTransaction(txID string, ops []cache.WALOp) error {
 	subject := fmt.Sprintf("wal.commits.%s", dm.kv.Bucket())
 
+	opsData, err := json.Marshal(ops)
+	if err != nil {
+		return fmt.Errorf("marshal WAL ops: %w", err)
+	}
+
 	msg := nats.NewMsg(subject)
 	msg.Header.Set("tx_id", txID)
+	msg.Header.Set("ops_count", strconv.Itoa(len(ops)))
 	msg.Header.Set("commit_time", strconv.FormatInt(time.Now().UnixNano(), 10))
+	msg.Data = opsData
 
-	lg.Logf(lg.TraceLevel, "Publishing WAL commit: tx=%s, subject=%s", txID, subject)
+	lg.Logf(lg.TraceLevel, "Publishing WAL tx=%s, ops=%d, subject=%s", txID, len(ops), subject)
 
 	if _, err := dm.js.PublishMsg(msg); err != nil {
-		lg.Logf(lg.ErrorLevel, "Failed to publish WAL commit: %s", err)
+		lg.Logf(lg.ErrorLevel, "Failed to publish WAL transaction: %s", err)
 		return err
 	}
+
+	// Duplicate to export commits stream for parallel export pipeline
+	if dm.exportEnabled {
+		exportSubject := fmt.Sprintf("wal.export.commits.%s", dm.kv.Bucket())
+		exportMsg := nats.NewMsg(exportSubject)
+		exportMsg.Header.Set("tx_id", txID)
+		exportMsg.Header.Set("ops_count", strconv.Itoa(len(ops)))
+		exportMsg.Header.Set("commit_time", msg.Header.Get("commit_time"))
+		exportMsg.Data = opsData
+		if _, err := dm.js.PublishMsg(exportMsg); err != nil {
+			lg.Logf(lg.WarnLevel, "Failed to publish export WAL transaction (non-fatal): %s", err)
+		}
+	}
+
 	return nil
 }
+
+// startExportCommitter runs a parallel pipeline that reads WAL transactions
+// from the export-dedicated streams and publishes them to the export committer.
+// It is independent of the KV apply pipeline (TransactionCommitter) and is not
+// blocked by sequential KV Put latency.
+func (dm *Domain) startExportCommitter(ctx context.Context) error {
+	if dm.exportCommitter == nil {
+		return nil
+	}
+
+	commitSubject := fmt.Sprintf("wal.export.commits.%s", dm.kv.Bucket())
+	consumerName := ExportCommitterDurableName + "-" + dm.kv.Bucket()
+
+	lg.Logf(lg.DebugLevel, "ExportCommitter pipeline starting for bucket=%s", dm.kv.Bucket())
+
+	_, err := dm.js.AddConsumer(WALExportCommitsStreamName, &nats.ConsumerConfig{
+		Name:           consumerName,
+		Durable:        consumerName,
+		DeliverSubject: consumerName,
+		DeliverGroup:   consumerName + "-group",
+		FilterSubject:  commitSubject,
+		AckPolicy:      nats.AckExplicitPolicy,
+		AckWait:        commitAckWait,
+		MaxDeliver:     commitMaxDeliver,
+		MaxAckPending:  1,
+	})
+	if err != nil && !errors.Is(err, nats.ErrConsumerNameAlreadyInUse) {
+		return fmt.Errorf("ExportCommitter: failed to create consumer: %w", err)
+	}
+
+	_, err = dm.js.QueueSubscribe(
+		commitSubject,
+		consumerName+"-group",
+		func(msg *nats.Msg) {
+			txID := msg.Header.Get("tx_id")
+			if txID == "" {
+				system.MsgOnErrorReturn(msg.Ack())
+				return
+			}
+
+			var ops []cache.WALOp
+			if err := json.Unmarshal(msg.Data, &ops); err != nil {
+				lg.Logf(lg.ErrorLevel, "ExportCommitter: failed to unmarshal ops for tx=%s: %s", txID, err)
+				system.MsgOnErrorReturn(msg.Ack())
+				return
+			}
+
+			lg.Logf(lg.TraceLevel, "ExportCommitter: processing tx_id=%s, ops=%d", txID, len(ops))
+
+			if len(ops) > 0 {
+				storePrefix := cache.KVStorePrefix
+				if dm.cache != nil {
+					storePrefix = dm.cache.GetStorePrefix()
+				}
+				// Convert cache.WALOp to statefun.WALOp for export committer
+				exportOps := make([]WALOp, len(ops))
+				for i, op := range ops {
+					exportOps[i] = WALOp{OpType: op.OpType, Key: op.Key, Value: op.Value}
+				}
+				if err := dm.exportCommitter.ProcessTransaction(txID, exportOps, storePrefix); err != nil {
+					lg.Logf(lg.WarnLevel, "ExportCommitter: ProcessTransaction failed for tx=%s (non-fatal): %s", txID, err)
+				}
+			}
+
+			system.MsgOnErrorReturn(msg.Ack())
+		},
+		nats.Bind(WALExportCommitsStreamName, consumerName),
+		nats.ManualAck(),
+	)
+	if err != nil {
+		return fmt.Errorf("ExportCommitter: failed to subscribe: %w", err)
+	}
+
+	lg.Logf(lg.DebugLevel, "ExportCommitter pipeline started")
+	return nil
+}
+

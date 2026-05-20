@@ -50,7 +50,8 @@ func TypeSetSubType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContext
 	}
 	childTypeWithDomain := ctx.Domain.CreateObjectIDWithHubDomain(childType, true)
 
-	operationKeysMutexLock(ctx, []string{selfID, childTypeWithDomain}, true)
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	operationKeysMutexLock(ctx, []string{selfID, childTypeWithDomain}, true, opTime)
 	defer operationKeysMutexUnlock(ctx)
 
 	link := easyjson.NewJSONObject()
@@ -85,7 +86,8 @@ func TypeRemoveSubType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	}
 	childTypeWithDomain := ctx.Domain.CreateObjectIDWithHubDomain(childType, true)
 
-	operationKeysMutexLock(ctx, []string{selfID, childTypeWithDomain}, true)
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	operationKeysMutexLock(ctx, []string{selfID, childTypeWithDomain}, true, opTime)
 	defer operationKeysMutexUnlock(ctx)
 
 	link := easyjson.NewJSONObject()
@@ -200,7 +202,7 @@ func UpdateObjectsLinkFromSuperTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugin
 	fromObjectClaimType = ctx.Domain.CreateObjectIDWithHubDomain(fromObjectClaimType, true)
 	toObjectClaimType = ctx.Domain.CreateObjectIDWithHubDomain(toObjectClaimType, true)
 
-	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true)
+	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true, opTime)
 
 	objectLinkType := isObjectLinkPermittedForClaimedTypes(ctx, selfID, objectToID, fromObjectClaimType, toObjectClaimType)
 	if len(objectLinkType) == 0 {
@@ -275,7 +277,7 @@ func DeleteObjectsLinkFromSuperTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugin
 		ctx.Domain.CreateObjectIDWithHubDomain(ctx.Payload.GetByPath("to_super_type").AsStringDefault(""), true))
 	compoundPrefix := fromClaimShort + "#" + toClaimShort + "#"
 
-	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true)
+	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true, opTime)
 
 	// Resolve the SPECIFIC edge by KV only (no object.read).
 	linkName, linkType, edgeExists := resolveLinkBetweenTwoObjectsByTypePrefix(ctx, selfID, objectToID, compoundPrefix)

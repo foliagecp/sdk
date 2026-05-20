@@ -34,6 +34,14 @@ const (
 	activePassiveMode           = true
 )
 
+// Export stream defaults
+const (
+	DefaultExportEnabled        = false
+	DefaultExportStreamMaxMsgs  = int64(100000)
+	DefaultExportStreamMaxBytes = int64(1024 * 1024 * 512) // 512MB
+	DefaultExportStreamMaxAge   = 72 * time.Hour
+)
+
 type RuntimeConfig struct {
 	name                  string
 	natsURL               string
@@ -50,6 +58,10 @@ type RuntimeConfig struct {
 	isActiveInstance               bool
 	activeRevID                    uint64
 	enableTLS                      bool
+	exportEnabled                  bool
+	exportStreamMaxMsgs            int64
+	exportStreamMaxBytes           int64
+	exportStreamMaxAge             time.Duration
 }
 
 type StreamParams struct {
@@ -100,6 +112,10 @@ func NewRuntimeConfig() *RuntimeConfig {
 		enableTLS:                      EnableTLS,
 		activePassiveMode:              activePassiveMode,
 		isActiveInstance:               true,
+		exportEnabled:                  DefaultExportEnabled,
+		exportStreamMaxMsgs:            DefaultExportStreamMaxMsgs,
+		exportStreamMaxBytes:           DefaultExportStreamMaxBytes,
+		exportStreamMaxAge:             DefaultExportStreamMaxAge,
 	}
 }
 
@@ -228,5 +244,25 @@ func (ro *RuntimeConfig) SetStreamMaxAge(streamType StreamType, maxAge time.Dura
 		ro.traceStreamMaxAge = maxAge
 	}
 
+	return ro
+}
+
+func (ro *RuntimeConfig) SetExportEnabled(enabled bool) *RuntimeConfig {
+	ro.exportEnabled = enabled
+	return ro
+}
+
+func (ro *RuntimeConfig) SetExportStreamMaxMessages(maxMsgs int64) *RuntimeConfig {
+	ro.exportStreamMaxMsgs = maxMsgs
+	return ro
+}
+
+func (ro *RuntimeConfig) SetExportStreamMaxBytes(maxBytes int64) *RuntimeConfig {
+	ro.exportStreamMaxBytes = maxBytes
+	return ro
+}
+
+func (ro *RuntimeConfig) SetExportStreamMaxAge(maxAge time.Duration) *RuntimeConfig {
+	ro.exportStreamMaxAge = maxAge
 	return ro
 }

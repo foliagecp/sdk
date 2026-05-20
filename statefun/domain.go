@@ -60,7 +60,10 @@ type Domain struct {
 	kv    nats.KeyValue
 	cache *cache.Store
 
-	shutdown chan struct{}
+	shutdown        chan struct{}
+	exportCommitter *ExportCommitter
+	exportEnabled   bool
+	exportSC        streamConfig
 }
 
 type streamConfig struct {
@@ -335,12 +338,30 @@ func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDo
 		if err := dm.createTraceStream(); err != nil {
 			return err
 		}
-		if err := dm.createWALOperationsStream(); err != nil {
-			return err
-		}
 		if err := dm.createWALCommitsStream(); err != nil {
 			return err
 		}
+	}
+
+	// Create export-dedicated WAL stream (parallel pipeline)
+	if dm.exportEnabled {
+		if err := dm.createWALExportCommitsStream(); err != nil {
+			return err
+		}
+	}
+
+	// Create export stream if enabled
+	if dm.exportEnabled {
+		dm.exportCommitter = NewExportCommitter(dm.js, dm.name)
+		if err := dm.exportCommitter.CreateExportStream(
+			dm.exportSC.maxMsgs,
+			dm.exportSC.maxBytes,
+			dm.exportSC.maxAge,
+			dm.exportSC.replicasCount,
+		); err != nil {
+			return fmt.Errorf("failed to create export stream: %w", err)
+		}
+		lg.Logf(lg.DebugLevel, "Export stream created: %s", dm.exportCommitter.StreamName())
 	}
 
 	le := lg.GetLogger()
@@ -355,6 +376,16 @@ func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDo
 	if err := dm.checkKvConsistency(ctx); err != nil {
 		return err
 	}
+
+	if dm.exportEnabled {
+		if err := dm.startExportCommitter(ctx); err != nil {
+			lg.Logf(lg.WarnLevel, "ExportCommitter pipeline failed to start (non-fatal): %s", err)
+		}
+		if err := dm.publishStartupSnapshot(ctx); err != nil {
+			lg.Logf(lg.WarnLevel, "Export startup snapshot failed (non-fatal): %s", err)
+		}
+	}
+
 	le.Trace(ctx, "Cache store inited!")
 
 	return nil
@@ -435,6 +466,46 @@ func (dm *Domain) checkKvConsistency(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+// publishStartupSnapshot reads all current KV entries and publishes them
+// directly to the export stream as a single "startup" transaction.
+// This allows the export dumper to rebuild its state after a restart without
+// waiting for a user-triggered write to arrive for each pre-existing entity.
+// The snapshot bypasses the WAL — KV is not modified.
+func (dm *Domain) publishStartupSnapshot(ctx context.Context) error {
+	storePrefix := dm.cache.GetStorePrefix()
+	pattern := storePrefix + ".>"
+
+	watchCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	watcher, err := dm.kv.Watch(pattern, nats.IgnoreDeletes(), nats.Context(watchCtx))
+	if err != nil {
+		return fmt.Errorf("startup snapshot watch: %w", err)
+	}
+	defer watcher.Stop()
+
+	var ops []WALOp
+	for entry := range watcher.Updates() {
+		if entry == nil {
+			break // nil = all historical entries delivered
+		}
+		ops = append(ops, WALOp{
+			OpType: cache.OpTypePUT,
+			Key:    entry.Key(),
+			Value:  entry.Value(),
+		})
+	}
+
+	if len(ops) == 0 {
+		lg.Logln(lg.DebugLevel, "Export startup snapshot: KV is empty, nothing to flush")
+		return nil
+	}
+
+	txID := fmt.Sprintf("startup-snapshot-%d", time.Now().UnixNano())
+	lg.Logf(lg.InfoLevel, "Export startup snapshot: flushing %d KV entries as tx=%s", len(ops), txID)
+	return dm.exportCommitter.ProcessTransaction(txID, ops, storePrefix)
 }
 
 func (dm *Domain) createIngressRouter() error {
@@ -539,10 +610,10 @@ func (dm *Domain) createTraceStream() error {
 	return dm.createStreamIfNotExists(sc)
 }
 
-func (dm *Domain) createWALOperationsStream() error {
+func (dm *Domain) createWALCommitsStream() error {
 	sc := &nats.StreamConfig{
-		Name:      WALOperationsStreamName,
-		Subjects:  []string{WALOperationsSubject},
+		Name:      WALCommitsStreamName,
+		Subjects:  []string{WALCommitsSubject},
 		Retention: nats.WorkQueuePolicy,
 		MaxAge:    24 * time.Hour,
 		Replicas:  dm.sysSC.replicasCount,
@@ -550,10 +621,10 @@ func (dm *Domain) createWALOperationsStream() error {
 	return dm.createStreamIfNotExists(sc)
 }
 
-func (dm *Domain) createWALCommitsStream() error {
+func (dm *Domain) createWALExportCommitsStream() error {
 	sc := &nats.StreamConfig{
-		Name:      WALCommitsStreamName,
-		Subjects:  []string{WALCommitsSubject},
+		Name:      WALExportCommitsStreamName,
+		Subjects:  []string{WALExportCommitsSubject},
 		Retention: nats.WorkQueuePolicy,
 		MaxAge:    24 * time.Hour,
 		Replicas:  dm.sysSC.replicasCount,
@@ -667,12 +738,8 @@ func dlqMsgBuilder(subject, stream, domain, errorMsg string, data []byte) *nats.
 	return dlqMsg
 }
 
-func (dm *Domain) PublishOperation(txID string, opTime int64, opType cache.OpType, key string, value []byte) error {
-	return dm.publishWALOperation(txID, opTime, opType, key, value)
-}
-
-func (dm *Domain) PublishCommit(txID string) error {
-	return dm.publishWALCommit(txID)
+func (dm *Domain) PublishTransaction(txID string, ops []cache.WALOp) error {
+	return dm.publishWALTransaction(txID, ops)
 }
 
 func (dm *Domain) GenerateTransactionID() string {

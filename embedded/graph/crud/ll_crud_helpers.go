@@ -24,7 +24,7 @@ func getOpStackFromOptions(options *easyjson.JSON) *easyjson.JSON {
 // getOpTimeFromPayloadIfExist return operation time from payload or current time if operation time does not exist
 func getOpTimeFromPayloadIfExist(payload *easyjson.JSON) int64 {
 	if payload != nil {
-		if opTime := int64(payload.GetByPath("op_time").AsNumericDefault(-1)); opTime > 0 {
+		if opTime := int64(payload.GetByPath("op_time").AsInt64Default(-1)); opTime > 0 {
 			return opTime
 		}
 	}
