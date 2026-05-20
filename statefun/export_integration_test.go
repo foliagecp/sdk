@@ -73,7 +73,11 @@ func TestExportCommitter_Integration(t *testing.T) {
 		}
 
 		exportStreamName := fmt.Sprintf(statefun.ExportStreamNameTmpl, r.Domain.Name())
-		exportSubject := fmt.Sprintf(statefun.ExportSubjectTmpl, r.Domain.Name())
+		// Since commit 0f0d08c, ExportCommitter publishes to
+		// "export.<domain>.events.<txID>" and the stream filters
+		// "export.<domain>.events.*". The filter subject we attach to
+		// the consumer must follow the same wildcard layout.
+		exportSubjectFilter := fmt.Sprintf(statefun.ExportSubjectFilterTmpl, r.Domain.Name())
 
 		// Create durable consumer on export stream
 		consumerName := "test-consumer"
@@ -81,7 +85,7 @@ func TestExportCommitter_Integration(t *testing.T) {
 			Name:           consumerName,
 			Durable:        consumerName,
 			DeliverSubject: consumerName,
-			FilterSubject:  exportSubject,
+			FilterSubject:  exportSubjectFilter,
 			AckPolicy:      nats.AckExplicitPolicy,
 		})
 		if err != nil {
@@ -89,8 +93,23 @@ func TestExportCommitter_Integration(t *testing.T) {
 		}
 
 		_, err = nc.Subscribe(consumerName, func(msg *nats.Msg) {
+			// Payload is wrapped via buildNatsData since commit 0f0d08c:
+			// {"caller_typename": "...", "caller_id": "...",
+			//  "payload": {"tx_id": "...", "domain": "...",
+			//              "timestamp": ..., "ops": [...]}}
+			// Extract the inner ExportEvent from the "payload" key.
+			wrapper, ok := easyjson.JSONFromBytes(msg.Data)
+			if !ok {
+				_ = msg.Ack()
+				return
+			}
+			inner := wrapper.GetByPath("payload")
+			if !inner.IsObject() {
+				_ = msg.Ack()
+				return
+			}
 			var event statefun.ExportEvent
-			if jsonErr := json.Unmarshal(msg.Data, &event); jsonErr == nil {
+			if jsonErr := json.Unmarshal(inner.ToBytes(), &event); jsonErr == nil {
 				exportEventCh <- event
 			}
 			_ = msg.Ack()
