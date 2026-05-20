@@ -36,26 +36,35 @@ func NewPrometrics(pattern string, addr string) *Prometrics {
 		cancelFunc:      cancel,
 	}
 
-	// Run HTTP-server with a separate ServeMux
-	go func() {
-		pm.GetRoutinesCounter().Started("prometrics-server")
-		defer pm.GetRoutinesCounter().Stopped("prometrics-server")
+	// Run HTTP-server with a separate ServeMux.
+	// addr == "" → do not start the HTTP server at all. The previous
+	// behaviour (delegated to net/http, which treats "" as ":http"
+	// i.e. port 80) was surprising and broke tests that just wanted
+	// the metric collectors without a network endpoint — and made
+	// callers crash with "listen tcp :80: bind: address already in
+	// use" on any non-root environment. Tests that legitimately want
+	// a port should pass "127.0.0.1:0" (random) or an explicit one.
+	if len(addr) > 0 {
+		go func() {
+			pm.GetRoutinesCounter().Started("prometrics-server")
+			defer pm.GetRoutinesCounter().Stopped("prometrics-server")
 
-		if len(pattern) == 0 {
-			pattern = "/"
-		}
+			if len(pattern) == 0 {
+				pattern = "/"
+			}
 
-		mux := http.NewServeMux()
-		mux.Handle(pattern, promhttp.Handler())
-		server := &http.Server{
-			Addr:    addr,
-			Handler: mux,
-		}
+			mux := http.NewServeMux()
+			mux.Handle(pattern, promhttp.Handler())
+			server := &http.Server{
+				Addr:    addr,
+				Handler: mux,
+			}
 
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			lg.Logln(lg.FatalLevel, err.Error())
-		}
-	}()
+			if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				lg.Logln(lg.FatalLevel, err.Error())
+			}
+		}()
+	}
 
 	go pm.golangRuntimeStatsCollector(ctx)
 
