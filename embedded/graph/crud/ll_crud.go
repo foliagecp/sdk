@@ -253,6 +253,24 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		body = *newBody
 	}
 
+	// No-op short-circuit: if the resulting body is structurally identical
+	// to the current one, nothing has to be written to the KV. This covers
+	// both replace=true (caller pushed the same body) and replace=false
+	// (merge produced an equal tree — common when external SDK consumers
+	// re-send the same state). Skipping the write avoids polluting the
+	// WAL, suppresses dirty publish + trigger fan-out, and keeps connected
+	// graphs quiet under idempotent upsert pressure.
+	//
+	// Equality uses easyjson.JSON.Equals → reflect.DeepEqual on the parsed
+	// tree, so object-key ordering does not matter. Both sides came from
+	// json.Unmarshal (float64 numbers), so type-coercion mismatches are not
+	// expected on the steady-state update path.
+	if oldBody != nil && body.Equals(*oldBody) {
+		operationKeysMutexUnlock(ctx)
+		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("vertex with id=%s body unchanged", selfID))).Reply()
+		return
+	}
+
 	ctx.Domain.Cache().SetValueJSON(selfID, &body, true, opTime, "")
 	indexVertexBody(ctx, body, opTime, true)
 
@@ -739,17 +757,85 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		linkBody = easyjson.NewJSONObject()
 	}
 
+	// Compute the FINAL link body (what would end up stored after the op)
+	// without yet touching the KV — needed for the no-op check below.
+	if !replace { // merge
+		newBody := oldLinkBody.Clone().GetPtr()
+		newBody.DeepMerge(linkBody)
+		linkBody = *newBody
+	}
+
+	// No-op short-circuit — must run BEFORE the destructive index sweep
+	// below (once DeleteValue lands the state has already moved).
+	//
+	// Two separate fast paths, kept apart on purpose so merge-mode does
+	// not pay for the existing-tag index scan in the common case:
+	//
+	//   • merge mode (replace=false): merge can only ADD tags, never
+	//     remove. So if the caller did not supply tags AND the body did
+	//     not change, the operation is provably a no-op without reading
+	//     the existing tag set at all. If the caller did supply tags we
+	//     conservatively go through the full re-issue (some of those
+	//     tags may be new — checking would cost a GetKeysByPattern that
+	//     we want to skip on the hot incremental-upsert path).
+	//
+	//   • replace mode (replace=true): we MUST read the existing tag
+	//     set, because the index sweep below would wipe whichever tags
+	//     are not in payload.tags. Compare the requested tag set
+	//     against the existing one; if they match AND body is equal,
+	//     short-circuit.
+	//
+	// Equality on body uses easyjson.JSON.Equals (reflect.DeepEqual on
+	// the parsed tree, key-order independent).
+	if oldLinkBody != nil && linkBody.Equals(*oldLinkBody) {
+		if !replace {
+			// Merge mode: no-op iff caller did not ask to touch tags.
+			if !payload.GetByPath("tags").IsNonEmptyArray() {
+				operationKeysMutexUnlock(ctx)
+				om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with name=%s body unchanged", selfID, linkName))).Reply()
+				return
+			}
+		} else {
+			// Replace mode: compare the requested tag set against the
+			// existing one. Only here do we pay for the index scan.
+			existingTagKeys := ctx.Domain.Cache().GetKeysByPattern(
+				fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff3Pattern, selfID, linkName, "tag", ">"))
+			existingTags := make(map[string]struct{}, len(existingTagKeys))
+			for _, k := range existingTagKeys {
+				toks := strings.Split(k, ".")
+				existingTags[toks[len(toks)-1]] = struct{}{}
+			}
+			requestedTagsArr, _ := payload.GetByPath("tags").AsArrayString()
+			requestedTags := make(map[string]struct{}, len(requestedTagsArr))
+			for _, t := range requestedTagsArr {
+				requestedTags[t] = struct{}{}
+			}
+			tagsEqual := len(existingTags) == len(requestedTags)
+			if tagsEqual {
+				for t := range existingTags {
+					if _, ok := requestedTags[t]; !ok {
+						tagsEqual = false
+						break
+					}
+				}
+			}
+			if tagsEqual {
+				operationKeysMutexUnlock(ctx)
+				om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("link from=%s with name=%s body and tags unchanged", selfID, linkName))).Reply()
+				return
+			}
+		}
+	}
+
 	if replace {
 		// Remove all indices -----------------------------
+		// Mirrors the previous behaviour: replace mode wipes BOTH the
+		// type index and all tag indices, then re-issues them below.
 		indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff2Pattern, selfID, linkName, ">"))
 		for _, indexKey := range indexKeys {
 			ctx.Domain.Cache().DeleteValue(indexKey, true, opTime, "")
 		}
 		// ------------------------------------------------
-	} else { // merge
-		newBody := oldLinkBody.Clone().GetPtr()
-		newBody.DeepMerge(linkBody)
-		linkBody = *newBody
 	}
 
 	// Create out link on this vertex -------------------------
