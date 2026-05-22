@@ -1086,6 +1086,13 @@ func ReadObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	result.SetByPath("from_type", easyjson.NewJSON(fromObjectType))
 	result.SetByPath("to_type", easyjson.NewJSON(toObjectType))
 
-	replyWithoutOpStack(om, ctx)
-	system.MsgOnErrorReturn(om.ReplyWithData(&result))
+	// replyWithoutOpStack accepts the payload as a variadic parameter and
+	// performs the ReplyWithData call itself. The previous two-statement
+	// form (replyWithoutOpStack + om.ReplyWithData) emitted TWO replies on
+	// the same request — the first carrying an empty data field (because
+	// replyWithoutOpStack without args reads om.GetData() which was already
+	// scrubbed of op_stack), the second carrying the actual result. Some
+	// callers parsed the first reply and ignored the second; others saw
+	// duplicated messages on the egress queue.
+	replyWithoutOpStack(om, ctx, result)
 }
