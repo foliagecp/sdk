@@ -181,7 +181,6 @@ func LLAPIVertexCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	}
 
 	ctx.Domain.Cache().SetValueJSON(selfID, &objectBody, true, opTime, "")
-	indexVertexBody(ctx, objectBody, opTime)
 
 	operationKeysMutexUnlock(ctx)
 
@@ -272,10 +271,6 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	}
 
 	ctx.Domain.Cache().SetValueJSON(selfID, &body, true, opTime, "")
-	// Incremental reindex against the previous body — avoids the
-	// GetKeysByPattern subtree scan and skips writes for unchanged fields
-	// (see reindexVertexBody). oldBody is the body as currently stored.
-	reindexVertexBody(ctx, oldBody, &body, opTime)
 
 	operationKeysMutexUnlock(ctx)
 
@@ -361,8 +356,6 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	}
 
 	ctx.Domain.Cache().DeleteValue(selfID, true, opTime, "") // Delete vertex's body
-
-	indexRemoveVertexBody(ctx)
 
 	operationKeysMutexUnlock(ctx)
 
@@ -669,8 +662,6 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		}
 		//fmt.Println("create vertex out link: ", selfID, toId)
 		// ----------------------------------
-		indexVertexLinkBody(ctx, linkName, linkBody, opTime)
-		// --------------------------------------------------------
 
 		addLinkOpToOpStack(opStack, ctx.Self.Typename, selfID, toId, linkName, linkType, nil, &linkBody)
 
@@ -857,10 +848,6 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		}
 	}
 	// ----------------------------------
-	// Incremental body-value reindex against the previous link body —
-	// avoids the GetKeysByPattern scan and skips unchanged fields.
-	reindexVertexLinkBody(ctx, linkName, oldLinkBody, &linkBody, opTime)
-	// --------------------------------------------------------
 
 	operationKeysMutexUnlock(ctx)
 
@@ -967,7 +954,6 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			ctx.Domain.Cache().DeleteValue(indexKey, true, opTime, "")
 		}
 		// ------------------------------------------------
-		indexRemoveVertexLinkBody(ctx, linkName)
 
 		// Set link type --------------------
 		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfID, linkType, toId), true, opTime, "")

@@ -1,7 +1,6 @@
 package crud
 
 import (
-	"bytes"
 	"fmt"
 	"strings"
 
@@ -76,8 +75,9 @@ func addLinkOpToOpStack(opStack *easyjson.JSON, opName string, fromVertexId stri
 // of the original one.
 //
 // Currently supported inverses:
-//   functions.graph.api.vertex.create -> functions.graph.api.vertex.delete
-//   functions.graph.api.link.create   -> functions.graph.api.link.delete
+//
+//	functions.graph.api.vertex.create -> functions.graph.api.vertex.delete
+//	functions.graph.api.link.create   -> functions.graph.api.link.delete
 //
 // Update/delete inverses are intentionally not handled here yet — only HL
 // wrappers that emit the two ops above use this helper today. Extend the
@@ -168,199 +168,4 @@ func getFullLinkInfoFromSpecifiedIdentifier(ctx *sfPlugins.StatefunContextProces
 		}
 	}
 	return "", "", "", false
-}
-
-func indexRemoveVertexBody(ctx *sfPlugins.StatefunContextProcessor) {
-	selfID := getOriginalID(ctx.Self.ID)
-	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
-
-	// Remove all indices -----------------------------
-	indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(VertexBodyValueIndexPrefPattern+KeySuff1Pattern, selfID, ">"))
-	for _, indexKey := range indexKeys {
-		ctx.Domain.Cache().DeleteValue(indexKey, true, opTime, "")
-	}
-	// ------------------------------------------------
-}
-
-// indexVertexBody builds the body-value index for a freshly created vertex
-// (the create path, where there is no previous body to diff against).
-// Updates use reindexVertexBody for an incremental diff instead.
-func indexVertexBody(ctx *sfPlugins.StatefunContextProcessor, vertexBody easyjson.JSON, opTime int64) {
-	selfID := getOriginalID(ctx.Self.ID)
-	// Index body keys ------------------------------------
-	for _, bodyKey := range vertexBody.ObjectKeys() {
-		value := vertexBody.GetByPath(bodyKey)
-		bytesVal := []byte{}
-
-		typeStr := ""
-		if value.IsBool() {
-			typeStr = "b"
-			bytesVal = system.BoolToBytes(value.AsBoolDefault(false))
-		}
-		if value.IsNumeric() {
-			typeStr = "n"
-			bytesVal = system.Float64ToBytes(value.AsNumericDefault(0))
-		}
-		if value.IsString() {
-			typeStr = "s"
-			bytesVal = []byte(value.AsStringDefault(""))
-		}
-
-		if len(bytesVal) > 0 {
-			ctx.Domain.Cache().SetValue(fmt.Sprintf(VertexBodyValueIndexPrefPattern+KeySuff2Pattern, selfID, typeStr, bodyKey), bytesVal, true, opTime, "")
-		}
-	}
-	// ----------------------------------------------------
-}
-
-// indexableScalar reports whether a JSON value participates in the body-value
-// secondary index, returning its type token ("b"/"n"/"s") and encoded bytes.
-// Mirrors the inline logic in indexVertexBody / indexVertexLinkBody: only
-// non-empty scalars are indexed; objects, arrays, null and empty strings are
-// not. (BoolToBytes always yields 1 byte and Float64ToBytes 8 bytes, so bool
-// and numeric are always indexed; only the empty string is excluded.)
-func indexableScalar(value easyjson.JSON) (typeStr string, bytesVal []byte, ok bool) {
-	switch {
-	case value.IsBool():
-		return "b", system.BoolToBytes(value.AsBoolDefault(false)), true
-	case value.IsNumeric():
-		return "n", system.Float64ToBytes(value.AsNumericDefault(0)), true
-	case value.IsString():
-		b := []byte(value.AsStringDefault(""))
-		if len(b) == 0 {
-			return "", nil, false
-		}
-		return "s", b, true
-	}
-	return "", nil, false
-}
-
-// reindexVertexBody updates the vertex body-value index INCREMENTALLY by
-// diffing the previous body against the new one. Compared to the old
-// reindex path (indexVertexBody with reindex=true), this avoids the
-// GetKeysByPattern subtree scan entirely and only writes index keys that
-// actually changed:
-//
-//   - field unchanged (same type + bytes) → no KV write, no WAL op
-//   - field added / value changed         → SetValue
-//   - field type changed (e.g. n→s)       → DeleteValue(old type key) + SetValue
-//   - field removed or became non-scalar  → DeleteValue
-//
-// Correctness note: this trusts that the existing index reflects oldBody,
-// which holds because the index is only ever mutated through these helpers
-// together with the body write. JPGQL's index lookups fall back to the body
-// when an index key is MISSING, but a STALE key would yield a wrong answer —
-// hence deletions (removed fields and type changes) are handled explicitly.
-func reindexVertexBody(ctx *sfPlugins.StatefunContextProcessor, oldBody, newBody *easyjson.JSON, opTime int64) {
-	selfID := getOriginalID(ctx.Self.ID)
-
-	newScalarKeys := map[string]struct{}{}
-	for _, bodyKey := range newBody.ObjectKeys() {
-		typeStr, bytesVal, ok := indexableScalar(newBody.GetByPath(bodyKey))
-		if !ok {
-			continue
-		}
-		newScalarKeys[bodyKey] = struct{}{}
-
-		oTypeStr, oBytes, oOk := indexableScalar(oldBody.GetByPath(bodyKey))
-		if oOk && oTypeStr == typeStr && bytes.Equal(oBytes, bytesVal) {
-			continue // unchanged → skip the write entirely
-		}
-		if oOk && oTypeStr != typeStr {
-			// Type changed: the old value lived under a different type token,
-			// so its index key differs and must be removed to avoid a stale entry.
-			ctx.Domain.Cache().DeleteValue(fmt.Sprintf(VertexBodyValueIndexPrefPattern+KeySuff2Pattern, selfID, oTypeStr, bodyKey), true, opTime, "")
-		}
-		ctx.Domain.Cache().SetValue(fmt.Sprintf(VertexBodyValueIndexPrefPattern+KeySuff2Pattern, selfID, typeStr, bodyKey), bytesVal, true, opTime, "")
-	}
-
-	// Remove index keys for fields that disappeared or stopped being scalar.
-	for _, bodyKey := range oldBody.ObjectKeys() {
-		oTypeStr, _, oOk := indexableScalar(oldBody.GetByPath(bodyKey))
-		if !oOk {
-			continue
-		}
-		if _, stillScalar := newScalarKeys[bodyKey]; stillScalar {
-			continue
-		}
-		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(VertexBodyValueIndexPrefPattern+KeySuff2Pattern, selfID, oTypeStr, bodyKey), true, opTime, "")
-	}
-}
-
-// reindexVertexLinkBody is the link-body counterpart of reindexVertexBody:
-// same incremental diff strategy against the link's previous body, avoiding
-// the GetKeysByPattern scan.
-func reindexVertexLinkBody(ctx *sfPlugins.StatefunContextProcessor, linkName string, oldBody, newBody *easyjson.JSON, opTime int64) {
-	selfID := getOriginalID(ctx.Self.ID)
-
-	newScalarKeys := map[string]struct{}{}
-	for _, bodyKey := range newBody.ObjectKeys() {
-		typeStr, bytesVal, ok := indexableScalar(newBody.GetByPath(bodyKey))
-		if !ok {
-			continue
-		}
-		newScalarKeys[bodyKey] = struct{}{}
-
-		oTypeStr, oBytes, oOk := indexableScalar(oldBody.GetByPath(bodyKey))
-		if oOk && oTypeStr == typeStr && bytes.Equal(oBytes, bytesVal) {
-			continue
-		}
-		if oOk && oTypeStr != typeStr {
-			ctx.Domain.Cache().DeleteValue(fmt.Sprintf(LinkBodyValueIndexPrefPattern+KeySuff3Pattern, selfID, linkName, oTypeStr, bodyKey), true, opTime, "")
-		}
-		ctx.Domain.Cache().SetValue(fmt.Sprintf(LinkBodyValueIndexPrefPattern+KeySuff3Pattern, selfID, linkName, typeStr, bodyKey), bytesVal, true, opTime, "")
-	}
-
-	for _, bodyKey := range oldBody.ObjectKeys() {
-		oTypeStr, _, oOk := indexableScalar(oldBody.GetByPath(bodyKey))
-		if !oOk {
-			continue
-		}
-		if _, stillScalar := newScalarKeys[bodyKey]; stillScalar {
-			continue
-		}
-		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(LinkBodyValueIndexPrefPattern+KeySuff3Pattern, selfID, linkName, oTypeStr, bodyKey), true, opTime, "")
-	}
-}
-
-func indexRemoveVertexLinkBody(ctx *sfPlugins.StatefunContextProcessor, linkName string) {
-	selfID := getOriginalID(ctx.Self.ID)
-	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
-
-	// Remove all indices -----------------------------
-	indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(LinkBodyValueIndexPrefPattern+KeySuff2Pattern, selfID, linkName, ">"))
-	for _, indexKey := range indexKeys {
-		ctx.Domain.Cache().DeleteValue(indexKey, true, opTime, "")
-	}
-	// ------------------------------------------------
-}
-
-// indexVertexLinkBody builds the body-value index for a freshly created link.
-// Updates use reindexVertexLinkBody for an incremental diff instead.
-func indexVertexLinkBody(ctx *sfPlugins.StatefunContextProcessor, linkName string, linkBody easyjson.JSON, opTime int64) {
-	selfID := getOriginalID(ctx.Self.ID)
-	// Index body keys ------------------------------------
-	for _, bodyKey := range linkBody.ObjectKeys() {
-		value := linkBody.GetByPath(bodyKey)
-		bytesVal := []byte{}
-
-		typeStr := ""
-		if value.IsBool() {
-			typeStr = "b"
-			bytesVal = system.BoolToBytes(value.AsBoolDefault(false))
-		}
-		if value.IsNumeric() {
-			typeStr = "n"
-			bytesVal = system.Float64ToBytes(value.AsNumericDefault(0))
-		}
-		if value.IsString() {
-			typeStr = "s"
-			bytesVal = []byte(value.AsStringDefault(""))
-		}
-
-		if len(bytesVal) > 0 {
-			ctx.Domain.Cache().SetValue(fmt.Sprintf(LinkBodyValueIndexPrefPattern+KeySuff3Pattern, selfID, linkName, typeStr, bodyKey), bytesVal, true, opTime, "")
-		}
-	}
-	// ----------------------------------------------------
 }

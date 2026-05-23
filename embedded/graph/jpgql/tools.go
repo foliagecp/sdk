@@ -1,5 +1,3 @@
-
-
 package jpgql
 
 import (
@@ -157,7 +155,7 @@ func replaceColonsOutsideQuotes(s string) string {
 
 func ParseFilter(filterQuery string) (*FilterData, error) {
 	filterQuery = strings.ReplaceAll(filterQuery, `'`, `"`) // Allow to use single quotes
-	filterQuery = replaceColonsOutsideQuotes(filterQuery)    // Replace colons in function names (v:has -> v_has) but not inside quoted values
+	filterQuery = replaceColonsOutsideQuotes(filterQuery)   // Replace colons in function names (v:has -> v_has) but not inside quoted values
 	value, err := filterParseLanguage.Evaluate(filterQuery, nil)
 	if err != nil {
 		return nil, err
@@ -233,81 +231,40 @@ func GetSpecificLinkIndices(cacheStore *cache.Store, fromObjectID string, linkNa
 	return resultIndices
 }
 
+// IsVertexBodyHasIndexValue reports whether the vertex body field `key`
+// satisfies the scalar requirement. The name retains "Index" for backward
+// API compatibility, but there is no longer a separate body-value index:
+// the value is read straight from the (already in-memory, parsed) vertex
+// body. The per-vertex index it used to consult never served reverse
+// lookups — it was only ever a point check on a known vertex — so reading
+// the body directly is equivalent, and avoids the write-time/memory cost of
+// maintaining the index. GetValueJSONByPath reads only the requested field
+// without cloning the whole body.
 func IsVertexBodyHasIndexValue(cacheStore *cache.Store, vertexId, key, valueType, operation, targetValue string) bool {
 	typeStr := strings.ToLower(valueType)[:1]
-	indexKeys := cacheStore.GetKeysByPattern(fmt.Sprintf(crud.VertexBodyValueIndexPrefPattern+crud.KeySuff2Pattern, vertexId, typeStr, key))
-	if len(indexKeys) > 0 {
-		return IsIndexedKeyMeetsRequirements(cacheStore, indexKeys, typeStr, operation, targetValue)
-	}
-	// Fallback: no index found, read body directly and check value by path
-	body, err := cacheStore.GetValueJSON(vertexId)
-	return isBodyValueMeetsRequirements(body, err, key, typeStr, operation, targetValue)
-}
-
-func IsLinkBodyHasIndexValue(cacheStore *cache.Store, fromVertexId, linkName, key, valueType, operation, targetValue string) bool {
-	typeStr := strings.ToLower(valueType)[:1]
-	indexKeys := cacheStore.GetKeysByPattern(fmt.Sprintf(crud.LinkBodyValueIndexPrefPattern+crud.KeySuff3Pattern, fromVertexId, linkName, typeStr, key))
-	if len(indexKeys) > 0 {
-		return IsIndexedKeyMeetsRequirements(cacheStore, indexKeys, typeStr, operation, targetValue)
-	}
-	// Fallback: no index found, read link body directly and check value by path
-	body, err := cacheStore.GetValueJSON(fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.KeySuff1Pattern, fromVertexId, linkName))
-	return isBodyValueMeetsRequirements(body, err, key, typeStr, operation, targetValue)
-}
-
-func IsIndexedKeyMeetsRequirements(cacheStore *cache.Store, indexKeys []string, typeStr, operation, targetValue string) bool {
-	for _, indexKey := range indexKeys {
-		if v, err := cacheStore.GetValue(indexKey); err == nil {
-			switch typeStr {
-			case "b":
-				valBool := system.BytesToBool(v)
-				targetValBool := system.Str2Bool(targetValue)
-				switch operation {
-				case "==":
-					return valBool == targetValBool
-				case "!=":
-					fallthrough
-				case "<":
-					fallthrough
-				case ">":
-					return valBool != targetValBool
-				}
-			case "n":
-				valNumeric := system.BytesToFloat64(v)
-				targetValNumeric := system.StringToFloat(targetValue)
-				switch operation {
-				case "==":
-					return valNumeric == targetValNumeric
-				case "!=":
-					return valNumeric != targetValNumeric
-				case "<":
-					return valNumeric < targetValNumeric
-				case ">":
-					return valNumeric > targetValNumeric
-				}
-			case "s":
-				valString := string(v)
-				switch operation {
-				case "==":
-					return valString == targetValue
-				case "!=":
-					return valString != targetValue
-				case "<":
-					return strings.Contains(targetValue, valString)
-				case ">":
-					return strings.Contains(valString, targetValue)
-				}
-			}
-		}
-	}
-	return false
-}
-
-func isBodyValueMeetsRequirements(body *easyjson.JSON, err error, key, typeStr, operation, targetValue string) bool {
-	if err != nil || body == nil {
+	value, err := cacheStore.GetValueJSONByPath(vertexId, key)
+	if err != nil || value == nil {
 		return false
 	}
-	value := body.GetByPath(key)
+	return isFieldValueMeetsRequirements(*value, typeStr, operation, targetValue)
+}
+
+// IsLinkBodyHasIndexValue is the link-body counterpart of
+// IsVertexBodyHasIndexValue. See that function for why no index is involved.
+func IsLinkBodyHasIndexValue(cacheStore *cache.Store, fromVertexId, linkName, key, valueType, operation, targetValue string) bool {
+	typeStr := strings.ToLower(valueType)[:1]
+	value, err := cacheStore.GetValueJSONByPath(fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.KeySuff1Pattern, fromVertexId, linkName), key)
+	if err != nil || value == nil {
+		return false
+	}
+	return isFieldValueMeetsRequirements(*value, typeStr, operation, targetValue)
+}
+
+// isFieldValueMeetsRequirements evaluates a scalar comparison against an
+// already-resolved field value (no body traversal — the caller passes the
+// field directly). A missing field arrives as JSON{nil}, which fails every
+// Is* type check below and yields false.
+func isFieldValueMeetsRequirements(value easyjson.JSON, typeStr, operation, targetValue string) bool {
 	switch typeStr {
 	case "b":
 		if !value.IsBool() {
@@ -434,20 +391,20 @@ func isArrayElementMeetsRequirements(arr easyjson.JSON, typeStr, operation, targ
 
 func IsVertexBodyHasArrayValue(cacheStore *cache.Store, vertexId, key, valueType, operation, targetValue string) bool {
 	typeStr := strings.ToLower(valueType)[:1]
-	body, err := cacheStore.GetValueJSON(vertexId)
-	if err != nil || body == nil {
+	value, err := cacheStore.GetValueJSONByPath(vertexId, key)
+	if err != nil || value == nil {
 		return false
 	}
-	return isArrayElementMeetsRequirements(body.GetByPath(key), typeStr, operation, targetValue)
+	return isArrayElementMeetsRequirements(*value, typeStr, operation, targetValue)
 }
 
 func IsLinkBodyHasArrayValue(cacheStore *cache.Store, fromVertexId, linkName, key, valueType, operation, targetValue string) bool {
 	typeStr := strings.ToLower(valueType)[:1]
-	body, err := cacheStore.GetValueJSON(fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.KeySuff1Pattern, fromVertexId, linkName))
-	if err != nil || body == nil {
+	value, err := cacheStore.GetValueJSONByPath(fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.KeySuff1Pattern, fromVertexId, linkName), key)
+	if err != nil || value == nil {
 		return false
 	}
-	return isArrayElementMeetsRequirements(body.GetByPath(key), typeStr, operation, targetValue)
+	return isArrayElementMeetsRequirements(*value, typeStr, operation, targetValue)
 }
 
 func IsLinkSatifiesFilterCreteria(cacheStore *cache.Store, fromVertexId string, toVertexId string, linkName string, linkFilterQuery string) bool {

@@ -502,7 +502,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 			storeConsistencyWithKVLossTime: 0,
 			valueExists:                    false,
 			purgeState:                     0,
-						syncedWithKV:                   true,
+			syncedWithKV:                   true,
 			valueUpdateTime:                -1,
 		},
 		lruTresholdTime:             0,
@@ -955,6 +955,50 @@ func (cs *Store) GetValueJSON(key string) (*easyjson.JSON, error) {
 	return result, resultError
 }
 
+// GetValueJSONByPath reads a single sub-path of the JSON value stored at key
+// WITHOUT cloning the whole value. GetValueJSON clones the entire tree, which
+// is wasteful when the caller only needs one field (e.g. JPGQL body-value
+// filters reading body.<field> on a traversal candidate). Here only the
+// resolved sub-value is cloned — a scalar/array field is tiny compared to a
+// full object body. Returns a JSON{nil} (with no error) when the path is
+// absent, so callers can treat "field missing" via the usual Is*/As* checks.
+func (cs *Store) GetValueJSONByPath(key string, path string) (*easyjson.JSON, error) {
+	var result *easyjson.JSON
+	var resultError error
+
+	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, false); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
+		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
+			csv.RLock("GetValueJSONByPath")
+			if !csv.ValueExists() {
+				resultError = fmt.Errorf("value for key=%s does not exist", key)
+			} else {
+				switch csv.valueType {
+				case typeJson:
+					sub := csv.value.(*easyjson.JSON).GetByPath(path).Clone()
+					result = &sub
+				case typeByteArray:
+					if json, ok := easyjson.JSONFromBytes(csv.value.([]byte)); ok {
+						sub := json.GetByPath(path).Clone()
+						result = &sub
+					} else {
+						resultError = fmt.Errorf("value for key=%s is not valid JSON", key)
+					}
+				default:
+					resultError = fmt.Errorf("unsupported value type: %d", csv.valueType)
+				}
+			}
+			csv.RUnlock("GetValueJSONByPath")
+
+			return result, resultError
+		}
+	}
+
+	// ---------------------Cache miss--------------------------
+	resultError = fmt.Errorf("value for key=%s does not exist", key)
+
+	return result, resultError
+}
+
 func (cs *Store) TransactionBegin(transactionID string) {
 	if v, ok := cs.transactions.Load(transactionID); ok {
 		transaction := v.(*Transaction)
@@ -993,7 +1037,7 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 		candidate := &StoreValue{
 			value:       newValue,
 			valueExists: true, purgeState: 0,
-			syncedWithKV: !updateInKV,
+			syncedWithKV:    !updateInKV,
 			valueUpdateTime: customSetTime,
 		}
 		actual, loaded := parent.StoreChild(keyLastToken, candidate)
@@ -1011,7 +1055,7 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 			actual.valueExists = true
 			actual.purgeState = 0
 			actual.valueUpdateTime = customSetTime
-						actual.syncedWithKV = !updateInKV
+			actual.syncedWithKV = !updateInKV
 
 			if actual.parent != nil {
 				actual.parent.notifyUpdates.Range(func(_, v interface{}) bool {
@@ -1054,7 +1098,7 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 				csvUpdate = &StoreValue{
 					value:       value,
 					valueExists: true, purgeState: 0, valueType: typeByteArray,
-					syncedWithKV: !updateInKV,
+					syncedWithKV:    !updateInKV,
 					valueUpdateTime: customSetTime,
 				}
 				actual, loaded := parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate)
@@ -1108,7 +1152,7 @@ func (cs *Store) SetValueJSON(key string, originValue *easyjson.JSON, updateInKV
 				valueExists:     true,
 				valueType:       typeJson,
 				purgeState:      0,
-								syncedWithKV:    !updateInKV,
+				syncedWithKV:    !updateInKV,
 				valueUpdateTime: customSetTime,
 			}
 			actual, loaded := parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate)
@@ -1343,7 +1387,7 @@ func (cs *Store) getLastKeyTokenAndItsParentCacheStoreValue(key string, createIf
 					storeConsistencyWithKVLossTime: 0,
 					valueExists:                    false,
 					purgeState:                     0,
-										syncedWithKV:                   true,
+					syncedWithKV:                   true,
 					valueUpdateTime:                system.GetCurrentTimeNs(),
 				}
 				actual, _ := currentStoreLevel.StoreChild(tokens[currentTokenID], &csv)

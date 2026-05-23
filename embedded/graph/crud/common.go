@@ -11,15 +11,7 @@ const (
 	KeySuff3Pattern = "%s.%s.%s"
 	KeySuff4Pattern = "%s.%s.%s.%s"
 
-	// Vertex related keys --------------------------------
-
-	// key=fmt.Sprintf(BodyValueIndexPrefPattern+KeySuff2Pattern, <vertexId>, <bodyKeyName>, <valueType>), value=<bodyKeyValue>
-	VertexBodyValueIndexPrefPattern = "%s.bodyindex."
-
 	// Link related keys ----------------------------------
-
-	// key=fmt.Sprintf(BodyValueIndexPrefPattern+KeySuff3Pattern, <fromVertexId>, <linkName>, <bodyKeyName>, <valueType>), value=<bodyKeyValue>
-	LinkBodyValueIndexPrefPattern = "%s.out.bodyindex."
 
 	// key=fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, <fromVertexId>, <linkName>), value=<linkType.toVertexId>
 	OutLinkTargetKeyPrefPattern = "%s.out.to."
