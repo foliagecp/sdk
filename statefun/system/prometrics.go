@@ -136,6 +136,24 @@ func (pm *Prometrics) EnsureGaugeVecSimple(id string, help string, labelNames []
 	if pm == nil {
 		return nil, PrometricInstanceIsNil
 	}
+	// Fast path: the metric is almost always already registered, because
+	// these helpers are called on the per-message hot path with a small,
+	// fixed set of ids. The previous code unconditionally constructed a
+	// throwaway GaugeVec (prometheus.NewGaugeVec → NewDesc + label-set
+	// compilation, several heap allocations) and only deduplicated by id
+	// *afterwards* inside EnsureGaugeVec — so every message paid the full
+	// construction cost just to discard the result. Checking the registry
+	// first makes the steady state allocation-free.
+	pm.metricsMutex.Lock()
+	if existing, ok := pm.metrics[id]; ok {
+		pm.metricsMutex.Unlock()
+		if gaugeVec, ok := existing.(*prometheus.GaugeVec); ok {
+			return gaugeVec, nil
+		}
+		return nil, PrometricDifferentTypeExistsForIdError
+	}
+	pm.metricsMutex.Unlock()
+
 	name := strings.ReplaceAll(id, ".", "")
 	metric := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: name,
@@ -177,6 +195,20 @@ func (pm *Prometrics) EnsureHistogramVecSimple(id string, help string, buckets [
 	if pm == nil {
 		return nil, PrometricInstanceIsNil
 	}
+	// Fast path: avoid constructing a throwaway HistogramVec on every call.
+	// See EnsureGaugeVecSimple for the rationale — this is the dominant
+	// per-message allocation hot spot (ft_msg_delivery is observed on every
+	// delivered message).
+	pm.metricsMutex.Lock()
+	if existing, ok := pm.metrics[id]; ok {
+		pm.metricsMutex.Unlock()
+		if hist, ok := existing.(*prometheus.HistogramVec); ok {
+			return hist, nil
+		}
+		return nil, PrometricDifferentTypeExistsForIdError
+	}
+	pm.metricsMutex.Unlock()
+
 	name := strings.ReplaceAll(id, ".", "")
 	metric := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    name,
