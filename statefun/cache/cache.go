@@ -65,7 +65,15 @@ type StoreValue struct {
 	// 0 - do not purge, 1 - wait for KV update confirmation and go to state 2, 2 - purge
 	valueType  uint8
 	purgeState int
-	store      *system.ShardedMap
+	// store is the container of child nodes, allocated lazily on the first
+	// child insertion. A freshly created node — and every leaf, which is
+	// the overwhelming majority of nodes — keeps store == nil and carries
+	// no ShardedMap, no shard maps and no shard mutexes. This is the main
+	// memory win: the previous code eagerly allocated an 8-shard map (8
+	// empty maps + 8 RWMutex) on EVERY node including leaves that never
+	// get children. atomic.Pointer makes the one-time nil→ptr transition
+	// safe against concurrent readers (LoadChild/Range read it locklessly).
+	store atomic.Pointer[system.ShardedMap]
 	// "0" if store contains all keys and all subkeys (no lru purged ones at any next level)
 	storeConsistencyWithKVLossTime int64
 	valueUpdateTime                int64
@@ -125,8 +133,49 @@ func (csv *StoreValue) ValueExists() bool {
 	return csv.valueExists
 }
 
+// shardCountForNewStore is the shard count used when a node lazily
+// allocates its children container on the first child insertion. Kept at
+// the historical value (8) so the concurrency profile of nodes that DO
+// have children is identical to before — this change only removes the
+// container from nodes that have no children, it does not alter sharding
+// for those that do (that tuning is a separate change).
+const shardCountForNewStore = 8
+
+// loadStore returns the node's children container, or nil if it has none
+// yet. Lockless atomic read — safe to call concurrently with ensureStore.
+func (csv *StoreValue) loadStore() *system.ShardedMap {
+	return csv.store.Load()
+}
+
+// ensureStore returns the node's children container, allocating it on the
+// first call. Concurrent-safe: callers race via CompareAndSwap and the
+// losers discard their candidate and adopt the winner's.
+func (csv *StoreValue) ensureStore() *system.ShardedMap {
+	if sm := csv.store.Load(); sm != nil {
+		return sm
+	}
+	candidate := system.SharedMapMustNewHashed(shardCountForNewStore)
+	if csv.store.CompareAndSwap(nil, candidate) {
+		return candidate
+	}
+	return csv.store.Load()
+}
+
+// storeLen reports the number of children, treating a nil (never-allocated)
+// container as empty.
+func (csv *StoreValue) storeLen() int {
+	if sm := csv.loadStore(); sm != nil {
+		return sm.Len()
+	}
+	return 0
+}
+
 func (csv *StoreValue) LoadChild(key string) (*StoreValue, bool) {
-	if v, ok := csv.store.Get(key); ok {
+	sm := csv.loadStore()
+	if sm == nil {
+		return nil, false
+	}
+	if v, ok := sm.Get(key); ok {
 		return v.(*StoreValue), true
 	}
 	return nil, false
@@ -136,7 +185,7 @@ func (csv *StoreValue) StoreChild(key string, child *StoreValue) (actual *StoreV
 	child.parent = csv
 	child.keyInParent = key
 
-	a, l := csv.store.LoadOrStore(key, child)
+	a, l := csv.ensureStore().LoadOrStore(key, child)
 	if l {
 		return a.(*StoreValue), true
 	}
@@ -180,7 +229,7 @@ func (csv *StoreValue) collectGarbage() {
 
 	csv.Lock("collectGarbage")
 
-	if !csv.valueExists && csv.store.Len() == 0 && csv.syncedWithKV {
+	if !csv.valueExists && csv.storeLen() == 0 && csv.syncedWithKV {
 		csv.TryPurgeReady()
 		csv.TryPurgeConfirm()
 	}
@@ -190,11 +239,15 @@ func (csv *StoreValue) collectGarbage() {
 		noNotifySubscribers = false
 		return false
 	})
-	canBeDeletedFromParent = csv.purgeState == 2 && csv.store.Len() == 0 && csv.syncedWithKV && noNotifySubscribers
+	canBeDeletedFromParent = csv.purgeState == 2 && csv.storeLen() == 0 && csv.syncedWithKV && noNotifySubscribers
 	csv.Unlock("collectGarbage")
 
 	if csv.parent != nil && canBeDeletedFromParent {
-		csv.parent.store.Delete(csv.keyInParent)
+		// The parent necessarily has a container (this node lives in it),
+		// but guard defensively against a nil store regardless.
+		if parentStore := csv.parent.loadStore(); parentStore != nil {
+			parentStore.Delete(csv.keyInParent)
+		}
 
 		go csv.parent.collectGarbage()
 	}
@@ -244,7 +297,11 @@ func (csv *StoreValue) Delete(updateInKV bool, customDeleteTime int64) {
 }
 
 func (csv *StoreValue) Range(f func(key, value interface{}) bool) {
-	csv.store.Range(func(k string, v interface{}) bool {
+	sm := csv.loadStore()
+	if sm == nil {
+		return
+	}
+	sm.Range(func(k string, v interface{}) bool {
 		return f(k, v)
 	})
 }
@@ -442,7 +499,6 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 		rootValue: &StoreValue{
 			parent:                         nil,
 			value:                          nil,
-			store:                          system.SharedMapMustNewHashed(8),
 			storeConsistencyWithKVLossTime: 0,
 			valueExists:                    false,
 			purgeState:                     0,
@@ -462,6 +518,11 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 	}
 
 	cs.ctx, cs.cancel = context.WithCancel(ctx)
+
+	// The root always holds children (every top-level key hangs off it),
+	// so initialise its container eagerly with the historical shard count
+	// rather than paying a lazy-alloc race on the very first insertion.
+	cs.rootValue.store.Store(system.SharedMapMustNewHashed(shardCountForNewStore))
 
 	// default - can not publish to WAL
 	cs.walWriteEnabled.Store(false)
@@ -930,7 +991,7 @@ func (cs *Store) TransactionEnd(transactionID string) {
 func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV bool, customSetTime int64) bool {
 	if keyLastToken, parent := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true); len(keyLastToken) > 0 && parent != nil {
 		candidate := &StoreValue{
-			value: newValue, store: system.SharedMapMustNewHashed(8),
+			value:       newValue,
 			valueExists: true, purgeState: 0,
 			syncedWithKV: !updateInKV,
 			valueUpdateTime: customSetTime,
@@ -991,7 +1052,7 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 				}
 			} else {
 				csvUpdate = &StoreValue{
-					value: value, store: system.SharedMapMustNewHashed(8),
+					value:       value,
 					valueExists: true, purgeState: 0, valueType: typeByteArray,
 					syncedWithKV: !updateInKV,
 					valueUpdateTime: customSetTime,
@@ -1044,7 +1105,6 @@ func (cs *Store) SetValueJSON(key string, originValue *easyjson.JSON, updateInKV
 		} else {
 			csvUpdate := &StoreValue{
 				value:           value,
-				store:           system.SharedMapMustNewHashed(8),
 				valueExists:     true,
 				valueType:       typeJson,
 				purgeState:      0,
@@ -1280,7 +1340,6 @@ func (cs *Store) getLastKeyTokenAndItsParentCacheStoreValue(key string, createIf
 			if createIfNotexists {
 				csv := StoreValue{
 					value:                          nil,
-					store:                          system.SharedMapMustNewHashed(8),
 					storeConsistencyWithKVLossTime: 0,
 					valueExists:                    false,
 					purgeState:                     0,
