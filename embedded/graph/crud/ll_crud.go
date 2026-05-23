@@ -181,7 +181,7 @@ func LLAPIVertexCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	}
 
 	ctx.Domain.Cache().SetValueJSON(selfID, &objectBody, true, opTime, "")
-	indexVertexBody(ctx, objectBody, opTime, false)
+	indexVertexBody(ctx, objectBody, opTime)
 
 	operationKeysMutexUnlock(ctx)
 
@@ -272,7 +272,10 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	}
 
 	ctx.Domain.Cache().SetValueJSON(selfID, &body, true, opTime, "")
-	indexVertexBody(ctx, body, opTime, true)
+	// Incremental reindex against the previous body — avoids the
+	// GetKeysByPattern subtree scan and skips writes for unchanged fields
+	// (see reindexVertexBody). oldBody is the body as currently stored.
+	reindexVertexBody(ctx, oldBody, &body, opTime)
 
 	operationKeysMutexUnlock(ctx)
 
@@ -666,7 +669,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		}
 		//fmt.Println("create vertex out link: ", selfID, toId)
 		// ----------------------------------
-		indexVertexLinkBody(ctx, linkName, linkBody, opTime, false)
+		indexVertexLinkBody(ctx, linkName, linkBody, opTime)
 		// --------------------------------------------------------
 
 		addLinkOpToOpStack(opStack, ctx.Self.Typename, selfID, toId, linkName, linkType, nil, &linkBody)
@@ -854,7 +857,9 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		}
 	}
 	// ----------------------------------
-	indexVertexLinkBody(ctx, linkName, linkBody, opTime, true)
+	// Incremental body-value reindex against the previous link body —
+	// avoids the GetKeysByPattern scan and skips unchanged fields.
+	reindexVertexLinkBody(ctx, linkName, oldLinkBody, &linkBody, opTime)
 	// --------------------------------------------------------
 
 	operationKeysMutexUnlock(ctx)
