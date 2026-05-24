@@ -7,9 +7,11 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/foliagecp/easyjson"
 
+	lg "github.com/foliagecp/sdk/statefun/logger"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
@@ -22,6 +24,16 @@ import (
 var (
 	validLinkName                    = regexp.MustCompile(`\A[a-zA-Z0-9\/_$#@%+=-]+\z`)
 	graphIdKeyMutex *system.KeyMutex = system.NewKeyMutex()
+
+	// graphKeyLockTimeout bounds how long operationKeysMutexLock blocks trying
+	// to acquire a per-key graph lock. The lock is normally held only for the
+	// duration of one operation (incl. its sub-requests, each capped by
+	// requestTimeoutSec), so a wait longer than this indicates a genuinely
+	// stuck/deadlocked holder. On timeout the operation proceeds WITHOUT that
+	// key's lock (logged) rather than hanging the worker forever — recovery and
+	// liveness over strict serialization in the pathological case. Tunable via
+	// GRAPH_KEY_LOCK_TIMEOUT_SEC.
+	graphKeyLockTimeout = time.Duration(system.GetEnvMustProceed[int]("GRAPH_KEY_LOCK_TIMEOUT_SEC", 300)) * time.Second
 )
 
 func getVertexBody(ctx *sfPlugins.StatefunContextProcessor, keyValueID string) *easyjson.JSON {
@@ -99,14 +111,24 @@ func operationKeysMutexLock(ctx *sfPlugins.StatefunContextProcessor, keys []stri
 	for _, k := range keys {
 		if writeOperation {
 			if !ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s.w", k)) {
-				graphIdKeyMutex.Lock(k)
-				ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.%s.w", k), easyjson.NewJSON(true))
-				lockedWriteAny = true
+				// Bounded acquire: never hang a worker forever on a stuck
+				// holder. On timeout we record nothing (so Unlock won't touch a
+				// lock we don't hold) and proceed — the holder is presumed
+				// deadlocked/frozen, so it is not actively mutating this key.
+				if graphIdKeyMutex.LockTimeout(k, graphKeyLockTimeout) {
+					ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.%s.w", k), easyjson.NewJSON(true))
+					lockedWriteAny = true
+				} else {
+					lg.Logf(lg.WarnLevel, "operationKeysMutexLock: write-lock acquire for key=%s timed out after %s; proceeding without it", k, graphKeyLockTimeout)
+				}
 			}
 		} else {
 			if !ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s", k)) {
-				graphIdKeyMutex.RLock(k)
-				ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.%s.r", k), easyjson.NewJSON(true))
+				if graphIdKeyMutex.RLockTimeout(k, graphKeyLockTimeout) {
+					ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.%s.r", k), easyjson.NewJSON(true))
+				} else {
+					lg.Logf(lg.WarnLevel, "operationKeysMutexLock: read-lock acquire for key=%s timed out after %s; proceeding without it", k, graphKeyLockTimeout)
+				}
 			}
 		}
 	}

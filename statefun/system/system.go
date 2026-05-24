@@ -83,6 +83,80 @@ func (k *KeyMutex) Lock(key interface{}) {
 	rm.mu.Lock()
 }
 
+// LockTimeout acquires an exclusive (write) lock for the key, giving up after
+// `timeout` if it cannot be obtained. Returns true if acquired (caller must
+// Unlock), false on timeout (caller must NOT Unlock). It bounds how long a
+// caller blocks on a contended key, so a stuck lock holder cannot make
+// waiters hang indefinitely.
+func (k *KeyMutex) LockTimeout(key interface{}, timeout time.Duration) bool {
+	k.mx.Lock()
+	rm, ok := k.m[key]
+	if !ok {
+		rm = &refMutex{}
+		k.m[key] = rm
+	}
+	atomic.AddInt32(&rm.refs, 1)
+	k.mx.Unlock()
+
+	if rm.mu.TryLock() {
+		return true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-timer.C:
+			k.mx.Lock()
+			if atomic.AddInt32(&rm.refs, -1) == 0 {
+				delete(k.m, key)
+			}
+			k.mx.Unlock()
+			return false
+		case <-ticker.C:
+			if rm.mu.TryLock() {
+				return true
+			}
+		}
+	}
+}
+
+// RLockTimeout is the shared-lock counterpart of LockTimeout.
+func (k *KeyMutex) RLockTimeout(key interface{}, timeout time.Duration) bool {
+	k.mx.Lock()
+	rm, ok := k.m[key]
+	if !ok {
+		rm = &refMutex{}
+		k.m[key] = rm
+	}
+	atomic.AddInt32(&rm.refs, 1)
+	k.mx.Unlock()
+
+	if rm.mu.TryRLock() {
+		return true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-timer.C:
+			k.mx.Lock()
+			if atomic.AddInt32(&rm.refs, -1) == 0 {
+				delete(k.m, key)
+			}
+			k.mx.Unlock()
+			return false
+		case <-ticker.C:
+			if rm.mu.TryRLock() {
+				return true
+			}
+		}
+	}
+}
+
 // Unlock releases an exclusive (write) lock for the specified key.
 func (k *KeyMutex) Unlock(key interface{}) {
 	k.mx.Lock()
