@@ -74,7 +74,7 @@ type StoreValue struct {
 	// get children. atomic.Pointer makes the one-time nil→ptr transition
 	// safe against concurrent readers (LoadChild/Range read it locklessly).
 	store atomic.Pointer[system.ShardedMap]
-	// "0" if store contains all keys and all subkeys (no lru purged ones at any next level)
+	// "0" if store contains all keys and all subkeys (none missing at any next level)
 	storeConsistencyWithKVLossTime int64
 	valueUpdateTime                int64
 	storeMutex                     sync.RWMutex
@@ -340,9 +340,8 @@ type Store struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 
-	rootValue       *StoreValue
-	lruTresholdTime int64
-	valuesInCache   int
+	rootValue     *StoreValue
+	valuesInCache int
 
 	transactions                sync.Map
 	transactionsMutex           *sync.Mutex
@@ -373,7 +372,7 @@ type Store struct {
 }
 
 type maintenanceResult struct {
-	lruTimes                     []int64
+	valueCount                   int
 	allBeforeBackupBarrierSynced bool
 }
 
@@ -433,11 +432,11 @@ func serializeForWAL(writeTime int64, flag uint8, data []byte) []byte {
 }
 
 // traverseCacheForMaintenance performs a DFS without collecting/publishing WAL
-// ops. It only gathers LRU times, runs GC on empty leaves, and checks the
-// backup barrier. Called infrequently (every N iterations) by kvLazyWriter.
+// ops. It counts cache nodes (for the cache_values metric), runs GC on empty
+// leaves, and checks the backup barrier. Called infrequently (every N
+// iterations) by kvLazyWriter.
 func (cs *Store) traverseCacheForMaintenance() *maintenanceResult {
 	result := &maintenanceResult{
-		lruTimes:                     []int64{},
 		allBeforeBackupBarrierSynced: true,
 	}
 
@@ -449,9 +448,7 @@ func (cs *Store) traverseCacheForMaintenance() *maintenanceResult {
 		currentStoreValue := cacheStoreValueStack[lastID]
 		cacheStoreValueStack = cacheStoreValueStack[:lastID]
 
-		currentStoreValue.RLock("maintenance")
-		result.lruTimes = append(result.lruTimes, currentStoreValue.valueUpdateTime)
-		currentStoreValue.RUnlock("maintenance")
+		result.valueCount++
 
 		noChildren := true
 		currentStoreValue.Range(func(key, value interface{}) bool {
@@ -466,15 +463,6 @@ func (cs *Store) traverseCacheForMaintenance() *maintenanceResult {
 					}
 				}
 			}
-
-			// LRU purge check
-			csvChild.Lock("maintenance")
-			if csvChild.valueUpdateTime > 0 && csvChild.valueUpdateTime <= cs.lruTresholdTime && csvChild.purgeState == 0 {
-				csvChild.parent.ConsistencyLoss(system.GetCurrentTimeNs())
-				csvChild.TryPurgeReady()
-				csvChild.TryPurgeConfirm()
-			}
-			csvChild.Unlock("maintenance")
 
 			cacheStoreValueStack = append(cacheStoreValueStack, csvChild)
 			return true
@@ -505,7 +493,6 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 			syncedWithKV:                   true,
 			valueUpdateTime:                -1,
 		},
-		lruTresholdTime:             0,
 		valuesInCache:               0,
 		transactionsMutex:           &sync.Mutex{},
 		getKeysByPatternFromKVMutex: &sync.Mutex{},
@@ -728,7 +715,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 					}
 				}
 
-				// SLOW PATH: maintenance DFS — LRU, GC, backup barrier (every N iterations)
+				// SLOW PATH: maintenance DFS — node count, GC, backup barrier (every N iterations)
 				maintenanceCounter++
 				if maintenanceCounter >= maintenanceInterval || backupBarrierStatus == BackupBarrierStatusLocking {
 					maintenanceCounter = 0
@@ -740,14 +727,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 						}
 					}
 
-					sort.Slice(maintResult.lruTimes, func(i, j int) bool { return maintResult.lruTimes[i] > maintResult.lruTimes[j] })
-					if len(maintResult.lruTimes) > cacheConfig.lruSize {
-						cs.lruTresholdTime = maintResult.lruTimes[cacheConfig.lruSize-1]
-					} else if len(maintResult.lruTimes) > 0 {
-						cs.lruTresholdTime = maintResult.lruTimes[len(maintResult.lruTimes)-1]
-					}
-
-					cs.valuesInCache = len(maintResult.lruTimes)
+					cs.valuesInCache = maintResult.valueCount
 
 					if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("cache_values", "", []string{"id"}); err == nil {
 						gaugeVec.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(cs.valuesInCache))
