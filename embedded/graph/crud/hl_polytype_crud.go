@@ -18,6 +18,7 @@ func RegisterPolyTypeFunctions(runtime *statefun.Runtime) {
 	statefun.NewFunctionType(runtime, "functions.cmdb.api.objects.link.supertype.create", CreateObjectsLinkFromSuperTypes, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
 	statefun.NewFunctionType(runtime, "functions.cmdb.api.objects.link.supertype.update", UpdateObjectsLinkFromSuperTypes, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
 	statefun.NewFunctionType(runtime, "functions.cmdb.api.objects.link.supertype.delete", DeleteObjectsLinkFromSuperTypes, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
+	statefun.NewFunctionType(runtime, "functions.cmdb.api.objects.link.supertype.read", ReadObjectsLinkFromSuperTypes, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
 	statefun.NewFunctionType(runtime, "functions.cmdb.api.type.subtype.set", TypeSetSubType, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
 	statefun.NewFunctionType(runtime, "functions.cmdb.api.type.subtype.remove", TypeRemoveSubType, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
 }
@@ -299,4 +300,72 @@ func DeleteObjectsLinkFromSuperTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugin
 	operationKeysMutexUnlock(ctx)
 
 	replyWithoutOpStack(om, ctx)
+}
+
+/*
+	{
+		"to": string,
+		"from_super_type": string,
+		"to_super_type": string
+	}
+
+Reads the SuperType/composition (cross-pack) edge between two objects — the
+one stored under the compound type "<fromClaim>#<toClaim>#<rel>". This is the
+counterpart of ReadObjectsLink, which reads only the base-type edge declared
+by the TypesLink between the objects' direct types.
+*/
+func ReadObjectsLinkFromSuperTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	selfID := getOriginalID(ctx.Self.ID)
+	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+
+	om := sfMediators.NewOpMediator(ctx)
+
+	objectToID, ok := ctx.Payload.GetByPath("to").AsString()
+	if !ok {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("'to' undefined")).Reply()
+		return
+	}
+	objectToID = ctx.Domain.CreateObjectIDWithThisDomain(objectToID, false)
+
+	// Address the SPECIFIC cross-pack edge by its claim pair. As in
+	// DeleteObjectsLinkFromSuperTypes, multiple compound edges with different
+	// claim pairs can exist between the same (from, to) — match the exact
+	// "<fromClaim>#<toClaim>#" prefix rather than picking an arbitrary edge.
+	fromClaimShort := ctx.Domain.GetObjectIDWithoutDomain(
+		ctx.Domain.CreateObjectIDWithHubDomain(ctx.Payload.GetByPath("from_super_type").AsStringDefault(""), true))
+	toClaimShort := ctx.Domain.GetObjectIDWithoutDomain(
+		ctx.Domain.CreateObjectIDWithHubDomain(ctx.Payload.GetByPath("to_super_type").AsStringDefault(""), true))
+	compoundPrefix := fromClaimShort + "#" + toClaimShort + "#"
+
+	operationKeysMutexLock(ctx, []string{selfID, objectToID}, false, opTime)
+
+	linkName, _, edgeExists := resolveLinkBetweenTwoObjectsByTypePrefix(ctx, selfID, objectToID, compoundPrefix)
+	if !edgeExists {
+		operationKeysMutexUnlock(ctx)
+		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("object link from=%s to=%s with claimed types (%s,%s) does not exist", selfID, objectToID, fromClaimShort, toClaimShort))).Reply()
+		return
+	}
+
+	payload := easyjson.NewJSONObject()
+	payload.SetByPath("name", easyjson.NewJSON(linkName))
+	payload.SetByPath("details", easyjson.NewJSON(true))
+	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &payload), ctx.Options))
+
+	// Object types for the result are best-effort (parity with ReadObjectsLink).
+	fromObjectType, _ := findObjectType(ctx, selfID)
+	toObjectType, _ := findObjectType(ctx, objectToID)
+
+	operationKeysMutexUnlock(ctx)
+	om.AggregateOpMsg(m)
+
+	if om.GetLastSyncOp().Data.PathExists("op_stack") {
+		j := om.GetLastSyncOp().Data.GetByPathPtr("op_stack")
+		executeTriggersFromLLOpStack(ctx, j, "", "")
+	}
+
+	result := m.Data
+	result.SetByPath("from_type", easyjson.NewJSON(fromObjectType))
+	result.SetByPath("to_type", easyjson.NewJSON(toObjectType))
+
+	replyWithoutOpStack(om, ctx, result)
 }

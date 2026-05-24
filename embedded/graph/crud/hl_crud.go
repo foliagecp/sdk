@@ -1062,6 +1062,11 @@ func ReadObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
 	operationKeysMutexLock(ctx, []string{selfID, objectToID}, false, opTime)
+
+	// ReadObjectsLink reads the link of the BASE type declared by the TypesLink
+	// between the two objects' DIRECT (parent) types. SuperType/composition
+	// edges — stored under a compound "<fromClaim>#<toClaim>#<rel>" type — are
+	// read via functions.cmdb.api.objects.link.supertype.read instead.
 	fromObjectType, toObjectType, linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, selfID, objectToID)
 	if err != nil {
 		operationKeysMutexUnlock(ctx)
@@ -1075,6 +1080,16 @@ func ReadObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	payload.SetByPath("details", easyjson.NewJSON(true))
 	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &payload), ctx.Options))
 	operationKeysMutexUnlock(ctx)
+
+	// No base-type link between (from, to): the LL read came back non-OK with a
+	// "with name= does not exist" message (the name is resolved from the type
+	// inside the LL read, and is empty on a miss). Return a clear error instead
+	// of passing that empty-name reply through.
+	if m.Status != sfMediators.SYNC_OP_STATUS_OK {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("object link from=%s to=%s of type %s does not exist", selfID, objectToID, linkType))).Reply()
+		return
+	}
+
 	om.AggregateOpMsg(m)
 
 	if om.GetLastSyncOp().Data.PathExists("op_stack") {
