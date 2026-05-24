@@ -73,13 +73,11 @@ type StoreValue struct {
 	// empty maps + 8 RWMutex) on EVERY node including leaves that never
 	// get children. atomic.Pointer makes the one-time nil→ptr transition
 	// safe against concurrent readers (LoadChild/Range read it locklessly).
-	store atomic.Pointer[system.ShardedMap]
-	// "0" if store contains all keys and all subkeys (none missing at any next level)
-	storeConsistencyWithKVLossTime int64
-	valueUpdateTime                int64
-	storeMutex                     sync.RWMutex
-	notifyUpdates                  sync.Map
-	syncedWithKV                   bool
+	store           atomic.Pointer[system.ShardedMap]
+	valueUpdateTime int64
+	storeMutex      sync.RWMutex
+	notifyUpdates   sync.Map
+	syncedWithKV    bool
 }
 
 func notifySubscriber(c chan KeyValue, key interface{}, value interface{}) {
@@ -108,25 +106,6 @@ func (csv *StoreValue) RLock(caller string) {
 
 func (csv *StoreValue) RUnlock(caller string) {
 	csv.storeMutex.RUnlock()
-}
-
-func (csv *StoreValue) GetFullKeyString() string {
-	if csv.parent != nil {
-		prefix := csv.parent.GetFullKeyString()
-		if len(prefix) > 0 {
-			return prefix + "." + csv.keyInParent
-		}
-	}
-	return csv.keyInParent
-}
-
-func (csv *StoreValue) ConsistencyLoss(lossTime int64) {
-	if lossTime > atomic.LoadInt64(&csv.storeConsistencyWithKVLossTime) {
-		atomic.StoreInt64(&csv.storeConsistencyWithKVLossTime, lossTime)
-	}
-	if csv.parent != nil {
-		csv.parent.ConsistencyLoss(lossTime)
-	}
 }
 
 func (csv *StoreValue) ValueExists() bool {
@@ -343,9 +322,8 @@ type Store struct {
 	rootValue     *StoreValue
 	valuesInCache int
 
-	transactions                sync.Map
-	transactionsMutex           *sync.Mutex
-	getKeysByPatternFromKVMutex *sync.Mutex
+	transactions      sync.Map
+	transactionsMutex *sync.Mutex
 
 	// walWriteEnabled - true for active instance
 	// only active instances can write to WAL streams
@@ -485,17 +463,15 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 		js:          js,
 		kv:          kv,
 		rootValue: &StoreValue{
-			parent:                         nil,
-			value:                          nil,
-			storeConsistencyWithKVLossTime: 0,
-			valueExists:                    false,
-			purgeState:                     0,
-			syncedWithKV:                   true,
-			valueUpdateTime:                -1,
+			parent:          nil,
+			value:           nil,
+			valueExists:     false,
+			purgeState:      0,
+			syncedWithKV:    true,
+			valueUpdateTime: -1,
 		},
-		valuesInCache:               0,
-		transactionsMutex:           &sync.Mutex{},
-		getKeysByPatternFromKVMutex: &sync.Mutex{},
+		valuesInCache:     0,
+		transactionsMutex: &sync.Mutex{},
 
 		//barrier init
 		backupBarrierTimestamp:   0,
@@ -1188,38 +1164,16 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 
 	keys := map[string]bool{}
 
-	appendKeysFromKV := func() {
-		cs.getKeysByPatternFromKVMutex.Lock()
-		//lg.Logln("!!! GetKeysByPattern started appendKeysFromKV")
-		if w, err := cs.kv.Watch(cs.toStoreKey(pattern), nats.IgnoreDeletes()); err == nil {
-			defer func() { _ = w.Stop() }()
-			for entry := range w.Updates() {
-				if entry != nil && len(entry.Value()) >= 9 {
-					keys[cs.fromStoreKey(entry.Key())] = true
-				} else {
-					break
-				}
-			}
-		} else {
-			lg.Logf(lg.ErrorLevel, "GetKeysByPattern kv.Watch error %s", err)
-		}
-		//lg.Logln("!!! GetKeysByPattern ended appendKeysFromKV")
-		cs.getKeysByPatternFromKVMutex.Unlock()
-	}
-
+	// The in-memory store is the complete authoritative mirror of KV: it is
+	// fully loaded at startup and nothing is ever evicted (the LRU machinery
+	// was removed). Therefore every key that exists in KV also exists here,
+	// and pattern resolution is a pure traversal of the in-memory tree — no
+	// KV read-back is needed.
 	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(pattern, false); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
 		keyWithoutLastToken := pattern[:len(pattern)-1]
 		if keyLastToken == "*" {
-			// Getting time of when CSV became inconsistent with KV
-			consistencyWithKVLossTime := atomic.LoadInt64(&parentCacheStoreValue.storeConsistencyWithKVLossTime)
-			// ------------------------------------------------------
-
-			childrenStoresAreConsistentWithKV := true
 			parentCacheStoreValue.Range(func(key, value interface{}) bool {
 				childCSV := value.(*StoreValue)
-				if atomic.LoadInt64(&childCSV.storeConsistencyWithKVLossTime) > 0 { // Child store not consistent with KV
-					childrenStoresAreConsistentWithKV = false
-				}
 				childCSV.RLock("GetKeysByPattern *")
 				if childCSV.valueExists {
 					keys[keyWithoutLastToken+key.(string)] = true
@@ -1227,28 +1181,7 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 				childCSV.RUnlock("GetKeysByPattern *")
 				return true
 			})
-
-			// If CSV is inconsistent with KV -----------------------
-			if consistencyWithKVLossTime > 0 {
-				keysCountBefore := len(keys)
-				appendKeysFromKV()
-				keysCountAfter := len(keys)
-
-				if keysCountBefore == keysCountAfter && childrenStoresAreConsistentWithKV {
-					// Restore consistency if relevant
-					//if atomic.CompareAndSwapInt64(&parentCacheStoreValue.storeConsistencyWithKVLossTime, consistencyWithKVLossTime, 0) {
-					//lg.Logf("Consistency restored for key=\"%s\" store", parentCacheStoreValue.GetFullKeyString())
-					//}
-					atomic.CompareAndSwapInt64(&parentCacheStoreValue.storeConsistencyWithKVLossTime, consistencyWithKVLossTime, 0)
-				}
-			}
-			// ------------------------------------------------------
 		} else if keyLastToken == ">" {
-			// Remembering all CSVs on all sub levels which are inconsistent with KV ----
-			allSubCSVsToConsistencyWithKVLossTime := map[*StoreValue]int64{}
-			inconsistencyWithKVExistsOnSubLevel := false
-			// --------------------------------------------------------------------------
-
 			cacheStoreValueStack := []*StoreValue{parentCacheStoreValue}
 			suffixPathsStack := []string{keyWithoutLastToken}
 			depthsStack := []int{0}
@@ -1258,12 +1191,6 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 				currentStoreValue := cacheStoreValueStack[lastID]
 				currentSuffix := suffixPathsStack[lastID]
 				currentDepth := depthsStack[lastID]
-
-				storeConsistencyWithKVLossTime := atomic.LoadInt64(&currentStoreValue.storeConsistencyWithKVLossTime)
-				if storeConsistencyWithKVLossTime > 0 {
-					allSubCSVsToConsistencyWithKVLossTime[currentStoreValue] = storeConsistencyWithKVLossTime
-					inconsistencyWithKVExistsOnSubLevel = true
-				}
 
 				cacheStoreValueStack = cacheStoreValueStack[:lastID]
 				suffixPathsStack = suffixPathsStack[:lastID]
@@ -1288,29 +1215,7 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 					return true
 				})
 			}
-
-			// If CSV is inconsistent with KV -----------------------
-			if inconsistencyWithKVExistsOnSubLevel {
-				keysCountBefore := len(keys)
-				appendKeysFromKV()
-				keysCountAfter := len(keys)
-
-				if keysCountBefore == keysCountAfter {
-					for subCSV, subCSVConsistencyWithKVLossTime := range allSubCSVsToConsistencyWithKVLossTime {
-						// Restore consistency if relevant
-						//if atomic.CompareAndSwapInt64(&subCSV.storeConsistencyWithKVLossTime, subCSVConsistencyWithKVLossTime, 0) {
-						//lg.Logf("Consistency restored for key=\"%s\" store", subCSV.GetFullKeyString())
-						//}
-						atomic.CompareAndSwapInt64(&subCSV.storeConsistencyWithKVLossTime, subCSVConsistencyWithKVLossTime, 0)
-					}
-				}
-			}
-			// ------------------------------------------------------
 		} else {
-			// Getting time of when CSV became inconsistent with KV
-			consistencyWithKVLossTime := atomic.LoadInt64(&parentCacheStoreValue.storeConsistencyWithKVLossTime)
-			// ------------------------------------------------------
-
 			if c, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
 				c.RLock("GetKeysByPattern one")
 				exists := c.valueExists
@@ -1319,22 +1224,6 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 					keys[pattern] = true
 				}
 			}
-
-			// If CSV is inconsistent with KV -----------------------
-			if consistencyWithKVLossTime > 0 {
-				appendKeysFromKV()
-				// Cannot restore consistency here cause not checking all keys from KV for this CSV level
-			}
-			// ------------------------------------------------------
-		}
-	} else { // No CSV at the level corresponding to the pattern at all
-		if ancestorCacheStoreValue := cs.getLastExistingCacheStoreValueByKey(pattern); ancestorCacheStoreValue != nil {
-			if atomic.LoadInt64(&ancestorCacheStoreValue.storeConsistencyWithKVLossTime) > 0 {
-				appendKeysFromKV()
-				// Cannot restore consistency here
-			}
-		} else {
-			lg.Logf(lg.ErrorLevel, "GetKeysByPattern: getLastExistingCacheStoreValueByKey returns nil")
 		}
 	}
 
@@ -1363,12 +1252,11 @@ func (cs *Store) getLastKeyTokenAndItsParentCacheStoreValue(key string, createIf
 		} else {
 			if createIfNotexists {
 				csv := StoreValue{
-					value:                          nil,
-					storeConsistencyWithKVLossTime: 0,
-					valueExists:                    false,
-					purgeState:                     0,
-					syncedWithKV:                   true,
-					valueUpdateTime:                system.GetCurrentTimeNs(),
+					value:           nil,
+					valueExists:     false,
+					purgeState:      0,
+					syncedWithKV:    true,
+					valueUpdateTime: system.GetCurrentTimeNs(),
 				}
 				actual, _ := currentStoreLevel.StoreChild(tokens[currentTokenID], &csv)
 				currentStoreLevel = actual
@@ -1379,23 +1267,6 @@ func (cs *Store) getLastKeyTokenAndItsParentCacheStoreValue(key string, createIf
 		currentTokenID++
 	}
 	return tokens[currentTokenID], currentStoreLevel
-}
-
-func (cs *Store) getLastExistingCacheStoreValueByKey(key string) *StoreValue {
-	tokens := strings.Split(key, ".")
-	currentTokenID := 0
-	currentStoreLevel := cs.rootValue
-
-	for currentTokenID < len(tokens)-1 {
-		if csv, ok := currentStoreLevel.LoadChild(tokens[currentTokenID]); ok {
-			currentStoreLevel = csv
-		} else {
-			break
-		}
-		currentTokenID++
-	}
-
-	return currentStoreLevel
 }
 
 func (cs *Store) getLastKeyCacheStoreValue(key string) *StoreValue {
