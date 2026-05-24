@@ -407,62 +407,99 @@ func IsLinkBodyHasArrayValue(cacheStore *cache.Store, fromVertexId, linkName, ke
 	return isArrayElementMeetsRequirements(*value, typeStr, operation, targetValue)
 }
 
+// IsLinkSatifiesFilterCreteria parses linkFilterQuery and evaluates it against a
+// single link. It re-parses the query on every call, so when many links are
+// evaluated for the SAME query prefer the parse-once path
+// (ParseFilter + isLinkSatisfiesParsedFilter); see
+// GetObjectIDsFromJPGQLLinkNameAndLinkFilterQuery. This wrapper is kept for
+// single-shot / external callers and preserves the original behavior exactly.
 func IsLinkSatifiesFilterCreteria(cacheStore *cache.Store, fromVertexId string, toVertexId string, linkName string, linkFilterQuery string) bool {
 	if len(linkFilterQuery) == 0 {
 		return true
 	}
-	if filterData, err := ParseFilter(linkFilterQuery); err == nil {
-		if len(filterData.disjunctiveNormalFormOfFeatures) == 0 {
-			return true
-		}
-		linkIndicesMap := GetSpecificLinkIndices(cacheStore, fromVertexId, linkName)
-		for _, features := range filterData.disjunctiveNormalFormOfFeatures {
-			featuresFromDisjunctionFound := true
-			for _, feature := range features {
-				tokens := strings.Split(feature.name, "_")
-				if len(tokens) == 2 {
-					if tokens[0] == "l" {
-						if tokens[1] == "has" {
-							if !IsLinkBodyHasIndexValue(cacheStore, fromVertexId, linkName, feature.value["key"], feature.value["value_type"], feature.value["operation"], feature.value["target_value"]) {
-								featuresFromDisjunctionFound = false
-								break
-							}
-						} else {
-							if _, ok := linkIndicesMap[tokens[1]+"."+feature.value["idx"]]; !ok {
-								featuresFromDisjunctionFound = false
-								break
-							}
-						}
-					}
-					if tokens[0] == "v" {
-						if tokens[1] == "has" {
-							// TODO: FIX IS NEEDED: toVertexId may live in another domain!!!!! Then nothing can be cheked!!!
-							// Probobal solution: toVertexId body' indices must be built not in its own domain, but in the domains of those vertices from which links lead to it
-							if !IsVertexBodyHasIndexValue(cacheStore, toVertexId, feature.value["key"], feature.value["value_type"], feature.value["operation"], feature.value["target_value"]) {
-								featuresFromDisjunctionFound = false
-								break
-							}
-						}
-					}
-				}
-				if len(tokens) == 3 && tokens[1] == "array" && tokens[2] == "has" {
-					if tokens[0] == "v" {
-						if !IsVertexBodyHasArrayValue(cacheStore, toVertexId, feature.value["key"], feature.value["value_type"], feature.value["operation"], feature.value["target_value"]) {
-							featuresFromDisjunctionFound = false
-							break
-						}
-					}
-					if tokens[0] == "l" {
-						if !IsLinkBodyHasArrayValue(cacheStore, fromVertexId, linkName, feature.value["key"], feature.value["value_type"], feature.value["operation"], feature.value["target_value"]) {
-							featuresFromDisjunctionFound = false
-							break
-						}
-					}
-				}
-			}
-			if featuresFromDisjunctionFound {
+	filterData, err := ParseFilter(linkFilterQuery)
+	if err != nil {
+		return false
+	}
+	if len(filterData.disjunctiveNormalFormOfFeatures) == 0 {
+		return true
+	}
+	var linkIndices map[string]struct{}
+	if filterDataNeedsLinkIndices(filterData) {
+		linkIndices = GetSpecificLinkIndices(cacheStore, fromVertexId, linkName)
+	}
+	return isLinkSatisfiesParsedFilter(cacheStore, fromVertexId, toVertexId, linkName, filterData, linkIndices)
+}
+
+// filterDataNeedsLinkIndices reports whether evaluating filterData requires the
+// per-link index map (GetSpecificLinkIndices). Only "l_<idx>" features (a link
+// feature whose op is not "has") consult that map; "l_has"/array-has read the
+// link body directly and "v_*" features read the target vertex body. When no
+// feature needs the map we skip the per-link OutLinkIndex subtree scan entirely.
+func filterDataNeedsLinkIndices(filterData *FilterData) bool {
+	for _, features := range filterData.disjunctiveNormalFormOfFeatures {
+		for _, feature := range features {
+			tokens := strings.Split(feature.name, "_")
+			if len(tokens) == 2 && tokens[0] == "l" && tokens[1] != "has" {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// isLinkSatisfiesParsedFilter evaluates an already-parsed filter against a single
+// link. linkIndices is consulted only for "l_<idx>" features; callers may pass
+// nil when filterDataNeedsLinkIndices(filterData) is false (a nil-map read yields
+// "not present", the correct semantics for a missing index). The evaluation
+// logic is identical to the original IsLinkSatifiesFilterCreteria body.
+func isLinkSatisfiesParsedFilter(cacheStore *cache.Store, fromVertexId string, toVertexId string, linkName string, filterData *FilterData, linkIndices map[string]struct{}) bool {
+	for _, features := range filterData.disjunctiveNormalFormOfFeatures {
+		featuresFromDisjunctionFound := true
+		for _, feature := range features {
+			tokens := strings.Split(feature.name, "_")
+			if len(tokens) == 2 {
+				if tokens[0] == "l" {
+					if tokens[1] == "has" {
+						if !IsLinkBodyHasIndexValue(cacheStore, fromVertexId, linkName, feature.value["key"], feature.value["value_type"], feature.value["operation"], feature.value["target_value"]) {
+							featuresFromDisjunctionFound = false
+							break
+						}
+					} else {
+						if _, ok := linkIndices[tokens[1]+"."+feature.value["idx"]]; !ok {
+							featuresFromDisjunctionFound = false
+							break
+						}
+					}
+				}
+				if tokens[0] == "v" {
+					if tokens[1] == "has" {
+						// TODO: FIX IS NEEDED: toVertexId may live in another domain!!!!! Then nothing can be cheked!!!
+						// Probobal solution: toVertexId body' indices must be built not in its own domain, but in the domains of those vertices from which links lead to it
+						if !IsVertexBodyHasIndexValue(cacheStore, toVertexId, feature.value["key"], feature.value["value_type"], feature.value["operation"], feature.value["target_value"]) {
+							featuresFromDisjunctionFound = false
+							break
+						}
+					}
+				}
+			}
+			if len(tokens) == 3 && tokens[1] == "array" && tokens[2] == "has" {
+				if tokens[0] == "v" {
+					if !IsVertexBodyHasArrayValue(cacheStore, toVertexId, feature.value["key"], feature.value["value_type"], feature.value["operation"], feature.value["target_value"]) {
+						featuresFromDisjunctionFound = false
+						break
+					}
+				}
+				if tokens[0] == "l" {
+					if !IsLinkBodyHasArrayValue(cacheStore, fromVertexId, linkName, feature.value["key"], feature.value["value_type"], feature.value["operation"], feature.value["target_value"]) {
+						featuresFromDisjunctionFound = false
+						break
+					}
+				}
+			}
+		}
+		if featuresFromDisjunctionFound {
+			return true
 		}
 	}
 	return false
@@ -487,13 +524,40 @@ func GetObjectIDsFromJPGQLLinkNameAndLinkFilterQuery(cacheStore *cache.Store, so
 		return result
 	}
 
+	// Parse the link filter ONCE for the whole fan-out instead of re-parsing
+	// (regex + grammar eval) for every candidate link, and decide once whether
+	// the per-link OutLinkIndex subtree scan is needed at all. Behavior matches
+	// the per-link IsLinkSatifiesFilterCreteria:
+	//   - empty query or empty feature set => every link passes;
+	//   - unparseable query                => no link passes.
+	var filterData *FilterData
+	needIndices := false
+	filterActive := len(linkFilterQuery) > 0
+	if filterActive {
+		fd, err := ParseFilter(linkFilterQuery)
+		if err != nil {
+			return result // invalid filter: nothing matches
+		}
+		if len(fd.disjunctiveNormalFormOfFeatures) == 0 {
+			filterActive = false // empty feature set: everything matches
+		} else {
+			filterData = fd
+			needIndices = filterDataNeedsLinkIndices(fd)
+		}
+	}
+
 	for _, linkName := range GetLinkNamesFromJPGQLLinkName(cacheStore, sourceId, jpgqlLinkName) {
 		targetId := GetTargetIdFromSourceIdAndLinkName(cacheStore, sourceId, linkName)
-		if IsLinkSatifiesFilterCreteria(cacheStore, sourceId, targetId, linkName, linkFilterQuery) {
-			// Is targetSatisfies
-			if len(targetId) > 0 {
-				result[targetId] = false
+		satisfies := true
+		if filterActive {
+			var linkIndices map[string]struct{}
+			if needIndices {
+				linkIndices = GetSpecificLinkIndices(cacheStore, sourceId, linkName)
 			}
+			satisfies = isLinkSatisfiesParsedFilter(cacheStore, sourceId, targetId, linkName, filterData, linkIndices)
+		}
+		if satisfies && len(targetId) > 0 {
+			result[targetId] = false
 		}
 	}
 
