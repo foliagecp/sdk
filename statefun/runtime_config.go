@@ -13,6 +13,13 @@ const (
 	KVMutexIsOldPollingInterval = 10
 	FunctionTypeIDLifetimeMs    = 5000
 	RequestTimeoutSec           = 60
+	// FunctionPoolDrainTimeoutSec bounds how long a worker pool waits — in the
+	// background, off the lifecycle critical path — for in-flight handlers to
+	// finish after the function is torn down (passive transition / shutdown)
+	// before cancelling their contexts as a last resort. Defaults to
+	// RequestTimeoutSec so it tracks the longest a single handler call may
+	// legitimately take; recovery is NOT delayed by it (the drain is async).
+	FunctionPoolDrainTimeoutSec = RequestTimeoutSec
 	GCIntervalSec               = 5
 	DefaultHubDomainName        = "hub"
 	HandlesDomainRouters        = true
@@ -51,6 +58,7 @@ type RuntimeConfig struct {
 	kvMutexIsOldPollingIntervalSec int
 	functionTypeIDLifetimeMs       int
 	requestTimeoutSec              int
+	functionPoolDrainTimeoutSec    int
 	gcIntervalSec                  int
 	desiredHUBDomainName           string
 	handlesDomainRouters           bool
@@ -106,6 +114,7 @@ func NewRuntimeConfig() *RuntimeConfig {
 		kvMutexIsOldPollingIntervalSec: KVMutexIsOldPollingInterval,
 		functionTypeIDLifetimeMs:       FunctionTypeIDLifetimeMs,
 		requestTimeoutSec:              RequestTimeoutSec,
+		functionPoolDrainTimeoutSec:    FunctionPoolDrainTimeoutSec,
 		gcIntervalSec:                  GCIntervalSec,
 		desiredHUBDomainName:           DefaultHubDomainName,
 		handlesDomainRouters:           HandlesDomainRouters,
@@ -156,6 +165,14 @@ func (ro *RuntimeConfig) SetFunctionTypeIDLifetimeMs(functionTypeIDLifetimeMs in
 
 func (ro *RuntimeConfig) SetRequestTimeoutSec(requestTimeoutSec int) *RuntimeConfig {
 	ro.requestTimeoutSec = requestTimeoutSec
+	return ro
+}
+
+// SetFunctionPoolDrainTimeoutSec sets how long a function's worker pool waits
+// (in the background, off the recovery path) for in-flight handlers to finish
+// after teardown before cancelling their contexts as a last resort.
+func (ro *RuntimeConfig) SetFunctionPoolDrainTimeoutSec(sec int) *RuntimeConfig {
+	ro.functionPoolDrainTimeoutSec = sec
 	return ro
 }
 

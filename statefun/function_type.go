@@ -35,7 +35,11 @@ type FunctionType struct {
 	executor      *sfPlugins.TypenameExecutorPlugin
 	resourceMutex sync.Mutex
 
-	sfWorkerPool *SFWorkerPool
+	// sfWorkerPool is an atomic.Pointer so it can be replaced on
+	// re-activation: becomePassive stops the pool (Stop marks it stopped
+	// for good), and a passive→active transition needs a fresh, working
+	// pool. Atomic swap keeps the hot read path (sendMsg) lock-free.
+	sfWorkerPool atomic.Pointer[SFWorkerPool]
 	tokens       system.TokenBucket
 	//-------for graceful shutdown-------
 	signalSubscription  *nats.Subscription
@@ -62,7 +66,7 @@ func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHa
 		shutdownCh:   make(chan struct{}, 1),
 	}
 	if runtime.canRegisterNewFunctionType {
-		ft.sfWorkerPool = NewSFWorkerPool(ft, config.functionWorkerPoolConfig)
+		ft.sfWorkerPool.Store(NewSFWorkerPool(ft, config.functionWorkerPoolConfig))
 		runtime.ftMu.Lock()
 		runtime.registeredFunctionTypes[ft.name] = ft
 		runtime.ftMu.Unlock()
@@ -111,7 +115,7 @@ func RegisterDynamicFunctionType(runtime *Runtime, name string, logicHandler Fun
 		tokens:       *system.NewTokenBucket(config.functionWorkerPoolConfig.MaxWorkers + config.functionWorkerPoolConfig.TaskQueueLen),
 		shutdownCh:   make(chan struct{}, 1),
 	}
-	ft.sfWorkerPool = NewSFWorkerPool(ft, config.functionWorkerPoolConfig)
+	ft.sfWorkerPool.Store(NewSFWorkerPool(ft, config.functionWorkerPoolConfig))
 
 	// Register in map (check uniqueness atomically)
 	runtime.ftMu.Lock()
@@ -193,7 +197,19 @@ func (ft *FunctionType) SetExecutor(alias string, content string, constructor fu
 
 // startSubscriptions creates NATS signal/request subscriptions according to the FT config.
 // Used both at runtime startup and for dynamically registered function types.
+// ensureWorkerPool guarantees a live (non-stopped) worker pool. becomePassive
+// stops the pool permanently; a passive→active transition calls this to spin
+// up a fresh one so the function type can process messages again.
+func (ft *FunctionType) ensureWorkerPool() {
+	if wp := ft.sfWorkerPool.Load(); wp == nil || wp.IsStopped() {
+		ft.sfWorkerPool.Store(NewSFWorkerPool(ft, ft.config.functionWorkerPoolConfig))
+	}
+}
+
 func (ft *FunctionType) startSubscriptions() error {
+	// Re-activation path: the pool may have been stopped by a previous
+	// becomePassive. Make sure we have a working one before resubscribing.
+	ft.ensureWorkerPool()
 	if ft.config.IsSignalProviderAllowed(sfPlugins.JetstreamGlobalSignal) {
 		if err := AddSignalSourceJetstreamQueuePushConsumer(ft); err != nil {
 			return err
@@ -303,7 +319,9 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	select {
 	case msgChannel <- msg:
 		ft.idHandlersLastMsgTime.Store(id, time.Now().UnixNano())
-		ft.sfWorkerPool.Notify()
+		if wp := ft.sfWorkerPool.Load(); wp != nil {
+			wp.Notify()
+		}
 	default:
 		ft.TokenRelease()
 		msg.RefusalCallback(false) // Can try to rediliver cause free tokens still exists, system have scaling resources
@@ -709,7 +727,9 @@ func (ft *FunctionType) stopRequestSubscription() {
 	if ft.requestSubscription == nil || !ft.requestSubscription.IsValid() {
 		return
 	}
-	ft.sfWorkerPool.Stop()
+	if wp := ft.sfWorkerPool.Load(); wp != nil {
+		wp.Stop()
+	}
 	_ = ft.requestSubscription.Unsubscribe()
 	lg.Logf(lg.DebugLevel, "unsubscribe request subscription for typename %s", ft.name)
 }

@@ -502,7 +502,11 @@ func (r *Runtime) dropAllFunctionPendingTasks() {
 	totalDropped := 0
 	r.ftMu.RLock()
 	for _, ft := range r.registeredFunctionTypes {
-		dropped := ft.sfWorkerPool.DropPendingTasks()
+		wp := ft.sfWorkerPool.Load()
+		if wp == nil {
+			continue
+		}
+		dropped := wp.DropPendingTasks()
 		totalDropped += dropped
 		if dropped > 0 {
 			lg.Logf(lg.DebugLevel, "Dropped %d pending tasks for function %s on passive transition", dropped, ft.name)
@@ -576,12 +580,19 @@ func (r *Runtime) collectGarbage() {
 			gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(float64(running))
 		}
 
+		wp := ft.sfWorkerPool.Load()
+		activeWorkers := 0
+		taskQueueLen := 0
+		if wp != nil {
+			activeWorkers = wp.GetActiveWorkersCount()
+			taskQueueLen = len(wp.taskQueue)
+		}
 		if isShutdown &&
 			(running > 0 ||
-				ft.sfWorkerPool.GetActiveWorkersCount() > 0 ||
-				len(ft.sfWorkerPool.taskQueue) > 0 ||
+				activeWorkers > 0 ||
+				taskQueueLen > 0 ||
 				(int64(ft.lastMsgTimeNs.Load())+int64(r.config.functionTypeIDLifetimeMs*1000*1000) > system.GetCurrentTimeNs())) {
-			lg.GetLogger().Debugf(context.TODO(), "for function %s is running=%d, is active=%d", ft.name, running, ft.sfWorkerPool.GetActiveWorkersCount())
+			lg.GetLogger().Debugf(context.TODO(), "for function %s is running=%d, is active=%d", ft.name, running, activeWorkers)
 			functionsReadyForStop = false
 			ft.lastMsgTimeNs.Store(uint64(system.GetCurrentTimeNs()))
 		}
@@ -642,8 +653,16 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 		lg.Logf(lg.WarnLevel, "%s, becoming passive", cause)
 		r.activeInstanceMu.Lock()
 		r.setActiveInstance(false)
+		revToRelease := r.config.activeRevID
 		r.config.activeRevID = 0
 		r.activeInstanceMu.Unlock()
+		// Release our own runtime lock so a fresh acquisition (recovery, or
+		// another instance) does not have to wait out the full soft-TTL on a
+		// stale-but-unrefreshed lock. Best-effort: if the lock was already
+		// lost/expired this is a no-op.
+		if revToRelease != 0 {
+			system.MsgOnErrorReturn(KeyMutexUnlock(ctx, r, system.GetHashStr(RuntimeName), revToRelease))
+		}
 		r.Domain.Cache().SetWALWriteEnabled(false)
 		r.stopFunctionSubscriptions(ctx)
 		r.dropAllFunctionPendingTasks()

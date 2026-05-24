@@ -121,6 +121,15 @@ func NewSFWorkerPool(ft *FunctionType, conf SFWorkerPoolConfig) *SFWorkerPool {
 	return wp
 }
 
+// IsStopped reports whether Stop() has been called. A stopped pool no longer
+// accepts tasks and must be replaced (see FunctionType.ensureWorkerPool)
+// before the function type can process messages again.
+func (wp *SFWorkerPool) IsStopped() bool {
+	wp.mu.Lock()
+	defer wp.mu.Unlock()
+	return wp.stopped
+}
+
 func (wp *SFWorkerPool) manager() {
 	submit := func(task SFWorkerTask) error {
 		wp.mu.Lock()
@@ -279,6 +288,17 @@ func (wp *SFWorkerPool) worker() {
 	}
 }
 
+// Stop tears the pool down WITHOUT blocking the caller. It marks the pool
+// stopped (no new tasks; idle workers and the manager exit at once), then
+// observes the in-flight drain in the background. This is critical for the
+// lifecycle ticker / becomePassive: a slow or wedged handler must never hold
+// up the transition or, worse, recovery (the 116 incident, where an unbounded
+// wg.Wait() inside becomePassive killed the ticker forever).
+//
+// In-flight handlers are NOT interrupted — they run to completion naturally
+// (Go cannot kill a goroutine). A passive→active transition meanwhile spins
+// up a fresh pool (FunctionType.ensureWorkerPool), so the draining old pool
+// never delays serving; a stuck handler is simply abandoned.
 func (wp *SFWorkerPool) Stop() {
 	wp.mu.Lock()
 	if wp.stopped {
@@ -289,7 +309,32 @@ func (wp *SFWorkerPool) Stop() {
 	close(wp.stopCh)
 	wp.mu.Unlock()
 
-	wp.wg.Wait()
+	go wp.drain()
+}
+
+// drain observes — off the critical path — whether in-flight handlers finish
+// within the configured window, logging if any are still running afterwards.
+// It never blocks the caller and never kills a worker; abandoned handlers
+// finish on their own.
+func (wp *SFWorkerPool) drain() {
+	done := make(chan struct{})
+	go func() {
+		wp.wg.Wait()
+		close(done)
+	}()
+
+	timeout := time.Duration(wp.ft.runtime.config.functionPoolDrainTimeoutSec) * time.Second
+	select {
+	case <-done:
+		// All in-flight handlers finished naturally.
+	case <-time.After(timeout):
+		wp.mu.Lock()
+		stuck := wp.workers
+		wp.mu.Unlock()
+		logger.Logf(logger.WarnLevel,
+			"worker pool %s: %d handler(s) still running after %s drain window; abandoning them",
+			wp.ft.name, stuck, timeout)
+	}
 }
 
 // DropPendingTasks removes tasks that have not started yet
