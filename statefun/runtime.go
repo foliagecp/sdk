@@ -652,7 +652,7 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 	becomePassive := func(cause string) {
 		lg.Logf(lg.WarnLevel, "%s, becoming passive", cause)
 		r.activeInstanceMu.Lock()
-		r.setActiveInstance(false)
+		r.config.isActiveInstance = false // lock already held; setActiveInstance would re-lock the same mutex (reentrant deadlock)
 		revToRelease := r.config.activeRevID
 		r.config.activeRevID = 0
 		r.activeInstanceMu.Unlock()
@@ -703,13 +703,13 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 							lg.Logf(lg.ErrorLevel, "KV consistency check failed: %v", err)
 							system.MsgOnErrorReturn(KeyMutexUnlock(ctx, r, system.GetHashStr(RuntimeName), r.config.activeRevID))
 							r.activeInstanceMu.Lock()
-							r.setActiveInstance(false)
+							r.config.isActiveInstance = false // lock already held; setActiveInstance would re-lock the same mutex (reentrant deadlock)
 							r.config.activeRevID = 0
 							r.activeInstanceMu.Unlock()
 						} else {
 							lg.Logf(lg.DebugLevel, "KV consistent, fully active now")
 							r.activeInstanceMu.Lock()
-							r.setActiveInstance(true)
+							r.config.isActiveInstance = true // lock already held; setActiveInstance would re-lock the same mutex (reentrant deadlock)
 							r.activeInstanceMu.Unlock()
 							r.Domain.Cache().SetWALWriteEnabled(true)
 							r.gs.resetPhaseOneCtx()
