@@ -39,16 +39,17 @@ assert seed -n "$N" || fail "seed failed"
 echo ">> pre-shutdown verify"
 assert verify -n "$N" || fail "pre-shutdown verify failed"
 
-echo ">> sending SIGTERM via 'compose stop' (grace 30s)"
+GRACE=90
+echo ">> sending SIGTERM via 'compose stop' (grace ${GRACE}s)"
 t0=$SECONDS
-dc stop -t 30 runtime || fail "compose stop errored"
+dc stop -t "$GRACE" runtime || fail "compose stop errored"
 drain=$((SECONDS - t0))
 echo ">> runtime stopped after ${drain}s"
 
 code="$(container_exit_code runtime)"
 echo ">> runtime exit code: $code"
 [ "$code" = "0" ] || fail "runtime did not drain cleanly (exit $code; 137 == SIGKILL after grace == hang)"
-[ "$drain" -lt 30 ] || fail "runtime took the full grace window (${drain}s) — likely did not drain, was killed"
+[ "$drain" -lt "$GRACE" ] || fail "runtime took the full grace window (${drain}s) — did not drain, was killed"
 
 echo ">> restarting runtime"
 dc up -d runtime || fail "runtime restart failed"

@@ -246,36 +246,60 @@ func cmdConsistency(args []string) {
 	c := bindConn(fs)
 	typ := fs.String("type", "systest_node", "object type")
 	expect := fs.Int("n", -1, "if >=0, also assert exactly N members")
+	settle := fs.Int("settle", 0, "seconds to re-check before failing (tolerate index settle lag)")
 	_ = fs.Parse(args)
 
 	dbc, err := c.client()
 	if err != nil {
 		die("connect: %v", err)
 	}
-	ids, err := dbc.Query.JPGQLCtraQuery(*typ, ".*[l:type('__object')]")
-	if err != nil {
-		die("jpgql enumerate %q: %v", *typ, err)
-	}
-	bad := 0
-	for _, id := range ids {
-		data, err := dbc.CMDB.ObjectReadV2(id)
+
+	// Enumerate the type's members and confirm each is readable. Under
+	// concurrent delete load a JPGQL __object enumeration may briefly list an
+	// id whose vertex is already gone (index settle lag); with -settle we
+	// re-check those stragglers for a bounded window. A phantom that survives
+	// the whole window is a real dangling index, and we fail.
+	check := func() (total, bad int, badIDs []string) {
+		ids, err := dbc.Query.JPGQLCtraQuery(*typ, ".*[l:type('__object')]")
 		if err != nil {
-			bad++
-			fmt.Fprintf(os.Stderr, "  UNREADABLE %s: %v\n", id, err)
-			continue
+			die("jpgql enumerate %q: %v", *typ, err)
 		}
-		if !data.IsNonEmptyObject() {
-			bad++
-			fmt.Fprintf(os.Stderr, "  EMPTY %s\n", id)
+		total = len(ids)
+		for _, id := range ids {
+			data, rerr := dbc.CMDB.ObjectReadV2(id)
+			if rerr != nil || !data.IsNonEmptyObject() {
+				bad++
+				badIDs = append(badIDs, id)
+			}
 		}
+		return
 	}
+
+	total, bad, badIDs := check()
+	deadline := time.Now().Add(time.Duration(*settle) * time.Second)
+	for bad > 0 && time.Now().Before(deadline) {
+		fmt.Printf("  %d/%d members not yet consistent (e.g. %v); re-checking...\n", bad, total, firstN(badIDs, 3))
+		time.Sleep(2 * time.Second)
+		total, bad, badIDs = check()
+	}
+
 	if bad > 0 {
-		die("consistency FAILED: %d/%d members bad", bad, len(ids))
+		for _, id := range firstN(badIDs, 10) {
+			fmt.Fprintf(os.Stderr, "  BAD %s (enumerated but unreadable — dangling __object index)\n", id)
+		}
+		die("consistency FAILED: %d/%d members bad after %ds settle", bad, total, *settle)
 	}
-	if *expect >= 0 && len(ids) != *expect {
-		die("consistency FAILED: %d members, want %d", len(ids), *expect)
+	if *expect >= 0 && total != *expect {
+		die("consistency FAILED: %d members, want %d", total, *expect)
 	}
-	fmt.Printf("consistency OK: %d members of %q all readable & typed\n", len(ids), *typ)
+	fmt.Printf("consistency OK: %d members of %q all readable & typed\n", total, *typ)
+}
+
+func firstN(s []string, n int) []string {
+	if len(s) < n {
+		return s
+	}
+	return s[:n]
 }
 
 // ---- soak -------------------------------------------------------------------

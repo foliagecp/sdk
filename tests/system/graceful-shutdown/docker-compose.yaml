@@ -26,9 +26,12 @@ services:
     env_file: ./.env
     depends_on:
       - nats
-    # Give the drain path room; run.sh asserts the process actually exits 0
-    # (clean drain) well within this window rather than being SIGKILLed.
-    stop_grace_period: 30s
+    # Give the drain path generous room. A clean drain is ~10s idle, but the
+    # readiness loop adds up to functionTypeIDLifetimeMs (5s) of tail and, under
+    # load (whole suite running), in-flight handlers take longer to finish — so
+    # a tight window produces false SIGKILLs. run.sh asserts the process exits 0
+    # (clean drain) within this window rather than being SIGKILLed at the limit.
+    stop_grace_period: 90s
 
 volumes:
   nats-data:

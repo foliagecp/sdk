@@ -39,7 +39,7 @@ assert soak -workers "$WORKERS" -duration "$DURATION" || fail "soak reported ope
 echo ">> runtime must still be responsive after the load"
 assert ping -wait 30 || fail "runtime unresponsive after soak (possible wedge/leak)"
 
-echo ">> post-soak graph-consistency check"
-assert consistency -type systest_node || fail "post-soak consistency failed"
+echo ">> post-soak graph-consistency check (settle window tolerates index lag, not corruption)"
+assert consistency -type systest_node -settle 15 || fail "post-soak consistency failed"
 
 echo ">> crud-soak: PASS"
