@@ -145,6 +145,9 @@ multi-node HA, load/soak, full backup/restore, cross-domain) will be covered by
 one (sequentially, so they do not contend), orchestrated by
 `scripts/run-all-tests.sh`.
 
+The detailed, per-test plan (topology, steps, assertions, pass criteria,
+priorities) is in [SYSTEM_TESTS_PLAN.md](./SYSTEM_TESTS_PLAN.md).
+
 ### Target repository layout
 
 - **`samples/`** — the demo docker-compose apps currently under `tests/`
