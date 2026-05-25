@@ -6,7 +6,7 @@ COPY . .
 
 RUN go mod tidy
 
-RUN cd ./tests/export/pg_high_level && go build -o /usr/bin/foliage-semantic-export-test
+RUN cd ./tests/integration/export/pg_high_level && go build -o /usr/bin/foliage-semantic-export-test
 
 FROM ubuntu:22.04
 

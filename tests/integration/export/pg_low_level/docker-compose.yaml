@@ -47,8 +47,8 @@ services:
       nats:
         condition: service_started
     build:
-      context: ../../..
-      dockerfile: tests/export/pg_low_level/Dockerfile
+      context: ../../../..
+      dockerfile: tests/integration/export/pg_low_level/Dockerfile
     volumes:
       - .:/foliage
     stop_grace_period: 300s

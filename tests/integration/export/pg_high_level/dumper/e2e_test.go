@@ -15,7 +15,7 @@ import (
 	"github.com/foliagecp/sdk/statefun/cache"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
-	"github.com/foliagecp/sdk/tests/export/pg_high_level/dumper"
+	"github.com/foliagecp/sdk/tests/integration/export/pg_high_level/dumper"
 	"github.com/nats-io/nats-server/v2/server"
 	natsservertest "github.com/nats-io/nats-server/v2/test"
 	"github.com/stretchr/testify/assert"

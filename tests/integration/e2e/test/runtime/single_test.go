@@ -14,7 +14,7 @@ import (
 
 	"github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/logger"
-	"github.com/foliagecp/sdk/tests/e2e/test/nats"
+	"github.com/foliagecp/sdk/tests/integration/e2e/test/nats"
 )
 
 func TestKeyMutexLockUnlock(t *testing.T) {

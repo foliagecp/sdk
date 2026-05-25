@@ -1,3 +1,4 @@
+// Foliage export test — runtime + semantic PG dumper integration (high-level).
 package main
 
 import (
@@ -12,41 +13,30 @@ import (
 	"github.com/foliagecp/sdk/statefun/cache"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/foliagecp/sdk/statefun/system"
-	"github.com/foliagecp/sdk/tests/export/pg_neo4j/dumper"
+	"github.com/foliagecp/sdk/tests/integration/export/pg_high_level/dumper"
 )
 
 var (
-	NatsURL      = system.GetEnvMustProceed("NATS_URL", "nats://nats:foliage@nats:4222")
-	PgURL        = system.GetEnvMustProceed("PG_URL", "postgres://foliage:foliage@postgres:5432/foliage?sslmode=disable")
-	Neo4jURI     = system.GetEnvMustProceed("NEO4J_URI", "bolt://neo4j:7687")
-	Neo4jUser    = system.GetEnvMustProceed("NEO4J_USER", "neo4j")
-	Neo4jPass    = system.GetEnvMustProceed("NEO4J_PASS", "foliage123")
-	EnableTLS    = system.GetEnvMustProceed("ENABLE_TLS", false)
+	NatsURL   = system.GetEnvMustProceed("NATS_URL", "nats://nats:foliage@nats:4222")
+	PgURL     = system.GetEnvMustProceed("PG_URL", "postgres://foliage:foliage@postgres:5432/foliage?sslmode=disable")
+	EnableTLS = system.GetEnvMustProceed("ENABLE_TLS", false)
 
-	pgDumper    *dumper.SemanticPGDumper
-	neo4jDumper *dumper.SemanticNeo4jDumper
+	pgDumper *dumper.SemanticPGDumper
 )
 
 func RegisterFunctionTypes(runtime *statefun.Runtime) {
 	graphCRUD.RegisterAllFunctionTypes(runtime)
 	statefun.RegisterExportDumper(
 		runtime,
-		"pg-dumper",
-		"export.pg.handler",
+		"semantic-pg-dumper",
+		"export.semantic.pg.handler",
 		SemanticPGHandler,
-		statefun.NewFunctionTypeConfig().SetMaxAckPending(1),
-	)
-	statefun.RegisterExportDumper(
-		runtime,
-		"neo4j-dumper",
-		"export.neo4j.handler",
-		SemanticNeo4jHandler,
 		statefun.NewFunctionTypeConfig().SetMaxAckPending(1),
 	)
 }
 
 func afterStart(ctx context.Context, runtime *statefun.Runtime) error {
-	lg.Logln(lg.InfoLevel, "=== PG+Neo4j export test: afterStart begin ===")
+	lg.Logln(lg.InfoLevel, "=== Semantic export test: afterStart begin ===")
 
 	domainName := runtime.Domain.Name()
 
@@ -102,41 +92,45 @@ func afterStart(ctx context.Context, runtime *statefun.Runtime) error {
 	lg.Logln(lg.InfoLevel, "=== CRUD complete, waiting for export pipeline... ===")
 	time.Sleep(15 * time.Second)
 
-	// --- PG Verification ---
-	lg.Logln(lg.InfoLevel, "=== PostgreSQL Verification ===")
+	// --- Verification ---
+	lg.Logln(lg.InfoLevel, "=== Verification ===")
 
-	pgTypes, _ := pgDumper.CountTypes(ctx)
-	pgObjects, _ := pgDumper.CountObjects(ctx)
-	pgTypeLinks, _ := pgDumper.CountTypeLinks(ctx)
-	pgObjLinks, _ := pgDumper.CountObjectLinks(ctx)
+	typeCount, err := pgDumper.CountTypes(ctx)
+	if err != nil {
+		lg.Logf(lg.ErrorLevel, "Failed to count types: %s", err)
+	} else {
+		lg.Logf(lg.InfoLevel, "Types in PG: %d", typeCount)
+	}
 
-	lg.Logf(lg.InfoLevel, "PG Types: %d", pgTypes)
-	lg.Logf(lg.InfoLevel, "PG Objects: %d", pgObjects)
-	lg.Logf(lg.InfoLevel, "PG Type links: %d", pgTypeLinks)
-	lg.Logf(lg.InfoLevel, "PG Object links: %d", pgObjLinks)
+	objectCount, err := pgDumper.CountObjects(ctx)
+	if err != nil {
+		lg.Logf(lg.ErrorLevel, "Failed to count objects: %s", err)
+	} else {
+		lg.Logf(lg.InfoLevel, "Objects in PG: %d", objectCount)
+	}
 
-	// --- Neo4j Verification ---
-	lg.Logln(lg.InfoLevel, "=== Neo4j Verification ===")
+	typeLinkCount, err := pgDumper.CountTypeLinks(ctx)
+	if err != nil {
+		lg.Logf(lg.ErrorLevel, "Failed to count type links: %s", err)
+	} else {
+		lg.Logf(lg.InfoLevel, "Type links in PG: %d", typeLinkCount)
+	}
 
-	n4jTypes, _ := neo4jDumper.CountNodes(ctx, "Type")
-	n4jObjects, _ := neo4jDumper.CountNodes(ctx, "Object")
-	n4jTypeLinks, _ := neo4jDumper.CountRelationships(ctx, "TYPE_LINK")
-	n4jObjLinks, _ := neo4jDumper.CountRelationships(ctx, "OBJECT_LINK")
+	objectLinkCount, err := pgDumper.CountObjectLinks(ctx)
+	if err != nil {
+		lg.Logf(lg.ErrorLevel, "Failed to count object links: %s", err)
+	} else {
+		lg.Logf(lg.InfoLevel, "Object links in PG: %d", objectLinkCount)
+	}
 
-	lg.Logf(lg.InfoLevel, "Neo4j Types: %d", n4jTypes)
-	lg.Logf(lg.InfoLevel, "Neo4j Objects: %d", n4jObjects)
-	lg.Logf(lg.InfoLevel, "Neo4j Type links: %d", n4jTypeLinks)
-	lg.Logf(lg.InfoLevel, "Neo4j Object links: %d", n4jObjLinks)
-
-	// --- Sample data ---
 	testIDs := []string{"srv-0", "srv-1", "rack-A", "nic-0"}
 	for _, id := range testIDs {
 		fullID := domainName + "/" + id
 		typeID, body, err := pgDumper.ReadObject(ctx, fullID)
 		if err != nil {
-			lg.Logf(lg.WarnLevel, "PG Object %s NOT found: %s", fullID, err)
+			lg.Logf(lg.WarnLevel, "Object %s NOT found in PG: %s", fullID, err)
 		} else {
-			lg.Logf(lg.InfoLevel, "PG Object %s -> type=%s body=%s", fullID, typeID, string(body))
+			lg.Logf(lg.InfoLevel, "Object %s → type=%s body=%s", fullID, typeID, string(body))
 		}
 	}
 
@@ -147,13 +141,11 @@ func afterStart(ctx context.Context, runtime *statefun.Runtime) error {
 		lg.Logf(lg.WarnLevel, "Deleted object %s still present in PG!", deletedID)
 	}
 
-	if pgObjects > 0 && n4jObjects > 0 {
-		lg.Logln(lg.InfoLevel, "=== PG+NEO4J EXPORT TEST PASSED ===")
+	if objectCount > 0 {
+		lg.Logln(lg.InfoLevel, "=== SEMANTIC EXPORT TEST PASSED ===")
 	} else {
-		lg.Logln(lg.ErrorLevel, "=== PG+NEO4J EXPORT TEST FAILED ===")
+		lg.Logln(lg.ErrorLevel, "=== SEMANTIC EXPORT TEST FAILED: no objects in PG ===")
 	}
-
-	lg.Logln(lg.InfoLevel, "Neo4j Browser available at http://localhost:7474")
 
 	return nil
 }
@@ -175,28 +167,8 @@ func initPGAndTranslator(ctx context.Context) error {
 		return fmt.Errorf("init PG schema: %w", err)
 	}
 	lg.Logln(lg.InfoLevel, "PostgreSQL schema initialized")
-	pgTranslator = statefun.NewSemanticTranslator(pgDumper)
-	return nil
-}
-
-func initNeo4jAndTranslator(ctx context.Context) error {
-	var n4jErr error
-	for attempt := 1; attempt <= 10; attempt++ {
-		neo4jDumper, n4jErr = dumper.NewSemanticNeo4jDumper(ctx, Neo4jURI, Neo4jUser, Neo4jPass)
-		if n4jErr == nil {
-			break
-		}
-		lg.Logf(lg.WarnLevel, "Neo4j connect attempt %d/10: %s", attempt, n4jErr)
-		time.Sleep(2 * time.Second)
-	}
-	if n4jErr != nil {
-		return fmt.Errorf("connect to Neo4j after retries: %w", n4jErr)
-	}
-	if err := neo4jDumper.InitSchema(ctx); err != nil {
-		return fmt.Errorf("init Neo4j schema: %w", err)
-	}
-	lg.Logln(lg.InfoLevel, "Neo4j schema initialized")
-	neo4jTranslator = statefun.NewSemanticTranslator(neo4jDumper)
+	translator = statefun.NewSemanticTranslator(pgDumper)
+	lg.Logln(lg.InfoLevel, "SemanticTranslator initialized (ready before runtime.Start)")
 	return nil
 }
 
@@ -205,17 +177,14 @@ func Start() {
 
 	ctx := context.Background()
 
+	// Initialize PG and translator BEFORE runtime.Start so the startup snapshot
+	// (published during cache load) is processed correctly by SemanticPGHandler.
 	if err := initPGAndTranslator(ctx); err != nil {
-		lg.Logf(lg.ErrorLevel, "Cannot initialize PG: %s", err)
+		lg.Logf(lg.ErrorLevel, "Cannot initialize PG/translator: %s", err)
 		return
 	}
 
-	if err := initNeo4jAndTranslator(ctx); err != nil {
-		lg.Logf(lg.ErrorLevel, "Cannot initialize Neo4j: %s", err)
-		return
-	}
-
-	runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "pg_neo4j_export_test").
+	runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "semantic_export_test").
 		UseJSDomainAsHubDomainName().
 		SetTLS(EnableTLS).
 		SetExportEnabled(true))
@@ -227,7 +196,7 @@ func Start() {
 	RegisterFunctionTypes(runtime)
 	runtime.RegisterOnAfterStartFunction(afterStart, true)
 
-	if err := runtime.Start(ctx, cache.NewCacheConfig("pg_neo4j_export_cache")); err != nil {
+	if err := runtime.Start(ctx, cache.NewCacheConfig("semantic_export_cache")); err != nil {
 		lg.Logf(lg.ErrorLevel, "Cannot start due to an error: %s", err)
 	}
 }

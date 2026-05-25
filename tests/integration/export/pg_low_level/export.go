@@ -13,7 +13,7 @@ import (
 	"github.com/foliagecp/sdk/statefun/cache"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/foliagecp/sdk/statefun/system"
-	"github.com/foliagecp/sdk/tests/export/pg_low_level/dumper"
+	"github.com/foliagecp/sdk/tests/integration/export/pg_low_level/dumper"
 )
 
 var (

@@ -6,7 +6,7 @@ COPY . .
 
 RUN go mod tidy
 
-RUN cd ./tests/export/pg_neo4j && go build -o /usr/bin/foliage-pg-neo4j-export-test
+RUN cd ./tests/integration/export/pg_neo4j && go build -o /usr/bin/foliage-pg-neo4j-export-test
 
 FROM ubuntu:22.04
 
