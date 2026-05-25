@@ -63,7 +63,7 @@ services:
         condition: service_healthy
     build:
       context: ../..
-      dockerfile: tests/cluster/Dockerfile
+      dockerfile: samples/cluster/Dockerfile
     volumes:
       - .:/foliage
     scale: 3

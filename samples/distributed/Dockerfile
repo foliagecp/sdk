@@ -11,7 +11,7 @@ COPY . .
 
 RUN go mod tidy
 
-RUN cd ./tests/object && go build -o /usr/bin/foliage
+RUN cd ./samples/distributed && go build -o /usr/bin/foliage
 
 FROM ubuntu:22.04
 

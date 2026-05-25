@@ -81,12 +81,12 @@ For detailed installation instructions and prerequisites, visit the [official do
 
 ### Running Tests
 
-Foliage provides a set of test samples to help you get familiar with the platform. For example, let's walk through the steps to run the simple test:
+Foliage provides a set of samples to help you get familiar with the platform. For example, let's walk through the steps to run the simple sample:
 
-#### 1. Navigate to `tests/simple`:
+#### 1. Navigate to `samples/simple`:
 
 ```sh
-cd tests/simple
+cd samples/simple
 ```
 
 #### 2. Build the test runtime:

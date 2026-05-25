@@ -1,5 +1,3 @@
-version: "2.1"
-
 services:
   nats:
     image: nats:latest
@@ -10,6 +8,7 @@ services:
       - "8222:8222"
     volumes:
        - ./configs/nats/nats.conf/:/etc/nats/nats.conf
+       - ./data/jetstream:/data/jetstream
 
   io:
     image: natsio/nats-box:latest
@@ -18,10 +17,12 @@ services:
     tty: true
     depends_on:
       - nats
+    volumes:
+      - ./backups:/backups
 
   runtime:
-    image: foliage-sdk-tests-object:latest
-    command: /usr/bin/foliage -ll 5
+    image: foliage-sdk-tests-simple:latest
+    command: /usr/bin/foliage -ll 6
     ports:
       - "9901:9901"
       - "8080:8080"
@@ -30,7 +31,7 @@ services:
       - nats
     build:
       context: ../..
-      dockerfile: tests/object/Dockerfile
+      dockerfile: samples/simple/Dockerfile
     volumes:
       - .:/foliage
 

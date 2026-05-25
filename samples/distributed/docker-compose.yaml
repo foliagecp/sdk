@@ -42,7 +42,7 @@ services:
       - nats-leaf
     build:
       context: ../..
-      dockerfile: tests/distributed/Dockerfile
+      dockerfile: samples/distributed/Dockerfile
 
   runtime-leaf:
     image: foliage-sdk-tests-distributed:latest
@@ -54,7 +54,7 @@ services:
       - nats-leaf
     build:
       context: ../..
-      dockerfile: tests/distributed/Dockerfile
+      dockerfile: samples/distributed/Dockerfile
 
   nats-exporter-hub:
     image: natsio/prometheus-nats-exporter:latest
