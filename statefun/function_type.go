@@ -457,7 +457,13 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 	if msg.Options != nil {
 		typenameIDContextProcessor.Options.DeepMerge(*msg.Options)
 	}
-	typenameIDContextProcessor.Caller = *msg.Caller
+	// Guard against a nil Caller: a malformed message must degrade to an empty
+	// caller address, not panic the worker and silently drop the task.
+	if msg.Caller != nil {
+		typenameIDContextProcessor.Caller = *msg.Caller
+	} else {
+		typenameIDContextProcessor.Caller = sfPlugins.StatefunAddress{}
+	}
 
 	typenameIDContextProcessor.SetTraceContext(msg.TraceContext)
 	if msg.TraceContext != nil {
