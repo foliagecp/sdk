@@ -1,0 +1,31 @@
+# nats-restart-recovery topology: one NATS with a persistent JetStream store and
+# one containerised foliage runtime.
+#
+# Unlike wal-restart-recovery (which kills the RUNTIME), this test hard-kills the
+# NATS container itself and restarts the SAME node on the SAME volume — verifying
+# the broker recovers its own JetStream store from disk after a crash and the
+# runtime resumes serving with no data loss. This is single-node durability +
+# self-recovery (distinct from cluster fault tolerance, which is nats-cluster-failover).
+services:
+  nats:
+    image: nats:latest
+    command: -c /etc/nats/nats.conf
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - ./configs/nats/nats.conf:/etc/nats/nats.conf
+      - nats-data:/data/jetstream
+
+  runtime:
+    image: foliage-systest-runtime:latest
+    build:
+      context: ../../..
+      dockerfile: samples/simple/Dockerfile
+    command: /usr/bin/foliage -ll 5
+    env_file: ./.env
+    depends_on:
+      - nats
+
+volumes:
+  nats-data:

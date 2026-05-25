@@ -1,0 +1,39 @@
+# backup-restore topology: one NATS + a foliage runtime + an `io` nats-box
+# (ships the `nats` CLI used to back up / restore the JetStream account).
+#
+# The test seeds a known graph, takes a JetStream account backup, wipes all
+# streams/KV, restores from the backup, restarts the runtime, and asserts the
+# graph is exactly what was backed up — the durability round-trip. (The
+# write-barrier that makes a backup consistent under live writes is covered by
+# the in-process unit test statefun/cache/backup_barrier_test.go; here the seed
+# is quiesced before backup so the snapshot is a clean point.)
+services:
+  nats:
+    image: nats:latest
+    command: -c /etc/nats/nats.conf
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - ./configs/nats/nats.conf:/etc/nats/nats.conf
+      - nats-data:/data/jetstream
+
+  io:
+    image: natsio/nats-box:latest
+    entrypoint: ["/bin/sh"]
+    tty: true
+    depends_on:
+      - nats
+
+  runtime:
+    image: foliage-systest-runtime:latest
+    build:
+      context: ../../..
+      dockerfile: samples/simple/Dockerfile
+    command: /usr/bin/foliage -ll 5
+    env_file: ./.env
+    depends_on:
+      - nats
+
+volumes:
+  nats-data:
