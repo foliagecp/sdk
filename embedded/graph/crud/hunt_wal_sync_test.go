@@ -65,6 +65,10 @@ func Test_Hunt_WAL_SecondRuntimeSyncsState(t *testing.T) {
 	rtA, cancelA := mkRT(true)
 	defer cancelA()
 	require.Truef(t, waitUntil(30*time.Second, rtA.IsActiveInstance), "first runtime must become active")
+	// IsActiveInstance can flip true before Start finishes wiring the request
+	// path (isReady is set late), so a write fired in that gap fails with
+	// "runtime has not started yet". Gate on readiness, not just active role.
+	require.Truef(t, waitUntil(30*time.Second, rtA.IsReady), "first runtime must become ready to serve requests")
 
 	dbcA, err := db.NewDBSyncClientFromRequestFunction(rtA.Request)
 	require.NoError(t, err)

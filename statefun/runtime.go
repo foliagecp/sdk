@@ -789,6 +789,17 @@ func (r *Runtime) IsActiveInstance() bool {
 	return r.config.isActiveInstance
 }
 
+// IsReady reports whether Start has finished bringing the runtime up to the
+// point where it can serve Request/Signal. It is set true late in Start (after
+// streams, subscriptions and the startup snapshot), so it can lag
+// IsActiveInstance — callers that need to send traffic should gate on this, not
+// just on active ownership. Useful as a readiness probe (health checks, tests
+// waiting for a freshly started runtime). Request/Signal already reject calls
+// made before this is true.
+func (r *Runtime) IsReady() bool {
+	return r.isReady.Load()
+}
+
 func (r *Runtime) setActiveInstance(active bool) {
 	r.activeInstanceMu.Lock()
 	defer r.activeInstanceMu.Unlock()
