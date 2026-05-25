@@ -85,18 +85,26 @@ func (dm *Domain) runTransactionCommitter(ctx context.Context, ready chan struct
 	}
 	lg.Logln(lg.TraceLevel, "KV marked as inconsistent, will process pending transactions")
 
-	_, err := dm.js.AddConsumer(WALCommitsStreamName, &nats.ConsumerConfig{
-		Name:           consumerName,
-		Durable:        consumerName,
-		DeliverSubject: consumerName,
-		DeliverGroup:   consumerName + "-group",
-		FilterSubject:  commitSubject,
-		AckPolicy:      nats.AckExplicitPolicy,
-		AckWait:        commitAckWait,
-		MaxDeliver:     commitMaxDeliver,
-		MaxAckPending:  1,
+	// Retry on transient cluster-formation errors; an already-existing consumer
+	// is success.
+	err := retryStartupJS(context.Background(), "WAL consumer "+consumerName, func() error {
+		_, e := dm.js.AddConsumer(WALCommitsStreamName, &nats.ConsumerConfig{
+			Name:           consumerName,
+			Durable:        consumerName,
+			DeliverSubject: consumerName,
+			DeliverGroup:   consumerName + "-group",
+			FilterSubject:  commitSubject,
+			AckPolicy:      nats.AckExplicitPolicy,
+			AckWait:        commitAckWait,
+			MaxDeliver:     commitMaxDeliver,
+			MaxAckPending:  1,
+		})
+		if e != nil && !errors.Is(e, nats.ErrConsumerNameAlreadyInUse) {
+			return e
+		}
+		return nil
 	})
-	if err != nil && !errors.Is(err, nats.ErrConsumerNameAlreadyInUse) {
+	if err != nil {
 		lg.Logf(lg.ErrorLevel, "TransactionCommitter failed to create consumer: %s", err)
 		return err
 	}

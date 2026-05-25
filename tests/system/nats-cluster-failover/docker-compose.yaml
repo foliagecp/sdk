@@ -37,6 +37,15 @@ services:
       - ./configs/nats/nats3.conf:/etc/nats/nats.conf
       - nats-data3:/data/jetstream
 
+  io:
+    image: natsio/nats-box:latest
+    entrypoint: ["/bin/sh"]
+    tty: true
+    depends_on:
+      - nats1
+      - nats2
+      - nats3
+
   runtime:
     image: foliage-systest-cluster-runtime:latest
     build:

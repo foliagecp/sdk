@@ -26,9 +26,13 @@ over with the cluster.
 
 This test is **skipped by default**. A 3-node JetStream RAFT cluster needs enough
 CPU to hold a steady leader/quorum; under constrained Docker (e.g. Docker Desktop
-on a busy laptop) the cluster flaps during formation and the runtime can't reach
-readiness (`NewDomain` JetStream operations time out / report "temporarily
-unavailable"). It is reliable on a multi-core / multi-host CI.
+on a busy laptop) the cluster flaps **near-continuously** during formation, and
+the runtime can't reach readiness even though `/healthz` and a one-off R=3
+placement probe pass. It is reliable on a multi-core / multi-host CI.
+
+`run.sh` already does what it can to be robust: it starts the cluster first,
+waits for all nodes to be JetStream-healthy, and **probes real R=3 stream
+placement** (create+delete a replicated test stream) before starting the runtime.
 
 Run it explicitly:
 
@@ -36,7 +40,17 @@ Run it explicitly:
 RUN_CLUSTER_TESTS=1 tests/system/nats-cluster-failover/run.sh
 ```
 
-Related SDK hardening: startup now retries transient JetStream-unavailable errors
-during stream/subscription creation (`retryTransientJS` in `statefun/runtime.go`),
-so a runtime survives a brief cluster election rather than aborting. The deeper
-`NewDomain` startup path is not yet covered by that retry.
+## Related SDK hardening (committed)
+
+Runtime **startup now retries transient JetStream errors across the whole
+path** — `AccountInfo`, KV-bucket creation, system/function stream creation, the
+WAL consumer, and signal subscriptions (`retryStartupJS` /
+`isStartupTransientJSError` in `statefun/runtime.go`, applied in
+`statefun/domain.go` and `statefun/wal.go`). A runtime joining a still-electing
+cluster retries (up to `JS_STARTUP_RETRY_TIMEOUT_SEC`, default 60) instead of
+aborting — real resilience for production clusters surviving a leader election.
+On a healthy single node this is a no-op (the first call succeeds).
+
+This does **not** make the cluster itself stable on a CPU-starved host: if the
+RAFT group can't hold quorum long enough for the runtime's multi-step startup,
+retries eventually exhaust. That is the environment limit this test documents.

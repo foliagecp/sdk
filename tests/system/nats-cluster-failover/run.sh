@@ -39,16 +39,30 @@ build_assert
 echo ">> building cluster runtime image if needed"
 dc build runtime || fail "image build failed"
 
-echo ">> starting the 3-node NATS cluster FIRST (runtime must not start before"
-echo "   JetStream forms a meta leader, or NewRuntime times out creating R=3 streams)"
-dc up -d nats1 nats2 nats3 || fail "cluster up failed"
+echo ">> starting the 3-node NATS cluster + io FIRST (runtime must not start"
+echo "   before the cluster can actually place R=3 streams)"
+dc up -d nats1 nats2 nats3 io || fail "cluster up failed"
 
 echo ">> waiting for all 3 cluster nodes to be JetStream-healthy (meta leader + current)"
 for p in 8222 8223 8224; do
   wait_http "http://localhost:${p}/healthz" 120 || fail "NATS node on :${p} did not become healthy"
 done
-echo ">> cluster healthy; settling before starting the runtime"
-sleep 8
+
+# Placement probe: /healthz only says a node is current — it does NOT prove the
+# cluster can place a REPLICATED stream. Create+delete an R=3 test stream until
+# it succeeds, so we start the runtime only once R=3 placement actually works.
+echo ">> probing R=3 stream placement (cluster must be able to replicate)"
+NURL_INT="nats://nats:foliage@nats1:4222"
+probe_ok=no
+probe_deadline=$((SECONDS + 150))
+while [ "$SECONDS" -lt "$probe_deadline" ]; do
+  if dc exec -T io sh -c "nats stream add __probe --subjects '__probe.>' --replicas 3 --defaults --server=$NURL_INT >/dev/null 2>&1 && nats stream rm -f __probe --server=$NURL_INT >/dev/null 2>&1"; then
+    probe_ok=yes; break
+  fi
+  sleep 3
+done
+[ "$probe_ok" = "yes" ] || fail "cluster could not place an R=3 stream (cluster never stabilized)"
+echo ">> R=3 placement works; starting the runtime"
 
 echo ">> starting the runtime against the ready cluster"
 dc up -d runtime || fail "runtime up failed"

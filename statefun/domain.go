@@ -74,8 +74,17 @@ type streamConfig struct {
 }
 
 func NewDomain(nc *nats.Conn, js nats.JetStreamContext, desiredHubDomainName string, ftSC, sysSC, kvSC, traceSC streamConfig) (dm *Domain, e error) {
-	accInfo, err := js.AccountInfo()
-	if err != nil {
+	// First JetStream call of startup; retry transient cluster-formation errors
+	// so joining a still-electing cluster does not abort runtime creation.
+	var accInfo *nats.AccountInfo
+	if err := retryStartupJS(context.Background(), "AccountInfo", func() error {
+		ai, e := js.AccountInfo()
+		if e != nil {
+			return e
+		}
+		accInfo = ai
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 
@@ -296,20 +305,29 @@ func (dm *Domain) CreateObjectIDWithHubDomain(objectID string, domainReplace boo
 func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDomainRouters bool) error {
 	bucketName := fmt.Sprintf("%s_%s_cache_bucket", dm.name, cacheConfig.GetId())
 
-	// Create application key value store bucket if does not exist --
-	if existingKV, err := dm.js.KeyValue(bucketName); err == nil {
-		dm.kv = existingKV
-	} else {
-		var err error
-		dm.kv, err = kv.CreateKeyValue(dm.nc, dm.js, &nats.KeyValueConfig{
+	// Create application key value store bucket if does not exist. Retry on
+	// transient cluster-formation errors so a runtime joining a still-electing
+	// JetStream cluster does not abort startup.
+	if err := retryStartupJS(ctx, "kvBucket "+bucketName, func() error {
+		if existingKV, e := dm.js.KeyValue(bucketName); e == nil {
+			dm.kv = existingKV
+			return nil
+		} else if isStartupTransientJSError(e) {
+			return e // cluster not ready — retry rather than try to create
+		}
+		newKV, e := kv.CreateKeyValue(dm.nc, dm.js, &nats.KeyValueConfig{
 			Bucket:   bucketName,
 			Replicas: dm.kvSC.replicasCount,
 			MaxBytes: dm.kvSC.maxBytes,
 			TTL:      dm.kvSC.maxAge,
 		})
-		if err != nil {
-			return err
+		if e != nil {
+			return e
 		}
+		dm.kv = newKV
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	// --------------------------------------------------------------
@@ -637,17 +655,21 @@ func (dm *Domain) createStreamIfNotExists(sc *nats.StreamConfig) error {
 	/* Each stream contains a single subject (topic).
 	 * Differently named stream with overlapping subjects cannot exist!
 	 */
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	var existingStreams []string
-	for info := range dm.js.StreamsInfo(nats.Context(ctx)) {
-		existingStreams = append(existingStreams, info.Config.Name)
-	}
-	if !slices.Contains(existingStreams, sc.Name) {
+	// Retried on transient cluster-formation errors; each attempt uses a fresh
+	// (generous) per-op deadline so one slow election does not abort startup.
+	return retryStartupJS(context.Background(), "createStream "+sc.Name, func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		var existingStreams []string
+		for info := range dm.js.StreamsInfo(nats.Context(ctx)) {
+			existingStreams = append(existingStreams, info.Config.Name)
+		}
+		if slices.Contains(existingStreams, sc.Name) {
+			return nil
+		}
 		_, err := dm.js.AddStream(sc)
 		return err
-	}
-	return nil
+	})
 	// --------------------------------------------------------------
 }
 

@@ -401,7 +401,7 @@ var jsStartupRetryTimeout = time.Duration(system.GetEnvMustProceed[int]("JS_STAR
 // isTransientJSError reports whether a JetStream error is a transient cluster-
 // availability condition — no leader/quorum yet, an election in progress — that
 // clears on its own, as opposed to a real config/logic error which must surface
-// immediately.
+// immediately. Safe to retry at any time.
 func isTransientJSError(err error) bool {
 	if err == nil {
 		return false
@@ -411,28 +411,53 @@ func isTransientJSError(err error) bool {
 		strings.Contains(s, "no responders")
 }
 
-// retryTransientJS runs op, retrying with backoff while it returns a transient
-// JetStream error, up to jsStartupRetryTimeout. This keeps a freshly started
+// isStartupTransientJSError additionally treats conditions that occur while a
+// clustered JetStream is still forming / electing — request timeouts, missing
+// leader, no placement peers yet — as transient. These are only safe to retry
+// during the bounded STARTUP window: in steady state a deadline/placement error
+// is a real problem, but during formation it just means "not ready yet".
+func isStartupTransientJSError(err error) bool {
+	if isTransientJSError(err) {
+		return true
+	}
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "deadline exceeded") ||
+		strings.Contains(s, "no suitable peers") ||
+		strings.Contains(s, "no leader") ||
+		strings.Contains(s, "leadership")
+}
+
+// retryJS runs op, retrying with backoff while it returns an error the transient
+// predicate accepts, up to jsStartupRetryTimeout. It keeps a freshly started
 // runtime from aborting when a (clustered) JetStream is briefly unavailable
 // during an election or initial formation; permanent errors return at once.
-func retryTransientJS(ctx context.Context, what string, op func() error) error {
+func retryJS(ctx context.Context, what string, transient func(error) bool, op func() error) error {
 	deadline := time.Now().Add(jsStartupRetryTimeout)
 	for attempt := 1; ; attempt++ {
 		err := op()
-		if !isTransientJSError(err) {
-			return err // nil (success) or a permanent error
-		}
-		if time.Now().After(deadline) {
-			lg.Logf(lg.ErrorLevel, "%s: JetStream still unavailable after %s of retries: %s", what, jsStartupRetryTimeout, err)
+		if err == nil || !transient(err) {
 			return err
 		}
-		lg.Logf(lg.WarnLevel, "%s: JetStream temporarily unavailable (attempt %d), retrying: %s", what, attempt, err)
+		if time.Now().After(deadline) {
+			lg.Logf(lg.ErrorLevel, "%s: JetStream still failing after %s of retries: %s", what, jsStartupRetryTimeout, err)
+			return err
+		}
+		lg.Logf(lg.WarnLevel, "%s: transient JetStream error (attempt %d), retrying: %s", what, attempt, err)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+// retryStartupJS retries on the broad startup-transient set (use only on the
+// runtime startup path: stream / consumer / KV-bucket / subscription creation).
+func retryStartupJS(ctx context.Context, what string, op func() error) error {
+	return retryJS(ctx, what, isStartupTransientJSError, op)
 }
 
 // createStreams ensures that the necessary NATS streams exist.
@@ -451,7 +476,7 @@ func (r *Runtime) createStreams(ctx context.Context) error {
 		if ft.config.IsSignalProviderAllowed(sfPlugins.JetstreamGlobalSignal) {
 			if !contains(existingStreams, ft.getStreamName()) {
 				streamName := ft.getStreamName()
-				err := retryTransientJS(ctx, "createStreams "+streamName, func() error {
+				err := retryStartupJS(ctx, "createStreams "+streamName, func() error {
 					_, e := r.js.AddStream(&nats.StreamConfig{
 						Name:      streamName,
 						Subjects:  []string{ft.subject},
@@ -528,7 +553,7 @@ func (r *Runtime) startFunctionSubscriptions(ctx context.Context, revisions map[
 			}
 		}
 
-		if err := retryTransientJS(ctx, "startSubscriptions "+ft.name, ft.startSubscriptions); err != nil {
+		if err := retryStartupJS(ctx, "startSubscriptions "+ft.name, ft.startSubscriptions); err != nil {
 			return err
 		}
 	}
