@@ -393,6 +393,48 @@ func (r *Runtime) GetNatsConnection() *nats.Conn {
 	return r.nc
 }
 
+// jsStartupRetryTimeout bounds how long startup JetStream operations (stream /
+// consumer / subscription creation) keep retrying a transient cluster-
+// availability error before giving up. Tunable via JS_STARTUP_RETRY_TIMEOUT_SEC.
+var jsStartupRetryTimeout = time.Duration(system.GetEnvMustProceed[int]("JS_STARTUP_RETRY_TIMEOUT_SEC", 60)) * time.Second
+
+// isTransientJSError reports whether a JetStream error is a transient cluster-
+// availability condition — no leader/quorum yet, an election in progress — that
+// clears on its own, as opposed to a real config/logic error which must surface
+// immediately.
+func isTransientJSError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "temporarily unavailable") ||
+		strings.Contains(s, "no responders")
+}
+
+// retryTransientJS runs op, retrying with backoff while it returns a transient
+// JetStream error, up to jsStartupRetryTimeout. This keeps a freshly started
+// runtime from aborting when a (clustered) JetStream is briefly unavailable
+// during an election or initial formation; permanent errors return at once.
+func retryTransientJS(ctx context.Context, what string, op func() error) error {
+	deadline := time.Now().Add(jsStartupRetryTimeout)
+	for attempt := 1; ; attempt++ {
+		err := op()
+		if !isTransientJSError(err) {
+			return err // nil (success) or a permanent error
+		}
+		if time.Now().After(deadline) {
+			lg.Logf(lg.ErrorLevel, "%s: JetStream still unavailable after %s of retries: %s", what, jsStartupRetryTimeout, err)
+			return err
+		}
+		lg.Logf(lg.WarnLevel, "%s: JetStream temporarily unavailable (attempt %d), retrying: %s", what, attempt, err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
 // createStreams ensures that the necessary NATS streams exist.
 func (r *Runtime) createStreams(ctx context.Context) error {
 	logger := lg.NewLogger(lg.Options{ReportCaller: true, Level: lg.InfoLevel})
@@ -408,14 +450,18 @@ func (r *Runtime) createStreams(ctx context.Context) error {
 	for _, ft := range r.registeredFunctionTypes {
 		if ft.config.IsSignalProviderAllowed(sfPlugins.JetstreamGlobalSignal) {
 			if !contains(existingStreams, ft.getStreamName()) {
-				_, err := r.js.AddStream(&nats.StreamConfig{
-					Name:      ft.getStreamName(),
-					Subjects:  []string{ft.subject},
-					Retention: nats.InterestPolicy,
-					Replicas:  r.Domain.ftSC.replicasCount,
-					MaxMsgs:   r.Domain.ftSC.maxMsgs,
-					MaxBytes:  r.Domain.ftSC.maxBytes,
-					MaxAge:    r.Domain.ftSC.maxAge,
+				streamName := ft.getStreamName()
+				err := retryTransientJS(ctx, "createStreams "+streamName, func() error {
+					_, e := r.js.AddStream(&nats.StreamConfig{
+						Name:      streamName,
+						Subjects:  []string{ft.subject},
+						Retention: nats.InterestPolicy,
+						Replicas:  r.Domain.ftSC.replicasCount,
+						MaxMsgs:   r.Domain.ftSC.maxMsgs,
+						MaxBytes:  r.Domain.ftSC.maxBytes,
+						MaxAge:    r.Domain.ftSC.maxAge,
+					})
+					return e
 				})
 				if err != nil {
 					logger.Errorf(context.TODO(), "Failed to add stream: %v", err)
@@ -482,7 +528,7 @@ func (r *Runtime) startFunctionSubscriptions(ctx context.Context, revisions map[
 			}
 		}
 
-		if err := ft.startSubscriptions(); err != nil {
+		if err := retryTransientJS(ctx, "startSubscriptions "+ft.name, ft.startSubscriptions); err != nil {
 			return err
 		}
 	}

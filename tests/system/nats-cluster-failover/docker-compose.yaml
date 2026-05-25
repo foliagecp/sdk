@@ -1,0 +1,55 @@
+# nats-cluster-failover topology: a real 3-node NATS cluster (RAFT, JetStream
+# replicated R=3, each node its own volume) + one foliage runtime in cluster
+# mode. Reuses the samples/cluster runtime and per-node nats configs.
+#
+# This is fault tolerance through redundancy: killing ONE of the three NATS
+# nodes leaves quorum (2/3) and a replica of every stream, so the system keeps
+# serving with no data loss; the node then rejoins and re-syncs. (Single-node
+# store self-recovery is the separate nats-restart-recovery test.)
+services:
+  nats1:
+    image: nats:latest
+    command: -c /etc/nats/nats.conf
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - ./configs/nats/nats1.conf:/etc/nats/nats.conf
+      - nats-data1:/data/jetstream
+
+  nats2:
+    image: nats:latest
+    command: -c /etc/nats/nats.conf
+    ports:
+      - "4223:4222"
+      - "8223:8222"
+    volumes:
+      - ./configs/nats/nats2.conf:/etc/nats/nats.conf
+      - nats-data2:/data/jetstream
+
+  nats3:
+    image: nats:latest
+    command: -c /etc/nats/nats.conf
+    ports:
+      - "4224:4222"
+      - "8224:8222"
+    volumes:
+      - ./configs/nats/nats3.conf:/etc/nats/nats.conf
+      - nats-data3:/data/jetstream
+
+  runtime:
+    image: foliage-systest-cluster-runtime:latest
+    build:
+      context: ../../..
+      dockerfile: samples/cluster/Dockerfile
+    command: /usr/bin/foliage -ll 5
+    env_file: ./.env
+    depends_on:
+      - nats1
+      - nats2
+      - nats3
+
+volumes:
+  nats-data1:
+  nats-data2:
+  nats-data3:
