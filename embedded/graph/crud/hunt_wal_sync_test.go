@@ -86,6 +86,11 @@ func Test_Hunt_WAL_SecondRuntimeSyncsState(t *testing.T) {
 	// Second runtime joins the same NATS/KV/domain and must sync the object.
 	rtB, cancelB := mkRT(false)
 	defer cancelB()
+	// Wait until rtB is fully started before touching its cache: Start builds the
+	// cache store in a goroutine, so reading Domain.Cache() mid-construction
+	// races with it (Store.rootValue). IsReady is set after construction (it is
+	// reached by passive instances too — only subscriptions are active-only).
+	require.Truef(t, waitUntil(30*time.Second, rtB.IsReady), "second runtime must become ready")
 
 	synced := waitUntil(30*time.Second, func() bool {
 		if rtB.Domain == nil || rtB.Domain.Cache() == nil {
