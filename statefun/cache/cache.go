@@ -181,12 +181,25 @@ func (csv *StoreValue) Put(value interface{}, updateInKV bool, customPutTime int
 	csv.Lock("Put")
 	key := csv.keyInParent
 
-	csv.value = value
-	csv.valueExists = true
-	csv.purgeState = 0
 	if customPutTime < 0 {
 		customPutTime = system.GetCurrentTimeNs()
 	}
+	// Last-writer-wins by op time. The KV watch re-applies PUTs asynchronously
+	// (storeUpdatesHandler, with IgnoreDeletes) carrying their ORIGINAL op
+	// time, so a create's PUT can arrive after a newer delete already landed.
+	// Without this guard that stale PUT resurrects a deleted key — e.g. a
+	// dangling `__object` enumeration entry after a concurrent object delete.
+	// Delete deliberately keeps the (tombstoned) node with its delete time for
+	// exactly this comparison; Put must honour it. A strictly older write is
+	// dropped; equal/newer writes apply.
+	if customPutTime < csv.valueUpdateTime {
+		csv.Unlock("Put")
+		return
+	}
+
+	csv.value = value
+	csv.valueExists = true
+	csv.purgeState = 0
 	csv.valueUpdateTime = customPutTime
 	csv.syncedWithKV = !updateInKV
 
@@ -286,7 +299,13 @@ func (csv *StoreValue) Range(f func(key, value interface{}) bool) {
 }
 
 func (csv *StoreValue) SetValueType(valueType uint8) {
+	// valueType is read under csv.RLock in the GetValue/GetValueJSON paths, and
+	// written from both in-process ops and the async KV-watch re-apply, so the
+	// write must take the lock too — otherwise it's a data race (and a torn
+	// type read could mis-decode a value).
+	csv.Lock("SetValueType")
 	csv.valueType = valueType
+	csv.Unlock("SetValueType")
 }
 
 func (csv *StoreValue) syncState() (bool, int64, bool) {
