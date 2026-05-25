@@ -164,6 +164,25 @@ go get github.com/foliagecp/sdk
 - Find out how to write your own application [here](./docs/how_to_write_an_application.md)
 - Measure performance with guidance [here](./docs/performance_measures.md)
 
+### Testing
+
+The SDK ships an extensive test suite (unit, component, integration, client-API
+contract, adversarial/`-race` hunts, container E2E, and planned docker-compose
+system tests). See the [testing guide](./docs/TESTING.md) for what exists, the
+coverage snapshot, the test map, and how to run everything.
+
+Run the full suite:
+
+```sh
+scripts/run-all-tests.sh        # serial, reliable; add --race or --coverage
+```
+
+Or just the Go tests during development:
+
+```sh
+go test ./...
+```
+
 ## Technology Stack
 
 Foliage relies on a versatile technology stack that includes:

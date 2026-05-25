@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+#
+# run-all-tests.sh — full Foliage SDK test run.
+#
+# Phase 1 (now):     Go tests (unit / component / integration) via `go test`.
+# Phase 2 (planned): docker-compose system tests, executed one by one.
+#
+# See docs/TESTING.md for the full picture, the test map and the roadmap.
+#
+# Usage:
+#   scripts/run-all-tests.sh [--race] [--coverage] [--quick] [--go-only] [--system-only]
+#
+#   --race        run Go tests under the race detector (slower)
+#   --coverage    write a merged coverage profile (coverage.out) over ./...
+#   --quick       run Go packages in parallel (fast, but embedded-NATS suites
+#                 may flake under contention; default is serial for reliability)
+#   --go-only     skip the system-test phase
+#   --system-only skip the Go-test phase
+#
+set -uo pipefail
+
+cd "$(dirname "$0")/.."
+
+RACE=""
+COVER=""
+PARALLEL="-p 1"      # serial packages by default: embedded-NATS suites contend in parallel
+GO_ONLY=0
+SYSTEM_ONLY=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --race)        RACE="-race" ;;
+    --coverage)    COVER="-coverprofile=coverage.out -coverpkg=./..." ;;
+    --quick)       PARALLEL="" ;;
+    --go-only)     GO_ONLY=1 ;;
+    --system-only) SYSTEM_ONLY=1 ;;
+    -h|--help)     sed -n '2,20p' "$0"; exit 0 ;;
+    *) echo "unknown flag: $arg (see --help)"; exit 2 ;;
+  esac
+done
+
+fail=0
+
+# -----------------------------------------------------------------------------
+# Phase 1 — Go tests
+# -----------------------------------------------------------------------------
+if [ "$SYSTEM_ONLY" -eq 0 ]; then
+  echo "=================================================================="
+  echo "Phase 1: Go tests  (go test ${PARALLEL} -count=1 ${RACE} ${COVER} ./...)"
+  echo "=================================================================="
+  # shellcheck disable=SC2086
+  if go test ${PARALLEL} -count=1 ${RACE} ${COVER} ./...; then
+    echo ">> Go tests: PASS"
+  else
+    echo ">> Go tests: FAIL"
+    fail=1
+  fi
+  if [ -n "$COVER" ] && [ -f coverage.out ]; then
+    echo ">> Coverage summary:"
+    go tool cover -func=coverage.out | tail -n 1
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+# Phase 2 — docker-compose system tests (planned)
+#
+# Convention (target): each system test lives in tests/system/<name>/ and exposes
+# an executable run.sh that brings its docker-compose project up, asserts, and
+# tears it down (exit 0 == pass). They run sequentially so they do not contend.
+# -----------------------------------------------------------------------------
+if [ "$GO_ONLY" -eq 0 ]; then
+  echo "=================================================================="
+  echo "Phase 2: system tests (docker-compose)"
+  echo "=================================================================="
+  SYS_DIR="tests/system"
+  if [ -d "$SYS_DIR" ] && compgen -G "$SYS_DIR/*/run.sh" > /dev/null; then
+    for run in "$SYS_DIR"/*/run.sh; do
+      name="$(basename "$(dirname "$run")")"
+      echo "------------------------------------------------------------------"
+      echo ">> system test: ${name}"
+      if bash "$run"; then
+        echo ">> ${name}: PASS"
+      else
+        echo ">> ${name}: FAIL"
+        fail=1
+      fi
+    done
+  else
+    echo ">> No system tests present yet (${SYS_DIR}/*/run.sh)."
+    echo ">> See docs/TESTING.md \"Roadmap\" for the planned system-test map."
+  fi
+fi
+
+echo "=================================================================="
+if [ "$fail" -eq 0 ]; then
+  echo "ALL TESTS PASSED"
+else
+  echo "SOME TESTS FAILED"
+fi
+echo "=================================================================="
+exit "$fail"
