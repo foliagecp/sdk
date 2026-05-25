@@ -2,11 +2,11 @@ Here's the content with issues fixed and presented in a single Markdown file:
 
 # Basic Test Sample
 
-The basic test sample provides a single stateful function called "`functions.tests.basic.master`". The documentation about the basic test sample can be found [here](https://pkg.go.dev/github.com/foliagecp/sdk/tests/basic/).
+The basic test sample provides a single stateful function called "`functions.tests.basic.master`". The documentation about the basic test sample can be found [here](https://pkg.go.dev/github.com/foliagecp/sdk/samples/basic/).
 
 ## Default Customization
 
-Basic customization is available via the corresponding `.env` file. For a detailed description of variables, refer [here](https://pkg.go.dev/github.com/foliagecp/sdk/tests/basic/#pkg-variables).
+Basic customization is available via the corresponding `.env` file. For a detailed description of variables, refer [here](https://pkg.go.dev/github.com/foliagecp/sdk/samples/basic/#pkg-variables).
 
 ### Calling a Stateful Function
 

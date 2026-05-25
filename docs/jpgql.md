@@ -165,7 +165,7 @@ Vertices whose `tags` array contains `staging` at depth=1:
 
 # Small test graph
 
-Small test graph shown on a picture below is created automatically on start in the [basic](./tests/basic.md) test sample:
+Small test graph shown on a picture below is created automatically on start in the [basic](./tests/basic.md) sample:
 ![Alt text](./pics/TestGraph.jpg)
 
 # Usage of JPGQL_CTRA (call tree result aggregation)

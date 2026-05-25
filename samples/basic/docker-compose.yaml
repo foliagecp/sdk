@@ -31,7 +31,7 @@ services:
       - nats
     build:
       context: ../..
-      dockerfile: tests/basic/Dockerfile
+      dockerfile: samples/basic/Dockerfile
     volumes:
       - .:/foliage
     stop_grace_period: 300s
