@@ -1,0 +1,28 @@
+# crud-soak topology: one NATS + one containerised foliage runtime. The test
+# drives sustained concurrent CRUD (many workers, disjoint id namespaces) for a
+# window, then asserts the runtime is still responsive and the graph invariant
+# holds — a real-deployment load/stability guard on top of the in-process
+# concurrency hunts.
+services:
+  nats:
+    image: nats:latest
+    command: -c /etc/nats/nats.conf
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - ./configs/nats/nats.conf:/etc/nats/nats.conf
+      - nats-data:/data/jetstream
+
+  runtime:
+    image: foliage-systest-runtime:latest
+    build:
+      context: ../../..
+      dockerfile: samples/simple/Dockerfile
+    command: /usr/bin/foliage -ll 5
+    env_file: ./.env
+    depends_on:
+      - nats
+
+volumes:
+  nats-data:

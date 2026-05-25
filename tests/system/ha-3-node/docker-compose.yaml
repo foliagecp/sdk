@@ -1,0 +1,46 @@
+# ha-3-node topology: one NATS + three foliage runtimes sharing the same domain
+# in active/passive mode (the SDK default). Exactly one acquires the KV runtime
+# lock and serves; the other two stand by.
+#
+# The image is built once (on runtime-a) and reused by runtime-b/runtime-c. Only
+# NATS publishes host ports — the assertion client talks to the cluster through
+# whichever runtime currently holds the lock, so the runtimes need no host ports.
+services:
+  nats:
+    image: nats:latest
+    command: -c /etc/nats/nats.conf
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - ./configs/nats/nats.conf:/etc/nats/nats.conf
+      - nats-data:/data/jetstream
+
+  runtime-a:
+    image: foliage-systest-runtime:latest
+    build:
+      context: ../../..
+      dockerfile: samples/simple/Dockerfile
+    command: /usr/bin/foliage -ll 5
+    env_file: ./.env
+    depends_on:
+      - nats
+
+  runtime-b:
+    image: foliage-systest-runtime:latest
+    command: /usr/bin/foliage -ll 5
+    env_file: ./.env
+    depends_on:
+      - nats
+      - runtime-a
+
+  runtime-c:
+    image: foliage-systest-runtime:latest
+    command: /usr/bin/foliage -ll 5
+    env_file: ./.env
+    depends_on:
+      - nats
+      - runtime-a
+
+volumes:
+  nats-data:

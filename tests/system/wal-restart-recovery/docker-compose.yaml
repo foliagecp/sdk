@@ -1,0 +1,29 @@
+# wal-restart-recovery topology: one NATS with a persistent JetStream store and
+# one containerised foliage runtime (samples/simple binary).
+#
+# The test hard-kills the runtime (SIGKILL, no drain) and restarts it, asserting
+# the graph is reconstructed from the persisted KV/WAL — i.e. committed data
+# survives an ungraceful crash, not just a clean shutdown.
+services:
+  nats:
+    image: nats:latest
+    command: -c /etc/nats/nats.conf
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - ./configs/nats/nats.conf:/etc/nats/nats.conf
+      - nats-data:/data/jetstream
+
+  runtime:
+    image: foliage-systest-runtime:latest
+    build:
+      context: ../../..
+      dockerfile: samples/simple/Dockerfile
+    command: /usr/bin/foliage -ll 5
+    env_file: ./.env
+    depends_on:
+      - nats
+
+volumes:
+  nats-data:

@@ -1,0 +1,34 @@
+# graceful-shutdown system test topology: one NATS (persistent JetStream) and
+# one containerised foliage runtime built from the samples/simple binary.
+#
+# The runtime runs as its own OS process, so run.sh can deliver a real SIGTERM
+# (docker compose stop) and observe the graceful-drain path that an in-process
+# `go test` cannot exercise (a process-wide signal there also kills embedded
+# NATS). The JetStream store is a named volume so committed state survives the
+# stop/restart and durability can be re-verified.
+services:
+  nats:
+    image: nats:latest
+    command: -c /etc/nats/nats.conf
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - ./configs/nats/nats.conf:/etc/nats/nats.conf
+      - nats-data:/data/jetstream
+
+  runtime:
+    image: foliage-systest-runtime:latest
+    build:
+      context: ../../..
+      dockerfile: samples/simple/Dockerfile
+    command: /usr/bin/foliage -ll 5
+    env_file: ./.env
+    depends_on:
+      - nats
+    # Give the drain path room; run.sh asserts the process actually exits 0
+    # (clean drain) well within this window rather than being SIGKILLed.
+    stop_grace_period: 30s
+
+volumes:
+  nats-data:

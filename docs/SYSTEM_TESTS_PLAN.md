@@ -7,7 +7,27 @@ OS-signal graceful shutdown, backup/restore, sustained load, and cross-domain
 behavior — i.e. the production-critical zones.
 
 See [TESTING.md](./TESTING.md) for the overall test strategy and the Go-test
-inventory.
+inventory, and [`tests/README.md`](../tests/README.md) for the `integration/`
+vs `system/` split.
+
+## 0. Implementation status
+
+Implemented under `tests/system/` (each a docker-compose project + `run.sh`,
+run sequentially in Phase 2 of `scripts/run-all-tests.sh`):
+
+| Test | Status |
+|---|---|
+| `graceful-shutdown` | **done** — real SIGTERM, asserts clean exit 0 + no committed op lost |
+| `wal-restart-recovery` | **done** — SIGKILL + restart, asserts graph reconstructed |
+| `ha-3-node` | **done** — 3 runtimes, kill nodes, asserts failover continuity + integrity |
+| `crud-soak` | **done** — sustained concurrent CRUD, asserts responsive + consistent |
+| `backup-restore` | **deferred** — needs backup/restore tooling first (no snapshot/restore API yet) |
+| `coherent-export` | **covered elsewhere** — already an integration test in `tests/integration/export` (testcontainers + PG/Neo4j dumpers); not duplicated here |
+| `cross-domain`, `load`, `nats-outage` | future |
+
+The shared harness (`tests/system/_lib/`) — a compose helper and the `assert`
+client over `clients/go/db` — is in place. The runtime image is reused from
+`samples/simple`. The sections below are the original design notes.
 
 ## 1. Why these are separate from `go test`
 

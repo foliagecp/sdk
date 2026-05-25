@@ -16,8 +16,8 @@ are the only non-pass/fail items (they measure, they do not gate).
 | **L2 Integration** | full runtime, embedded NATS | `go test` | CRUD end-to-end, signal/request, HA, WAL durability, triggers |
 | **L3 Client contract** | `db.DBSyncClient` end-to-end | `go test` | the public client surface consumers depend on |
 | **Adversarial hunts** | property / fault-injection / `-race` | `go test` | finds real bugs (state leaks, races, deadlocks) |
-| **E2E (containers)** | `tests/e2e`, `tests/export` | `go test` (testcontainers) | NATS containers, Postgres/Neo4j export dumpers |
-| **System (docker-compose)** | `tests/system/*` (**planned**) | `scripts/run-all-tests.sh` | graceful shutdown, load, HA-3-node, backup/restore, coherent export |
+| **Integration (containers)** | `tests/integration/{e2e,export}` | `go test` (testcontainers) | NATS containers, Postgres/Neo4j export dumpers |
+| **System (docker-compose)** | `tests/system/*` | `scripts/run-all-tests.sh` | graceful shutdown, crash/restart recovery, HA-3-node, CRUD soak |
 | **Benchmarks** | `Benchmark*` | `go test -bench` | performance guards (not pass/fail) |
 
 ## 2. What exists today
@@ -51,8 +51,9 @@ are the only non-pass/fail items (they measure, they do not gate).
 - **`statefun/cache`** — `store_value_lazy_test.go`, `backup_barrier_test.go`.
 - **`statefun/system`** — `keymutex_timeout_test.go`.
 - **`clients/go/db`** — `common_test.go`.
-- **`tests/e2e/test/{nats,runtime}`**, **`tests/export/pg_{high,low}_level/dumper`**
-  — testcontainers E2E (real NATS / Postgres).
+- **`tests/integration/e2e/test/{nats,runtime}`**,
+  **`tests/integration/export/pg_{high,low}_level/dumper`** — testcontainers
+  E2E (real NATS / Postgres).
 
 ### Bugs found by these tests (with permanent regression coverage)
 
@@ -137,46 +138,44 @@ go test -run '^$' -bench=. -benchmem ./...  # benchmarks (no pass/fail)
 - For reliable results run serially (`-p 1`, what the script does), one package
   at a time, and ensure no stale test/NATS processes are left over.
 
-## 6. Roadmap — docker-compose system tests
+## 6. Repository layout — where tests live
 
-The areas that cannot be exercised by `go test` (OS-signal graceful shutdown,
-multi-node HA, load/soak, full backup/restore, cross-domain) will be covered by
-**docker-compose driven system tests** that run **after** the Go tests, one by
-one (sequentially, so they do not contend), orchestrated by
-`scripts/run-all-tests.sh`.
+Tests are split by **how** they run; both kinds are executed by
+`scripts/run-all-tests.sh`. See [`tests/README.md`](../tests/README.md) for the
+full breakdown.
 
-The detailed, per-test plan (topology, steps, assertions, pass criteria,
-priorities) is in [SYSTEM_TESTS_PLAN.md](./SYSTEM_TESTS_PLAN.md).
+- **`samples/`** — demo docker-compose apps (`basic`, `simple`, `object`,
+  `cluster`, `distributed`, `backup-barrier`). Examples, **not** assertions.
+- **`tests/integration/`** — `go test` + testcontainers: real dependency
+  containers (NATS, Postgres, Neo4j) with the runtime **in-process**. Picked up
+  by `go test ./...` (Phase 1). Covers the export pipeline (`export/`) and
+  runtime-on-real-NATS (`e2e/`).
+- **`tests/system/<name>/`** — docker-compose projects, each with an executable
+  `run.sh` (up → assert → down, exit 0 == pass), run **sequentially** in Phase 2.
+  Here the **runtime itself runs in a container** (its own OS process), so these
+  cover what an in-process `go test` cannot.
 
-### Target repository layout
+The per-test design notes (topology, steps, assertions) are in
+[SYSTEM_TESTS_PLAN.md](./SYSTEM_TESTS_PLAN.md).
 
-- **`samples/`** — the demo docker-compose apps currently under `tests/`
-  (`basic`, `simple`, `object`, `cluster`, `distributed`, `backup-barrier`).
-  These are examples, not assertions, and will be moved out of `tests/`.
-- **`tests/`** — actual automated tests only:
-  - Go tests (as today),
-  - `tests/system/<name>/` — each a docker-compose project plus an executable
-    `run.sh` that brings it up, asserts, and tears it down (exit 0 == pass). The
-    runner discovers and executes these.
+### System tests (implemented) and the zones they cover
 
-### Planned system-test map (prod-critical zones)
-
-| Zone | Go-test status | System test (planned) |
+| Zone | Go-test status | System test (`tests/system/`) |
 |---|---|---|
-| CRUD correctness / idempotency | covered | full multi-service CRUD soak |
+| CRUD correctness / idempotency | covered | `crud-soak` (sustained concurrent CRUD) |
 | JPGQL (filters, multi-hop) | covered | — |
-| Concurrency (`-race`) | covered | — |
-| HA active/passive + recovery | covered (2 in-proc) | **HA 3-node** failover/leadership |
-| WAL durability / replication | covered (2 in-proc) | restart & replay across restart |
-| Backup write-barrier | covered (unit) | **full backup + restore** round-trip |
-| Graceful shutdown (drain) | not go-testable¹ | SIGTERM drain on real NATS |
-| Load / soak (degradation) | — | throughput + no-leak under sustained load |
-| Coherent export (PG/Neo4j) | covered (dumpers) | end-to-end export consistency |
-| Cross-domain / shadow objects | — | weak-cluster cross-domain link + JPGQL |
+| Concurrency (`-race`) | covered | exercised by `crud-soak` under load |
+| HA active/passive + recovery | covered (2 in-proc) | **`ha-3-node`** failover/continuity |
+| WAL durability across restart | covered (2 in-proc) | **`wal-restart-recovery`** (SIGKILL + restart) |
+| Graceful shutdown (drain) | not go-testable¹ | **`graceful-shutdown`** (real SIGTERM) |
+| Load / soak (degradation) | — | `crud-soak` (responsive + consistent after load) |
+| Coherent export (PG/Neo4j) | covered by `tests/integration/export` | — (already an integration test) |
+| Backup write-barrier | covered (unit) | — (needs backup tooling first; out of scope) |
+| Cross-domain / shadow objects | — | future (weak-cluster link + JPGQL) |
 
 ¹ The graceful-drain path is triggered only by a process-wide OS signal, which
 also crashes the embedded NATS server in `go test`; it must be tested against a
-real NATS instance in a subprocess/container.
+real NATS instance with the runtime in its own container.
 
 ## 7. CI guidance
 
