@@ -27,10 +27,11 @@ type statefunTestEnvironment struct {
 	runtimeCfg *statefun.RuntimeConfig
 	cacheCfg   *cache.Config
 	nc         *nats.Conn
+	jsStoreDir string
 }
 
 func newStatefunTestEnvironment() *statefunTestEnvironment {
-	srv := runServer()
+	srv, jsStoreDir := runServer()
 	// Single-instance (always-active) for tests: unit/integration suites do not
 	// exercise HA, and the active/passive KV-lock dance is what makes parallel
 	// `go test ./...` flaky ("Lost runtime lock, becoming passive") when many
@@ -44,6 +45,7 @@ func newStatefunTestEnvironment() *statefunTestEnvironment {
 		runtime:    mustNewRuntime(*runtimeConfig),
 		runtimeCfg: runtimeConfig,
 		cacheCfg:   cacheConfig,
+		jsStoreDir: jsStoreDir,
 	}
 }
 
@@ -123,12 +125,21 @@ func (env *statefunTestEnvironment) SetThisDomainPreffix(id string) string {
 }
 
 func (env *statefunTestEnvironment) cleanJetStreamStorage() error {
-	var sd string
+	// Remove the exact temp dir we created for this broker. Relying on
+	// JetStreamConfig().StoreDir leaks the empty parent because nats reports the
+	// "<dir>/jetstream" subdir, so RemoveAll on it leaves "<dir>" behind.
+	if env.jsStoreDir != "" {
+		if err := os.RemoveAll(env.jsStoreDir); err != nil {
+			return fmt.Errorf("unable to clean storage: %w", err)
+		}
+		return nil
+	}
 
+	// Fallback (no tracked dir): clean whatever the server reports.
+	var sd string
 	if config := env.srv.JetStreamConfig(); config != nil {
 		sd = config.StoreDir
 	}
-
 	if sd != "" {
 		if err := os.RemoveAll(sd); err != nil {
 			return fmt.Errorf("unable to clean storage: %w", err)
@@ -138,13 +149,28 @@ func (env *statefunTestEnvironment) cleanJetStreamStorage() error {
 	return nil
 }
 
-func runServer() *server.Server {
+// runServer starts an embedded NATS with JetStream and returns the server plus
+// the unique store dir it owns (empty if a temp dir could not be created).
+func runServer() (*server.Server, string) {
 	opts := natsservertest.DefaultTestOptions
 	opts.JetStream = true
 	// random port
 	opts.Port = -1
+	// Unique JetStream store per broker instance. DefaultTestOptions uses a
+	// FIXED shared dir ($TMPDIR/nats/jetstream); pointing two independent
+	// embedded brokers at one dir — parallel `go test`, or a killed-but-lingering
+	// broker plus a fresh one — makes nats-server nil-deref during JetStream
+	// recovery (checkForOrphanMsgs/checkStateForInterestStream). Each broker is a
+	// distinct server and, like a production NATS with its own volume, must own
+	// its store. Single-broker restart-on-the-same-store recovery is unaffected;
+	// Stop() removes this dir.
+	storeDir := ""
+	if dir, err := os.MkdirTemp("", "foliage-nats-js-"); err == nil {
+		opts.StoreDir = dir
+		storeDir = dir
+	}
 
-	return natsservertest.RunServer(&opts)
+	return natsservertest.RunServer(&opts), storeDir
 }
 
 func mustNewRuntime(cfg statefun.RuntimeConfig) *statefun.Runtime {
