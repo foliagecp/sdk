@@ -31,7 +31,11 @@ type statefunTestEnvironment struct {
 
 func newStatefunTestEnvironment() *statefunTestEnvironment {
 	srv := runServer()
-	runtimeConfig := statefun.NewRuntimeConfigSimple(srv.ClientURL(), defaultRuntimeName)
+	// Single-instance (always-active) for tests: unit/integration suites do not
+	// exercise HA, and the active/passive KV-lock dance is what makes parallel
+	// `go test ./...` flaky ("Lost runtime lock, becoming passive") when many
+	// embedded-NATS runtimes contend. Disabling it makes the harness deterministic.
+	runtimeConfig := statefun.NewRuntimeConfigSimple(srv.ClientURL(), defaultRuntimeName).SetActivePassiveMode(false)
 	cacheConfig := cache.NewCacheConfig(defaultCacheID)
 
 	return &statefunTestEnvironment{
