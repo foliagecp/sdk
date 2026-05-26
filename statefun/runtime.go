@@ -720,6 +720,18 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 	// Channel for async KV consistency check result (non-nil = check in progress)
 	var kvConsistencyCheck chan error
 
+	// Soft-TTL tolerance for the runtime lock. lastRuntimeLockRefresh is the last
+	// moment we KNOW we held it (initial acquisition or a successful refresh).
+	// A transient KV outage — e.g. the KV bucket stream briefly has no RAFT
+	// leader while a cluster node rejoins — makes KeyMutexLockUpdate fail even
+	// though the lock is still ours in KV. Demoting on that first failure needlessly
+	// drops every responder. We keep the lock across such failures until the
+	// soft-TTL elapses; only then may another instance legitimately seize it
+	// (see KeyMutexLock: a lock is stealable once lockTime+kvMutexLifeTimeSec<now),
+	// so that is exactly when we MUST step down to avoid split-brain.
+	lastRuntimeLockRefresh := time.Now()
+	lockSoftTTL := time.Duration(r.config.kvMutexLifeTimeSec) * time.Second
+
 	becomePassive := func(cause string) {
 		lg.Logf(lg.WarnLevel, "%s, becoming passive", cause)
 		r.activeInstanceMu.Lock()
@@ -757,10 +769,22 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 				if r.config.activeRevID != 0 {
 					newRevID, err := KeyMutexLockUpdate(ctx, r, system.GetHashStr(RuntimeName), r.config.activeRevID)
 					if err != nil {
-						becomePassive("Lost runtime lock")
-						continue
+						// A genuine release (the lock value was cleared) means
+						// another instance legitimately took over → step down now.
+						// A transient KV error (could not reach the bucket stream)
+						// leaves the lock ours; tolerate it until the soft-TTL
+						// since our last successful refresh elapses.
+						genuineLoss := strings.Contains(err.Error(), "already unlocked")
+						if genuineLoss || time.Since(lastRuntimeLockRefresh) >= lockSoftTTL {
+							becomePassive("Lost runtime lock")
+							continue
+						}
+						lg.Logf(lg.WarnLevel, "runtime lock refresh failed transiently (%v); keeping lock (%.1fs/%ds within soft-TTL)",
+							err, time.Since(lastRuntimeLockRefresh).Seconds(), r.config.kvMutexLifeTimeSec)
+					} else {
+						r.config.activeRevID = newRevID
+						lastRuntimeLockRefresh = time.Now()
 					}
-					r.config.activeRevID = newRevID
 				}
 
 				if r.IsActiveInstance() {
@@ -796,6 +820,7 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 					if err == nil {
 						lg.Logf(lg.DebugLevel, "Passive instance acquired lock, checking KV consistency")
 						r.config.activeRevID = newRevID
+						lastRuntimeLockRefresh = time.Now()
 						ch := make(chan error, 1)
 						kvConsistencyCheck = ch
 						go func() {
