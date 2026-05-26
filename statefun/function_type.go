@@ -320,7 +320,7 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 	case msgChannel <- msg:
 		ft.idHandlersLastMsgTime.Store(id, time.Now().UnixNano())
 		if wp := ft.sfWorkerPool.Load(); wp != nil {
-			wp.Notify()
+			wp.NotifyId(id)
 		}
 	default:
 		ft.TokenRelease()

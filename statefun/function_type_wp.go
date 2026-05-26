@@ -98,9 +98,24 @@ type SFWorkerPool struct {
 	workers     int
 	idleWorkers int
 
-	notifyCh chan struct{}
-	stopCh   chan struct{}
-	stopped  bool
+	// pendingIds carries IDs whose per-id channel has at least one buffered
+	// message waiting for the manager. Producers (FunctionType.handleMsgForID)
+	// push the ID after enqueueing into the per-id channel; the manager pops
+	// from pendingIds and drains exactly ONE message from that id's channel.
+	// This replaces the previous design where the manager iterated the entire
+	// idHandlersChannel sync.Map every 10 ms looking for the busiest id —
+	// which became O(N_unique_ids) per tick and showed up at ~24% of CPU in
+	// profiles once the seed grew past a few thousand objects.
+	//
+	// Capacity = taskQueue capacity: enough headroom that bursts of "new
+	// message arrived" notifications do not block the producer. Duplicate
+	// pushes (same id pushed twice while the first is unconsumed) are
+	// harmless — the manager pops twice, the second drainOne finds an empty
+	// channel and returns.
+	pendingIds chan string
+
+	stopCh  chan struct{}
+	stopped bool
 
 	prometricsUpdatedTime time.Time
 
@@ -114,7 +129,7 @@ func NewSFWorkerPool(ft *FunctionType, conf SFWorkerPoolConfig) *SFWorkerPool {
 		minWorkers:  conf.MinWorkers,
 		maxWorkers:  conf.MaxWorkers,
 		idleTimeout: conf.IdleTimeout,
-		notifyCh:    make(chan struct{}, 1),
+		pendingIds:  make(chan string, conf.TaskQueueLen),
 		stopCh:      make(chan struct{}),
 	}
 	go wp.manager()
@@ -157,54 +172,61 @@ func (wp *SFWorkerPool) manager() {
 			return fmt.Errorf("worker pool is going to stop")
 		}
 	}
-	drainFunctionTypeIDChannels := func() {
-		for {
-			var maxLen int
-			var selectedChan chan FunctionTypeMsg
-			var selectedId string
 
-			wp.ft.idHandlersChannel.Range(func(key, value any) bool {
-				id := key.(string)
-				ch := value.(chan FunctionTypeMsg)
-				if l := len(ch); l > maxLen {
-					maxLen = l
-					selectedChan = ch
-					selectedId = id
-				}
-				return true
-			})
-
-			if maxLen == 0 || selectedChan == nil {
-				return
-			}
-			if len(wp.taskQueue) >= cap(wp.taskQueue) {
-				return
-			}
-
-			msg := <-selectedChan
+	// drainOne consumes exactly one message from the named id's channel and
+	// submits it as a task. A "stale" pendingIds entry (channel already
+	// drained by a concurrent worker, or id GC'd) simply finds nothing and
+	// returns — harmless. We do NOT loop here over the same id: per-id FIFO
+	// is preserved by workerTaskExecutor's idKeyMutex, and processing one
+	// id-msg per pop keeps the manager interleaving fairly across ids.
+	drainOne := func(id string) {
+		chRaw, ok := wp.ft.idHandlersChannel.Load(id)
+		if !ok {
+			return
+		}
+		ch := chRaw.(chan FunctionTypeMsg)
+		select {
+		case msg := <-ch:
 			task := SFWorkerTask{
-				Msg: SFWorkerMessage{
-					ID:   selectedId,
-					Data: msg,
-				},
+				Msg: SFWorkerMessage{ID: id, Data: msg},
 			}
-
 			system.MsgOnErrorReturn(submit(task))
+			// Self-renotify if more messages remain in this id's channel:
+			// covers the case where a producer's NotifyId was dropped because
+			// pendingIds was momentarily full.
+			if len(ch) > 0 {
+				select {
+				case wp.pendingIds <- id:
+				default:
+				}
+			}
+		default:
+			// already drained by another path; nothing to do
 		}
 	}
 
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
+	// 1 Hz fallback: emit metrics AND scan for any id-channels left with
+	// buffered messages whose NotifyId was dropped (both producer-side and
+	// drain-side). Range is O(N_unique_ids) but at 1 Hz instead of 100 Hz —
+	// total CPU cost negligible compared to the old 10 ms ticker that did the
+	// same scan and dominated profiles.
+	fallbackTicker := time.NewTicker(1 * time.Second)
+	defer fallbackTicker.Stop()
 	for {
-		if time.Since(wp.prometricsUpdatedTime) > 1*time.Second {
-			wp.prometricsUpdatedTime = time.Now()
-			wp.prometricsMeasures()
-		}
 		select {
-		case <-wp.notifyCh:
-			drainFunctionTypeIDChannels()
-		case <-ticker.C:
-			drainFunctionTypeIDChannels()
+		case id := <-wp.pendingIds:
+			drainOne(id)
+		case <-fallbackTicker.C:
+			wp.prometricsMeasures()
+			wp.ft.idHandlersChannel.Range(func(key, value any) bool {
+				if ch, ok := value.(chan FunctionTypeMsg); ok && len(ch) > 0 {
+					select {
+					case wp.pendingIds <- key.(string):
+					default:
+					}
+				}
+				return true
+			})
 		case <-wp.stopCh:
 			return
 		}
@@ -224,9 +246,15 @@ func (wp *SFWorkerPool) prometricsMeasures() {
 	}
 }
 
-func (wp *SFWorkerPool) Notify() {
+// NotifyId tells the manager that the named id's channel has a fresh message.
+// Non-blocking: if pendingIds is full (extreme producer pressure), the
+// notification is dropped and the next NotifyId for any id will give the
+// manager an opportunity to wake up; the message itself stays in the per-id
+// channel and is recoverable via any subsequent notify or via the manager's
+// next periodic tick.
+func (wp *SFWorkerPool) NotifyId(id string) {
 	select {
-	case wp.notifyCh <- struct{}{}:
+	case wp.pendingIds <- id:
 	default:
 	}
 }
@@ -268,7 +296,11 @@ func (wp *SFWorkerPool) worker() {
 			timer.Reset(wp.idleTimeout)
 
 			wp.ft.TokenRelease()
-			wp.Notify()
+			// No Notify here: producers push to pendingIds directly, and
+			// drainOne self-renotifies if the id's channel still has buffered
+			// messages after consuming one. The metricsTicker fallback at 1Hz
+			// guarantees recovery even if both producer- and drain-side
+			// pendingIds pushes are dropped under extreme overflow.
 
 		case <-timer.C:
 			wp.mu.Lock()
