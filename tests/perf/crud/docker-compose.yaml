@@ -1,0 +1,30 @@
+# crud-perf topology: one NATS + one containerised foliage runtime
+# (samples/simple). Perf scenarios drive a known workload from the host via
+# the perfclient binary and record latency/throughput into a CSV.
+#
+# Single-node deployment by design — perf numbers under HA/cluster are a
+# separate concern; for now we measure the runtime's raw CRUD characteristics.
+services:
+  nats:
+    image: nats:latest
+    command: -c /etc/nats/nats.conf
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - ./configs/nats/nats.conf:/etc/nats/nats.conf
+      - nats-data:/data/jetstream
+
+  runtime:
+    image: foliage-systest-runtime:latest
+    build:
+      context: ../../..
+      dockerfile: samples/simple/Dockerfile
+    # -ll 4 (warn) keeps log spam out of the way during measurement.
+    command: /usr/bin/foliage -ll 4
+    env_file: ./.env
+    depends_on:
+      - nats
+
+volumes:
+  nats-data:
