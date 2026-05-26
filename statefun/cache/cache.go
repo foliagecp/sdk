@@ -4,7 +4,6 @@ package cache
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"regexp"
 	"sort"
@@ -19,21 +18,17 @@ import (
 
 	"github.com/foliagecp/easyjson"
 
-	customNatsKv "github.com/foliagecp/sdk/embedded/nats/kv"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
 )
 
-const (
-	// Flags 0 (delete) and 1 (append) are deprecated
-	//Deprecated
-	FlagDeletedOld uint8 = 0x00
-	//Deprecated
-	FlagAppendOld   uint8 = 0x01
-	FlagDeleted     uint8 = 0x02
-	FlagBytesAppend uint8 = 0x03
-	FlagJSONAppend  uint8 = 0x04
-)
+// Wire-format flags (FlagBytesAppend / FlagJSONAppend / FlagDeleted, plus the
+// two deprecated 0/1 variants) and the timestamp prefix on KV values were
+// removed in the cache-is-source-of-truth refactor. Cache writes go cache →
+// WAL → KV one-way; KV is a downstream sink (like the postgres exporter), so
+// the value bytes in KV are now the raw user payload with no header. If
+// multi-instance coherence is ever needed it must be solved by a separate
+// protocol, NOT by piggy-backing on KV-watch echoes.
 
 const (
 	//gracefully shutdown
@@ -46,11 +41,6 @@ var (
 	keyValidationRegexp *regexp.Regexp = regexp.MustCompile(`^[a-zA-Z0-9/=_$#@$%+-][a-zA-Z0-9/=._$#@%+-]+[a-zA-Z0-9/=_$#@%+-]$|^[a-zA-Z0-9/=_$#@%+-]*$`)
 )
 
-type KeyValue struct {
-	Key   interface{}
-	Value interface{}
-}
-
 // value types
 const (
 	typeByteArray = iota
@@ -62,9 +52,7 @@ type StoreValue struct {
 	keyInParent string
 	value       interface{}
 	valueExists bool
-	// 0 - do not purge, 1 - wait for KV update confirmation and go to state 2, 2 - purge
-	valueType  uint8
-	purgeState int
+	valueType   uint8
 	// store is the container of child nodes, allocated lazily on the first
 	// child insertion. A freshly created node — and every leaf, which is
 	// the overwhelming majority of nodes — keeps store == nil and carries
@@ -76,16 +64,16 @@ type StoreValue struct {
 	store           atomic.Pointer[system.ShardedMap]
 	valueUpdateTime int64
 	storeMutex      sync.RWMutex
-	notifyUpdates   sync.Map
-	syncedWithKV    bool
-}
-
-func notifySubscriber(c chan KeyValue, key interface{}, value interface{}) {
-	select {
-	case c <- KeyValue{Key: key, Value: value}:
-	default:
-		// drop if the buffer is full to avoid deadlock
-	}
+	// Note: the old `syncedWithKV bool` and `purgeState int` fields are gone.
+	// They existed for the two-phase delete protocol used to coordinate
+	// multiple cache instances over a shared KV via kv.Watch echoes. With KV
+	// now a one-way downstream sink and no continuous KV-watch, the cache
+	// owns its own state and can delete from the tree immediately.
+	//
+	// The old `notifyUpdates sync.Map` field is also gone — its sole users
+	// (SubscribeLevelCallback / UnsubscribeLevelCallback) had no callers
+	// anywhere in the codebase; a sync.Map header on every one of millions
+	// of cache nodes was pure dead weight.
 }
 
 func (csv *StoreValue) Lock(caller string) {
@@ -168,12 +156,6 @@ func (csv *StoreValue) StoreChild(key string, child *StoreValue) (actual *StoreV
 	if l {
 		return a.(*StoreValue), true
 	}
-
-	// New child — notify subscribers (outside the lock)
-	csv.notifyUpdates.Range(func(_, v interface{}) bool {
-		notifySubscriber(v.(chan KeyValue), key, child.value)
-		return true
-	})
 	return child, false
 }
 
@@ -184,14 +166,12 @@ func (csv *StoreValue) Put(value interface{}, updateInKV bool, customPutTime int
 	if customPutTime < 0 {
 		customPutTime = system.GetCurrentTimeNs()
 	}
-	// Last-writer-wins by op time. The KV watch re-applies PUTs asynchronously
-	// (storeUpdatesHandler, with IgnoreDeletes) carrying their ORIGINAL op
-	// time, so a create's PUT can arrive after a newer delete already landed.
-	// Without this guard that stale PUT resurrects a deleted key — e.g. a
-	// dangling `__object` enumeration entry after a concurrent object delete.
-	// Delete deliberately keeps the (tombstoned) node with its delete time for
-	// exactly this comparison; Put must honour it. A strictly older write is
-	// dropped; equal/newer writes apply.
+	// Last-writer-wins by op time, kept as defence-in-depth for in-process
+	// concurrent writes that supply explicit older timestamps (the previous
+	// reason for this guard — stale PUTs re-arriving via KV-watch echo — is
+	// gone with the cache-is-source-of-truth refactor). Delete keeps a
+	// tombstoned node with its delete time so a subsequent SetValue with an
+	// older customSetTime cannot resurrect it; equal/newer writes apply.
 	if customPutTime < csv.valueUpdateTime {
 		csv.Unlock("Put")
 		return
@@ -199,17 +179,9 @@ func (csv *StoreValue) Put(value interface{}, updateInKV bool, customPutTime int
 
 	csv.value = value
 	csv.valueExists = true
-	csv.purgeState = 0
 	csv.valueUpdateTime = customPutTime
-	csv.syncedWithKV = !updateInKV
-
-	if csv.parent != nil {
-		csv.parent.notifyUpdates.Range(func(_, v interface{}) bool {
-			notifySubscriber(v.(chan KeyValue), key, value)
-			return true
-		})
-	}
-
+	_ = updateInKV // kept in signature for callers; no longer affects local state
+	_ = key        // formerly used for parent-subscriber notifications; gone with notifyUpdates
 	csv.Unlock("Put")
 }
 
@@ -220,18 +192,12 @@ func (csv *StoreValue) collectGarbage() {
 	var canBeDeletedFromParent bool
 
 	csv.Lock("collectGarbage")
-
-	if !csv.valueExists && csv.storeLen() == 0 && csv.syncedWithKV {
-		csv.TryPurgeReady()
-		csv.TryPurgeConfirm()
-	}
-
-	noNotifySubscribers := true
-	csv.notifyUpdates.Range(func(_, _ interface{}) bool {
-		noNotifySubscribers = false
-		return false
-	})
-	canBeDeletedFromParent = csv.purgeState == 2 && csv.storeLen() == 0 && csv.syncedWithKV && noNotifySubscribers
+	// A tombstoned leaf with no children can be dropped from the tree right
+	// away. The old purge state machine (`purgeState` 0→1→2 gated on KV-watch
+	// echo confirmation) and the noNotifySubscribers guard (gated on the now-
+	// gone subscriber map) are both gone: the cache no longer waits for KV
+	// before reclaiming memory.
+	canBeDeletedFromParent = !csv.valueExists && csv.storeLen() == 0
 	csv.Unlock("collectGarbage")
 
 	if csv.parent != nil && canBeDeletedFromParent {
@@ -245,47 +211,23 @@ func (csv *StoreValue) collectGarbage() {
 	}
 }
 
-func (csv *StoreValue) TryPurgeReady() bool {
-	if csv.purgeState == 0 {
-		csv.purgeState = 1
-		return true
-	}
-	return false
-}
-
-func (csv *StoreValue) TryPurgeConfirm() bool {
-	if csv.syncedWithKV && csv.purgeState == 1 {
-		csv.purgeState = 2
-		return true
-	}
-	return false
-}
-
 func (csv *StoreValue) Delete(updateInKV bool, customDeleteTime int64) {
 	csv.Lock("Delete")
 	key := csv.keyInParent
-	// Cannot really remove this value from the parent's store map beacause of the time comparison when updates come from NATS KV
+	// We keep the node as a tombstone (valueExists=false, valueUpdateTime set)
+	// so an in-process Put with an explicitly older customSetTime cannot
+	// resurrect it through the Put LWW guard. collectGarbage removes the node
+	// from the parent's map on a later maintenance pass once there are no
+	// subscribers and no children.
 	csv.value = nil
 	csv.valueExists = false
 	if customDeleteTime < 0 {
 		customDeleteTime = system.GetCurrentTimeNs()
 	}
 	csv.valueUpdateTime = customDeleteTime
-	if updateInKV {
-		csv.purgeState = 1
-		csv.syncedWithKV = false
-	} else {
-		csv.purgeState = 2
-		csv.syncedWithKV = true
-	}
+	_ = updateInKV // kept in signature for callers; no longer affects local state
+	_ = key        // formerly used for parent-subscriber notifications; gone with notifyUpdates
 	csv.Unlock("Delete")
-
-	if csv.parent != nil {
-		csv.parent.notifyUpdates.Range(func(_, v interface{}) bool {
-			notifySubscriber(v.(chan KeyValue), key, nil)
-			return true
-		})
-	}
 }
 
 func (csv *StoreValue) Range(f func(key, value interface{}) bool) {
@@ -308,29 +250,6 @@ func (csv *StoreValue) SetValueType(valueType uint8) {
 	csv.Unlock("SetValueType")
 }
 
-func (csv *StoreValue) syncState() (bool, int64, bool) {
-	csv.RLock("syncState")
-	ve := csv.valueExists
-	vut := csv.valueUpdateTime
-	sw := csv.syncedWithKV
-	csv.RUnlock("syncState")
-	return ve, vut, sw
-}
-
-type TransactionOperator struct {
-	operatorType int // 0 - set, 1 - delete
-	key          string
-	value        []byte
-	updateInKV   bool
-	customTime   int64
-}
-
-type Transaction struct {
-	operators    []*TransactionOperator
-	beginCounter int
-	mutex        *sync.Mutex
-}
-
 type Store struct {
 	cacheConfig *Config
 	js          nats.JetStreamContext
@@ -341,13 +260,16 @@ type Store struct {
 	rootValue     *StoreValue
 	valuesInCache int
 
-	transactions      sync.Map
-	transactionsMutex *sync.Mutex
-
 	// walWriteEnabled - true for active instance
 	// only active instances can write to WAL streams
 	walWriteEnabled      atomic.Bool
 	transactionGenerator atomic.Pointer[TransactionGenerator]
+
+	// committedTxTime is the high-watermark of WAL transactions that have
+	// been durably applied to KV. Updated atomically by RecordCommittedTx
+	// from the transaction committer. Consumed by the backup-write-barrier
+	// readiness check (replaces the old per-node syncedWithKV scan).
+	committedTxTime atomic.Int64
 
 	// activeOps tracks in-flight write operations by opTime.
 	// key: int64 opTime, value: *atomic.Int32 (reference count).
@@ -369,8 +291,11 @@ type Store struct {
 }
 
 type maintenanceResult struct {
-	valueCount                   int
-	allBeforeBackupBarrierSynced bool
+	valueCount int
+	// Backup-barrier readiness is now determined by Store.committedTxTime,
+	// not by walking the cache. The old `allBeforeBackupBarrierSynced` flag
+	// was set by scanning every node for syncedWithKV; that machinery is
+	// gone with the cache-as-source-of-truth refactor.
 }
 
 // pendingTx accumulates ops for a single WAL transaction.
@@ -420,24 +345,151 @@ func (cs *Store) publishDirtyOp(writeTime int64, key string, opType OpType, fina
 	})
 }
 
-// serializeForWAL builds the WAL entry bytes: [8-byte timestamp][1-byte flag][payload]
-func serializeForWAL(writeTime int64, flag uint8, data []byte) []byte {
-	timeBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(timeBytes, uint64(writeTime))
-	header := append(timeBytes, flag)
-	return append(header, data...)
+// RecordCommittedTx is invoked by the WAL→KV transaction committer
+// (statefun.Domain.applyTransactionOps) after a transaction has been
+// durably written to KV. It advances the committedTxTime watermark
+// monotonically. The backup-write-barrier readiness check uses this
+// watermark instead of the old per-node syncedWithKV bit: a barrier set
+// at timestamp B is "ready to lock" once committedTxTime ≥ B (i.e. all
+// transactions issued before the barrier have landed in KV).
+func (cs *Store) RecordCommittedTx(txTime int64) {
+	for {
+		cur := cs.committedTxTime.Load()
+		if txTime <= cur {
+			return
+		}
+		if cs.committedTxTime.CompareAndSwap(cur, txTime) {
+			return
+		}
+	}
+}
+
+// CommittedTxTime returns the watermark — the largest tx timestamp known to
+// have been durably applied to KV by the committer.
+func (cs *Store) CommittedTxTime() int64 {
+	return cs.committedTxTime.Load()
+}
+
+// HasPendingWrites returns true if there are transactions buffered in the
+// cache that have not been published to the WAL stream yet. Used by
+// callers that need a "cache → WAL → KV is drained" barrier.
+func (cs *Store) HasPendingWrites() bool {
+	has := false
+	cs.pendingTxs.Range(func(_, _ any) bool {
+		has = true
+		return false
+	})
+	return has
+}
+
+// loadFromKV opens a KV watcher, replays the historical state into the cache
+// as either typed JSON or raw bytes (probed per-entry), then stops. Called
+// once at startup by NewCacheStore's initialLoader, and again from
+// RehydrateFromKV on every passive→active promotion (HA failover). Wire
+// format on KV is the raw user payload — no per-record header. The Put LWW
+// guard is a non-issue here because callers MUST guarantee no concurrent
+// in-process writes during a load (initial load runs before isReady;
+// rehydration runs while walWriteEnabled is false and no function handlers
+// are subscribed).
+//
+// Why we probe JSON-vs-bytes per entry: CMDB callers Set values either as
+// JSON (SetValueJSON, vertex bodies) or as bytes (SetValue, link targets and
+// index keys). That distinction is what later GetValueJSON/Exists/JPGQL rely
+// on to know whether a value is a JSON-typed body. Without it, e.g.
+// `ExistsJson(types/<T>)` returns false after restart and JPGQL enumerations
+// like [l:type('__object')] silently produce empty results. The probe is one
+// `easyjson.JSONFromBytes` per entry — cheap on a one-shot load.
+func (cs *Store) loadFromKV(ctx context.Context) error {
+	w, err := cs.kv.Watch(cs.cacheConfig.kvStorePrefix+".>", nats.IgnoreDeletes())
+	if err != nil {
+		return fmt.Errorf("kv.Watch: %w", err)
+	}
+	defer func() { system.MsgOnErrorReturn(w.Stop()) }()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case entry, ok := <-w.Updates():
+			if !ok {
+				return fmt.Errorf("kv watcher channel closed unexpectedly during load")
+			}
+			if entry == nil {
+				// End of historical replay — load complete.
+				return nil
+			}
+			key := cs.fromStoreKey(entry.Key())
+			valueBytes := entry.Value()
+			now := system.GetCurrentTimeNs()
+			// Empty value is a LEGITIMATE write, not a delete: CMDB writes
+			// index keys (e.g. <v>.out.index.<linkName>.type.<linkType>) with
+			// nil value because the information is encoded in the key shape
+			// alone. With IgnoreDeletes() the watcher already filters real
+			// tombstones, so any entry that arrives is a real key. Skipping
+			// empty values here previously dropped every link-type/tag index
+			// key on reload, which broke JPGQL enumeration after a restart
+			// (consistency check would return 0 members).
+			if len(valueBytes) == 0 {
+				cs.SetValue(key, valueBytes, false, now)
+				continue
+			}
+			// Probe: if the bytes are a valid JSON object, store as JSON so
+			// callers that distinguish typeJson vs typeByteArray (ExistsJson,
+			// JPGQL filters, GetValueJSON*) see the right type. Otherwise
+			// store as raw bytes. This restores the type semantics that CMDB
+			// originally wrote (SetValueJSON for vertex bodies, SetValue for
+			// link targets and index keys).
+			if jv, ok := easyjson.JSONFromBytes(valueBytes); ok && jv.IsObject() {
+				cs.SetValueJSON(key, &jv, false, now)
+			} else {
+				cs.SetValue(key, valueBytes, false, now)
+			}
+		}
+	}
+}
+
+// RehydrateFromKV drops the in-memory cache tree and reloads it from KV.
+// The runtime calls this on every passive→active promotion in HA mode: a
+// passive instance's cache is, by design, a stale snapshot frozen at the
+// moment its initial load completed (there is no continuous kv.Watch
+// reflecting subsequent active-side writes back). On promotion we must
+// reconcile the local cache with KV before serving any request, because
+// the just-departed active was writing to KV without our knowledge.
+//
+// Caller contract — MUST be guaranteed at the call site:
+//   - walWriteEnabled is false (this is what makes kvLazyWriter idle and
+//     unable to walk the tree concurrently);
+//   - isReady is false on the runtime, so function handlers are not
+//     serving requests and there are no in-process writes;
+//   - the runtime promotion path waits for committer to drain pending WAL
+//     transactions into KV BEFORE calling this — otherwise we would
+//     re-load a KV state that is missing transactions still buffered in
+//     the wal_commits stream.
+//
+// On error the cache is left empty; the caller should abort the promotion
+// (the runtime stays passive and will retry on the next tick).
+func (cs *Store) RehydrateFromKV(ctx context.Context) error {
+	// Atomic swap of the root's children-container — readers/writers that
+	// somehow still hold a child reference see a consistent old subtree
+	// (released to GC after they drop it). The root identity is kept so
+	// notifyUpdates subscribers stay valid.
+	cs.rootValue.store.Store(system.SharedMapMustNewHashed(shardCountForNewStore))
+	// Reset committed-tx watermark too — the new world starts from the
+	// state we are about to load, and any old in-process backup-barrier
+	// state is meaningless across a role transition.
+	cs.committedTxTime.Store(0)
+	return cs.loadFromKV(ctx)
 }
 
 // traverseCacheForMaintenance performs a DFS without collecting/publishing WAL
-// ops. It counts cache nodes (for the cache_values metric), runs GC on empty
-// leaves, and checks the backup barrier. Called infrequently (every N
-// iterations) by kvLazyWriter.
+// ops. It counts cache nodes (for the cache_values metric) and runs GC on
+// empty leaves. Called infrequently (every N iterations) by kvLazyWriter.
+//
+// Backup-barrier readiness is no longer decided here — it is a single watermark
+// comparison (Store.CommittedTxTime() ≥ barrierTimestamp), done by kvLazyWriter
+// at the same maintenance tick. This removed the previous full-tree scan that
+// touched every node's lock and syncedWithKV bit per maintenance cycle.
 func (cs *Store) traverseCacheForMaintenance() *maintenanceResult {
-	result := &maintenanceResult{
-		allBeforeBackupBarrierSynced: true,
-	}
-
-	backupBarrierTimestamp, backupBarrierStatus := cs.getBackupBarrierState()
+	result := &maintenanceResult{}
 
 	cacheStoreValueStack := []*StoreValue{cs.rootValue}
 	for len(cacheStoreValueStack) > 0 {
@@ -450,18 +502,7 @@ func (cs *Store) traverseCacheForMaintenance() *maintenanceResult {
 		noChildren := true
 		currentStoreValue.Range(func(key, value interface{}) bool {
 			noChildren = false
-			csvChild := value.(*StoreValue)
-
-			if backupBarrierStatus == BackupBarrierStatusLocking {
-				ve, vut, sw := csvChild.syncState()
-				if ve && vut > 0 && vut <= backupBarrierTimestamp {
-					if !sw {
-						result.allBeforeBackupBarrierSynced = false
-					}
-				}
-			}
-
-			cacheStoreValueStack = append(cacheStoreValueStack, csvChild)
+			cacheStoreValueStack = append(cacheStoreValueStack, value.(*StoreValue))
 			return true
 		})
 
@@ -485,12 +526,9 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 			parent:          nil,
 			value:           nil,
 			valueExists:     false,
-			purgeState:      0,
-			syncedWithKV:    true,
 			valueUpdateTime: -1,
 		},
-		valuesInCache:     0,
-		transactionsMutex: &sync.Mutex{},
+		valuesInCache: 0,
 
 		//barrier init
 		backupBarrierTimestamp:   0,
@@ -509,91 +547,15 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 	// default - can not publish to WAL
 	cs.walWriteEnabled.Store(false)
 
-	storeUpdatesHandler := func(cs *Store) {
-		system.GlobalPrometrics.GetRoutinesCounter().Started("cache.storeUpdatesHandler")
-		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("cache.storeUpdatesHandler")
-		if w, err := kv.Watch(cacheConfig.kvStorePrefix+".>", nats.IgnoreDeletes()); err == nil {
-			defer func() {
-				system.MsgOnErrorReturn(w.Stop())
-			}()
-			activeKVSync := true
-			for activeKVSync {
-				select {
-				case <-cs.ctx.Done():
-					activeKVSync = false
-				case entry, ok := <-w.Updates():
-					if !ok {
-						le.Warnf(ctx, "storeUpdatesHandler: KV watcher channel closed unexpectedly")
-						activeKVSync = false
-						break
-					}
-					if entry != nil {
-						key := cs.fromStoreKey(entry.Key())
-						valueBytes := entry.Value()
-						if len(valueBytes) >= 9 { // Update or delete signal from KV store
-							appendFlag := valueBytes[8]
-							kvRecordTime := int64(binary.BigEndian.Uint64(valueBytes[:8]))
-
-							cacheRecordTime := cs.GetValueUpdateTime(key)
-							if kvRecordTime > cacheRecordTime {
-								switch appendFlag {
-								case FlagAppendOld, FlagBytesAppend:
-									//lg.Logf("---CACHE_KV TF UPDATE: %s, %d, %d", key, kvRecordTime, appendFlag)
-									cs.SetValue(key, valueBytes[9:], false, kvRecordTime, "")
-								case FlagJSONAppend:
-									if json, ok := easyjson.JSONFromBytes(valueBytes[9:]); ok {
-										cs.SetValueJSON(key, &json, false, kvRecordTime, "")
-									} else {
-										le.Errorf(ctx, "Failed to parse JSON for key=%s", key)
-									}
-								default:
-									// Someone else (other module) deleted a key from the cache
-									//lg.Logf("---CACHE_KV TF DELETE: %s, %d, %d", key, kvRecordTime, appendFlag)
-
-									//system.MsgOnErrorReturn(kv.Delete(entry.Key()))
-									system.MsgOnErrorReturn(customNatsKv.KVDelete(cs.js, cs.kv, entry.Key()))
-
-									//cs.rootValue.purgeReady
-									//if csv := cs.getLastKeyCacheStoreValue(key); csv != nil {
-									//	csv.Purge(true)
-									//}
-								}
-							} else if kvRecordTime == cacheRecordTime { // KV confirms update
-								if appendFlag == FlagDeletedOld || appendFlag == FlagDeleted {
-									//system.MsgOnErrorReturn(kv.Delete(entry.Key()))
-									system.MsgOnErrorReturn(customNatsKv.KVDelete(cs.js, cs.kv, entry.Key()))
-								}
-								if csv := cs.getLastKeyCacheStoreValue(key); csv != nil {
-									csv.Lock("storeUpdatesHandler")
-									csv.syncedWithKV = true
-									csv.TryPurgeConfirm()
-									csv.Unlock("storeUpdatesHandler")
-								}
-								//lg.Logf("---CACHE_KV TF TOO OLD: %s, %d, %d", key, kvRecordTime, appendFlag)
-							}
-						} else if len(valueBytes) == 0 { // Complete delete signal from KV store
-							if csv := cs.getLastKeyCacheStoreValue(key); csv != nil {
-								csv.Lock("storeUpdatesHandler complete_delete")
-								csv.syncedWithKV = true
-								csv.TryPurgeReady()
-								csv.TryPurgeConfirm()
-								csv.Unlock("storeUpdatesHandler complete_delete")
-							}
-							//lg.Logf("---CACHE_KV EMPTY: %s", key)
-							// Deletion notify - omitting cause value must already be deleted from the cache
-						} else {
-							//lg.Logf("---CACHE_KV !T!F: %s", key)
-							le.Error(ctx, "storeUpdatesHandler: received value without time and append flag!")
-						}
-					} else {
-						if inited.CompareAndSwap(false, true) {
-							close(initChan)
-						}
-					}
-				}
-			}
-		} else {
-			le.Errorf(ctx, "storeUpdatesHandler kv.Watch error %s", err)
+	initialLoader := func(cs *Store) {
+		system.GlobalPrometrics.GetRoutinesCounter().Started("cache.initialLoader")
+		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("cache.initialLoader")
+		if err := cs.loadFromKV(cs.ctx); err != nil {
+			le.Errorf(ctx, "initial load from KV failed: %s", err)
+			return // initChan stays open → NewCacheStore blocks → caller must abort
+		}
+		if inited.CompareAndSwap(false, true) {
+			close(initChan)
 		}
 	}
 	kvLazyWriterWithWAL := func(cs *Store) {
@@ -666,7 +628,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 					var batchTimes []int64
 
 					for _, txTime := range pendingTimes {
-						if cs.HasActiveOperationsUpTo(txTime) {
+						if cs.hasActiveOperationsUpTo(txTime) {
 							break // earlier ops still in-flight — stop to preserve order
 						}
 						if err := cs.checkBackupBarrierInfoBeforeWrite(txTime); err != nil {
@@ -710,18 +672,21 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 					}
 				}
 
-				// SLOW PATH: maintenance DFS — node count, GC, backup barrier (every N iterations)
+				// SLOW PATH: maintenance — node count + GC (every N iterations).
+				// Backup-barrier readiness is now a single watermark comparison
+				// instead of a full-tree DFS that touched every node's lock.
+				// (reuses backupBarrierTimestamp / backupBarrierStatus read at
+				// the top of the iteration.)
+				if backupBarrierStatus == BackupBarrierStatusLocking &&
+					backupBarrierTimestamp > 0 &&
+					cs.CommittedTxTime() >= backupBarrierTimestamp {
+					cs.markCacheReadyForBackup()
+				}
+
 				maintenanceCounter++
-				if maintenanceCounter >= maintenanceInterval || backupBarrierStatus == BackupBarrierStatusLocking {
+				if maintenanceCounter >= maintenanceInterval {
 					maintenanceCounter = 0
 					maintResult := cs.traverseCacheForMaintenance()
-
-					if backupBarrierStatus == BackupBarrierStatusLocking {
-						if maintResult.allBeforeBackupBarrierSynced {
-							cs.markCacheReadyForBackup()
-						}
-					}
-
 					cs.valuesInCache = maintResult.valueCount
 
 					if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("cache_values", "", []string{"id"}); err == nil {
@@ -761,36 +726,10 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 			}
 		}
 	}
-	go storeUpdatesHandler(&cs)
+	go initialLoader(&cs)
 	go kvLazyWriterWithWAL(&cs)
 	<-initChan
 	return &cs
-}
-
-// key - level callback key, for e.g. "a.b.c.*"
-// callbackID - unique id for this subscription
-func (cs *Store) SubscribeLevelCallback(key string, callbackID string) chan KeyValue {
-	if _, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true); parentCacheStoreValue != nil {
-		onBufferOverflow := func() {
-			lg.Logf(lg.WarnLevel, "SubscribeLevelCallback SubscriptionNotificationsBuffer overflow for key=%s!", key)
-		}
-		callbackChannelIn, callbackChannelOut := system.CreateDimSizeChannel[KeyValue](cs.cacheConfig.levelSubscriptionNotificationsBufferMaxSize, onBufferOverflow)
-		parentCacheStoreValue.notifyUpdates.Store(callbackID, callbackChannelIn)
-
-		return callbackChannelOut
-	}
-	return nil
-}
-
-func (cs *Store) UnsubscribeLevelCallback(key string, callbackID string) {
-	if _, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, false); parentCacheStoreValue != nil {
-		if v, ok := parentCacheStoreValue.notifyUpdates.Load(callbackID); ok {
-			if callbackChannelIn, ok := v.(chan KeyValue); ok {
-				close(callbackChannelIn)
-			}
-		}
-		parentCacheStoreValue.notifyUpdates.Delete(callbackID)
-	}
 }
 
 func (cs *Store) GetValueUpdateTime(key string) int64 {
@@ -908,7 +847,10 @@ func (cs *Store) GetValueJSON(key string) (*easyjson.JSON, error) {
 				case typeJson:
 					result = csv.value.(*easyjson.JSON).Clone().GetPtr()
 				case typeByteArray:
-					lg.Logf(lg.WarnLevel, "Value for key=%s is []byte, converting to JSON", key)
+					// Cache entries loaded from KV at startup / rehydration are
+					// stored as raw bytes (typeByteArray); transparently parsing
+					// them to JSON on demand is the normal path now, not a bug
+					// signal — keep the conversion silent.
 					if json, ok := easyjson.JSONFromBytes(csv.value.([]byte)); ok {
 						result = &json
 					} else {
@@ -974,51 +916,17 @@ func (cs *Store) GetValueJSONByPath(key string, path string) (*easyjson.JSON, er
 	return result, resultError
 }
 
-func (cs *Store) TransactionBegin(transactionID string) {
-	if v, ok := cs.transactions.Load(transactionID); ok {
-		transaction := v.(*Transaction)
-		transaction.mutex.Lock()
-		transaction.beginCounter++
-		transaction.mutex.Unlock()
-	} else {
-		cs.transactions.Store(transactionID, &Transaction{operators: []*TransactionOperator{}, beginCounter: 1, mutex: &sync.Mutex{}})
-	}
-}
-
-func (cs *Store) TransactionEnd(transactionID string) {
-	if v, ok := cs.transactions.Load(transactionID); ok {
-		transaction := v.(*Transaction)
-		transaction.mutex.Lock()
-		transaction.beginCounter--
-		if transaction.beginCounter == 0 {
-			cs.transactionsMutex.Lock()
-			for _, op := range transaction.operators {
-				switch op.operatorType {
-				case 0:
-					cs.SetValue(op.key, op.value, op.updateInKV, op.customTime, "")
-				case 1:
-					cs.DeleteValue(op.key, op.updateInKV, op.customTime, "")
-				}
-			}
-			cs.transactionsMutex.Unlock()
-			cs.transactions.Delete(transactionID)
-		}
-		transaction.mutex.Unlock()
-	}
-}
-
 func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV bool, customSetTime int64) bool {
 	if keyLastToken, parent := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true); len(keyLastToken) > 0 && parent != nil {
 		candidate := &StoreValue{
-			value:       newValue,
-			valueExists: true, purgeState: 0,
-			syncedWithKV:    !updateInKV,
+			value:           newValue,
+			valueExists:     true,
 			valueUpdateTime: customSetTime,
 		}
 		actual, loaded := parent.StoreChild(keyLastToken, candidate)
 		if !loaded {
 			if updateInKV {
-				cs.publishDirtyOp(customSetTime, key, OpTypePUT, serializeForWAL(customSetTime, FlagBytesAppend, newValue))
+				cs.publishDirtyOp(customSetTime, key, OpTypePUT, newValue)
 			}
 			return true // created for the first time
 		}
@@ -1028,19 +936,10 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 		if !actual.valueExists && actual.value == nil {
 			actual.value = newValue
 			actual.valueExists = true
-			actual.purgeState = 0
 			actual.valueUpdateTime = customSetTime
-			actual.syncedWithKV = !updateInKV
-
-			if actual.parent != nil {
-				actual.parent.notifyUpdates.Range(func(_, v interface{}) bool {
-					notifySubscriber(v.(chan KeyValue), keyLastToken, actual.value)
-					return true
-				})
-			}
 			actual.Unlock("SetValueIfDoesNotExist")
 			if updateInKV {
-				cs.publishDirtyOp(customSetTime, key, OpTypePUT, serializeForWAL(customSetTime, FlagBytesAppend, newValue))
+				cs.publishDirtyOp(customSetTime, key, OpTypePUT, newValue)
 			}
 			return true
 		}
@@ -1049,98 +948,76 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 	return false
 }
 
-func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTime int64, transactionID string) bool {
+func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTime int64) bool {
 	if !keyValidationRegexp.MatchString(key) {
 		return false
 	}
-
 	if customSetTime < 0 {
 		customSetTime = system.GetCurrentTimeNs()
 	}
-	if len(transactionID) == 0 {
-		//lg.Logln(">>1 " + key)
-		if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
-			//lg.Logln(">>2 " + key)
-			var csvUpdate *StoreValue
-			if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
-				//lg.Logln(">>3 " + key)
-				csv.SetValueType(typeByteArray)
-				csv.Put(value, updateInKV, customSetTime)
-				if updateInKV {
-					cs.publishDirtyOp(customSetTime, key, OpTypePUT, serializeForWAL(customSetTime, FlagBytesAppend, value))
-				}
-			} else {
-				csvUpdate = &StoreValue{
-					value:       value,
-					valueExists: true, purgeState: 0, valueType: typeByteArray,
-					syncedWithKV:    !updateInKV,
-					valueUpdateTime: customSetTime,
-				}
-				actual, loaded := parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate)
-				if loaded && customSetTime >= actual.valueUpdateTime {
-					actual.SetValueType(typeByteArray)
-					actual.Put(value, updateInKV, customSetTime)
-				}
-				if updateInKV {
-					cs.publishDirtyOp(customSetTime, key, OpTypePUT, serializeForWAL(customSetTime, FlagBytesAppend, value))
-				}
-			}
-		}
+	keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true)
+	if len(keyLastToken) == 0 || parentCacheStoreValue == nil {
+		return true
+	}
+	if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
+		csv.SetValueType(typeByteArray)
+		csv.Put(value, updateInKV, customSetTime)
 	} else {
-		if v, ok := cs.transactions.Load(transactionID); ok {
-			transaction := v.(*Transaction)
-			transaction.mutex.Lock()
-			transaction.operators = append(transaction.operators, &TransactionOperator{operatorType: 0, key: key, value: value, updateInKV: updateInKV, customTime: customSetTime})
-			transaction.mutex.Unlock()
-		} else {
-			lg.Logf(lg.ErrorLevel, "SetValue: transaction with id=%s doesn't exist", transactionID)
+		csvUpdate := &StoreValue{
+			value:           value,
+			valueExists:     true,
+			valueType:       typeByteArray,
+			valueUpdateTime: customSetTime,
 		}
+		actual, loaded := parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate)
+		if loaded && customSetTime >= actual.valueUpdateTime {
+			actual.SetValueType(typeByteArray)
+			actual.Put(value, updateInKV, customSetTime)
+		}
+	}
+	if updateInKV {
+		cs.publishDirtyOp(customSetTime, key, OpTypePUT, value)
 	}
 	return true
 }
 
-func (cs *Store) SetValueJSON(key string, originValue *easyjson.JSON, updateInKV bool, customSetTime int64, transactionID string) bool {
+func (cs *Store) SetValueJSON(key string, originValue *easyjson.JSON, updateInKV bool, customSetTime int64) bool {
 	if !keyValidationRegexp.MatchString(key) {
 		return false
 	}
-
 	if customSetTime < 0 {
 		customSetTime = system.GetCurrentTimeNs()
 	}
-
-	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
-		value := originValue.Clone().GetPtr()
-		// Pre-serialize before any locks — reuse for WAL publish
-		var walBytes []byte
-		if updateInKV {
-			walBytes = serializeForWAL(customSetTime, FlagJSONAppend, originValue.ToBytes())
+	keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true)
+	if len(keyLastToken) == 0 || parentCacheStoreValue == nil {
+		return true
+	}
+	value := originValue.Clone().GetPtr()
+	// Pre-serialize before any locks — reuse for WAL publish. KV stores
+	// the raw JSON payload (no header) now.
+	var walBytes []byte
+	if updateInKV {
+		walBytes = originValue.ToBytes()
+	}
+	if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
+		csv.SetValueType(typeJson)
+		csv.Put(value, updateInKV, customSetTime)
+	} else {
+		csvUpdate := &StoreValue{
+			value:           value,
+			valueExists:     true,
+			valueType:       typeJson,
+			valueUpdateTime: customSetTime,
 		}
-		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
-			csv.SetValueType(typeJson)
-			csv.Put(value, updateInKV, customSetTime)
-			if updateInKV {
-				cs.publishDirtyOp(customSetTime, key, OpTypePUT, walBytes)
-			}
-		} else {
-			csvUpdate := &StoreValue{
-				value:           value,
-				valueExists:     true,
-				valueType:       typeJson,
-				purgeState:      0,
-				syncedWithKV:    !updateInKV,
-				valueUpdateTime: customSetTime,
-			}
-			actual, loaded := parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate)
-			if loaded && customSetTime >= actual.valueUpdateTime {
-				actual.SetValueType(typeJson)
-				actual.Put(value, updateInKV, customSetTime)
-			}
-			if updateInKV {
-				cs.publishDirtyOp(customSetTime, key, OpTypePUT, walBytes)
-			}
+		actual, loaded := parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate)
+		if loaded && customSetTime >= actual.valueUpdateTime {
+			actual.SetValueType(typeJson)
+			actual.Put(value, updateInKV, customSetTime)
 		}
 	}
-
+	if updateInKV {
+		cs.publishDirtyOp(customSetTime, key, OpTypePUT, walBytes)
+	}
 	return true
 }
 
@@ -1148,33 +1025,29 @@ func (cs *Store) Destroy() {
 	cs.cancel()
 }
 
-func (cs *Store) DeleteValue(key string, updateInKV bool, customDeleteTime int64, transactionID string) {
+func (cs *Store) DeleteValue(key string, updateInKV bool, customDeleteTime int64) {
 	if customDeleteTime < 0 {
 		customDeleteTime = system.GetCurrentTimeNs()
 	}
-	if len(transactionID) == 0 {
-		if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, false); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
-			if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
-				csv.RLock("DeleteValue probe")
-				exists := csv.valueExists
-				csv.RUnlock("DeleteValue probe")
-				if exists {
-					csv.Delete(updateInKV, customDeleteTime)
-					if updateInKV {
-						cs.publishDirtyOp(customDeleteTime, key, OpTypeDelete, serializeForWAL(customDeleteTime, FlagDeleted, nil))
-					}
-				}
-			}
-		}
-	} else {
-		if v, ok := cs.transactions.Load(transactionID); ok {
-			transaction := v.(*Transaction)
-			transaction.mutex.Lock()
-			transaction.operators = append(transaction.operators, &TransactionOperator{operatorType: 1, key: key, value: nil, updateInKV: updateInKV, customTime: customDeleteTime})
-			transaction.mutex.Unlock()
-		} else {
-			lg.Logf(lg.ErrorLevel, "DeleteValue: transaction with id=%s doesn't exist", transactionID)
-		}
+	keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, false)
+	if len(keyLastToken) == 0 || parentCacheStoreValue == nil {
+		return
+	}
+	csv, ok := parentCacheStoreValue.LoadChild(keyLastToken)
+	if !ok {
+		return
+	}
+	csv.RLock("DeleteValue probe")
+	exists := csv.valueExists
+	csv.RUnlock("DeleteValue probe")
+	if !exists {
+		return
+	}
+	csv.Delete(updateInKV, customDeleteTime)
+	if updateInKV {
+		// WAL DELETE op needs no value — the OpType tells the committer
+		// to issue a KV delete.
+		cs.publishDirtyOp(customDeleteTime, key, OpTypeDelete, nil)
 	}
 }
 
@@ -1273,8 +1146,6 @@ func (cs *Store) getLastKeyTokenAndItsParentCacheStoreValue(key string, createIf
 				csv := StoreValue{
 					value:           nil,
 					valueExists:     false,
-					purgeState:      0,
-					syncedWithKV:    true,
 					valueUpdateTime: system.GetCurrentTimeNs(),
 				}
 				actual, _ := currentStoreLevel.StoreChild(tokens[currentTokenID], &csv)
@@ -1286,21 +1157,6 @@ func (cs *Store) getLastKeyTokenAndItsParentCacheStoreValue(key string, createIf
 		currentTokenID++
 	}
 	return tokens[currentTokenID], currentStoreLevel
-}
-
-func (cs *Store) getLastKeyCacheStoreValue(key string) *StoreValue {
-	tokens := strings.Split(key, ".")
-	currentTokenID := 0
-	currentStoreLevel := cs.rootValue
-	for currentTokenID < len(tokens) {
-		if csv, ok := currentStoreLevel.LoadChild(tokens[currentTokenID]); ok {
-			currentStoreLevel = csv
-		} else {
-			return nil
-		}
-		currentTokenID++
-	}
-	return currentStoreLevel
 }
 
 func (cs *Store) toStoreKey(key string) string {
@@ -1366,9 +1222,9 @@ func (cs *Store) MarkOperationDone(opTime int64) {
 	}
 }
 
-// HasActiveOperationsUpTo returns true if there is at least one in-flight
+// hasActiveOperationsUpTo returns true if there is at least one in-flight
 // write operation whose opTime is ≤ barrierTime.
-func (cs *Store) HasActiveOperationsUpTo(barrierTime int64) bool {
+func (cs *Store) hasActiveOperationsUpTo(barrierTime int64) bool {
 	found := false
 	cs.activeOps.Range(func(k, _ any) bool {
 		if k.(int64) <= barrierTime {

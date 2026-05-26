@@ -125,6 +125,14 @@ func KeyMutexLock(ctx context.Context, runtime *Runtime, key string, errorOnLock
 	}
 }
 
+// ErrMutexRevisionViolated is returned by KeyMutexLockUpdate when the lock
+// entry in KV no longer carries our last-known revision id. That means some
+// other instance ran the lock-takeover path (mutexResetLock) and the lock is
+// now legitimately theirs; we must NOT try to overwrite it back, because
+// that would re-introduce a split-brain window where both instances think
+// they are active.
+var ErrMutexRevisionViolated = errors.New("mutex lock revision violated by another instance")
+
 func KeyMutexLockUpdate(ctx context.Context, runtime *Runtime, key string, lockRevisionID uint64) (uint64, error) {
 	le := lg.GetLogger()
 	kv := runtime.Domain.kv
@@ -135,19 +143,26 @@ func KeyMutexLockUpdate(ctx context.Context, runtime *Runtime, key string, lockR
 		return 0, err
 	}
 	if entry.Revision() != lockRevisionID {
+		// Another instance has touched our lock entry. Historically this was
+		// only a warning and the code then optimistically tried to overwrite
+		// the lock using the freshly-read revision — which let A "steal back"
+		// a lock that B had just legitimately seized, leading to split-brain
+		// (both A and B convinced they are active). Return a typed error so
+		// the runtime-lifecycle code can demote immediately without the
+		// "kept lock during soft-TTL window" tolerance.
 		le.Warnf(ctx, "Context mutex for key=%s with revision=%d was violated, new revision=%d!", key, lockRevisionID, entry.Revision())
+		return 0, ErrMutexRevisionViolated
 	}
 	lockTime := system.BytesToInt64(entry.Value())
-	if lockTime != 0 {
-		revId, err := kv.Update(keyMutex, system.Int64ToBytes(system.GetCurrentTimeNs()), entry.Revision())
-		if err != nil {
-			return 0, err
-		}
-		le.Tracef(ctx, "Updated %s", keyMutex)
-		return revId, err
-	} else {
+	if lockTime == 0 {
 		return 0, fmt.Errorf("Context mutex for key=%s was already unlocked", key)
 	}
+	revId, err := kv.Update(keyMutex, system.Int64ToBytes(system.GetCurrentTimeNs()), entry.Revision())
+	if err != nil {
+		return 0, err
+	}
+	le.Tracef(ctx, "Updated %s", keyMutex)
+	return revId, nil
 }
 
 func KeyMutexUnlock(ctx context.Context, runtime *Runtime, key string, lockRevisionID uint64) error {

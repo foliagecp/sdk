@@ -340,69 +340,6 @@ func Base64ToStr(base64Encoded string) string {
 	return string(xmlBytes)
 }
 
-func CreateDimSizeChannel[T interface{}](maxBufferElements int, onBufferOverflow func()) (in chan T, out chan T) {
-	in = make(chan T)
-	out = make(chan T)
-	notifier := make(chan struct{})
-	var mutex sync.Mutex
-
-	var buffer []T
-
-	puller := func() {
-		GlobalPrometrics.GetRoutinesCounter().Started("CreateDimSizeChannel-puller")
-		defer GlobalPrometrics.GetRoutinesCounter().Stopped("CreateDimSizeChannel-puller")
-		defer close(notifier) // notifier channel is being closed
-		for {
-			val, ok := <-in
-			if !ok { // in channel is closed
-				return
-			}
-			mutex.Lock()
-			buffer = append(buffer, val)
-			if len(buffer) > maxBufferElements {
-				if onBufferOverflow != nil {
-					go onBufferOverflow() // Call user's function in a separate routines
-				}
-			}
-			mutex.Unlock()
-
-			select {
-			case notifier <- struct{}{}:
-			default:
-				continue
-			}
-		}
-	}
-	pusher := func() {
-		GlobalPrometrics.GetRoutinesCounter().Started("CreateDimSizeChannel-pusher")
-		defer GlobalPrometrics.GetRoutinesCounter().Stopped("CreateDimSizeChannel-pusher")
-		defer close(out) // out channel is being closed
-		for {
-			mutex.Lock()
-			if len(buffer) == 0 {
-				mutex.Unlock()
-				_, ok := <-notifier
-				if !ok { // notifier channel is closed
-					return
-				}
-			} else {
-				v := buffer[0]
-				if len(buffer) == 1 {
-					buffer = nil
-				} else {
-					buffer = buffer[1:]
-				}
-				mutex.Unlock()
-				out <- v
-			}
-		}
-	}
-	go puller()
-	go pusher()
-
-	return
-}
-
 func MsgOnErrorReturn(retVars ...interface{}) {
 	le := lg.GetLogger()
 	for _, retVar := range retVars {

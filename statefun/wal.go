@@ -15,8 +15,6 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-var errTransactionAlreadyApplied = fmt.Errorf("transaction already applied by another runtime")
-
 const (
 	WALCommitsStreamName    = "wal_commits"
 	WALCommitsSubject       = "wal.commits.*"
@@ -156,6 +154,16 @@ func (dm *Domain) runTransactionCommitter(ctx context.Context, ready chan struct
 				lg.Logf(lg.ErrorLevel, "TransactionCommitter: failed to apply transaction %s: %s", txID, err)
 				system.MsgOnErrorReturn(msg.Nak())
 				return
+			}
+
+			// Advance the cache's "last committed tx" watermark. The
+			// backup-write-barrier readiness check uses this watermark
+			// instead of the old per-node syncedWithKV scan: a barrier set
+			// at time B is ready once the watermark ≥ B (i.e. every WAL
+			// transaction up to B has landed in KV). txID is the int64 tx
+			// timestamp formatted by cache.kvLazyWriter.
+			if txTime, perr := strconv.ParseInt(txID, 10, 64); perr == nil {
+				dm.cache.RecordCommittedTx(txTime)
 			}
 
 			lg.Logf(lg.TraceLevel, "TransactionCommitter: transaction %s completed, Ack()", txID)
@@ -360,6 +368,41 @@ func (dm *Domain) isKVConsistent() (bool, error) {
 	}
 
 	return string(entry.Value()) == "true", nil
+}
+
+// WaitForKVCaughtUp blocks until everything written through the cache has
+// landed in JetStream KV — both the cache has nothing left to publish to WAL
+// and the committer has no pending WAL messages left to apply. Returns nil on
+// success, ctx.Err() if cancelled, or an error if the timeout elapses with
+// pending work still present.
+//
+// In the cache-as-source-of-truth model, cache writes (SetValue / Delete)
+// return as soon as the in-memory state is updated; the WAL→committer→KV
+// chain is asynchronous. Callers that need a hard "writes are durable in KV"
+// barrier — backup tooling, HA-aware tests that hand off to a second runtime
+// joining the same KV, graceful-shutdown drains — use this.
+func (dm *Domain) WaitForKVCaughtUp(ctx context.Context, timeout time.Duration) error {
+	if dm.cache == nil {
+		return fmt.Errorf("cache is not initialised")
+	}
+	deadline := time.Now().Add(timeout)
+	consumerName := CommitterDurableName + "-" + dm.kv.Bucket()
+	for {
+		cachePending := dm.cache.HasPendingWrites()
+		committerPending := dm.countPendingCommits(consumerName)
+		if !cachePending && committerPending == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("KV not caught up within %s (cache_pending=%v committer_pending=%d)",
+				timeout, cachePending, committerPending)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 
 func (dm *Domain) countPendingCommits(consumerName string) int {

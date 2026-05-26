@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"os"
 	"os/signal"
 	"strings"
@@ -61,6 +62,18 @@ type Runtime struct {
 	afterStartFunctionsWaitGroup sync.WaitGroup
 	afterStartRunning            atomic.Bool
 	activeInstanceMu             sync.RWMutex
+
+	// cacheDirty drives the "rehydrate cache from KV before going active"
+	// decision. true means the cache snapshot may be out of date with KV.
+	//
+	// Initial value: true. NewCacheStore did an initial load, but between
+	// that load and our first lock acquisition any other active instance
+	// is free to keep writing to KV — there is no continuous kv.Watch in
+	// the cache-as-source-of-truth model, so we cannot prove our snapshot
+	// is current. Better to pay the cost of one reload than to serve stale
+	// reads. becomePassive() also sets it to true; it is cleared only by a
+	// successful RehydrateFromKV during a promotion.
+	cacheDirty atomic.Bool
 }
 
 type GracefulShutdown struct {
@@ -92,6 +105,12 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		shutdown:                   make(chan struct{}),
 		functionsStopCh:            make(chan struct{}),
 	}
+	// Default cacheDirty=true. Between NewCacheStore's initial load and our
+	// first lock acquisition any other active instance may have written to
+	// KV without our cache seeing it (the cache-as-source-of-truth model
+	// has no continuous kv.Watch). The first passive→active promotion will
+	// pay a RehydrateFromKV to guarantee a fresh snapshot before serving.
+	r.cacheDirty.Store(true)
 
 	natsOpts := nats.GetDefaultOptions()
 	natsOpts.Servers = strings.Split(r.config.natsURL, ",")
@@ -753,6 +772,11 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 			r.gs.cancelPhaseOne()
 		}
 		kvConsistencyCheck = nil
+		// While we sit passive, another instance can become active and mutate
+		// KV without our cache learning of it (the cache-as-source-of-truth
+		// model has no continuous kv.Watch). Mark the cache dirty so the next
+		// promotion does a full RehydrateFromKV before serving requests.
+		r.cacheDirty.Store(true)
 	}
 
 	for {
@@ -769,12 +793,29 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 				if r.config.activeRevID != 0 {
 					newRevID, err := KeyMutexLockUpdate(ctx, r, system.GetHashStr(RuntimeName), r.config.activeRevID)
 					if err != nil {
-						// A genuine release (the lock value was cleared) means
-						// another instance legitimately took over → step down now.
-						// A transient KV error (could not reach the bucket stream)
-						// leaves the lock ours; tolerate it until the soft-TTL
-						// since our last successful refresh elapses.
-						genuineLoss := strings.Contains(err.Error(), "already unlocked")
+						// Three classes of error, ranked safety-critical first:
+						//
+						//   1) ErrMutexRevisionViolated — the lock entry in KV
+						//      now carries someone else's revision id, i.e.
+						//      another instance legitimately seized the lock
+						//      while we couldn't refresh. We MUST demote
+						//      immediately or we get split-brain (both A and
+						//      B convinced they are active). NOT tolerated by
+						//      the soft-TTL window — strict safety beats
+						//      availability here.
+						//
+						//   2) "already unlocked" — explicit release path. Also
+						//      a genuine loss → demote.
+						//
+						//   3) Anything else — transient KV reachability error.
+						//      The lock is still ours in KV. Keep it through
+						//      the soft-TTL window since our last successful
+						//      refresh; demote only when that budget is
+						//      exhausted (at which point another instance
+						//      could lawfully seize the lock, so we MUST be
+						//      passive by then).
+						genuineLoss := errors.Is(err, ErrMutexRevisionViolated) ||
+							strings.Contains(err.Error(), "already unlocked")
 						if genuineLoss || time.Since(lastRuntimeLockRefresh) >= lockSoftTTL {
 							becomePassive("Lost runtime lock")
 							continue
@@ -824,7 +865,32 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 						ch := make(chan error, 1)
 						kvConsistencyCheck = ch
 						go func() {
-							ch <- r.Domain.checkKvConsistency(ctx)
+							// 1) Wait for the committer to drain pending WAL
+							//    transactions into KV — otherwise our cache
+							//    rehydrate below would read a KV that's
+							//    missing transactions still buffered in the
+							//    wal_commits stream.
+							if err := r.Domain.checkKvConsistency(ctx); err != nil {
+								ch <- err
+								return
+							}
+							// 2) Rehydrate the cache from KV if it may be
+							//    stale. A passive instance's cache is frozen
+							//    at the moment its initial load completed; any
+							//    other active that ran during our passive
+							//    spell wrote to KV without our cache knowing.
+							//    cacheDirty starts false (NewCacheStore did
+							//    the initial load) and is set true on every
+							//    becomePassive, so the very first promotion
+							//    after startup correctly skips this reload.
+							if r.cacheDirty.Load() {
+								if err := r.Domain.Cache().RehydrateFromKV(ctx); err != nil {
+									ch <- fmt.Errorf("cache rehydrate failed: %w", err)
+									return
+								}
+								r.cacheDirty.Store(false)
+							}
+							ch <- nil
 						}()
 					} else if !errors.Is(err, ErrMutexLocked) {
 						lg.Logf(lg.ErrorLevel, "KeyMutexLock failed for %s: %v", RuntimeName, err)
@@ -854,7 +920,12 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 						revisions[ftName] = newRevID
 						continue
 					}
-					if strings.Contains(err.Error(), "already unlocked") {
+					// Function-level lock: both "already unlocked" and
+					// ErrMutexRevisionViolated mean we no longer own this
+					// per-function token. Drop our stale revision so the
+					// next tryLock starts fresh.
+					if errors.Is(err, ErrMutexRevisionViolated) ||
+						strings.Contains(err.Error(), "already unlocked") {
 						revisions[ftName] = 0
 						tryLock(ftName)
 						continue

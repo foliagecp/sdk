@@ -1,7 +1,6 @@
 package statefun
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -31,17 +30,20 @@ const (
 	ExportEnabled = false
 
 	// --- WAL value format ---
-
-	// WAL values carry an 8-byte big-endian timestamp followed by a 1-byte flags field.
-	walValueHeaderSize     = 9
-	walFlagDeleted    byte = 0x02 // tombstone — entry was deleted
+	//
+	// Historically each WAL value was [8-byte timestamp][1-byte flag][payload].
+	// That header existed for multi-instance coherence over a shared KV via
+	// kv.Watch echo (time = LWW resolution, flag = "delete intent" tombstone).
+	// Both went away with the cache-as-source-of-truth refactor: KV is now a
+	// downstream sink, the WAL value is the raw user payload, and DELETE is
+	// signalled by WALOp.OpType, not by a flag byte.
 )
 
 // WALOp represents a raw operation from the WAL.
 type WALOp struct {
 	OpType string // cache.OpTypePUT or cache.OpTypeDelete
 	Key    string // Full KV key (with store prefix)
-	Value  []byte // Serialized data (9-byte header + payload)
+	Value  []byte // Raw payload (no header). nil for DELETE ops.
 }
 
 // ExportEvent is the semantic event published to the export stream.
@@ -407,43 +409,23 @@ func parseKey(key string, storePrefix string) *parsedKey {
 	}
 }
 
-// extractBody extracts the JSON body from a WAL value (strips 9-byte header).
+// extractBody returns the JSON body from a WAL value. The value is now the
+// raw user payload — no header to strip. DELETE ops carry no value (caller
+// already filters by op.OpType), so an empty value here means "no body".
 func extractBody(value []byte) json.RawMessage {
-	if len(value) <= walValueHeaderSize {
+	if len(value) == 0 {
 		return nil
 	}
-	flag := value[8]
-	if flag == walFlagDeleted {
-		return nil
-	}
-	data := value[walValueHeaderSize:]
-	if len(data) == 0 {
-		return nil
-	}
-	// Return a copy to avoid referencing the original slice
-	result := make(json.RawMessage, len(data))
-	copy(result, data)
+	// Return a copy to avoid referencing the original slice.
+	result := make(json.RawMessage, len(value))
+	copy(result, value)
 	return result
 }
 
-// extractTargetValue extracts a string value from a WAL value (strips 9-byte header).
+// extractTargetValue returns a string-typed WAL value (e.g. out-link target
+// id). The value is the raw payload — no header to strip.
 func extractTargetValue(value []byte) string {
-	if len(value) <= walValueHeaderSize {
-		return ""
-	}
-	flag := value[8]
-	if flag == walFlagDeleted {
-		return ""
-	}
-	return string(value[walValueHeaderSize:])
-}
-
-// ParseWALValueTimestamp extracts the timestamp from a WAL value header.
-func ParseWALValueTimestamp(value []byte) int64 {
-	if len(value) < 8 {
-		return 0
-	}
-	return int64(binary.BigEndian.Uint64(value[:8]))
+	return string(value)
 }
 
 func appendUnique(slice []string, val string) []string {

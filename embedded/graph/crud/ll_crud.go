@@ -202,7 +202,7 @@ func LLAPIVertexCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		objectBody = easyjson.NewJSONObject()
 	}
 
-	ctx.Domain.Cache().SetValueJSON(selfID, &objectBody, true, opTime, "")
+	ctx.Domain.Cache().SetValueJSON(selfID, &objectBody, true, opTime)
 
 	operationKeysMutexUnlock(ctx)
 
@@ -292,7 +292,7 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		return
 	}
 
-	ctx.Domain.Cache().SetValueJSON(selfID, &body, true, opTime, "")
+	ctx.Domain.Cache().SetValueJSON(selfID, &body, true, opTime)
 
 	operationKeysMutexUnlock(ctx)
 
@@ -377,7 +377,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		oldBody = getVertexBody(ctx, selfID)
 	}
 
-	ctx.Domain.Cache().DeleteValue(selfID, true, opTime, "") // Delete vertex's body
+	ctx.Domain.Cache().DeleteValue(selfID, true, opTime) // Delete vertex's body
 
 	operationKeysMutexUnlock(ctx)
 
@@ -486,8 +486,8 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 					}
 				}
 				if brokenTarget {
-					outLinkTypes = append(outLinkTypes, "")
-					outLinkIds = append(outLinkIds, "")
+					outLinkTypes = append(outLinkTypes)
+					outLinkIds = append(outLinkIds)
 				}
 			}
 			result.SetByPath("links.out.names", easyjson.NewJSON(outLinkNames))
@@ -574,7 +574,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if inLinkName, ok := payload.GetByPath("in_name").AsString(); ok && len(inLinkName) > 0 {
 			inLinkType := payload.GetByPath("in_type").AsStringDefault("")
 			if linkFromObjectUUID := getOriginalID(ctx.Caller.ID); len(linkFromObjectUUID) > 0 {
-				ctx.Domain.Cache().SetValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, selfID, linkFromObjectUUID, inLinkName), []byte(inLinkType), true, opTime, "")
+				ctx.Domain.Cache().SetValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, selfID, linkFromObjectUUID, inLinkName), []byte(inLinkType), true, opTime)
 				//fmt.Println("create vertex in link: ", selfID, linkFromObjectUUID)
 				om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONNull())).Reply()
 				return
@@ -645,7 +645,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 		// Create in link on descendant vertex --------------------
 		if ctx.Domain.GetDomainFromObjectID(toId) == ctx.Domain.Name() {
-			ctx.Domain.Cache().SetValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, toId, selfID, linkName), []byte(linkType), true, opTime, "")
+			ctx.Domain.Cache().SetValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, toId, selfID, linkName), []byte(linkType), true, opTime)
 		} else {
 			nextCallPayload := easyjson.NewJSONObject()
 			nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
@@ -663,22 +663,22 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 		// Create out link on this vertex -------------------------
 		// Set link target ------------------
-		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, selfID, linkName), []byte(fmt.Sprintf("%s.%s", linkType, toId)), true, opTime, "") // Store link body in KV
+		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, selfID, linkName), []byte(fmt.Sprintf("%s.%s", linkType, toId)), true, opTime) // Store link body in KV
 		// ----------------------------------
 		// Set link body --------------------
-		ctx.Domain.Cache().SetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName), &linkBody, true, opTime, "") // Store link body in KV
+		ctx.Domain.Cache().SetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName), &linkBody, true, opTime) // Store link body in KV
 		// ----------------------------------
 		// Set link type --------------------
-		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfID, linkType, toId), []byte(linkName), true, opTime, "") // Store link type
+		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfID, linkType, toId), []byte(linkName), true, opTime) // Store link type
 		// ----------------------------------
 		// Index link type ------------------
-		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff3Pattern, selfID, linkName, "type", linkType), nil, true, opTime, "")
+		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff3Pattern, selfID, linkName, "type", linkType), nil, true, opTime)
 		// ----------------------------------
 		// Index link tags ------------------
 		if payload.GetByPath("tags").IsNonEmptyArray() {
 			if linkTags, ok := payload.GetByPath("tags").AsArrayString(); ok {
 				for _, linkTag := range linkTags {
-					ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff3Pattern, selfID, linkName, "tag", linkTag), nil, true, opTime, "")
+					ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff3Pattern, selfID, linkName, "tag", linkTag), nil, true, opTime)
 				}
 			}
 		}
@@ -849,23 +849,23 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		// type index and all tag indices, then re-issues them below.
 		indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff2Pattern, selfID, linkName, ">"))
 		for _, indexKey := range indexKeys {
-			ctx.Domain.Cache().DeleteValue(indexKey, true, opTime, "")
+			ctx.Domain.Cache().DeleteValue(indexKey, true, opTime)
 		}
 		// ------------------------------------------------
 	}
 
 	// Create out link on this vertex -------------------------
 	// Set link body --------------------
-	ctx.Domain.Cache().SetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName), &linkBody, true, opTime, "") // Store link body in KV
+	ctx.Domain.Cache().SetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName), &linkBody, true, opTime) // Store link body in KV
 	// ----------------------------------
 	// Index link type ------------------
-	ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff3Pattern, selfID, linkName, "type", linkType), nil, true, opTime, "")
+	ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff3Pattern, selfID, linkName, "type", linkType), nil, true, opTime)
 	// ----------------------------------
 	// Index link tags ------------------
 	if payload.GetByPath("tags").IsNonEmptyArray() {
 		if linkTags, ok := payload.GetByPath("tags").AsArrayString(); ok {
 			for _, linkTag := range linkTags {
-				ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff3Pattern, selfID, linkName, "tag", linkTag), nil, true, opTime, "")
+				ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff3Pattern, selfID, linkName, "tag", linkTag), nil, true, opTime)
 			}
 		}
 	}
@@ -919,7 +919,7 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if inLinkName, ok := payload.GetByPath("in_name").AsString(); ok && len(inLinkName) > 0 {
 			if linkFromObjectUUID := getOriginalID(ctx.Caller.ID); len(linkFromObjectUUID) > 0 {
 				//fmt.Println("delete vertex in link: ", selfID, linkFromObjectUUID)
-				ctx.Domain.Cache().DeleteValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, selfID, linkFromObjectUUID, inLinkName), true, opTime, "")
+				ctx.Domain.Cache().DeleteValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, selfID, linkFromObjectUUID, inLinkName), true, opTime)
 				om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONNull())).Reply()
 				return
 			} else {
@@ -973,18 +973,18 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		// Remove all indices -----------------------------
 		indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff2Pattern, selfID, linkName, ">"))
 		for _, indexKey := range indexKeys {
-			ctx.Domain.Cache().DeleteValue(indexKey, true, opTime, "")
+			ctx.Domain.Cache().DeleteValue(indexKey, true, opTime)
 		}
 		// ------------------------------------------------
 
 		// Set link type --------------------
-		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfID, linkType, toId), true, opTime, "")
+		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfID, linkType, toId), true, opTime)
 		// ----------------------------------
 		// Delete link body -----------------
-		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName), true, opTime, "")
+		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName), true, opTime)
 		// ----------------------------------
 		// Delete link target ---------------
-		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, selfID, linkName), true, opTime, "")
+		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, selfID, linkName), true, opTime)
 		// ----------------------------------
 
 		// If this was the __type link of a CMDB object, invalidate the cached
@@ -1001,7 +1001,7 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 		// Delete in link on descendant vertex --------------------
 		if ctx.Domain.GetDomainFromObjectID(toId) == ctx.Domain.Name() {
-			ctx.Domain.Cache().DeleteValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, toId, selfID, linkName), true, opTime, "")
+			ctx.Domain.Cache().DeleteValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, toId, selfID, linkName), true, opTime)
 		} else {
 			nextCallPayload := easyjson.NewJSONObject()
 			nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))

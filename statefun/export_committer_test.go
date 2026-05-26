@@ -1,11 +1,9 @@
 package statefun
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/foliagecp/sdk/statefun/cache"
 	"github.com/stretchr/testify/assert"
@@ -14,25 +12,15 @@ import (
 
 const testStorePrefix = "store"
 
-// makeWALValue creates a WAL-formatted value with the 9-byte header.
-func makeWALValue(data []byte, flagByte byte) []byte {
-	ts := make([]byte, 8)
-	binary.BigEndian.PutUint64(ts, uint64(time.Now().UnixNano()))
-	header := append(ts, flagByte)
-	return append(header, data...)
-}
+// WAL values are now the raw user payload — no [time][flag][payload] header.
+// DELETE ops carry no value (the committer infers "this is a delete" from
+// WALOp.OpType). Helpers kept by name so existing test bodies need no churn.
 
-func makeJSONWALValue(jsonStr string) []byte {
-	return makeWALValue([]byte(jsonStr), 0x04) // FlagJSONAppend
-}
+func makeJSONWALValue(jsonStr string) []byte { return []byte(jsonStr) }
 
-func makeBytesWALValue(data string) []byte {
-	return makeWALValue([]byte(data), 0x03) // FlagBytesAppend
-}
+func makeBytesWALValue(data string) []byte { return []byte(data) }
 
-func makeDeletedWALValue() []byte {
-	return makeWALValue(nil, walFlagDeleted)
-}
+func makeDeletedWALValue() []byte { return nil }
 
 // --- parseKey tests ---
 
@@ -136,23 +124,18 @@ func TestExtractBody_Deleted(t *testing.T) {
 	assert.Nil(t, body)
 }
 
-func TestExtractBody_TooShort(t *testing.T) {
+func TestExtractBody_RawPayload(t *testing.T) {
+	// After the cache-as-source-of-truth refactor, WAL values are raw user
+	// payload — no header to strip, so a short non-empty value is returned
+	// as-is rather than rejected as "too short for header".
 	body := extractBody([]byte{1, 2, 3})
-	assert.Nil(t, body)
+	assert.Equal(t, json.RawMessage{1, 2, 3}, body)
 }
 
 func TestExtractTargetValue(t *testing.T) {
 	val := makeBytesWALValue("__object.hub/rackA")
 	target := extractTargetValue(val)
 	assert.Equal(t, "__object.hub/rackA", target)
-}
-
-func TestParseWALValueTimestamp(t *testing.T) {
-	ts := int64(1234567890)
-	val := make([]byte, 9)
-	binary.BigEndian.PutUint64(val[:8], uint64(ts))
-	val[8] = 0x04
-	assert.Equal(t, ts, ParseWALValueTimestamp(val))
 }
 
 // --- deduplicateOps tests ---

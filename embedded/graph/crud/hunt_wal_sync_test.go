@@ -3,8 +3,12 @@ package crud_test
 // Bug hunt: WAL/snapshot durability across instances.
 //
 // A second runtime joining the same NATS + domain must reconstruct the graph
-// written by the first (startup snapshot of existing KV + ongoing WAL/KV watch).
-// This is the cross-instance replication that backs HA passives and restarts.
+// from KV at startup. In the cache-as-source-of-truth model there is no
+// ongoing kv.Watch echo into the cache after initial load, so the only thing
+// rtB sees during its load is what rtA has already pushed durably to KV.
+// Therefore the test must explicitly drain the WAL→committer→KV chain on
+// rtA (via Domain.WaitForKVCaughtUp) BEFORE starting rtB — otherwise rtA's
+// writes can still be in flight and rtB's initial load will miss them.
 //
 // Two real runtimes in one process; the deadlock fix (HA transitions) is what
 // lets them coexist.
@@ -90,6 +94,14 @@ func Test_Hunt_WAL_SecondRuntimeSyncsState(t *testing.T) {
 
 	require.NoError(t, dbcA.CMDB.TypeCreate("WalType"))
 	require.NoError(t, dbcA.CMDB.ObjectUpdate("wal-1", easyjson.NewJSONObjectWithKeyValue("v", easyjson.NewJSON(42)), false, "WalType"))
+
+	// Drain rtA's WAL→committer→KV chain before rtB joins. Without this,
+	// rtA's writes may still be buffered (in pendingTxs or in the WAL stream
+	// not yet applied by the committer) when rtB's initial load samples KV,
+	// and rtB's cache would miss them — there is no continuous kv.Watch in
+	// the cache-as-source-of-truth model to fill in afterwards.
+	require.NoError(t, rtA.Domain.WaitForKVCaughtUp(context.Background(), 30*time.Second),
+		"rtA writes must reach KV before rtB joins")
 
 	// Second runtime joins the same NATS/KV/domain and must sync the object.
 	rtB, cancelB := mkRT(false)
