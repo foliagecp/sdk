@@ -5,52 +5,41 @@ JetStream cluster (RAFT, streams replicated R=3, each node its own volume) keeps
 serving when **one** node is killed — quorum (2/3) holds and every stream has a
 surviving replica — and the killed node then rejoins and re-syncs.
 
-This is distinct from:
+Distinct from:
 - `nats-restart-recovery` — a **single** node crashes and recovers its own store
   (durability, with an outage), and
 - `ha-3-node` — three **runtime** instances fail over (active/passive), on one NATS.
 
 ## Scenario (`run.sh`)
 
-1. Start the 3-node cluster first; wait until all nodes are JetStream-healthy.
+1. Start the 3-node cluster + `io` first; wait until all nodes are
+   JetStream-healthy, then **probe real R=3 stream placement** (create+delete a
+   replicated test stream) so the runtime starts only once the cluster can
+   actually replicate.
 2. Start one runtime in cluster mode (`NATS_CLUSTER_MODE=true`, `NATS_REPLICAS=3`).
 3. Seed a known graph (replicated R=3); verify.
 4. Kill one node (`nats2`); assert the system keeps serving and data is intact
-   (quorum 2/3), and that new writes still commit with a node down.
+   (quorum 2/3), and that **new writes still commit with a node down**.
 5. Restart the node; assert it rejoins and data/consistency hold.
 
 The assertion client connects to all three nodes (comma-separated) so it fails
 over with the cluster.
 
-## Opt-in: needs a stable multi-node environment
+## SDK fixes this test surfaced
 
-This test is **skipped by default**. A 3-node JetStream RAFT cluster needs enough
-CPU to hold a steady leader/quorum; under constrained Docker (e.g. Docker Desktop
-on a busy laptop) the cluster flaps **near-continuously** during formation, and
-the runtime can't reach readiness even though `/healthz` and a one-off R=3
-placement probe pass. It is reliable on a multi-core / multi-host CI.
+Getting this green uncovered two real startup bugs (both fixed):
 
-`run.sh` already does what it can to be robust: it starts the cluster first,
-waits for all nodes to be JetStream-healthy, and **probes real R=3 stream
-placement** (create+delete a replicated test stream) before starting the runtime.
+1. **afterStart ran before the runtime was ready.** `cmdbSchemaPrepare` (creates
+   the built-in `types`/`objects` roots via `runtime.Request`) was invoked before
+   `isReady`, and `Request` rejects pre-ready calls. On fast single-node startup
+   `isReady` wins the race; on a 3-node R=3 cluster (~30 subscriptions, slow to
+   wire up) afterStart fired first and the schema init was silently dropped,
+   leaving every CMDB op failing with `vertex hub/types does not exist`. Fixed by
+   gating afterStart on `isReady` (`statefun/runtime.go`).
+2. **Startup aborted on transient JetStream errors.** A runtime joining a still-
+   electing cluster now retries (`retryStartupJS` across AccountInfo / KV-bucket /
+   stream / consumer / subscription creation) instead of aborting.
 
-Run it explicitly:
-
-```sh
-RUN_CLUSTER_TESTS=1 tests/system/nats-cluster-failover/run.sh
-```
-
-## Related SDK hardening (committed)
-
-Runtime **startup now retries transient JetStream errors across the whole
-path** — `AccountInfo`, KV-bucket creation, system/function stream creation, the
-WAL consumer, and signal subscriptions (`retryStartupJS` /
-`isStartupTransientJSError` in `statefun/runtime.go`, applied in
-`statefun/domain.go` and `statefun/wal.go`). A runtime joining a still-electing
-cluster retries (up to `JS_STARTUP_RETRY_TIMEOUT_SEC`, default 60) instead of
-aborting — real resilience for production clusters surviving a leader election.
-On a healthy single node this is a no-op (the first call succeeds).
-
-This does **not** make the cluster itself stable on a CPU-starved host: if the
-RAFT group can't hold quorum long enough for the runtime's multi-step startup,
-retries eventually exhaust. That is the environment limit this test documents.
+Note: cluster startup is slower than single-node (forming ~30 R=3 stream/consumer
+RAFT groups); the runtime retries transient errors up to
+`JS_STARTUP_RETRY_TIMEOUT_SEC` (180 here).

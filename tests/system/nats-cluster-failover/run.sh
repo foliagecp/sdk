@@ -22,17 +22,6 @@ N=200
 # All three nodes, so the client fails over when one dies.
 NATS3="nats://nats:foliage@localhost:4222,nats://nats:foliage@localhost:4223,nats://nats:foliage@localhost:4224"
 
-# This test needs a STABLE 3-node JetStream RAFT cluster. Under constrained
-# Docker (Docker Desktop on a busy laptop) the cluster can't hold a steady
-# leader/quorum during formation, and the runtime fails to reach readiness
-# (NewDomain JS ops time out). It is reliable on a multi-core / multi-host CI.
-# Opt in explicitly; otherwise skip cleanly so the suite stays green.
-if [ "${RUN_CLUSTER_TESTS:-0}" != "1" ]; then
-  echo ">> nats-cluster-failover: SKIPPED (needs a stable multi-node cluster env)"
-  echo ">>   run on a multi-core / CI host with:  RUN_CLUSTER_TESTS=1 $0"
-  exit 0
-fi
-
 install_trap
 build_assert
 

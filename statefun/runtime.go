@@ -844,7 +844,18 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 				}
 			}
 
-			if r.afterStartRunning.CompareAndSwap(false, true) {
+			// Run afterStart functions only once the runtime is ready to serve:
+			// they typically issue requests (e.g. cmdbSchemaPrepare creates the
+			// built-in types/objects roots via runtime.Request), and Request
+			// rejects calls before isReady. On fast (single-node) startup isReady
+			// is set before this tick, so it is a no-op; on slow startup (a 3-node
+			// R=3 cluster takes much longer to wire up ~30 subscriptions) this
+			// prevents afterStart from firing prematurely and silently dropping
+			// schema initialization — which otherwise leaves every CMDB op failing
+			// with "vertex hub/types does not exist". isReady.Load short-circuits
+			// the CompareAndSwap so a not-yet-ready tick does not consume the
+			// one-shot guard; a later tick runs it once ready.
+			if r.isReady.Load() && r.afterStartRunning.CompareAndSwap(false, true) {
 				lg.GetLogger().Debugf(ctx, "run afterStartFunctions")
 				r.runAfterStartFunctions(r.gs.phaseOneCtx())
 			}
