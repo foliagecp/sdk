@@ -63,5 +63,13 @@ fail() {
 # cleanup always removes the project's containers and volumes.
 cleanup() { dc down -v --remove-orphans >/dev/null 2>&1 || true; }
 
-# install_trap wires cleanup to run on any exit (pass or fail).
-install_trap() { trap cleanup EXIT INT TERM; }
+# install_trap wires cleanup to run on any exit (pass or fail) AND pre-cleans
+# this project up front. A prior run that was interrupted (Ctrl-C) or crashed
+# can leave this project's NATS container running on a persisted volume; docker
+# compose would then silently reuse it, so the test sees stale data (e.g.
+# "vertex systest_node already exists") instead of a clean slate. Tearing the
+# project down -v before `up` guarantees a fresh start every time.
+install_trap() {
+  trap cleanup EXIT INT TERM
+  cleanup
+}
