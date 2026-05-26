@@ -37,6 +37,11 @@ func Test_HA_ActivePassive_ExclusivityAndRecovery(t *testing.T) {
 	opts := natsservertest.DefaultTestOptions
 	opts.JetStream = true
 	opts.Port = -1
+	// DefaultTestOptions leaves StoreDir empty → nats-server falls back to the
+	// FIXED shared path $TMPDIR/jetstream, which persists across runs and is
+	// shared with sibling packages during `go test ./...`. Give every run its
+	// own auto-cleaned store dir so stale streams/KV cannot poison it.
+	opts.StoreDir = t.TempDir()
 	srv := natsservertest.RunServer(&opts)
 	defer srv.Shutdown()
 	url := srv.ClientURL()

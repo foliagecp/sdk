@@ -44,6 +44,14 @@ func Test_Hunt_WAL_SecondRuntimeSyncsState(t *testing.T) {
 	opts := natsservertest.DefaultTestOptions
 	opts.JetStream = true
 	opts.Port = -1
+	// DefaultTestOptions leaves StoreDir empty, which makes nats-server fall
+	// back to the FIXED shared path $TMPDIR/jetstream (see jetstream.go:214).
+	// That dir persists across `go test` runs, so leftover streams/KV/RAFT
+	// state from a prior run poisons this one — surfacing as
+	// "vertex WalType already exists" plus a cascade of consumer/timeout
+	// errors. Give every run its own auto-cleaned store dir, mirroring the
+	// harness fix in statefun/test/env.go.
+	opts.StoreDir = t.TempDir()
 	srv := natsservertest.RunServer(&opts)
 	defer srv.Shutdown()
 	url := srv.ClientURL()
