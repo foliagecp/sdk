@@ -41,9 +41,13 @@ The observer samples every 10 seconds:
   the runtime can be "up" yet not serving, and the probe will see exactly
   that.
 * **Prometheus scrape** — `fg_runtime_mem_alloc_bytes` and
-  `fg_runtime_routines_counter`. A trailing-window least-squares slope fit
-  flags growth above `-max-mem-drift-bph` / `-max-goroutine-drift-ph` as a
-  leak.
+  `fg_runtime_routines_counter`. A least-squares slope fit over the **full
+  observation window** (minus an initial `-drift-warmup` so cache
+  initial-load and worker-pool spin-up don't bias the fit upward) flags
+  growth above `-max-mem-drift-bph` / `-max-goroutine-drift-ph` as a leak.
+  Fitting over the whole run averages out the GC saw-tooth — a trailing
+  window would catch the last saw-tooth crest and report a spurious leak
+  on a stable process.
 
 Every sample is written to `tests/soak/_results/<run>/observer.csv` so the
 data survives a fail-fast exit and is available for post-mortem.

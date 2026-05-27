@@ -15,9 +15,12 @@
 //     stretch of consecutive failures longer than -max-stall-sec is flagged
 //     as an unrecovered stall, which is the primary FAILURE signal (the
 //     116-class regression).
-//   * Memory drift: scrape fg_runtime_mem_alloc_bytes. If the trailing
-//     -drift-window samples show a slope above -max-mem-drift-bytes-per-hour
-//     and the run is at least one window long, FAIL — the runtime is leaking.
+//   * Memory drift: scrape fg_runtime_mem_alloc_bytes. Fits a least-squares
+//     slope over the WHOLE observation window (minus an initial warmup),
+//     not a trailing slice — that way a GC saw-tooth landing inside an
+//     arbitrary trailing window cannot raise a false-positive on a process
+//     whose long-term memory is flat. If the slope is above
+//     -max-mem-drift-bytes-per-hour, FAIL.
 //   * Goroutine drift: scrape fg_runtime_routines_counter. Same shape; bounds
 //     a leak in spawned goroutines (becomePassive that never finishes, etc).
 //   * Exclusivity (HA mode): if -prom-urls has multiple endpoints, at most
@@ -67,7 +70,7 @@ type flags struct {
 	maxStall    time.Duration
 	memDriftBph int64 // bytes/hour
 	grDriftPh   int64 // goroutines/hour
-	driftWindow int   // number of samples to fit a slope over
+	warmup      time.Duration // skip this much at the start of the run before drift fits begin
 	timeout     time.Duration
 	preflight   time.Duration // wait this long for the first OK before starting the clock
 }
@@ -83,7 +86,7 @@ func parseFlags() *flags {
 	flag.DurationVar(&f.maxStall, "max-stall", 30*time.Second, "max consecutive liveness-fail window before FAIL")
 	flag.Int64Var(&f.memDriftBph, "max-mem-drift-bph", 200*1024*1024, "max allowed memory drift (bytes/hour) over the trailing window; <=0 disables")
 	flag.Int64Var(&f.grDriftPh, "max-goroutine-drift-ph", 200, "max allowed goroutine drift (goroutines/hour) over the trailing window; <=0 disables")
-	flag.IntVar(&f.driftWindow, "drift-window", 60, "trailing samples to fit drift slope over (60 samples * 10s = 10min)")
+	flag.DurationVar(&f.warmup, "drift-warmup", 60*time.Second, "ignore this much of the run at the start before fitting drift (lets caches settle)")
 	flag.DurationVar(&f.timeout, "timeout", 5*time.Second, "per-probe timeout for both NATS and Prometheus")
 	flag.DurationVar(&f.preflight, "preflight", 2*time.Minute, "wait up to this long for the first OK before starting the duration clock")
 	flag.Parse()
@@ -233,19 +236,31 @@ done:
 		fail = true
 	}
 
-	// Memory / goroutine drift — only meaningful if we scrape Prometheus and
-	// we have at least the drift window of samples.
-	if len(promList) > 0 && len(samples) >= f.driftWindow {
-		memBph, grPh := computeDrifts(samples, f.driftWindow, f.interval)
-		fmt.Printf("observer: trailing-%d memory drift %d B/hr, goroutine drift %.1f /hr\n",
-			f.driftWindow, memBph, grPh)
-		if f.memDriftBph > 0 && memBph > f.memDriftBph {
-			fmt.Fprintf(os.Stderr, "observer: MEM-DRIFT %d B/hr > limit %d B/hr\n", memBph, f.memDriftBph)
-			fail = true
-		}
-		if f.grDriftPh > 0 && int64(grPh) > f.grDriftPh {
-			fmt.Fprintf(os.Stderr, "observer: GOROUTINE-DRIFT %.1f /hr > limit %d /hr\n", grPh, f.grDriftPh)
-			fail = true
+	// Memory / goroutine drift over the full observation window (after the
+	// warmup window so cache initial-load + worker-pool spin-up don't bias the
+	// slope upward). A least-squares fit over O(360+) samples averages out
+	// the GC saw-tooth; a stable process whose Alloc oscillates 555→594 MB
+	// settles to slope ≈ 0, instead of catching the last 60 samples' worth
+	// of saw-tooth and reporting a false leak. Need at least 2 points after
+	// warmup; otherwise we skip the check entirely.
+	if len(promList) > 0 {
+		fitSamples := samplesAfterWarmup(samples, f.warmup)
+		if len(fitSamples) >= 2 {
+			memBph, grPh := computeDrifts(fitSamples, f.interval)
+			windowSec := fitSamples[len(fitSamples)-1].ts.Sub(fitSamples[0].ts).Seconds()
+			fmt.Printf("observer: full-window memory drift %d B/hr, goroutine drift %.1f /hr (fit over %.0fs, %d samples)\n",
+				memBph, grPh, windowSec, len(fitSamples))
+			if f.memDriftBph > 0 && memBph > f.memDriftBph {
+				fmt.Fprintf(os.Stderr, "observer: MEM-DRIFT %d B/hr > limit %d B/hr\n", memBph, f.memDriftBph)
+				fail = true
+			}
+			if f.grDriftPh > 0 && int64(grPh) > f.grDriftPh {
+				fmt.Fprintf(os.Stderr, "observer: GOROUTINE-DRIFT %.1f /hr > limit %d /hr\n", grPh, f.grDriftPh)
+				fail = true
+			}
+		} else {
+			fmt.Printf("observer: drift check skipped (need >=2 samples after %s warmup; have %d)\n",
+				f.warmup, len(fitSamples))
 		}
 	}
 
@@ -426,22 +441,36 @@ func parseSimpleMetric(line, name string) (int64, bool) {
 	return int64(v), true
 }
 
-// computeDrifts fits a slope over the last `window` samples and returns
-// (mem bytes/hour, goroutines/hour). A tiny least-squares fit is enough; we
-// don't need fractional precision, just a leak alarm.
-func computeDrifts(s []sample, window int, interval time.Duration) (int64, float64) {
-	if window > len(s) {
-		window = len(s)
+// samplesAfterWarmup returns the suffix of s where ts >= s[0].ts + warmup.
+// Used to drop the initial cache-load + worker-pool spin-up samples before
+// fitting drift — those don't reflect steady-state.
+func samplesAfterWarmup(s []sample, warmup time.Duration) []sample {
+	if len(s) == 0 || warmup <= 0 {
+		return s
 	}
-	tail := s[len(s)-window:]
-	if len(tail) < 2 {
+	cutoff := s[0].ts.Add(warmup)
+	for i := range s {
+		if !s[i].ts.Before(cutoff) {
+			return s[i:]
+		}
+	}
+	return nil
+}
+
+// computeDrifts fits a least-squares slope over the supplied samples and
+// returns (mem bytes/hour, goroutines/hour). Caller passes the post-warmup
+// slice; we DO NOT pick a trailing window here, because a trailing window
+// of a stable-but-saw-toothing process gives spurious slopes — the longer
+// the fit, the better the saw-tooth averages out.
+func computeDrifts(s []sample, interval time.Duration) (int64, float64) {
+	if len(s) < 2 {
 		return 0, 0
 	}
 	// x is the index in interval units; y is the metric.
 	var sx, sxx float64
 	var smem, sxmem float64
 	var sgor, sxgor float64
-	for i, smp := range tail {
+	for i, smp := range s {
 		x := float64(i)
 		sx += x
 		sxx += x * x
@@ -450,7 +479,7 @@ func computeDrifts(s []sample, window int, interval time.Duration) (int64, float
 		sgor += float64(smp.goroutines)
 		sxgor += x * float64(smp.goroutines)
 	}
-	n := float64(len(tail))
+	n := float64(len(s))
 	denom := n*sxx - sx*sx
 	if denom == 0 {
 		return 0, 0
