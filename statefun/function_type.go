@@ -339,6 +339,29 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 		ft.idKeyMutex.Unlock(id)
 	}()
 
+	// Refresh idHandlersLastMsgTime on every invocation, regardless of which
+	// path got us here. Without this, the gc loop in (*FunctionType).gc would
+	// only ever see ids that arrived via sendMsg/handleMsgForID through the
+	// worker pool — calls from io.go:343 (goLangLocalRequest, an in-process
+	// ctx.Request from one statefun to another in the same runtime) bypass
+	// sendMsg entirely and would therefore never register their id with the
+	// gc map. The contextProcessors entry they create on the next line, plus
+	// its ~10 closures and captured Payload/Options/Caller/Reply state, would
+	// then leak until either the same id arrived through the NATS path or
+	// the runtime shut down. Under a workload with high unique-id rate (e.g.
+	// CMDB CRUD with fresh vertex/link ids every iteration) this accumulates
+	// hundreds of thousands of orphan processors and drives heap_objects
+	// growth — diagnosed against tests/soak/leak-hunt: heap_objects climbed
+	// 3 M → 11 M in 10 min with the older code, and pprof traced 90.82 % of
+	// inuse_objects back to a Request-closure (this function's `Request`
+	// field assigned below) retained via the contextProcessors map.
+	//
+	// Store is unconditional (overwrite-OK) so calls that DID come through
+	// sendMsg also keep their lastMsgTime monotonically updated — sendMsg's
+	// own Store happens earlier in the path and would otherwise stay stale
+	// across long in-process call chains.
+	ft.idHandlersLastMsgTime.Store(id, time.Now().UnixNano())
+
 	if ft.executor != nil {
 		ft.executor.AddForID(id)
 	}
