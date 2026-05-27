@@ -97,6 +97,24 @@ wait "$WORKLOAD_PID" 2>/dev/null || true
 echo ">> post-soak readiness"
 assert ping -wait 30 || fail "runtime unresponsive after leakhunt ended"
 
+# Pull heap pprof + final /metrics for post-mortem before the container
+# is torn down. heap.pb.gz is what we want to feed into pprof later to
+# see WHICH Go types are accumulating; metrics.txt captures the
+# cache_values / cache_sweep_runs_total / cache_sweep_removed_total
+# gauges at end-of-test so we can decide if sweep was even running.
+echo ">> capturing post-run heap profile + metrics"
+curl -fsS -o "$RUN_DIR/heap-end.pb.gz" http://localhost:6060/debug/pprof/heap 2>/dev/null \
+  && echo "   -> $RUN_DIR/heap-end.pb.gz" \
+  || echo "   pprof :6060 unreachable (PPROF_ADDR not honoured by binary?)"
+curl -fsS -o "$RUN_DIR/metrics-end.txt" http://localhost:9901/metrics 2>/dev/null \
+  && echo "   -> $RUN_DIR/metrics-end.txt"
+
+echo ">> ---- sweep diagnostics ----"
+if [ -f "$RUN_DIR/metrics-end.txt" ]; then
+  grep -E '^(cache_values|cache_sweep_runs_total|cache_sweep_removed_total)' "$RUN_DIR/metrics-end.txt" || \
+    echo "  (no cache_sweep_* metrics — runtime image is from before the diagnostic counter commit)"
+fi
+
 echo ">> ---- leak-hunt summary ----"
 # Quick on-the-fly summary so the operator sees the shape without having to
 # open the CSV. First-vs-last 10% average of mem_alloc_bytes and

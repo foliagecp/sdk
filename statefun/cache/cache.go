@@ -288,10 +288,18 @@ type Store struct {
 	backupBarrierStatus      int32 // 0=unlocked, 1=locking, 2=locked
 	backupBarrierLastChecked int64
 	Synced                   chan struct{}
+
+	// Sweep diagnostics, updated by kvLazyWriter after each maintenance
+	// pass. Exported via the cache_sweep_runs_total / cache_sweep_removed_total
+	// gauges. Atomic because the kvLazyWriter goroutine is the sole writer
+	// but the Prometheus snapshot is happening on another goroutine.
+	totalSweepRuns    int64
+	totalSweepRemoved int64
 }
 
 type maintenanceResult struct {
-	valueCount int
+	valueCount   int
+	removedCount int // dead children dropped from parent.store during this sweep
 	// Backup-barrier readiness is now determined by Store.committedTxTime,
 	// not by walking the cache. The old `allBeforeBackupBarrierSynced` flag
 	// was set by scanning every node for syncedWithKV; that machinery is
@@ -572,6 +580,7 @@ func (cs *Store) sweepSubtree(csv *StoreValue, result *maintenanceResult) bool {
 				child.Unlock("sweepSubtree-confirm")
 				if stillDead {
 					sm.Delete(k)
+					result.removedCount++
 				}
 			}
 		}
@@ -764,6 +773,21 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 
 					if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("cache_values", "", []string{"id"}); err == nil {
 						gaugeVec.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(cs.valuesInCache))
+					}
+
+					// Diagnostic counters — required for the leak-hunt
+					// soak to distinguish "sweep never runs" from "sweep
+					// runs but doesn't collect anything" from "sweep
+					// runs and collects but cannot keep up". Without
+					// these the only signal is the heap_objects ramp,
+					// which conflates all three failure modes.
+					atomic.AddInt64(&cs.totalSweepRuns, 1)
+					atomic.AddInt64(&cs.totalSweepRemoved, int64(maintResult.removedCount))
+					if gv, err := system.GlobalPrometrics.EnsureGaugeVecSimple("cache_sweep_runs_total", "", []string{"id"}); err == nil {
+						gv.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(atomic.LoadInt64(&cs.totalSweepRuns)))
+					}
+					if gv, err := system.GlobalPrometrics.EnsureGaugeVecSimple("cache_sweep_removed_total", "", []string{"id"}); err == nil {
+						gv.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(atomic.LoadInt64(&cs.totalSweepRemoved)))
 					}
 				}
 
