@@ -1,0 +1,66 @@
+# ha-promotion-flap — three runtimes share one domain in active/passive HA.
+#
+# Topology mirrors tests/system/ha-3-node, with each runtime's Prometheus and
+# pprof ports exposed on distinct host ports so the observer (and post-mortem)
+# can read each one individually. Each runtime is its own service so we can
+# `docker compose kill` whichever currently holds the KV runtime lock.
+#
+# NOTE: all three runtimes share the same NATS subject namespace, so from the
+# outside there is exactly one logically-addressable runtime at a time (the
+# active). Continuity through repeated kills is the observable invariant the
+# soak test enforces. Exclusivity at the active-flag level is tested in-process
+# by statefun/ha_test.go and is not re-checked here.
+services:
+  nats:
+    image: nats:latest
+    command: -c /etc/nats/nats.conf
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - ./configs/nats/nats.conf:/etc/nats/nats.conf
+      - nats-data:/data/jetstream
+
+  runtime-a:
+    image: foliage-systest-runtime:latest
+    build:
+      context: ../../..
+      dockerfile: samples/simple/Dockerfile
+    command: /usr/bin/foliage -ll 4
+    env_file: ./.env
+    environment:
+      - PPROF_ADDR=:6060
+    ports:
+      - "6060:6060"
+      - "9901:9901"
+    depends_on:
+      - nats
+
+  runtime-b:
+    image: foliage-systest-runtime:latest
+    command: /usr/bin/foliage -ll 4
+    env_file: ./.env
+    environment:
+      - PPROF_ADDR=:6060
+    ports:
+      - "6061:6060"
+      - "9902:9901"
+    depends_on:
+      - nats
+      - runtime-a
+
+  runtime-c:
+    image: foliage-systest-runtime:latest
+    command: /usr/bin/foliage -ll 4
+    env_file: ./.env
+    environment:
+      - PPROF_ADDR=:6060
+    ports:
+      - "6062:6060"
+      - "9903:9901"
+    depends_on:
+      - nats
+      - runtime-a
+
+volumes:
+  nats-data:

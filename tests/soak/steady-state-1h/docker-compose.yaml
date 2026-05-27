@@ -1,0 +1,35 @@
+# steady-state-1h — continuous load with no induced faults. Catches slow
+# memory leaks, goroutine drift, and gradual throughput collapse that the
+# short tests/system/crud-soak can't see (25s isn't enough for a leaking
+# resource to grow into a problem).
+#
+# Same single-node layout as nats-stall-recovery but with no chaos. The
+# observer's mem/goroutine drift checks are the primary gate here.
+services:
+  nats:
+    image: nats:latest
+    command: -c /etc/nats/nats.conf
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - ./configs/nats/nats.conf:/etc/nats/nats.conf
+      - nats-data:/data/jetstream
+
+  runtime:
+    image: foliage-systest-runtime:latest
+    build:
+      context: ../../..
+      dockerfile: samples/simple/Dockerfile
+    command: /usr/bin/foliage -ll 4
+    env_file: ./.env
+    environment:
+      - PPROF_ADDR=:6060
+    ports:
+      - "6060:6060"
+      - "9901:9901"
+    depends_on:
+      - nats
+
+volumes:
+  nats-data:

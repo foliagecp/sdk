@@ -1,0 +1,41 @@
+# nats-stall-recovery — soak topology mirroring tests/system/crud-soak, but
+# with the runtime's Prometheus and pprof ports published to the host. The
+# soak observer scrapes :9901 every interval and (on failure) `dump_state`
+# pulls a goroutine snapshot + heap profile from :6060.
+#
+# This is a deliberate 1-NATS / 1-runtime layout: we exercise the runtime's
+# resilience to NATS being momentarily unavailable, not NATS itself. The
+# scenario pauses the NATS container at random intervals to simulate the
+# 116-class incident, then asserts that the runtime returns to service
+# within an SLO after every unpause.
+services:
+  nats:
+    image: nats:latest
+    command: -c /etc/nats/nats.conf
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - ./configs/nats/nats.conf:/etc/nats/nats.conf
+      - nats-data:/data/jetstream
+
+  runtime:
+    image: foliage-systest-runtime:latest
+    build:
+      context: ../../..
+      dockerfile: samples/simple/Dockerfile
+    command: /usr/bin/foliage -ll 4
+    env_file: ./.env
+    environment:
+      # Optional: when the samples/simple build exposes pprof, dump_state
+      # will pick up goroutine + heap on failure. If the binary ignores the
+      # env, the port is simply closed and dump_state degrades gracefully.
+      - PPROF_ADDR=:6060
+    ports:
+      - "6060:6060"     # pprof (best-effort, for failure dumps)
+      - "9901:9901"     # Prometheus /metrics (observer scrapes this)
+    depends_on:
+      - nats
+
+volumes:
+  nats-data:
