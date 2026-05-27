@@ -19,6 +19,11 @@ import (
 	lg "github.com/foliagecp/sdk/statefun/logger"
 )
 
+// exportAutoThreshold is the file size above which delivery:"auto" switches to
+// chunked mode. Declared as a variable so tests can lower it without building
+// a multi-megabyte graph.
+var exportAutoThreshold = 1 << 20 // 1 MB
+
 type gNode struct {
 	id    string
 	depth int
@@ -39,21 +44,50 @@ type exportConfig struct {
 }
 
 /*
-Print Graph from certain id using Graphviz
+LLAPIPrintGraph handles all graph export operations for a single vertex, dispatched
+by the optional export_action field:
 
-Algorithm: Sync BFS
+  - (absent)         — BFS graph traversal + export (default)
+  - "get_chunk"      — fetch one chunk of a previously started chunked export
+  - "finish_session" — release an in-memory export session
 
-	Payload: {
-		"depth": uint // optional, default: -1
-		"format": string // "dot" | "graphml" - optional, default: "dot"
-		"json2xml": bool // whether to export bodies as json or xml (graphml only) - optional, default false
-		"exclude": { // Fields to exclude during export, optional
-			"vertex": ["__meta", "fieldX.fieldY" ...] // optional
-			"edge": ["field1", ...] // optional
-		}
+All three actions are intentionally handled by the same function type so that
+the statefun single-instance lock guarantees they execute on the same process,
+where the in-memory ExportSessionStore lives.
+
+BFS payload:
+
+	{
+	    "depth":    int    // optional, default: -1 (unlimited)
+	    "format":   string // "dot" | "graphml", default: "dot"
+	    "delivery": string // "inline" | "auto" | "chunks", default: "inline"
+	    "json2xml": bool   // graphml only, default: false
+	    "exclude":  { "vertex": [...], "edge": [...] }  // optional
 	}
+
+get_chunk payload:
+
+	{ "export_action": "get_chunk", "session_id": "...", "chunk_index": N }
+
+finish_session payload:
+
+	{ "export_action": "finish_session", "session_id": "..." }
 */
 func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	switch action := ctx.Payload.GetByPath("export_action").AsStringDefault(""); action {
+	case "":
+		exportPrintGraph(ctx)
+	case "get_chunk":
+		exportGetChunk(ctx)
+	case "finish_session":
+		exportFinishSession(ctx)
+	default:
+		om := sfMediators.NewOpMediator(ctx)
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("unknown export_action %q", action))).Reply()
+	}
+}
+
+func exportPrintGraph(ctx *sfPlugins.StatefunContextProcessor) {
 	self := ctx.Self
 	payload := ctx.Payload
 
@@ -69,9 +103,7 @@ func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 
 	nodes := map[string]*easyjson.JSON{}
 	uniqueEdges := map[string]struct{}{}
-	queue := []gNode{}
-	queue = append(queue, gNode{self.ID, 0})
-
+	queue := []gNode{{self.ID, 0}}
 	edges := []gEdge{}
 
 	for len(queue) > 0 {
@@ -105,9 +137,8 @@ func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 
 	om := sfMediators.NewOpMediator(ctx)
 
-	var fileData string
-
 	format := payload.GetByPath("format").AsStringDefault("dot")
+	var fileData string
 	switch format {
 	case "graphml":
 		fileData = createGraphML(ctx.Self.ID, ctx.Domain, nodes, edges, conf, payload.GetByPath("json2xml").AsBoolDefault(false))
@@ -118,9 +149,64 @@ func LLAPIPrintGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefu
 		return
 	}
 
+	requestedDelivery := payload.GetByPath("delivery").AsStringDefault("inline")
+	useChunked := requestedDelivery == "chunks" ||
+		(requestedDelivery == "auto" && len(fileData) > exportAutoThreshold)
+
+	if useChunked {
+		sessionID, totalChunks, chunkSz := defaultStore.Put(fileData)
+		reply := easyjson.NewJSONObject()
+		reply.SetByPath("format", easyjson.NewJSON(format))
+		reply.SetByPath("delivery", easyjson.NewJSON("chunks"))
+		reply.SetByPath("session_id", easyjson.NewJSON(sessionID))
+		reply.SetByPath("vertex_id", easyjson.NewJSON(ctx.Self.ID))
+		reply.SetByPath("total_chunks", easyjson.NewJSON(totalChunks))
+		reply.SetByPath("total_bytes", easyjson.NewJSON(int64(len(fileData))))
+		reply.SetByPath("chunk_size", easyjson.NewJSON(chunkSz))
+		om.AggregateOpMsg(sfMediators.OpMsgOk(reply)).Reply()
+		return
+	}
+
 	reply := easyjson.NewJSONObjectWithKeyValue("file", easyjson.NewJSON(fileData))
 	reply.SetByPath("format", easyjson.NewJSON(format))
+	reply.SetByPath("delivery", easyjson.NewJSON("inline"))
 	om.AggregateOpMsg(sfMediators.OpMsgOk(reply)).Reply()
+}
+
+func exportGetChunk(ctx *sfPlugins.StatefunContextProcessor) {
+	om := sfMediators.NewOpMediator(ctx)
+	payload := ctx.Payload
+
+	sessionID := payload.GetByPath("session_id").AsStringDefault("")
+	chunkIndex := int(payload.GetByPath("chunk_index").AsNumericDefault(-1))
+	if sessionID == "" || chunkIndex < 0 {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("session_id and chunk_index are required")).Reply()
+		return
+	}
+
+	data, last, err := defaultStore.GetChunk(sessionID, chunkIndex)
+	if err != nil {
+		lg.Logf(lg.WarnLevel, "get_chunk: vertex=%s session=%s index=%d: %v", ctx.Self.ID, sessionID, chunkIndex, err)
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
+		return
+	}
+
+	reply := easyjson.NewJSONObject()
+	reply.SetByPath("data", easyjson.NewJSON(data))
+	reply.SetByPath("chunk_index", easyjson.NewJSON(chunkIndex))
+	reply.SetByPath("last", easyjson.NewJSON(last))
+	om.AggregateOpMsg(sfMediators.OpMsgOk(reply)).Reply()
+}
+
+func exportFinishSession(ctx *sfPlugins.StatefunContextProcessor) {
+	om := sfMediators.NewOpMediator(ctx)
+	sessionID := ctx.Payload.GetByPath("session_id").AsStringDefault("")
+	if sessionID == "" {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed("session_id is required")).Reply()
+		return
+	}
+	defaultStore.FinishSession(sessionID)
+	om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONObject())).Reply()
 }
 
 func getVertexBodyAndOutLinks(ctx *sfPlugins.StatefunContextProcessor, id string) (*easyjson.JSON, []gEdge) {
