@@ -8,3 +8,9 @@ __pycahe__/*
 .vscode/
 flink/modules/main-embedded/src/target/
 .VSCodeCounter
+
+# Per-run test artefacts (CSVs, log dumps, pprof snapshots). Every test
+# scenario writes into its own tests/<kind>/_results/ — perf, soak, and
+# anything we add later — and the runner scripts mkdir -p the directory
+# themselves, so we don't need to keep the empty parent in version control.
+tests/*/_results/
