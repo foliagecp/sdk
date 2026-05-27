@@ -22,9 +22,12 @@ scripts/run-soak-tests.sh --duration-min 15          # smoke run
 | `nats-stall-recovery` | NATS pause/unpause at random intervals while load runs | 116-class: runtime never returns to active after a NATS hiccup |
 | `steady-state-1h` | Continuous CRUD with no induced faults | Slow memory / goroutine drift; gradual throughput collapse |
 | `ha-promotion-flap` | 3 runtimes, the active is SIGKILLed every ~10 min | Wedged promotion (no node serves); data loss across kills |
+| `leak-hunt` (observation-only, not in `all`) | Unbounded unique-id CRUD with rolling delete window — reproduces production tombstone-cascade load locally | Cache GC keeping up with link-replace tombstones; orphaned StoreValue growth |
 
 Each scenario lives in its own subdirectory with a `docker-compose.yaml`
-topology + an executable `run.sh`. They run sequentially.
+topology + an executable `run.sh`. The first three run sequentially under
+`--scenario all`; `leak-hunt` is observation-only (no SLO gating) and must
+be invoked explicitly via `--scenario leak-hunt`.
 
 ## How a scenario decides pass / fail
 

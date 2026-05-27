@@ -100,6 +100,7 @@ type sample struct {
 	livenessLatency   time.Duration
 	activeURL         string
 	memAllocBytes     int64
+	heapObjects       int64
 	goroutines        int64
 	observedEndpoints int
 	activeCount       int
@@ -134,7 +135,7 @@ func main() {
 	defer csvFile.Close()
 	csv := bufio.NewWriter(csvFile)
 	defer csv.Flush()
-	fmt.Fprintln(csv, "ts,liveness_ok,liveness_latency_ms,active_url,mem_alloc_bytes,goroutines,observed_endpoints,active_count,stall_consec_sec")
+	fmt.Fprintln(csv, "ts,liveness_ok,liveness_latency_ms,active_url,mem_alloc_bytes,heap_objects,goroutines,observed_endpoints,active_count,stall_consec_sec")
 
 	// One persistent DB client per NATS URL. db.NewDBSyncClient opens a new
 	// NATS connection every call and never closes it; at 360 probes/hour we
@@ -295,6 +296,7 @@ func probeOnce(clients []db.DBSyncClient, natsURLs, promURLs []string, timeout t
 		ok      bool
 		latency time.Duration
 		mem     int64
+		objs    int64
 		gor     int64
 		url     string
 	}
@@ -307,7 +309,7 @@ func probeOnce(clients []db.DBSyncClient, natsURLs, promURLs []string, timeout t
 			r := endpointResult{idx: i, url: natsURLs[i]}
 			r.ok, r.latency = liveness(clients[i])
 			if i < len(promURLs) {
-				r.mem, r.gor = scrapeProm(promURLs[i], timeout)
+				r.mem, r.objs, r.gor = scrapeProm(promURLs[i], timeout)
 			}
 			results[i] = r
 		}(i)
@@ -330,6 +332,9 @@ func probeOnce(clients []db.DBSyncClient, natsURLs, promURLs []string, timeout t
 		}
 		if r.mem > s.memAllocBytes {
 			s.memAllocBytes = r.mem
+		}
+		if r.objs > s.heapObjects {
+			s.heapObjects = r.objs
 		}
 		if r.gor > s.goroutines {
 			s.goroutines = r.gor
@@ -371,40 +376,46 @@ func waitFirstOK(ctx context.Context, clients []db.DBSyncClient) bool {
 	}
 }
 
-// scrapeProm pulls fg_runtime_mem_alloc_bytes and fg_runtime_routines_counter
-// from a Prometheus /metrics endpoint. Returns (mem, goroutines); zeros on
-// any error (caller can tell from the CSV that this tick had no metric).
-func scrapeProm(url string, timeout time.Duration) (int64, int64) {
+// scrapeProm pulls fg_runtime_mem_alloc_bytes, go_memstats_heap_objects, and
+// fg_runtime_routines_counter from a Prometheus /metrics endpoint. Returns
+// (mem, heap_objects, goroutines); zeros on any error (caller can tell from
+// the CSV that this tick had no metric).
+//
+// heap_objects is the key signal for cache-tombstone leaks: on a stable
+// process where the in-KV graph isn't growing, this should plateau. A
+// linear ramp here = orphaned StoreValue nodes (or other Go objects) the
+// runtime never reclaims — see the discussion in tests/soak/leak-hunt.
+func scrapeProm(url string, timeout time.Duration) (int64, int64, int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return 0, 0
+		return 0, 0, 0
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return 0, 0
+		return 0, 0, 0
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		// drain so the connection can be reused
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return 0, 0
+		return 0, 0, 0
 	}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	var mem, gor int64
+	var mem, objs, gor int64
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.HasPrefix(line, "#") {
 			continue
 		}
-		// Lines we care about:
-		//   fg_runtime_mem_alloc_bytes 123
-		//   fg_runtime_routines_counter 456
-		// (both are no-label gauges)
 		if v, ok := parseSimpleMetric(line, "fg_runtime_mem_alloc_bytes"); ok {
 			mem = v
+			continue
+		}
+		if v, ok := parseSimpleMetric(line, "go_memstats_heap_objects"); ok {
+			objs = v
 			continue
 		}
 		if v, ok := parseSimpleMetric(line, "fg_runtime_routines_counter"); ok {
@@ -412,7 +423,7 @@ func scrapeProm(url string, timeout time.Duration) (int64, int64) {
 			continue
 		}
 	}
-	return mem, gor
+	return mem, objs, gor
 }
 
 // parseSimpleMetric returns the integer value of a no-label Prometheus
@@ -491,12 +502,13 @@ func computeDrifts(s []sample, interval time.Duration) (int64, float64) {
 }
 
 func writeRow(w io.Writer, s sample) {
-	fmt.Fprintf(w, "%d,%t,%d,%s,%d,%d,%d,%d,%d\n",
+	fmt.Fprintf(w, "%d,%t,%d,%s,%d,%d,%d,%d,%d,%d\n",
 		s.ts.Unix(),
 		s.livenessOK,
 		s.livenessLatency.Milliseconds(),
 		s.activeURL,
 		s.memAllocBytes,
+		s.heapObjects,
 		s.goroutines,
 		s.observedEndpoints,
 		s.activeCount,

@@ -38,7 +38,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: assert <ping|seed|verify|count|consistency> [flags]")
+		fmt.Fprintln(os.Stderr, "usage: assert <ping|seed|verify|count|consistency|soak|leakhunt> [flags]")
 		os.Exit(2)
 	}
 	cmd := os.Args[1]
@@ -57,6 +57,8 @@ func main() {
 		cmdConsistency(args)
 	case "soak":
 		cmdSoak(args)
+	case "leakhunt":
+		cmdLeakHunt(args)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n", cmd)
 		os.Exit(2)
@@ -437,5 +439,117 @@ func cmdSoak(args []string) {
 		*workers, *duration, *pool, created, updated, deleted, errCount)
 	if errCount > 0 {
 		die("soak FAILED: %d operation error(s)", errCount)
+	}
+}
+
+// ---- leakhunt --------------------------------------------------------------
+
+// cmdLeakHunt is a deliberately leak-provoking workload — the opposite of
+// `soak`'s bounded shape. It exists to *reproduce* tombstone-cascade and
+// cache-orphan accumulation locally, so we can size fixes against the same
+// memory signature production sees on stand 116.
+//
+// Workload per worker:
+//
+//   - On every iteration:
+//   - ObjectCreate(id(counter))                  — NEW, unique id each time
+//   - if counter > 0: ObjectsLinkCreate(prev, id) — chain
+//   - If counter > -lag: ObjectDelete(id(counter - lag))
+//   - Delete propagates into ll_crud.go's 5-DeleteValue burst per
+//     outgoing link (OutLinkType / OutLinkBody / OutLinkTarget + InLink
+//     + index), each of which becomes a tombstone in the in-memory cache
+//     unless tombstone-cascade GC catches it.
+//
+// Counter monotonically increases over the run. Live cardinality stabilises
+// at ~workers*lag vertices, but the stream of fresh ids means the in-memory
+// tree has to add new branches AND retire tombstoned ones constantly — the
+// exact pattern reported on stand 116. If `cache.traverseCacheForMaintenance`
+// keeps up, heap_objects plateaus; if it cannot collapse tombstone cascades
+// fast enough, heap_objects grows linearly.
+//
+// This is NOT subject to drift-SLO in the soak observer — leak-hunt
+// scenarios pass `-max-mem-drift-bph 0` to disable that check. The whole
+// point is to OBSERVE memory behaviour, not gate on it.
+func cmdLeakHunt(args []string) {
+	fs := flag.NewFlagSet("leakhunt", flag.ExitOnError)
+	c := bindConn(fs)
+	workers := fs.Int("workers", 32, "concurrent workers")
+	duration := fs.Int("duration", 1800, "duration (seconds)")
+	typ := fs.String("type", "systest_node", "object type")
+	prefix := fs.String("prefix", "leak", "object id prefix")
+	lag := fs.Int("lag", 100, "delete the vertex created `lag` iterations ago (rolling delete window)")
+	_ = fs.Parse(args)
+	if *lag < 1 {
+		die("-lag must be >= 1")
+	}
+
+	setup, err := c.client()
+	if err != nil {
+		die("connect: %v", err)
+	}
+	if err := setup.CMDB.TypeCreate(*typ); err != nil {
+		die("type create %q: %v", *typ, err)
+	}
+	if err := setup.CMDB.TypesLinkCreate(*typ, *typ, "chain", nil); err != nil {
+		die("types link create: %v", err)
+	}
+
+	var created, deleted, errCount int64
+	deadline := time.Now().Add(time.Duration(*duration) * time.Second)
+
+	var wg sync.WaitGroup
+	for w := 0; w < *workers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			dbc, err := c.client()
+			if err != nil {
+				atomic.AddInt64(&errCount, 1)
+				fmt.Fprintf(os.Stderr, "  worker %d connect: %v\n", w, err)
+				return
+			}
+			id := func(i int) string { return fmt.Sprintf("%s-w%d-%d", *prefix, w, i) }
+
+			counter := 0
+			for time.Now().Before(deadline) {
+				body := easyjson.NewJSONObjectWithKeyValue("idx", easyjson.NewJSON(counter))
+				if err := dbc.CMDB.ObjectCreate(id(counter), *typ, body); err != nil {
+					atomic.AddInt64(&errCount, 1)
+					fmt.Fprintf(os.Stderr, "  worker %d create %s: %v\n", w, id(counter), err)
+					return
+				}
+				atomic.AddInt64(&created, 1)
+
+				if counter > 0 {
+					if err := dbc.CMDB.ObjectsLinkCreate(id(counter-1), id(counter), fmt.Sprintf("l%d", counter), nil); err != nil {
+						atomic.AddInt64(&errCount, 1)
+						fmt.Fprintf(os.Stderr, "  worker %d link: %v\n", w, err)
+						return
+					}
+				}
+
+				// Roll: once we're past the lag window, every iteration drops
+				// the vertex that was created `lag` steps ago. That delete
+				// fans into 5 DeleteValue calls in ll_crud.go per outgoing
+				// link, producing the tombstone storm we want to observe.
+				if counter >= *lag {
+					oldID := id(counter - *lag)
+					if err := dbc.CMDB.ObjectDelete(oldID); err != nil {
+						atomic.AddInt64(&errCount, 1)
+						fmt.Fprintf(os.Stderr, "  worker %d delete %s: %v\n", w, oldID, err)
+						return
+					}
+					atomic.AddInt64(&deleted, 1)
+				}
+				counter++
+			}
+		}(w)
+	}
+	wg.Wait()
+
+	fmt.Printf("leakhunt done: workers=%d duration=%ds lag=%d created=%d deleted=%d errors=%d\n",
+		*workers, *duration, *lag, created, deleted, errCount)
+	if errCount > 0 {
+		die("leakhunt FAILED: %d operation error(s)", errCount)
 	}
 }

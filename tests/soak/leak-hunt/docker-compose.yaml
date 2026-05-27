@@ -1,0 +1,34 @@
+# leak-hunt — observation-only soak topology for reproducing cache-tombstone
+# accumulation locally. Same layout as steady-state-1h (1 NATS + 1 runtime,
+# pprof + Prometheus published) — what differs is the workload (assert
+# leakhunt: unbounded unique ids with a rolling delete window) and the
+# observer's SLOs (drift checks disabled — we WATCH memory here, not gate on
+# it).
+services:
+  nats:
+    image: nats:latest
+    command: -c /etc/nats/nats.conf
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - ./configs/nats/nats.conf:/etc/nats/nats.conf
+      - nats-data:/data/jetstream
+
+  runtime:
+    image: foliage-systest-runtime:latest
+    build:
+      context: ../../..
+      dockerfile: samples/simple/Dockerfile
+    command: /usr/bin/foliage -ll 4
+    env_file: ./.env
+    environment:
+      - PPROF_ADDR=:6060
+    ports:
+      - "6060:6060"
+      - "9901:9901"
+    depends_on:
+      - nats
+
+volumes:
+  nats-data:

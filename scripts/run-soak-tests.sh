@@ -12,8 +12,13 @@
 # you want a stability signal you can trust before tagging a release.
 #
 # Usage:
-#   scripts/run-soak-tests.sh [--scenario nats-stall-recovery|steady-state-1h|ha-promotion-flap|all]
+#   scripts/run-soak-tests.sh [--scenario nats-stall-recovery|steady-state-1h|ha-promotion-flap|leak-hunt|all]
 #                             [--duration-min N]
+#
+# `all` runs the three production-grade scenarios (nats-stall-recovery,
+# steady-state-1h, ha-promotion-flap) which gate pass/fail. `leak-hunt` is
+# observation-only (unbounded unique-id workload to expose tombstone-cascade
+# accumulation locally) and is NOT included in `all` — invoke it explicitly.
 #
 # Per-scenario tunables (env): see tests/soak/README.md.
 #
@@ -39,11 +44,11 @@ case "$SCENARIO" in
   all)
     SCENARIOS=( nats-stall-recovery steady-state-1h ha-promotion-flap )
     ;;
-  nats-stall-recovery|steady-state-1h|ha-promotion-flap)
+  nats-stall-recovery|steady-state-1h|ha-promotion-flap|leak-hunt)
     SCENARIOS=( "$SCENARIO" )
     ;;
   *)
-    echo "unknown scenario: $SCENARIO (use nats-stall-recovery|steady-state-1h|ha-promotion-flap|all)"
+    echo "unknown scenario: $SCENARIO (use nats-stall-recovery|steady-state-1h|ha-promotion-flap|leak-hunt|all)"
     exit 2
     ;;
 esac
