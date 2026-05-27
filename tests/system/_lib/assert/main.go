@@ -304,13 +304,30 @@ func firstN(s []string, n int) []string {
 
 // ---- soak -------------------------------------------------------------------
 
-// cmdSoak drives sustained concurrent CRUD for a window: W workers each create
-// a private stream of objects, chain-link them, periodically update, and
-// occasionally delete an earlier one. Each worker uses its own client and a
-// disjoint id namespace, so this stresses throughput and the runtime's worker
-// pool / WAL without artificial key contention. Any operation error fails the
-// run; on success it reports per-op counts. A follow-up `consistency` call in
-// run.sh asserts the post-soak graph invariant.
+// cmdSoak drives sustained concurrent CRUD for a window using a **bounded**
+// working set per worker:
+//
+//   1. Pre-seed: each worker creates -pool objects + chain links between
+//      them. After this step the worker's id namespace is fixed.
+//   2. Steady loop until deadline:
+//      * every iteration: ObjectUpdate over a rolling slot (replace=true)
+//      * every -refresh-every iterations: ObjectDelete + ObjectCreate for
+//        the same slot, exercising the full CRUD path while keeping
+//        cardinality exactly = -pool.
+//
+// Why bounded — earlier versions had a growth shape (one ObjectCreate per
+// iteration with sparse deletes). It was fine for the 25-second
+// tests/system/crud-soak burst, but at hour scales the memory drift signal
+// of the soak observer (tests/soak/) became dominated by "the graph really
+// did grow" and a real leak would hide in the noise. Cardinality = workers
+// * pool from end-of-seed onward makes the memory drift signal honest:
+// positive drift is a leak, not just more data.
+//
+// What it still tests (vs. the older growth shape): runtime responsiveness
+// under sustained CRUD, worker-pool / WAL pressure, every CRUD op type on
+// the hot path (Create, LinkCreate, Update, Delete) — just at a stable
+// graph size instead of a monotonically growing one. The follow-up
+// `consistency` call in run.sh asserts the same post-soak invariant.
 func cmdSoak(args []string) {
 	fs := flag.NewFlagSet("soak", flag.ExitOnError)
 	c := bindConn(fs)
@@ -318,7 +335,16 @@ func cmdSoak(args []string) {
 	duration := fs.Int("duration", 20, "soak duration (seconds)")
 	typ := fs.String("type", "systest_node", "object type")
 	prefix := fs.String("prefix", "soak", "object id prefix")
+	pool := fs.Int("pool", 200, "objects pre-seeded per worker (working set size)")
+	refreshEvery := fs.Int("refresh-every", 50, "every Nth iteration, delete+recreate the current slot (exercises CRUD without growth)")
 	_ = fs.Parse(args)
+
+	if *pool < 2 {
+		die("-pool must be >= 2 (got %d)", *pool)
+	}
+	if *refreshEvery < 1 {
+		die("-refresh-every must be >= 1 (got %d)", *refreshEvery)
+	}
 
 	// One client sets up the schema up front so workers only do object ops.
 	setup, err := c.client()
@@ -347,51 +373,68 @@ func cmdSoak(args []string) {
 				return
 			}
 			id := func(i int) string { return fmt.Sprintf("%s-w%d-%d", *prefix, w, i) }
-			i := 0
-			for time.Now().Before(deadline) {
-				body := easyjson.NewJSONObjectWithKeyValue("idx", easyjson.NewJSON(i))
-				if err := dbc.CMDB.ObjectCreate(id(i), *typ, body); err != nil {
+			N := *pool
+
+			// Step 1 — pre-seed: N objects + N-1 chain links.
+			for j := 0; j < N && time.Now().Before(deadline); j++ {
+				body := easyjson.NewJSONObjectWithKeyValue("idx", easyjson.NewJSON(j))
+				if err := dbc.CMDB.ObjectCreate(id(j), *typ, body); err != nil {
 					atomic.AddInt64(&errCount, 1)
-					fmt.Fprintf(os.Stderr, "  worker %d create %s: %v\n", w, id(i), err)
+					fmt.Fprintf(os.Stderr, "  worker %d seed-create %s: %v\n", w, id(j), err)
 					return
 				}
 				atomic.AddInt64(&created, 1)
-
-				if i > 0 {
-					if err := dbc.CMDB.ObjectsLinkCreate(id(i-1), id(i), fmt.Sprintf("l%d", i), nil); err != nil {
+				if j > 0 {
+					if err := dbc.CMDB.ObjectsLinkCreate(id(j-1), id(j), fmt.Sprintf("l%d", j), nil); err != nil {
 						atomic.AddInt64(&errCount, 1)
-						fmt.Fprintf(os.Stderr, "  worker %d link: %v\n", w, err)
+						fmt.Fprintf(os.Stderr, "  worker %d seed-link: %v\n", w, err)
 						return
 					}
 				}
-				if i%5 == 0 {
-					ub := easyjson.NewJSONObjectWithKeyValue("idx", easyjson.NewJSON(i))
-					ub.SetByPath("touched", easyjson.NewJSON(true))
-					if err := dbc.CMDB.ObjectUpdate(id(i), ub, true); err != nil {
+			}
+
+			// Step 2 — steady loop: mostly updates, periodic delete+recreate.
+			counter := 0
+			for time.Now().Before(deadline) {
+				j := counter % N
+				if counter > 0 && counter%*refreshEvery == 0 {
+					// CRUD-full path: drop and recreate this slot. Links
+					// involving it go with the delete; we do NOT restore
+					// them (chain becomes progressively sparser as the run
+					// continues, which itself is fine signal — what we
+					// guard is cardinality stability, not topology).
+					if err := dbc.CMDB.ObjectDelete(id(j)); err != nil {
 						atomic.AddInt64(&errCount, 1)
-						fmt.Fprintf(os.Stderr, "  worker %d update: %v\n", w, err)
+						fmt.Fprintf(os.Stderr, "  worker %d delete %s: %v\n", w, id(j), err)
+						return
+					}
+					atomic.AddInt64(&deleted, 1)
+					body := easyjson.NewJSONObjectWithKeyValue("idx", easyjson.NewJSON(j))
+					body.SetByPath("recreated_at", easyjson.NewJSON(counter))
+					if err := dbc.CMDB.ObjectCreate(id(j), *typ, body); err != nil {
+						atomic.AddInt64(&errCount, 1)
+						fmt.Fprintf(os.Stderr, "  worker %d recreate %s: %v\n", w, id(j), err)
+						return
+					}
+					atomic.AddInt64(&created, 1)
+				} else {
+					ub := easyjson.NewJSONObjectWithKeyValue("idx", easyjson.NewJSON(j))
+					ub.SetByPath("counter", easyjson.NewJSON(counter))
+					if err := dbc.CMDB.ObjectUpdate(id(j), ub, true); err != nil {
+						atomic.AddInt64(&errCount, 1)
+						fmt.Fprintf(os.Stderr, "  worker %d update %s: %v\n", w, id(j), err)
 						return
 					}
 					atomic.AddInt64(&updated, 1)
 				}
-				// Occasionally delete an object a few steps back (its links go
-				// with it); deletes must stay idempotent/consistent under load.
-				if i > 10 && i%7 == 0 {
-					if err := dbc.CMDB.ObjectDelete(id(i - 9)); err != nil {
-						atomic.AddInt64(&errCount, 1)
-						fmt.Fprintf(os.Stderr, "  worker %d delete: %v\n", w, err)
-						return
-					}
-					atomic.AddInt64(&deleted, 1)
-				}
-				i++
+				counter++
 			}
 		}(w)
 	}
 	wg.Wait()
 
-	fmt.Printf("soak done: workers=%d duration=%ds created=%d updated=%d deleted=%d errors=%d\n",
-		*workers, *duration, created, updated, deleted, errCount)
+	fmt.Printf("soak done: workers=%d duration=%ds pool=%d created=%d updated=%d deleted=%d errors=%d\n",
+		*workers, *duration, *pool, created, updated, deleted, errCount)
 	if errCount > 0 {
 		die("soak FAILED: %d operation error(s)", errCount)
 	}
