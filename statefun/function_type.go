@@ -701,32 +701,41 @@ func (ft *FunctionType) findObjectType(id string) (string, error) {
 	return response.GetByPath("data.type").AsStringDefault(""), nil
 }
 
+// stopSignalSubscription tears the signal subscription down for a passive
+// transition. Uses Unsubscribe(), not Drain(): becomePassive is an emergency
+// stop, not a graceful shutdown.
+//
+// Why this matters — production incident 116-class:
+//
+// becomePassive runs synchronously on the lifecycle ticker goroutine. The
+// previous Drain() + 10-second per-subscription wait turned this into a
+// 20-30 second hostage situation across all ~26 function types whenever
+// NATS was momentarily unreachable (Drain() blocks on round-trips that
+// won't complete). During those 20-30 s the lifecycle ticker is frozen
+// and CANNOT attempt to re-acquire the runtime lock, so by the time
+// becomePassive returns the lock TTL has expired and recovery is already
+// far behind. The soak test (tests/soak/nats-stall-recovery) reproduced
+// exactly this: a 30 s NATS pause + 26 s drain pushed total stall past
+// the 30 s SLO every time.
+//
+// Unsubscribe() returns once the local subscription is cleared, regardless
+// of NATS reachability. Any in-flight signal that already crossed sendMsg
+// into ft.idHandlersChannel is then dropped by dropAllFunctionPendingTasks
+// in the very next line of becomePassive; anything still unacked at the
+// JetStream broker is automatically redelivered to the next active
+// subscriber in the queue group. Both cases are safe — what we lose by
+// not waiting for in-flight callbacks is exactly nothing of correctness,
+// only the symmetric "graceful" log line. Worth it: recovery now starts
+// within milliseconds of the lock being lost.
 func (ft *FunctionType) stopSignalSubscription() {
-	if !ft.signalSubscription.IsValid() {
+	if ft.signalSubscription == nil || !ft.signalSubscription.IsValid() {
 		return
 	}
-	lg.Logf(lg.DebugLevel, "draining signal subscription for typename %s", ft.name)
-	if err := ft.signalSubscription.Drain(); err != nil {
-		lg.Logf(lg.ErrorLevel, "failed to drain signal subscription for typename %s: %s", ft.name, err.Error())
+	if err := ft.signalSubscription.Unsubscribe(); err != nil {
+		lg.Logf(lg.ErrorLevel, "failed to unsubscribe signal subscription for typename %s: %s", ft.name, err.Error())
 		return
 	}
-
-	timeout := time.After(10 * time.Second)
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-timeout:
-			lg.Logf(lg.ErrorLevel, "timeout waiting for signal subscription drain for typename %s", ft.name)
-			return
-		case <-ticker.C:
-			if !ft.signalSubscription.IsValid() {
-				lg.Logf(lg.ErrorLevel, "signal subscription drained successfully for typename %s", ft.name)
-				return
-			}
-		}
-	}
+	lg.Logf(lg.DebugLevel, "unsubscribe signal subscription for typename %s", ft.name)
 }
 
 func (ft *FunctionType) stopRequestSubscription() {
