@@ -249,3 +249,107 @@ func indexOfShard(sm *ShardedMap, key string) int {
 	}
 	return int(idx)
 }
+
+// --- lazy shard allocation ---
+//
+// The shard's inner map is allocated only on first write. This eliminates the
+// per-shard hmap header for shards that never get touched — which is the
+// common case in the cache tree where most ShardedMap instances belong to
+// nodes with a single child. The tests below pin that contract: a fresh
+// ShardedMap holds no maps; only shards that received a write hold them;
+// read-only operations and Delete never allocate; Clear resets back to the
+// fresh state.
+
+func countAllocatedShardMaps(sm *ShardedMap) int {
+	n := 0
+	for i := range sm.shards {
+		s := &sm.shards[i]
+		s.mu.RLock()
+		if s.m != nil {
+			n++
+		}
+		s.mu.RUnlock()
+	}
+	return n
+}
+
+func TestLazyAlloc_NewIsAllNil(t *testing.T) {
+	sm := SharedMapMustNewHashed(8)
+	if n := countAllocatedShardMaps(sm); n != 0 {
+		t.Fatalf("fresh ShardedMap should have 0 allocated shard maps, got %d", n)
+	}
+}
+
+func TestLazyAlloc_ReadsDoNotAllocate(t *testing.T) {
+	sm := SharedMapMustNewHashed(8)
+
+	// All of these must work without allocating any shard map.
+	if _, ok := sm.Get("missing"); ok {
+		t.Fatalf("Get on empty returned ok=true")
+	}
+	if sm.Has("missing") {
+		t.Fatalf("Has on empty returned true")
+	}
+	if l := sm.Len(); l != 0 {
+		t.Fatalf("Len on empty = %d, want 0", l)
+	}
+	if k := sm.Keys(); len(k) != 0 {
+		t.Fatalf("Keys on empty = %v, want []", k)
+	}
+	if s := sm.Snapshot(); len(s) != 0 {
+		t.Fatalf("Snapshot on empty = %v, want {}", s)
+	}
+	visited := false
+	sm.Range(func(string, interface{}) bool { visited = true; return true })
+	if visited {
+		t.Fatalf("Range on empty visited a key")
+	}
+	sm.Delete("missing") // Delete on nil map is a no-op in Go.
+
+	if n := countAllocatedShardMaps(sm); n != 0 {
+		t.Fatalf("read-only / delete-only ops must not allocate; got %d shard maps", n)
+	}
+}
+
+func TestLazyAlloc_FirstWriteAllocatesOneShard(t *testing.T) {
+	sm := SharedMapMustNewHashed(8)
+	sm.Set("a", 1)
+	if n := countAllocatedShardMaps(sm); n != 1 {
+		t.Fatalf("after a single Set expected exactly 1 allocated shard map, got %d", n)
+	}
+}
+
+func TestLazyAlloc_ClearReturnsToNil(t *testing.T) {
+	sm := SharedMapMustNewHashed(8)
+	for i := 0; i < 50; i++ {
+		sm.Set(fmt.Sprintf("k%d", i), i)
+	}
+	if n := countAllocatedShardMaps(sm); n == 0 {
+		t.Fatalf("expected some shards to be allocated after 50 Sets, got 0")
+	}
+	sm.Clear()
+	if n := countAllocatedShardMaps(sm); n != 0 {
+		t.Fatalf("after Clear expected 0 allocated shard maps, got %d", n)
+	}
+	if l := sm.Len(); l != 0 {
+		t.Fatalf("after Clear Len = %d, want 0", l)
+	}
+}
+
+func TestLazyAlloc_LoadOrStoreOnlyAllocatesOnInsert(t *testing.T) {
+	sm := SharedMapMustNewHashed(8)
+	// existing-key path on empty map must NOT allocate
+	if _, loaded := sm.LoadOrStore("k", 0); loaded {
+		t.Fatalf("LoadOrStore on empty must return loaded=false")
+	}
+	if n := countAllocatedShardMaps(sm); n != 1 {
+		t.Fatalf("first LoadOrStore should allocate exactly 1 shard map, got %d", n)
+	}
+	// second LoadOrStore on same key must not change the count
+	if _, loaded := sm.LoadOrStore("k", 7); !loaded {
+		t.Fatalf("LoadOrStore on existing must return loaded=true")
+	}
+	if n := countAllocatedShardMaps(sm); n != 1 {
+		t.Fatalf("repeat LoadOrStore on same key allocated more shard maps: got %d, want 1", n)
+	}
+}

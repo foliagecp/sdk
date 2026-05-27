@@ -7,9 +7,23 @@ import (
 
 // shard is an independent segment with its own map and RWMutex.
 // Contention is limited to a single shard for operations on keys that hash there.
+//
+// The map is lazily allocated on the first write into this shard
+// (see Set / LoadOrStore). Reads, Delete, Len, Range, Keys and Snapshot all
+// rely on Go's well-defined nil-map behaviour ("read/iterate/delete on a nil
+// map is a no-op; len(nil) == 0") and therefore do not need to allocate.
+//
+// Why lazy: in the cache tree under cache.StoreValue.store a fresh node with
+// one child still ends up creating an 8-shard ShardedMap. With eager
+// allocation that meant 8 empty hmap headers (~48 B each) per node, even
+// when only one shard ever gets used — at ~600 k such nodes that is ~200 MB
+// of hmap headers and ~3.5 M extra heap objects walked by every GC cycle.
+// Holding off until the first write deletes that overhead almost entirely
+// without changing the concurrency profile of nodes that DO use multiple
+// shards.
 type shard struct {
 	mu sync.RWMutex
-	m  map[string]interface{}
+	m  map[string]interface{} // nil until first write
 }
 
 // ShardedMap is a hash-sharded, concurrency-safe map.
@@ -21,6 +35,9 @@ type ShardedMap struct {
 
 // NewHashed creates a sharded map with the given number of shards.
 // shardCount must be > 0. If shardCount is a power of two, shard selection is a fast bitmask.
+//
+// Shards are created with nil maps — see the comment on type shard for why.
+// The first write into a shard allocates its map under that shard's lock.
 func SharedMapNewHashed(shardCount int) (*ShardedMap, error) {
 	if shardCount <= 0 {
 		return nil, errors.New("shardCount must be > 0")
@@ -28,9 +45,6 @@ func SharedMapNewHashed(shardCount int) (*ShardedMap, error) {
 	sm := &ShardedMap{
 		shards:   make([]shard, shardCount),
 		pow2Mask: pow2Mask(uint64(shardCount)),
-	}
-	for i := range sm.shards {
-		sm.shards[i].m = make(map[string]interface{})
 	}
 	return sm, nil
 }
@@ -49,6 +63,9 @@ func SharedMapMustNewHashed(shardCount int) *ShardedMap {
 func (sm *ShardedMap) Set(key string, value interface{}) {
 	s := sm.shardFor(key)
 	s.mu.Lock()
+	if s.m == nil {
+		s.m = make(map[string]interface{})
+	}
 	s.m[key] = value
 	s.mu.Unlock()
 }
@@ -67,8 +84,13 @@ func (sm *ShardedMap) LoadOrStore(key string, val interface{}) (actual interface
 	s := sm.shardFor(key)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Read on a nil map is well-defined (returns zero, false), so this works
+	// before the lazy allocation below.
 	if v, ok := s.m[key]; ok {
 		return v, true
+	}
+	if s.m == nil {
+		s.m = make(map[string]interface{})
 	}
 	s.m[key] = val
 	return val, false
@@ -157,12 +179,14 @@ func (sm *ShardedMap) Snapshot() map[string]interface{} {
 	return cp
 }
 
-// Clear wipes all shards.
+// Clear wipes all shards. Resets each shard's map to nil so the lazy-alloc
+// invariant is preserved across Clear/Set cycles — a Clear'd shard that is
+// never touched again contributes zero heap overhead.
 func (sm *ShardedMap) Clear() {
 	for i := range sm.shards {
 		s := &sm.shards[i]
 		s.mu.Lock()
-		s.m = make(map[string]interface{})
+		s.m = nil
 		s.mu.Unlock()
 	}
 }
