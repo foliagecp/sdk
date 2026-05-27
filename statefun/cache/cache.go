@@ -480,38 +480,111 @@ func (cs *Store) RehydrateFromKV(ctx context.Context) error {
 	return cs.loadFromKV(ctx)
 }
 
-// traverseCacheForMaintenance performs a DFS without collecting/publishing WAL
-// ops. It counts cache nodes (for the cache_values metric) and runs GC on
-// empty leaves. Called infrequently (every N iterations) by kvLazyWriter.
+// traverseCacheForMaintenance performs a post-order DFS that counts nodes
+// (for the cache_values metric) AND collapses tombstone cascades.
 //
-// Backup-barrier readiness is no longer decided here — it is a single watermark
-// comparison (Store.CommittedTxTime() ≥ barrierTimestamp), done by kvLazyWriter
-// at the same maintenance tick. This removed the previous full-tree scan that
-// touched every node's lock and syncedWithKV bit per maintenance cycle.
+// History — the previous version did an iterative DFS that called
+// collectGarbage() only on nodes with no children ("noChildren" branch).
+// That had a structural problem: a tombstone chain A→B(†)→C(†)→D(†) where
+// only D is a leaf needed K maintenance passes to disappear (K = depth of
+// the chain). Under churn — every ll_crud.go ObjectDelete fans into ~5
+// DeleteValue calls, each leaving a tombstone whose subtree may contain
+// other tombstones — the chain accumulates faster than leaf-only GC can
+// shrink it, and the in-memory tree grows without bound while the KV
+// itself stays constant. Stand 116 (2026-05-27) saw heap_objects climb
+// 8M → 130M over 4h with KV stable at ~258k entries — that ratio (~500
+// Go-objects per KV entry) is the signature of this cascade leaving
+// orphaned StoreValue branches the runtime never reclaims.
+//
+// New implementation — post-order recursion. For each node we first
+// sweep all its children, get back the keys of those that are themselves
+// fully removable, then drop them from this node's store. After children
+// are processed we report our own removability back to the caller. A
+// single pass therefore collapses any cascade depth: D is reported dead
+// to C, which becomes a leaf-tombstone and reports dead to B, etc.
+//
+// Race against concurrent writes — between a child returning canRemove=
+// true and the parent actually deleting it from its store, a concurrent
+// Put on the same path could resurrect the child. We protect against
+// that by re-checking the child's state under its own lock just before
+// the delete; if the recheck shows the child became valid again, we
+// leave it alone. This is the protocol Skala-backend's report flagged
+// the old asynchronous collectGarbage cascade for racing on, and it is
+// fixed here.
+//
+// Root is never removed (it has no parent and is the cache entry point).
+//
+// Backup-barrier readiness is no longer decided here — it is a single
+// watermark comparison (Store.CommittedTxTime() ≥ barrierTimestamp),
+// done by kvLazyWriter at the same maintenance tick. That removal
+// pre-dates this change.
 func (cs *Store) traverseCacheForMaintenance() *maintenanceResult {
 	result := &maintenanceResult{}
+	cs.sweepSubtree(cs.rootValue, result)
+	return result
+}
 
-	cacheStoreValueStack := []*StoreValue{cs.rootValue}
-	for len(cacheStoreValueStack) > 0 {
-		lastID := len(cacheStoreValueStack) - 1
-		currentStoreValue := cacheStoreValueStack[lastID]
-		cacheStoreValueStack = cacheStoreValueStack[:lastID]
+// sweepSubtree post-order DFS sweep. Returns true if csv is now itself
+// removable from its parent (tombstoned AND no surviving children).
+//
+// MUST NOT be called on the cache root from a context that would honour
+// the returned bool — traverseCacheForMaintenance is the sole caller and
+// discards the root's return value (the root has no parent so the value
+// is meaningless there).
+func (cs *Store) sweepSubtree(csv *StoreValue, result *maintenanceResult) bool {
+	result.valueCount++
 
-		result.valueCount++
-
-		noChildren := true
-		currentStoreValue.Range(func(key, value interface{}) bool {
-			noChildren = false
-			cacheStoreValueStack = append(cacheStoreValueStack, value.(*StoreValue))
+	// Step 1 — recurse into each child, collecting keys of children that
+	// reported themselves as fully removable. We snapshot the children via
+	// ShardedMap.Range (which itself snapshots each shard under RLock to
+	// avoid lock inversion, see system/shardedmap.go); concurrent inserts
+	// during the snapshot are fine, they just won't be visited this pass
+	// and will be picked up the next time around.
+	var deadKeys []string
+	csv.Range(func(key, value interface{}) bool {
+		child, ok := value.(*StoreValue)
+		if !ok {
 			return true
-		})
+		}
+		if cs.sweepSubtree(child, result) {
+			deadKeys = append(deadKeys, key.(string))
+		}
+		return true
+	})
 
-		if noChildren {
-			currentStoreValue.collectGarbage()
+	// Step 2 — drop removable children. Recheck each under the child's
+	// own lock to close the race window: a concurrent Put could have
+	// landed between the recursive sweepSubtree returning true and now,
+	// which would mean the child is no longer dead. Skip those.
+	if len(deadKeys) > 0 {
+		if sm := csv.loadStore(); sm != nil {
+			for _, k := range deadKeys {
+				raw, ok := sm.Get(k)
+				if !ok {
+					continue
+				}
+				child, ok := raw.(*StoreValue)
+				if !ok {
+					continue
+				}
+				child.Lock("sweepSubtree-confirm")
+				stillDead := !child.valueExists && child.storeLen() == 0
+				child.Unlock("sweepSubtree-confirm")
+				if stillDead {
+					sm.Delete(k)
+				}
+			}
 		}
 	}
 
-	return result
+	// Step 3 — am I removable? Root never is.
+	if csv.parent == nil {
+		return false
+	}
+	csv.Lock("sweepSubtree-self")
+	canRemove := !csv.valueExists && csv.storeLen() == 0
+	csv.Unlock("sweepSubtree-self")
+	return canRemove
 }
 
 func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamContext, kv nats.KeyValue) *Store {
