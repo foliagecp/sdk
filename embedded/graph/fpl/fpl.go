@@ -36,6 +36,12 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 		PostProcessorVertexBody,
 		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMultipleInstancesAllowance(false).SetMsgAckWaitMs(MAX_ACK_WAIT_MS),
 	)
+	statefun.NewFunctionType(
+		runtime,
+		"functions.graph.api.query.fpl.pp.obody",
+		PostProcessorObjectBody,
+		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMultipleInstancesAllowance(false).SetMsgAckWaitMs(MAX_ACK_WAIT_MS),
+	)
 }
 
 /*
@@ -113,8 +119,8 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 	}
 
 	var (
-		statsMu        sync.Mutex
-		allJpgqlCalls  []jpgqlCallStat
+		statsMu       sync.Mutex
+		allJpgqlCalls []jpgqlCallStat
 	)
 	recordCallStat := func(s jpgqlCallStat) {
 		statsMu.Lock()
@@ -167,19 +173,13 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 				subOpMsg := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.query.jpgql.ctra", jpgqlCallID, &payload, &subOptions))
 
 				// Record per-call stats regardless of status — failed/incomplete
-				// calls are part of the diagnostic story too. Status name lookup
-				// uses OpStatusNames (mediator/msg.go) so the response surfaces
-				// "ok"|"idle"|"incomplete"|"failed" verbatim instead of an int.
-				statusName := "unknown"
-				if int(subOpMsg.Status) >= 0 && int(subOpMsg.Status) < len(sfMediators.OpStatusNames) {
-					statusName = sfMediators.OpStatusNames[subOpMsg.Status]
-				}
+				// calls are part of the diagnostic story too.
 				recordCallStat(jpgqlCallStat{
 					uoiIndex:          uoiIdx,
 					intersectionIndex: intersectionIdx,
 					query:             jpgqlQuery.request,
 					fromUUID:          jpgqlQuery.uuid,
-					status:            statusName,
+					status:            string(subOpMsg.Status),
 					stats:             subOpMsg.Data.GetByPath("stats"),
 				})
 
@@ -292,6 +292,78 @@ func PostProcessorVertexBody(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Statef
 
 			payload := easyjson.NewJSONObject()
 			om := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", uuid, &payload, nil))
+
+			uuiDataMutex.Lock()
+			defer uuiDataMutex.Unlock()
+			if om.Status == sfMediators.SYNC_OP_STATUS_OK {
+				uuidDatas[i] = &om.Data
+			} else {
+				uuidDatas[i] = easyjson.NewJSONObject().GetPtr()
+			}
+			uuidDatas[i].SetByPath("uuid", easyjson.NewJSON(uuid))
+		}(i, uuid)
+	}
+	wg.Wait()
+
+	if sortFields, ok := ctx.Payload.GetByPath("data.sort_by_field").AsArrayString(); ok {
+		uuidDatas = system.SortJSONs(uuidDatas, sortFields)
+	}
+
+	resultJsonArray := easyjson.NewJSONArray()
+	for _, uuidData := range uuidDatas {
+		resultJsonArray.AddToArray(*uuidData)
+	}
+
+	resultJson := easyjson.NewJSONObjectWithKeyValue("arr", resultJsonArray)
+	om.AggregateOpMsg(sfMediators.OpMsgOk(resultJson)).Reply()
+}
+
+/*
+PostProcessorObjectBody is the CMDB-object counterpart of PostProcessorVertexBody.
+
+Layout of the request is identical to .pp.vbody:
+
+	{
+		"uuids": [...],
+		"data": {
+			"sort_by_field": [
+				"<field name 1>[:asc|:dsc]",
+				"<field name 2>[:asc|:dsc]",
+				...
+			]
+		}
+	}
+
+The only difference is the per-uuid fetch: instead of the raw graph-level
+"functions.graph.api.vertex.read", this post-processor calls the CMDB-level
+"functions.cmdb.api.object.read" with the "details_v2" payload flag. That gives
+the caller the v2-shaped CMDB object (structured links.out array, body, type)
+rather than the raw vertex projection — which is what report exports usually
+want, identical to ObjectReadV2 in clients/go/db.
+
+Each uuid is fetched concurrently; on a failed read a placeholder empty object
+is inserted (with the "uuid" field still set) so the result array length and
+caller-visible indexing match the input uuids list, mirroring vbody behavior.
+*/
+func PostProcessorObjectBody(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	om := sfMediators.NewOpMediator(ctx)
+
+	uuids := []string{}
+	if arr, ok := ctx.Payload.GetByPath("uuids").AsArrayString(); ok {
+		uuids = arr
+	}
+
+	var wg sync.WaitGroup
+	uuidDatas := make([]*easyjson.JSON, len(uuids))
+	var uuiDataMutex sync.Mutex
+	for i, uuid := range uuids {
+		wg.Add(1)
+		go func(i int, uuid string) {
+			defer wg.Done()
+
+			payload := easyjson.NewJSONObject()
+			payload.SetByPath("details_v2", easyjson.NewJSON(true))
+			om := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", uuid, &payload, nil))
 
 			uuiDataMutex.Lock()
 			defer uuiDataMutex.Unlock()
