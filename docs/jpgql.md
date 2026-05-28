@@ -174,6 +174,46 @@ JPGQL CTRA is a synchronous request/reply function. Send a NATS request to `requ
 
 The response contains `data.uuids` (matching vertex IDs) and `data.stats` (query performance statistics). Vertex IDs include the domain prefix (e.g. `hub/g`). The `stats` field is omitted in the examples below for brevity.
 
+## Options
+
+CTRA accepts an optional `options` object alongside `payload` in the NATS request. All fields are optional; defaults are picked when omitted.
+
+| Option | Type | Default | Meaning |
+|---|---|---|---|
+| `qds_timeout_sec` | float | `5` | Query Depth Spreading timeout in seconds. Once the elapsed time since query start exceeds this, no further DFS expansion happens; what was already discovered is returned. Note the whole-query wall-clock can be up to roughly twice this number (accumulation phase + cross-domain calls). |
+| `max_depth` | int | `-1` | Maximum traversal depth. `-1` means unlimited; otherwise vertices beyond this depth are not expanded and are counted under `stats.paths_skipped.depth`. |
+
+Internal options (`query_started_nano`, `call_started_nano`, `depth`) are set by the runtime for each invocation and are not intended to be supplied by callers.
+
+Example using `qds_timeout_sec` to cap a long traversal at 2 seconds:
+
+```sh
+nats -s nats://nats:foliage@nats:4222 req request.hub.functions.graph.api.query.jpgql.ctra.root "$(jq -n '
+{
+    "payload": { "query": "..*" },
+    "options": { "qds_timeout_sec": 2.0, "max_depth": 5 }
+}
+')" | jq '.'
+```
+
+## Response stats
+
+The `data.stats` object contains:
+
+| Path | Meaning |
+|---|---|
+| `stats.call_tree.vertices_passed` | Total vertices the traversal visited (including those that didn't match the query) |
+| `stats.call_tree.max_depth_reached` | Deepest level the traversal reached during expansion |
+| `stats.paths_skipped.depth` | Branches abandoned because `max_depth` was reached |
+| `stats.paths_skipped.timeout` | Branches abandoned because `qds_timeout_sec` elapsed |
+| `stats.paths_skipped.backpressure` | Legacy field, always `0` in the current implementation (kept for response-schema compatibility) |
+| `stats.times.query_start_nano` | When the top-level query started (UnixNano) |
+| `stats.times.qds_end_nano` | When the depth-spreading phase finished (UnixNano) |
+| `stats.times.query_end_nano` | When the response was assembled (UnixNano) |
+| `stats.duration.query_nano` | Total wall clock duration of the query |
+| `stats.duration.qds_nano` | Depth-spreading-phase duration |
+| `stats.duration.max_backpressure_nano` | Legacy field, always `0` in the current implementation (kept for response-schema compatibility) |
+
 ## JPGQL_CTRA query examples
 
 > In the examples below the domain is `hub` (default). Adjust to match your deployment.

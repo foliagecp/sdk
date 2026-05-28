@@ -69,6 +69,63 @@ FPL query syntax is based on JSON structure and can be described by the followin
 
 ---
 
+## Options
+
+FPL accepts an optional `options` object that mirrors JPGQL's CTRA options. Whatever is set here is forwarded **to every individual `jpgql.ctra` sub-call** that FPL spawns; if the caller omits an option, FPL falls back to the same default JPGQL uses internally.
+
+| Option | Type | Default | Meaning |
+|---|---|---|---|
+| `qds_timeout_sec` | float | `5` | Forwarded to each jpgql.ctra call as its Query Depth Spreading timeout. See [jpgql.md](./jpgql.md) for semantics. |
+| `max_depth` | int | `-1` | Forwarded to each jpgql.ctra call as its maximum traversal depth. |
+
+Note these are FPL-level options — they apply uniformly across all sub-queries in `jpgql_uoi`. There is no per-sub-query override in the current schema; if you need different timeouts/depths for different jpgql queries inside a single FPL request, run them as separate FPL calls.
+
+Example:
+
+```bash
+nats -s nats://nats:foliage@nats:4222 req request.hub.functions.graph.api.query.fpl.root "$(jq -n '
+{
+    "payload": {
+        "jpgql_uoi": [
+            [{"jpgql": "..*", "from_uuid": "pak1/scala_hlm_hw-server"}]
+        ]
+    },
+    "options": { "qds_timeout_sec": 2.0, "max_depth": 5 }
+}
+')" | jq '.'
+```
+
+---
+
+## Response
+
+The FPL response is a JSON object with:
+
+```json
+{
+  "uuids": ["<uuid_1>", "<uuid_2>", "..."],
+  "stats": {
+    "jpgql_calls": [
+      {
+        "uoi_index":          0,
+        "intersection_index": 0,
+        "query":              "<jpgql query string>",
+        "from_uuid":          "<starting vertex>",
+        "status":             "ok" | "idle" | "incomplete" | "failed",
+        "stats":              { /* native jpgql.ctra stats — see jpgql.md */ }
+      },
+      ...
+    ]
+  }
+}
+```
+
+`stats.jpgql_calls` is the **per-sub-query diagnostic**: one entry for every individual `jpgql.ctra` invocation FPL made, regardless of whether that call succeeded, failed, timed out, or was idle. Entries are sorted by `(uoi_index, intersection_index)` so the array order matches the layout of the input `jpgql_uoi`. Use this when one specific sub-query in a large FPL request is slow or empty — `stats[i].stats.duration.query_nano` and `stats[i].status` tell you which one.
+
+If a `post_processor_func` is configured, the post-processor's response shape is preserved as-is and `stats.jpgql_calls` is grafted onto it under the same `stats.jpgql_calls` path. The diagnostic is always available regardless of response shape.
+
+---
+
 ## Existing Post-Processing Function in FPL
 
 Currently, the core of Foliage supports the following post-processing function:

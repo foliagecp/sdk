@@ -278,7 +278,6 @@ Request:
 	options: json - optional
 		qds_timeout_sec: float - optional // Query Depth Spreading timeout (whole query timeout will be about twice longer), default = 5
 		max_depth: int - optional // default = -1
-		bp_timeout_ms: float // Back pressure timeout ms, default = 300
 
 		query_started_nano: int // set by system from initial moment, will be overwritted if received
 		call_started_nano: int // set by system for each call, will be overwritted if received
@@ -305,10 +304,6 @@ func JPGQLCallTreeResultAggregation(_ sfPlugins.StatefunExecutor, ctx *sfPlugins
 
 	maxDepth := int(options.GetByPath("max_depth").AsNumericDefault(-1))
 	options.SetByPath("max_depth", easyjson.NewJSON(maxDepth))
-
-	// bp_timeout_ms is kept for compatibility, but is not actually used in this implementation
-	bpTimeoutMs := options.GetByPath("bp_timeout_ms").AsNumericDefault(300)
-	options.SetByPath("bp_timeout_ms", easyjson.NewJSON(bpTimeoutMs))
 
 	queryStartedNano := int64(options.GetByPath("query_started_nano").AsNumericDefault(0))
 	if queryStartedNano == 0 {
