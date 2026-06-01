@@ -36,7 +36,12 @@ func newStatefunTestEnvironment() *statefunTestEnvironment {
 	// exercise HA, and the active/passive KV-lock dance is what makes parallel
 	// `go test ./...` flaky ("Lost runtime lock, becoming passive") when many
 	// embedded-NATS runtimes contend. Disabling it makes the harness deterministic.
-	runtimeConfig := statefun.NewRuntimeConfigSimple(srv.ClientURL(), defaultRuntimeName).SetActivePassiveMode(false)
+	runtimeConfig := statefun.NewRuntimeConfigSimple(srv.ClientURL(), defaultRuntimeName).
+		SetActivePassiveMode(false).
+		// Generous JetStream API timeout: under the full suite with -race a single
+		// embedded NATS server is saturated, and KV-mutex Put/Update otherwise
+		// time out at the ~5s nats default, making CMDB ops return "failed".
+		SetNatsAPITimeoutSec(30)
 	cacheConfig := cache.NewCacheConfig(defaultCacheID)
 
 	return &statefunTestEnvironment{

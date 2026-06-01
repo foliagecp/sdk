@@ -140,7 +140,15 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		return nil, err
 	}
 
-	r.js, err = r.nc.JetStream(nats.PublishAsyncMaxPending(256))
+	jsOpts := []nats.JSOpt{nats.PublishAsyncMaxPending(256)}
+	if r.config.natsAPITimeoutSec > 0 {
+		// Raise the JetStream API request timeout (default ~5s) so KV-mutex
+		// Put/Update calls don't spuriously fail with "context deadline
+		// exceeded" when the NATS server is saturated (notably tests running the
+		// full suite under -race on one embedded server).
+		jsOpts = append(jsOpts, nats.MaxWait(time.Duration(r.config.natsAPITimeoutSec)*time.Second))
+	}
+	r.js, err = r.nc.JetStream(jsOpts...)
 	if err != nil {
 		return nil, err
 	}

@@ -13,6 +13,13 @@ const (
 	KVMutexIsOldPollingInterval = 10
 	FunctionTypeIDLifetimeMs    = 5000
 	RequestTimeoutSec           = 60
+	// NatsAPITimeoutSec is the JetStream API request timeout (nats.MaxWait) for
+	// the runtime's JS context. 0 means "leave the nats.go default" (~5s),
+	// preserving the historical behaviour. Tests raise it so KV-mutex Put/Update
+	// calls do not spuriously time out when a single embedded NATS server is
+	// saturated under the full -race suite (the failures are "context deadline
+	// exceeded" on kv.Put/Update, not a logic bug).
+	NatsAPITimeoutSec = 0
 	// FunctionPoolDrainTimeoutSec bounds how long a worker pool waits — in the
 	// background, off the lifecycle critical path — for in-flight handlers to
 	// finish after the function is torn down (passive transition / shutdown)
@@ -58,6 +65,7 @@ type RuntimeConfig struct {
 	kvMutexIsOldPollingIntervalSec int
 	functionTypeIDLifetimeMs       int
 	requestTimeoutSec              int
+	natsAPITimeoutSec              int
 	functionPoolDrainTimeoutSec    int
 	gcIntervalSec                  int
 	desiredHUBDomainName           string
@@ -114,6 +122,7 @@ func NewRuntimeConfig() *RuntimeConfig {
 		kvMutexIsOldPollingIntervalSec: KVMutexIsOldPollingInterval,
 		functionTypeIDLifetimeMs:       FunctionTypeIDLifetimeMs,
 		requestTimeoutSec:              RequestTimeoutSec,
+		natsAPITimeoutSec:              NatsAPITimeoutSec,
 		functionPoolDrainTimeoutSec:    FunctionPoolDrainTimeoutSec,
 		gcIntervalSec:                  GCIntervalSec,
 		desiredHUBDomainName:           DefaultHubDomainName,
@@ -145,6 +154,14 @@ func (ro *RuntimeConfig) UseJSDomainAsHubDomainName() *RuntimeConfig {
 
 func (ro *RuntimeConfig) SetNatsURL(natsURL string) *RuntimeConfig {
 	ro.natsURL = natsURL
+	return ro
+}
+
+// SetNatsAPITimeoutSec sets the JetStream API request timeout (nats.MaxWait)
+// for the runtime's JS context. 0 keeps the nats.go default. Mainly used by
+// tests to give a saturated embedded NATS server enough headroom under -race.
+func (ro *RuntimeConfig) SetNatsAPITimeoutSec(sec int) *RuntimeConfig {
+	ro.natsAPITimeoutSec = sec
 	return ro
 }
 
