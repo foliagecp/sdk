@@ -54,16 +54,65 @@ const (
 	flagValueTypeJSON uint8 = 1 << 1 // value type: set => typeJson, clear => typeByteArray
 )
 
+// --- shared node-lock pool -------------------------------------------------
+//
+// Instead of a 24-byte sync.RWMutex inlined in every StoreValue (millions of
+// nodes), node locks come from a fixed-size shared pool indexed by the node's
+// lockIdx. This is safe because NO cache code path ever holds two node locks
+// simultaneously — tree navigation (LoadChild/Range) is lockless via atomic
+// pointers, and every Lock/RLock is acquired and released on a single node —
+// so a pool-slot collision between two unrelated nodes can only cause extra
+// serialization, never deadlock. The size=1 stress test (every node sharing
+// ONE mutex) is the maximum-collision proof of this.
+//
+// Pool size is a power of two, configurable via CACHE_LOCK_POOL_SIZE (default
+// 65536 -> 1.5 MB, negligible). It must only be (re)sized while the cache is
+// quiescent (process init, or a test before it builds anything).
+var (
+	lockPool     []sync.RWMutex
+	lockPoolMask uint32
+	lockIdxNext  uint32 // round-robin assignment counter
+)
+
+func init() {
+	setLockPoolSize(system.GetEnvMustProceed[int]("CACHE_LOCK_POOL_SIZE", 1<<16))
+}
+
+// setLockPoolSize rounds n down to a power of two (min 1) and (re)allocates the
+// pool. NOT safe to call concurrently with cache use — init time or a quiescent
+// test only.
+func setLockPoolSize(n int) {
+	size := 1
+	for size*2 <= n {
+		size *= 2
+	}
+	lockPool = make([]sync.RWMutex, size)
+	lockPoolMask = uint32(size - 1)
+}
+
+func (csv *StoreValue) nodeMutex() *sync.RWMutex {
+	return &lockPool[csv.lockIdx&lockPoolMask]
+}
+
 type StoreValue struct {
 	parent      *StoreValue
 	keyInParent string
 	value       interface{}
 	// flags packs the former `valueExists bool` and `valueType uint8` into a
-	// single byte (one byte saved per node — at tens of millions of nodes that
-	// is tens of MB). All mutations happen under csv.storeMutex (Put / Delete /
+	// single byte. All mutations happen under the node lock (Put / Delete /
 	// SetValueType / SetValueIfDoesNotExist all hold it), so the read-modify-
 	// write on the shared byte never loses an update.
 	flags uint8
+	// lockIdx selects this node's RWMutex from the shared lockPool (instead of
+	// an inline 24-byte sync.RWMutex per node). It lands in what used to be
+	// struct padding after `flags`, so it costs ZERO extra bytes while removing
+	// the 24-byte inline mutex (96 -> 80 byte size class). Assigned once when
+	// the node joins the tree (StoreChild); unattached/default nodes use slot 0
+	// (always valid). A pool slot collision can only cause extra serialization,
+	// never deadlock: no cache path ever holds two node locks at once (tree
+	// navigation is lockless; every Lock/RLock is taken and released on a single
+	// node). See lockpool_stress_test.go for the size=1 (max-collision) proof.
+	lockIdx uint32
 	// Children are held in an ADAPTIVE container sized to the node's fanout.
 	// The fanout analysis of a real graph dump showed 88% of non-leaf nodes
 	// have exactly one child and 98.6% have <=8, so an 8-shard ShardedMap on
@@ -89,7 +138,10 @@ type StoreValue struct {
 	c1              atomic.Pointer[StoreValue]
 	more            atomic.Pointer[childOverflow]
 	valueUpdateTime int64
-	storeMutex      sync.RWMutex
+	// Note: the per-node `storeMutex sync.RWMutex` (24 bytes) is gone — the node
+	// lock now comes from the shared lockPool, indexed by lockIdx above. See
+	// lockPool below.
+	//
 	// Note: the old `syncedWithKV bool` and `purgeState int` fields are gone.
 	// They existed for the two-phase delete protocol used to coordinate
 	// multiple cache instances over a shared KV via kv.Watch echoes. With KV
@@ -103,23 +155,19 @@ type StoreValue struct {
 }
 
 func (csv *StoreValue) Lock(caller string) {
-	//lg.Logf("------- Locking '%s' by '%s'", csv.keyInParent, caller)
-	csv.storeMutex.Lock()
-	//lg.Logf(">>>>>>> Locked '%s' by '%s'", csv.keyInParent, caller)
+	csv.nodeMutex().Lock()
 }
 
 func (csv *StoreValue) Unlock(caller string) {
-	//lg.Logf(">>>>>>> Unlocking '%s' by '%s'", csv.keyInParent, caller)
-	csv.storeMutex.Unlock()
-	//lg.Logf("------- Unlocked '%s' by '%s'", csv.keyInParent, caller)
+	csv.nodeMutex().Unlock()
 }
 
 func (csv *StoreValue) RLock(caller string) {
-	csv.storeMutex.RLock()
+	csv.nodeMutex().RLock()
 }
 
 func (csv *StoreValue) RUnlock(caller string) {
-	csv.storeMutex.RUnlock()
+	csv.nodeMutex().RUnlock()
 }
 
 func (csv *StoreValue) ValueExists() bool {
@@ -246,6 +294,12 @@ func (csv *StoreValue) LoadChild(key string) (*StoreValue, bool) {
 func (csv *StoreValue) StoreChild(key string, child *StoreValue) (actual *StoreValue, loaded bool) {
 	child.parent = csv
 	child.keyInParent = key
+	// Spread the node across the lock pool round-robin as it joins the tree.
+	// (Correctness does not depend on this — an unassigned node uses slot 0,
+	// which is always valid — it only balances pool load.)
+	if child.lockIdx == 0 {
+		child.lockIdx = atomic.AddUint32(&lockIdxNext, 1)
+	}
 
 	// Hot-node fast path: already sharded — use the shard locks directly, no
 	// node lock (this is what preserves concurrent-write scaling on high-fanout
@@ -255,8 +309,8 @@ func (csv *StoreValue) StoreChild(key string, child *StoreValue) (actual *StoreV
 		return a.(*StoreValue), l
 	}
 
-	csv.storeMutex.Lock()
-	defer csv.storeMutex.Unlock()
+	csv.nodeMutex().Lock()
+	defer csv.nodeMutex().Unlock()
 
 	// Existing single child?
 	if c := csv.c1.Load(); c != nil {
@@ -316,8 +370,8 @@ func (csv *StoreValue) deleteChild(key string) {
 		m.sharded.Delete(key)
 		return
 	}
-	csv.storeMutex.Lock()
-	defer csv.storeMutex.Unlock()
+	csv.nodeMutex().Lock()
+	defer csv.nodeMutex().Unlock()
 	if c := csv.c1.Load(); c != nil && c.keyInParent == key {
 		csv.c1.Store(nil)
 		return
