@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sync"
 	"testing"
 	"time"
 
@@ -21,12 +20,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var initPrometrics sync.Once
-
 func ensurePrometrics() {
-	initPrometrics.Do(func() {
+	// GlobalPrometrics is installed once in TestMain (main_test.go) before any
+	// worker pool runs. Keep this as a defensive no-op-if-set so the test still
+	// works in isolation, but NEVER overwrite a live global — the old
+	// unconditional sync.Once write raced the worker-pool reader.
+	if system.GlobalPrometrics == nil {
 		system.GlobalPrometrics = system.NewPrometrics("", "")
-	})
+	}
 }
 
 func runTestServer(t *testing.T) *server.Server {
