@@ -1,11 +1,13 @@
 package cache
 
-// White-box tests for the lazy children-container ("store") of StoreValue.
+// White-box tests for the adaptive children-container of StoreValue.
 //
-// The memory win of PR #1 rests on a single invariant: a node that has no
-// children carries no ShardedMap at all (store == nil). The container is
-// allocated only on the first child insertion. These tests pin that
-// invariant and verify the concurrent allocation race is safe.
+// A node with no children carries no container at all (c1 == nil && more ==
+// nil). The single-child fast path keeps the one child inline in c1 (88% of
+// non-leaf nodes in a real graph). Past one child the node uses a COW
+// parallel-slice overflow, upgrading to an 8-shard ShardedMap past
+// overflowToShardedThreshold so hot high-fanout nodes keep write striping.
+// These tests pin those invariants and verify the concurrent paths are safe.
 
 import (
 	"fmt"
@@ -13,51 +15,46 @@ import (
 	"testing"
 )
 
-// Test_StoreValue_FreshNodeHasNoContainer verifies that a newly created
-// node (a leaf, the overwhelming majority) holds no ShardedMap. This is
-// the property that removes ~4.4M empty maps from a large graph.
+// Test_StoreValue_FreshNodeHasNoContainer verifies that a newly created node (a
+// leaf, the overwhelming majority) holds neither the single-child pointer nor
+// an overflow container. This is the property that removes millions of empty
+// 8-shard maps from a large graph.
 func Test_StoreValue_FreshNodeHasNoContainer(t *testing.T) {
 	csv := &StoreValue{}
 
-	if sm := csv.loadStore(); sm != nil {
-		t.Fatalf("fresh node must have nil store, got %p", sm)
+	if csv.c1.Load() != nil || csv.more.Load() != nil {
+		t.Fatalf("fresh node must have empty container (c1=%v more=%v)", csv.c1.Load(), csv.more.Load())
 	}
 	if n := csv.storeLen(); n != 0 {
 		t.Fatalf("fresh node storeLen must be 0, got %d", n)
 	}
 }
 
-// Test_StoreValue_LoadChildOnNilStore verifies read paths tolerate a nil
+// Test_StoreValue_LoadChildOnEmpty verifies read paths tolerate an empty
 // container without panicking and report "no child".
-func Test_StoreValue_LoadChildOnNilStore(t *testing.T) {
+func Test_StoreValue_LoadChildOnEmpty(t *testing.T) {
 	csv := &StoreValue{}
 
 	if child, ok := csv.LoadChild("anything"); ok || child != nil {
-		t.Fatalf("LoadChild on nil store must return (nil,false), got (%v,%v)", child, ok)
+		t.Fatalf("LoadChild on empty must return (nil,false), got (%v,%v)", child, ok)
 	}
 
-	// Range over a nil store must be a no-op (and must not panic).
 	called := false
 	csv.Range(func(key, value interface{}) bool {
 		called = true
 		return true
 	})
 	if called {
-		t.Fatalf("Range over nil store must not invoke the callback")
+		t.Fatalf("Range over empty container must not invoke the callback")
 	}
 }
 
-// Test_StoreValue_ContainerAllocatedOnFirstChild verifies the container
-// appears exactly when the first child is stored, and the child is then
-// retrievable.
-func Test_StoreValue_ContainerAllocatedOnFirstChild(t *testing.T) {
+// Test_StoreValue_SingleChildFastPath verifies the first child lands in the
+// inline c1 fast path (no overflow allocated), and is retrievable.
+func Test_StoreValue_SingleChildFastPath(t *testing.T) {
 	parent := &StoreValue{}
 
-	if parent.loadStore() != nil {
-		t.Fatalf("precondition: parent must start with nil store")
-	}
-
-	child := &StoreValue{value: []byte("v"), valueExists: true}
+	child := &StoreValue{value: []byte("v"), flags: flagValueExists}
 	actual, loaded := parent.StoreChild("c1", child)
 	if loaded {
 		t.Fatalf("first StoreChild must report loaded=false")
@@ -66,8 +63,11 @@ func Test_StoreValue_ContainerAllocatedOnFirstChild(t *testing.T) {
 		t.Fatalf("StoreChild must return the inserted child on first insert")
 	}
 
-	if parent.loadStore() == nil {
-		t.Fatalf("container must be allocated after first child insertion")
+	if parent.c1.Load() != child {
+		t.Fatalf("first child must occupy the inline c1 fast path")
+	}
+	if parent.more.Load() != nil {
+		t.Fatalf("a single-child node must NOT allocate an overflow container")
 	}
 	if n := parent.storeLen(); n != 1 {
 		t.Fatalf("storeLen must be 1 after one child, got %d", n)
@@ -77,27 +77,96 @@ func Test_StoreValue_ContainerAllocatedOnFirstChild(t *testing.T) {
 	if !ok || got != child {
 		t.Fatalf("inserted child must be retrievable, got (%v,%v)", got, ok)
 	}
-
-	// Parent/key wiring set by StoreChild.
 	if child.parent != parent || child.keyInParent != "c1" {
 		t.Fatalf("StoreChild must wire child.parent and child.keyInParent")
 	}
 }
 
-// Test_StoreValue_ensureStoreIdempotent verifies repeated ensureStore
-// returns the same container instance (no reallocation).
-func Test_StoreValue_ensureStoreIdempotent(t *testing.T) {
-	csv := &StoreValue{}
-	a := csv.ensureStore()
-	b := csv.ensureStore()
-	if a == nil || a != b {
-		t.Fatalf("ensureStore must return the same non-nil container, got a=%p b=%p", a, b)
+// Test_StoreValue_AdaptiveTransitions walks the container through all three
+// representations — inline single (1), COW slice (2..threshold), sharded
+// (>threshold) — and checks every inserted child stays retrievable and the
+// count is exact across each transition.
+func Test_StoreValue_AdaptiveTransitions(t *testing.T) {
+	parent := &StoreValue{}
+	total := overflowToShardedThreshold + 5 // cross both transitions
+
+	for i := 0; i < total; i++ {
+		key := fmt.Sprintf("k%d", i)
+		parent.StoreChild(key, &StoreValue{value: []byte(key), flags: flagValueExists})
+
+		// After 1 child: inline. After 2..threshold: slice overflow. After
+		// >threshold: sharded.
+		switch {
+		case i == 0:
+			if parent.c1.Load() == nil || parent.more.Load() != nil {
+				t.Fatalf("after 1 child: expected inline c1, no overflow")
+			}
+		case i+1 <= overflowToShardedThreshold:
+			m := parent.more.Load()
+			if parent.c1.Load() != nil || m == nil || m.sharded != nil {
+				t.Fatalf("after %d children: expected COW-slice overflow", i+1)
+			}
+		default:
+			m := parent.more.Load()
+			if m == nil || m.sharded == nil {
+				t.Fatalf("after %d children (> %d): expected sharded overflow", i+1, overflowToShardedThreshold)
+			}
+		}
+
+		if got := parent.storeLen(); got != i+1 {
+			t.Fatalf("storeLen must be %d, got %d", i+1, got)
+		}
+	}
+
+	// All children retrievable after both transitions.
+	for i := 0; i < total; i++ {
+		key := fmt.Sprintf("k%d", i)
+		if got, ok := parent.LoadChild(key); !ok || got == nil {
+			t.Fatalf("child %q lost across transitions", key)
+		}
+	}
+
+	// Range visits exactly the inserted set.
+	seen := map[string]bool{}
+	parent.Range(func(k, v interface{}) bool {
+		seen[k.(string)] = true
+		return true
+	})
+	if len(seen) != total {
+		t.Fatalf("Range must visit %d children, saw %d", total, len(seen))
 	}
 }
 
-// Test_StoreValue_ConcurrentFirstChild stresses the lazy-allocation race:
-// many goroutines insert distinct children into a fresh parent at once.
-// All children must survive and exactly one container must back them.
+// Test_StoreValue_DeleteChild covers removal in each representation.
+func Test_StoreValue_DeleteChild(t *testing.T) {
+	parent := &StoreValue{}
+
+	// single -> empty
+	parent.StoreChild("only", &StoreValue{flags: flagValueExists})
+	parent.deleteChild("only")
+	if parent.storeLen() != 0 || parent.c1.Load() != nil {
+		t.Fatalf("deleting the single child must empty the node")
+	}
+
+	// build up to slice, delete from middle
+	for i := 0; i < 4; i++ {
+		parent.StoreChild(fmt.Sprintf("s%d", i), &StoreValue{flags: flagValueExists})
+	}
+	parent.deleteChild("s1")
+	if parent.storeLen() != 3 {
+		t.Fatalf("slice delete must leave 3, got %d", parent.storeLen())
+	}
+	if _, ok := parent.LoadChild("s1"); ok {
+		t.Fatalf("deleted slice child must be gone")
+	}
+	if _, ok := parent.LoadChild("s2"); !ok {
+		t.Fatalf("sibling must survive slice delete")
+	}
+}
+
+// Test_StoreValue_ConcurrentFirstChild stresses concurrent inserts of distinct
+// children into a fresh parent (crosses inline->slice->sharded under racing
+// writers). All children must survive; run with -race.
 func Test_StoreValue_ConcurrentFirstChild(t *testing.T) {
 	const n = 256
 	parent := &StoreValue{}
@@ -108,14 +177,11 @@ func Test_StoreValue_ConcurrentFirstChild(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			key := fmt.Sprintf("k%d", i)
-			parent.StoreChild(key, &StoreValue{value: []byte(key), valueExists: true})
+			parent.StoreChild(key, &StoreValue{value: []byte(key), flags: flagValueExists})
 		}(i)
 	}
 	wg.Wait()
 
-	if parent.loadStore() == nil {
-		t.Fatalf("container must exist after concurrent inserts")
-	}
 	if got := parent.storeLen(); got != n {
 		t.Fatalf("expected %d children after concurrent inserts, got %d", n, got)
 	}
@@ -129,7 +195,8 @@ func Test_StoreValue_ConcurrentFirstChild(t *testing.T) {
 
 // Test_StoreValue_ConcurrentSameKeyDedup verifies that when many goroutines
 // race to insert the SAME key, exactly one wins and all callers observe the
-// same surviving child (LoadOrStore semantics preserved through lazy alloc).
+// same surviving child (LoadOrStore semantics preserved through the adaptive
+// container).
 func Test_StoreValue_ConcurrentSameKeyDedup(t *testing.T) {
 	const n = 128
 	parent := &StoreValue{}
@@ -140,7 +207,7 @@ func Test_StoreValue_ConcurrentSameKeyDedup(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func(i int) {
 			defer wg.Done()
-			actual, _ := parent.StoreChild("dup", &StoreValue{value: []byte(fmt.Sprintf("%d", i)), valueExists: true})
+			actual, _ := parent.StoreChild("dup", &StoreValue{value: []byte(fmt.Sprintf("%d", i)), flags: flagValueExists})
 			results[i] = actual
 		}(i)
 	}

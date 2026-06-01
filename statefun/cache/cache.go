@@ -47,21 +47,47 @@ const (
 	typeJson
 )
 
+// StoreValue.flags bit layout. Packs the former `valueExists bool` and
+// `valueType uint8` into a single byte.
+const (
+	flagValueExists   uint8 = 1 << 0 // the node carries a real value (possibly a nil/empty one, e.g. an index marker key) as opposed to being a structural-only or tombstoned node
+	flagValueTypeJSON uint8 = 1 << 1 // value type: set => typeJson, clear => typeByteArray
+)
+
 type StoreValue struct {
 	parent      *StoreValue
 	keyInParent string
 	value       interface{}
-	valueExists bool
-	valueType   uint8
-	// store is the container of child nodes, allocated lazily on the first
-	// child insertion. A freshly created node — and every leaf, which is
-	// the overwhelming majority of nodes — keeps store == nil and carries
-	// no ShardedMap, no shard maps and no shard mutexes. This is the main
-	// memory win: the previous code eagerly allocated an 8-shard map (8
-	// empty maps + 8 RWMutex) on EVERY node including leaves that never
-	// get children. atomic.Pointer makes the one-time nil→ptr transition
-	// safe against concurrent readers (LoadChild/Range read it locklessly).
-	store           atomic.Pointer[system.ShardedMap]
+	// flags packs the former `valueExists bool` and `valueType uint8` into a
+	// single byte (one byte saved per node — at tens of millions of nodes that
+	// is tens of MB). All mutations happen under csv.storeMutex (Put / Delete /
+	// SetValueType / SetValueIfDoesNotExist all hold it), so the read-modify-
+	// write on the shared byte never loses an update.
+	flags uint8
+	// Children are held in an ADAPTIVE container sized to the node's fanout.
+	// The fanout analysis of a real graph dump showed 88% of non-leaf nodes
+	// have exactly one child and 98.6% have <=8, so an 8-shard ShardedMap on
+	// every node (8 maps + 8 RWMutex) was hugely over-provisioned.
+	//
+	//   - c1: the single-child fast path (88% of non-leaf nodes). The child's
+	//     own keyInParent IS the key, so no separate key field is needed —
+	//     one atomic pointer, ZERO extra allocation, lockless reads.
+	//   - more: overflow for 2+ children. A COW-immutable parallel-slice set
+	//     for small fanout, upgrading to an 8-shard ShardedMap past
+	//     overflowToShardedThreshold so HOT high-fanout nodes (e.g. the
+	//     "objects" enumeration node written concurrently during a rebuild)
+	//     keep their lock-striping. Both pointers are atomic; readers
+	//     (LoadChild/Range/storeLen) never take a lock.
+	//
+	// Invariant: a single-child node has c1!=nil, more==nil; a multi-child
+	// node has c1==nil, more!=nil; an empty node has both nil. During the
+	// 1->2 migration the writer publishes `more` (containing both children)
+	// BEFORE clearing c1, so a concurrent reader may transiently see both —
+	// readers tolerate that (LoadChild never early-returns on a c1 key
+	// mismatch; Range/storeLen over-approximate, which is safe for their
+	// ==0 / dedup-by-map callers).
+	c1              atomic.Pointer[StoreValue]
+	more            atomic.Pointer[childOverflow]
 	valueUpdateTime int64
 	storeMutex      sync.RWMutex
 	// Note: the old `syncedWithKV bool` and `purgeState int` fields are gone.
@@ -97,53 +123,122 @@ func (csv *StoreValue) RUnlock(caller string) {
 }
 
 func (csv *StoreValue) ValueExists() bool {
-	return csv.valueExists
+	return csv.getValueExists()
 }
 
-// shardCountForNewStore is the shard count used when a node lazily
-// allocates its children container on the first child insertion. Kept at
-// the historical value (8) so the concurrency profile of nodes that DO
-// have children is identical to before — this change only removes the
-// container from nodes that have no children, it does not alter sharding
-// for those that do (that tuning is a separate change).
+// flags accessors. Reads happen under the caller's RLock/Lock; writes under
+// Lock (so the read-modify-write on the shared flags byte is race-free).
+func (csv *StoreValue) getValueExists() bool { return csv.flags&flagValueExists != 0 }
+
+func (csv *StoreValue) setValueExists(v bool) {
+	if v {
+		csv.flags |= flagValueExists
+	} else {
+		csv.flags &^= flagValueExists
+	}
+}
+
+func (csv *StoreValue) getValueType() uint8 {
+	if csv.flags&flagValueTypeJSON != 0 {
+		return typeJson
+	}
+	return typeByteArray
+}
+
+func (csv *StoreValue) setValueType(t uint8) {
+	if t == typeJson {
+		csv.flags |= flagValueTypeJSON
+	} else {
+		csv.flags &^= flagValueTypeJSON
+	}
+}
+
+// shardCountForNewStore is the shard count used when a NON-root node's overflow
+// grows past overflowToShardedThreshold and upgrades to a ShardedMap. Non-root
+// high-fanout nodes (a vertex's out.to / enumeration containers) are written by
+// a SINGLE writer at a time — every link.create/vertex op serializes on the
+// owning vertex's graph key-mutex (operationKeysMutexLock locks selfID), so
+// only concurrent READERS race the one writer. 8 shards is therefore already
+// generous here; it exists mainly to spread the map, not to absorb write
+// contention.
 const shardCountForNewStore = 8
 
-// loadStore returns the node's children container, or nil if it has none
-// yet. Lockless atomic read — safe to call concurrently with ensureStore.
-func (csv *StoreValue) loadStore() *system.ShardedMap {
-	return csv.store.Load()
+// rootShardCount is the shard count for the ROOT node only. The root is the one
+// place that takes genuinely CONCURRENT writes to DISTINCT keys: creating
+// vertex X (locks X) and vertex Y (locks Y) both insert their UID into the
+// root's container, and X's and Y's locks are different — so there is no single
+// mutex serializing root writes the way the per-vertex lock serializes
+// everything below a vertex UID. More shards => less write contention on this
+// single hottest node. The extra memory is paid on exactly ONE node, so it is
+// negligible.
+const rootShardCount = 64
+
+// overflowToShardedThreshold — small overflow (COW parallel slices) is used up
+// to this many children; beyond it the node upgrades to an 8-shard ShardedMap.
+// 98.6% of non-leaf nodes in the real dump stay at or below 8 children, so the
+// vast majority never allocate a ShardedMap at all.
+const overflowToShardedThreshold = 8
+
+// childOverflow holds a node's children when it has 2 or more. Exactly one
+// representation is active:
+//   - {keys, vals}: COW-immutable parallel slices, used for small fanout.
+//     Writers never mutate a published slice; they build a new childOverflow
+//     and atomically swap it in, so concurrent readers iterate a stable
+//     snapshot without locking.
+//   - sharded: an 8-shard map for hot high-fanout nodes, internally
+//     synchronized (its own per-shard locks).
+type childOverflow struct {
+	keys    []string
+	vals    []*StoreValue
+	sharded *system.ShardedMap
 }
 
-// ensureStore returns the node's children container, allocating it on the
-// first call. Concurrent-safe: callers race via CompareAndSwap and the
-// losers discard their candidate and adopt the winner's.
-func (csv *StoreValue) ensureStore() *system.ShardedMap {
-	if sm := csv.store.Load(); sm != nil {
-		return sm
-	}
-	candidate := system.SharedMapMustNewHashed(shardCountForNewStore)
-	if csv.store.CompareAndSwap(nil, candidate) {
-		return candidate
-	}
-	return csv.store.Load()
+// initRootSharded (re)initialises the root node's children container as a fresh
+// 8-shard map and clears any single-child fast-path pointer. Used at cache
+// creation and on KV rehydration (role transition). Safe to call on the root
+// only — it does not preserve existing children (the caller intends a reset or
+// a fresh start).
+func (csv *StoreValue) initRootSharded() {
+	csv.more.Store(&childOverflow{sharded: system.SharedMapMustNewHashed(rootShardCount)})
+	csv.c1.Store(nil)
 }
 
-// storeLen reports the number of children, treating a nil (never-allocated)
-// container as empty.
+// storeLen reports the number of children. Lockless. Callers only ever compare
+// the result against 0; during the transient 1->2 migration window this may
+// under-report (return 1 while the node briefly holds 2), which keeps the
+// ==0 emptiness check correct (it never falsely returns 0 for a non-empty node).
 func (csv *StoreValue) storeLen() int {
-	if sm := csv.loadStore(); sm != nil {
-		return sm.Len()
+	if csv.c1.Load() != nil {
+		return 1
+	}
+	if m := csv.more.Load(); m != nil {
+		if m.sharded != nil {
+			return m.sharded.Len()
+		}
+		return len(m.keys)
 	}
 	return 0
 }
 
 func (csv *StoreValue) LoadChild(key string) (*StoreValue, bool) {
-	sm := csv.loadStore()
-	if sm == nil {
-		return nil, false
+	// Single-child fast path. NOTE: on a key MISMATCH we must NOT early-return —
+	// during a 1->2 migration c1 may hold the old child while the one we want is
+	// already published in `more`.
+	if c := csv.c1.Load(); c != nil && c.keyInParent == key {
+		return c, true
 	}
-	if v, ok := sm.Get(key); ok {
-		return v.(*StoreValue), true
+	if m := csv.more.Load(); m != nil {
+		if m.sharded != nil {
+			if v, ok := m.sharded.Get(key); ok {
+				return v.(*StoreValue), true
+			}
+			return nil, false
+		}
+		for i, k := range m.keys {
+			if k == key {
+				return m.vals[i], true
+			}
+		}
 	}
 	return nil, false
 }
@@ -152,11 +247,113 @@ func (csv *StoreValue) StoreChild(key string, child *StoreValue) (actual *StoreV
 	child.parent = csv
 	child.keyInParent = key
 
-	a, l := csv.ensureStore().LoadOrStore(key, child)
-	if l {
-		return a.(*StoreValue), true
+	// Hot-node fast path: already sharded — use the shard locks directly, no
+	// node lock (this is what preserves concurrent-write scaling on high-fanout
+	// nodes; see BenchmarkContainerConcurrentInsert_*).
+	if m := csv.more.Load(); m != nil && m.sharded != nil {
+		a, l := m.sharded.LoadOrStore(key, child)
+		return a.(*StoreValue), l
 	}
+
+	csv.storeMutex.Lock()
+	defer csv.storeMutex.Unlock()
+
+	// Existing single child?
+	if c := csv.c1.Load(); c != nil {
+		if c.keyInParent == key {
+			return c, true
+		}
+		// 1 -> 2: publish overflow holding BOTH children, then clear c1.
+		csv.more.Store(&childOverflow{
+			keys: []string{c.keyInParent, key},
+			vals: []*StoreValue{c, child},
+		})
+		csv.c1.Store(nil)
+		return child, false
+	}
+
+	// Existing overflow (re-load under lock; another goroutine may have upgraded).
+	if m := csv.more.Load(); m != nil {
+		if m.sharded != nil {
+			a, l := m.sharded.LoadOrStore(key, child)
+			return a.(*StoreValue), l
+		}
+		for i, k := range m.keys {
+			if k == key {
+				return m.vals[i], true
+			}
+		}
+		if len(m.keys)+1 > overflowToShardedThreshold {
+			sm := system.SharedMapMustNewHashed(shardCountForNewStore)
+			for i := range m.keys {
+				sm.LoadOrStore(m.keys[i], m.vals[i])
+			}
+			sm.LoadOrStore(key, child)
+			csv.more.Store(&childOverflow{sharded: sm})
+			return child, false
+		}
+		nk := make([]string, len(m.keys)+1)
+		nv := make([]*StoreValue, len(m.vals)+1)
+		copy(nk, m.keys)
+		copy(nv, m.vals)
+		nk[len(m.keys)] = key
+		nv[len(m.vals)] = child
+		csv.more.Store(&childOverflow{keys: nk, vals: nv})
+		return child, false
+	}
+
+	// Empty -> first child.
+	csv.c1.Store(child)
 	return child, false
+}
+
+// deleteChild removes a child by key from this node's container. Mirrors the
+// locking of StoreChild: sharded deletes go straight through the shard locks;
+// the small (c1/COW-slice) cases serialize on the node lock and publish a new
+// immutable snapshot.
+func (csv *StoreValue) deleteChild(key string) {
+	if m := csv.more.Load(); m != nil && m.sharded != nil {
+		m.sharded.Delete(key)
+		return
+	}
+	csv.storeMutex.Lock()
+	defer csv.storeMutex.Unlock()
+	if c := csv.c1.Load(); c != nil && c.keyInParent == key {
+		csv.c1.Store(nil)
+		return
+	}
+	m := csv.more.Load()
+	if m == nil {
+		return
+	}
+	if m.sharded != nil {
+		m.sharded.Delete(key)
+		return
+	}
+	idx := -1
+	for i, k := range m.keys {
+		if k == key {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return
+	}
+	if len(m.keys) == 1 {
+		csv.more.Store(nil)
+		return
+	}
+	nk := make([]string, 0, len(m.keys)-1)
+	nv := make([]*StoreValue, 0, len(m.vals)-1)
+	for i := range m.keys {
+		if i == idx {
+			continue
+		}
+		nk = append(nk, m.keys[i])
+		nv = append(nv, m.vals[i])
+	}
+	csv.more.Store(&childOverflow{keys: nk, vals: nv})
 }
 
 func (csv *StoreValue) Put(value interface{}, updateInKV bool, customPutTime int64) {
@@ -178,37 +375,11 @@ func (csv *StoreValue) Put(value interface{}, updateInKV bool, customPutTime int
 	}
 
 	csv.value = value
-	csv.valueExists = true
+	csv.setValueExists(true)
 	csv.valueUpdateTime = customPutTime
 	_ = updateInKV // kept in signature for callers; no longer affects local state
 	_ = key        // formerly used for parent-subscriber notifications; gone with notifyUpdates
 	csv.Unlock("Put")
-}
-
-func (csv *StoreValue) collectGarbage() {
-	system.GlobalPrometrics.GetRoutinesCounter().Started("cache.csv.collectGarbage")
-	defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("cache.csv.collectGarbage")
-
-	var canBeDeletedFromParent bool
-
-	csv.Lock("collectGarbage")
-	// A tombstoned leaf with no children can be dropped from the tree right
-	// away. The old purge state machine (`purgeState` 0→1→2 gated on KV-watch
-	// echo confirmation) and the noNotifySubscribers guard (gated on the now-
-	// gone subscriber map) are both gone: the cache no longer waits for KV
-	// before reclaiming memory.
-	canBeDeletedFromParent = !csv.valueExists && csv.storeLen() == 0
-	csv.Unlock("collectGarbage")
-
-	if csv.parent != nil && canBeDeletedFromParent {
-		// The parent necessarily has a container (this node lives in it),
-		// but guard defensively against a nil store regardless.
-		if parentStore := csv.parent.loadStore(); parentStore != nil {
-			parentStore.Delete(csv.keyInParent)
-		}
-
-		go csv.parent.collectGarbage()
-	}
 }
 
 func (csv *StoreValue) Delete(updateInKV bool, customDeleteTime int64) {
@@ -216,11 +387,12 @@ func (csv *StoreValue) Delete(updateInKV bool, customDeleteTime int64) {
 	key := csv.keyInParent
 	// We keep the node as a tombstone (valueExists=false, valueUpdateTime set)
 	// so an in-process Put with an explicitly older customSetTime cannot
-	// resurrect it through the Put LWW guard. collectGarbage removes the node
-	// from the parent's map on a later maintenance pass once there are no
-	// subscribers and no children.
+	// resurrect it through the Put LWW guard. The maintenance pass
+	// (traverseCacheForMaintenance -> sweepSubtree) removes the tombstoned node
+	// from the parent's container once it has no children, collapsing whole
+	// tombstone cascades in a single post-order sweep.
 	csv.value = nil
-	csv.valueExists = false
+	csv.setValueExists(false)
 	if customDeleteTime < 0 {
 		customDeleteTime = system.GetCurrentTimeNs()
 	}
@@ -230,14 +402,32 @@ func (csv *StoreValue) Delete(updateInKV bool, customDeleteTime int64) {
 	csv.Unlock("Delete")
 }
 
+// Range iterates the node's children. Lockless reads of the adaptive container.
+// During the transient 1->2 migration window a child may be visited twice (once
+// via c1, once via the freshly published overflow); all callers tolerate this
+// (sweepSubtree re-confirms under lock before deleting; GetKeysByPattern dedups
+// into a map).
 func (csv *StoreValue) Range(f func(key, value interface{}) bool) {
-	sm := csv.loadStore()
-	if sm == nil {
+	if c := csv.c1.Load(); c != nil {
+		if !f(c.keyInParent, c) {
+			return
+		}
+	}
+	m := csv.more.Load()
+	if m == nil {
 		return
 	}
-	sm.Range(func(k string, v interface{}) bool {
-		return f(k, v)
-	})
+	if m.sharded != nil {
+		m.sharded.Range(func(k string, v interface{}) bool {
+			return f(k, v)
+		})
+		return
+	}
+	for i := range m.keys {
+		if !f(m.keys[i], m.vals[i]) {
+			return
+		}
+	}
 }
 
 func (csv *StoreValue) SetValueType(valueType uint8) {
@@ -246,7 +436,7 @@ func (csv *StoreValue) SetValueType(valueType uint8) {
 	// write must take the lock too — otherwise it's a data race (and a torn
 	// type read could mis-decode a value).
 	csv.Lock("SetValueType")
-	csv.valueType = valueType
+	csv.setValueType(valueType)
 	csv.Unlock("SetValueType")
 }
 
@@ -478,9 +668,8 @@ func (cs *Store) loadFromKV(ctx context.Context) error {
 func (cs *Store) RehydrateFromKV(ctx context.Context) error {
 	// Atomic swap of the root's children-container — readers/writers that
 	// somehow still hold a child reference see a consistent old subtree
-	// (released to GC after they drop it). The root identity is kept so
-	// notifyUpdates subscribers stay valid.
-	cs.rootValue.store.Store(system.SharedMapMustNewHashed(shardCountForNewStore))
+	// (released to GC after they drop it). The root identity is kept.
+	cs.rootValue.initRootSharded()
 	// Reset committed-tx watermark too — the new world starts from the
 	// state we are about to load, and any old in-process backup-barrier
 	// state is meaningless across a role transition.
@@ -565,23 +754,17 @@ func (cs *Store) sweepSubtree(csv *StoreValue, result *maintenanceResult) bool {
 	// landed between the recursive sweepSubtree returning true and now,
 	// which would mean the child is no longer dead. Skip those.
 	if len(deadKeys) > 0 {
-		if sm := csv.loadStore(); sm != nil {
-			for _, k := range deadKeys {
-				raw, ok := sm.Get(k)
-				if !ok {
-					continue
-				}
-				child, ok := raw.(*StoreValue)
-				if !ok {
-					continue
-				}
-				child.Lock("sweepSubtree-confirm")
-				stillDead := !child.valueExists && child.storeLen() == 0
-				child.Unlock("sweepSubtree-confirm")
-				if stillDead {
-					sm.Delete(k)
-					result.removedCount++
-				}
+		for _, k := range deadKeys {
+			child, ok := csv.LoadChild(k)
+			if !ok {
+				continue
+			}
+			child.Lock("sweepSubtree-confirm")
+			stillDead := !child.getValueExists() && child.storeLen() == 0
+			child.Unlock("sweepSubtree-confirm")
+			if stillDead {
+				csv.deleteChild(k)
+				result.removedCount++
 			}
 		}
 	}
@@ -591,7 +774,7 @@ func (cs *Store) sweepSubtree(csv *StoreValue, result *maintenanceResult) bool {
 		return false
 	}
 	csv.Lock("sweepSubtree-self")
-	canRemove := !csv.valueExists && csv.storeLen() == 0
+	canRemove := !csv.getValueExists() && csv.storeLen() == 0
 	csv.Unlock("sweepSubtree-self")
 	return canRemove
 }
@@ -607,7 +790,6 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 		rootValue: &StoreValue{
 			parent:          nil,
 			value:           nil,
-			valueExists:     false,
 			valueUpdateTime: -1,
 		},
 		valuesInCache: 0,
@@ -621,10 +803,10 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 
 	cs.ctx, cs.cancel = context.WithCancel(ctx)
 
-	// The root always holds children (every top-level key hangs off it),
-	// so initialise its container eagerly with the historical shard count
-	// rather than paying a lazy-alloc race on the very first insertion.
-	cs.rootValue.store.Store(system.SharedMapMustNewHashed(shardCountForNewStore))
+	// The root holds every top-level key (thousands of <domain>/<id> entries),
+	// so it is the single highest-fanout node — give it the sharded overflow
+	// directly instead of letting it grow through the small-overflow stages.
+	cs.rootValue.initRootSharded()
 
 	// default - can not publish to WAL
 	cs.walWriteEnabled.Store(false)
@@ -835,7 +1017,7 @@ func (cs *Store) GetValueUpdateTime(key string) int64 {
 	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, false); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
 		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
 			csv.RLock("GetValueUpdateTime")
-			if csv.valueExists {
+			if csv.getValueExists() {
 				result = csv.valueUpdateTime
 			}
 			csv.RUnlock("GetValueUpdateTime")
@@ -854,14 +1036,14 @@ func (cs *Store) GetValue(key string) ([]byte, error) {
 			if !csv.ValueExists() { // Value was intentionally deleted and was marked so, no cache miss policy can be applied here
 				resultError = fmt.Errorf("value for key=%s does not exist", key)
 			} else {
-				switch csv.valueType {
+				switch csv.getValueType() {
 				case typeByteArray:
 					result = csv.value.([]byte)
 				case typeJson:
 					lg.Logf(lg.WarnLevel, "Value for key=%s is JSON, use GetValueJSON method", key)
 					result = csv.value.(*easyjson.JSON).ToBytes()
 				default:
-					resultError = fmt.Errorf("unsupported value type: %d", csv.valueType)
+					resultError = fmt.Errorf("unsupported value type: %d", csv.getValueType())
 				}
 			}
 			csv.RUnlock("GetValue")
@@ -893,7 +1075,7 @@ func (cs *Store) Exists(key string) bool {
 			if !csv.ValueExists() {
 				return false
 			}
-			if csv.valueType == typeJson {
+			if csv.getValueType() == typeJson {
 				lg.Logf(lg.WarnLevel, "Value for key=%s is JSON, use ExistsJson method", key)
 			}
 			return true
@@ -921,7 +1103,7 @@ func (cs *Store) ExistsJson(key string) bool {
 			if !csv.ValueExists() {
 				return false
 			}
-			if csv.valueType == typeByteArray {
+			if csv.getValueType() == typeByteArray {
 				lg.Logf(lg.WarnLevel, "Value for key=%s is []byte, use Exists method", key)
 			}
 			return true
@@ -940,7 +1122,7 @@ func (cs *Store) GetValueJSON(key string) (*easyjson.JSON, error) {
 			if !csv.ValueExists() {
 				resultError = fmt.Errorf("value for key=%s does not exist", key)
 			} else {
-				switch csv.valueType {
+				switch csv.getValueType() {
 				case typeJson:
 					result = csv.value.(*easyjson.JSON).Clone().GetPtr()
 				case typeByteArray:
@@ -954,7 +1136,7 @@ func (cs *Store) GetValueJSON(key string) (*easyjson.JSON, error) {
 						resultError = fmt.Errorf("value for key=%s is not valid JSON", key)
 					}
 				default:
-					resultError = fmt.Errorf("unsupported value type: %d", csv.valueType)
+					resultError = fmt.Errorf("unsupported value type: %d", csv.getValueType())
 				}
 			}
 			csv.RUnlock("GetValueJSON")
@@ -986,7 +1168,7 @@ func (cs *Store) GetValueJSONByPath(key string, path string) (*easyjson.JSON, er
 			if !csv.ValueExists() {
 				resultError = fmt.Errorf("value for key=%s does not exist", key)
 			} else {
-				switch csv.valueType {
+				switch csv.getValueType() {
 				case typeJson:
 					sub := csv.value.(*easyjson.JSON).GetByPath(path).Clone()
 					result = &sub
@@ -998,7 +1180,7 @@ func (cs *Store) GetValueJSONByPath(key string, path string) (*easyjson.JSON, er
 						resultError = fmt.Errorf("value for key=%s is not valid JSON", key)
 					}
 				default:
-					resultError = fmt.Errorf("unsupported value type: %d", csv.valueType)
+					resultError = fmt.Errorf("unsupported value type: %d", csv.getValueType())
 				}
 			}
 			csv.RUnlock("GetValueJSONByPath")
@@ -1017,7 +1199,7 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 	if keyLastToken, parent := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true); len(keyLastToken) > 0 && parent != nil {
 		candidate := &StoreValue{
 			value:           newValue,
-			valueExists:     true,
+			flags:           flagValueExists,
 			valueUpdateTime: customSetTime,
 		}
 		actual, loaded := parent.StoreChild(keyLastToken, candidate)
@@ -1030,9 +1212,9 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 
 		// Already exists — set only if "empty"
 		actual.Lock("SetValueIfDoesNotExist")
-		if !actual.valueExists && actual.value == nil {
+		if !actual.getValueExists() && actual.value == nil {
 			actual.value = newValue
-			actual.valueExists = true
+			actual.setValueExists(true)
 			actual.valueUpdateTime = customSetTime
 			actual.Unlock("SetValueIfDoesNotExist")
 			if updateInKV {
@@ -1062,8 +1244,7 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 	} else {
 		csvUpdate := &StoreValue{
 			value:           value,
-			valueExists:     true,
-			valueType:       typeByteArray,
+			flags:           flagValueExists, // typeByteArray == flagValueTypeJSON clear
 			valueUpdateTime: customSetTime,
 		}
 		actual, loaded := parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate)
@@ -1102,8 +1283,7 @@ func (cs *Store) SetValueJSON(key string, originValue *easyjson.JSON, updateInKV
 	} else {
 		csvUpdate := &StoreValue{
 			value:           value,
-			valueExists:     true,
-			valueType:       typeJson,
+			flags:           flagValueExists | flagValueTypeJSON,
 			valueUpdateTime: customSetTime,
 		}
 		actual, loaded := parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate)
@@ -1135,7 +1315,7 @@ func (cs *Store) DeleteValue(key string, updateInKV bool, customDeleteTime int64
 		return
 	}
 	csv.RLock("DeleteValue probe")
-	exists := csv.valueExists
+	exists := csv.getValueExists()
 	csv.RUnlock("DeleteValue probe")
 	if !exists {
 		return
@@ -1164,7 +1344,7 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 			parentCacheStoreValue.Range(func(key, value interface{}) bool {
 				childCSV := value.(*StoreValue)
 				childCSV.RLock("GetKeysByPattern *")
-				if childCSV.valueExists {
+				if childCSV.getValueExists() {
 					keys[keyWithoutLastToken+key.(string)] = true
 				}
 				childCSV.RUnlock("GetKeysByPattern *")
@@ -1194,7 +1374,7 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 					}
 					ch := value.(*StoreValue)
 					ch.RLock("GetKeysByPattern >")
-					if ch.valueExists {
+					if ch.getValueExists() {
 						keys[newSuffix] = true
 					}
 					ch.RUnlock("GetKeysByPattern >")
@@ -1207,7 +1387,7 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 		} else {
 			if c, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
 				c.RLock("GetKeysByPattern one")
-				exists := c.valueExists
+				exists := c.getValueExists()
 				c.RUnlock("GetKeysByPattern one")
 				if exists {
 					keys[pattern] = true
@@ -1242,7 +1422,6 @@ func (cs *Store) getLastKeyTokenAndItsParentCacheStoreValue(key string, createIf
 			if createIfNotexists {
 				csv := StoreValue{
 					value:           nil,
-					valueExists:     false,
 					valueUpdateTime: system.GetCurrentTimeNs(),
 				}
 				actual, _ := currentStoreLevel.StoreChild(tokens[currentTokenID], &csv)
