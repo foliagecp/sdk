@@ -58,13 +58,28 @@ func (env *statefunTestEnvironment) StartRuntime() error {
 		}
 	}()
 
-	select {
-	case err := <-errChan:
-		return err
-	case <-time.After(1 * time.Second):
+	// Wait until the runtime is actually READY, not a blind 1s sleep. Runtime
+	// sets r.isReady (atomic) only AFTER Domain.start() has built and published
+	// the cache store; observing IsReady()==true establishes a happens-before
+	// edge with the Start goroutine, so the test's subsequent Domain.Cache()
+	// reads are properly synchronized. The old time.After(1s) provided no such
+	// edge, which raced Domain.start()'s `dm.cache = ...` write against the
+	// test's Cache() read under heavy -race load.
+	deadline := time.After(30 * time.Second)
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-errChan:
+			return err
+		case <-deadline:
+			return fmt.Errorf("runtime did not become ready within 30s")
+		case <-ticker.C:
+			if env.runtime.IsReady() {
+				return nil
+			}
+		}
 	}
-
-	return nil
 }
 
 func (env *statefunTestEnvironment) Runtime() *statefun.Runtime {
