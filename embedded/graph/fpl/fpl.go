@@ -179,7 +179,7 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 					intersectionIndex: intersectionIdx,
 					query:             jpgqlQuery.request,
 					fromUUID:          jpgqlQuery.uuid,
-					status:            string(subOpMsg.Status),
+					status:            sfMediators.OpStatusNames[subOpMsg.Status],
 					stats:             subOpMsg.Data.GetByPath("stats"),
 				})
 
