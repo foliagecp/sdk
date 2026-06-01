@@ -22,12 +22,13 @@ var (
 )
 
 type statefunTestEnvironment struct {
-	srv        *server.Server
-	runtime    *statefun.Runtime
-	runtimeCfg *statefun.RuntimeConfig
-	cacheCfg   *cache.Config
-	nc         *nats.Conn
-	jsStoreDir string
+	srv         *server.Server
+	runtime     *statefun.Runtime
+	runtimeCfg  *statefun.RuntimeConfig
+	cacheCfg    *cache.Config
+	nc          *nats.Conn
+	jsStoreDir  string
+	runtimeDone chan struct{} // closed when the Start() goroutine returns
 }
 
 func newStatefunTestEnvironment() *statefunTestEnvironment {
@@ -56,8 +57,10 @@ func newStatefunTestEnvironment() *statefunTestEnvironment {
 
 func (env *statefunTestEnvironment) StartRuntime() error {
 	errChan := make(chan error, 1)
+	env.runtimeDone = make(chan struct{})
 
 	go func() {
+		defer close(env.runtimeDone)
 		if err := env.runtime.Start(context.TODO(), env.cacheCfg); err != nil {
 			errChan <- err
 		}
@@ -100,6 +103,22 @@ func (env *statefunTestEnvironment) OnAfterStartFunction(f statefun.OnAfterStart
 }
 
 func (env *statefunTestEnvironment) Stop() {
+	// Stop the RUNTIME first, then NATS. Start() runs in a goroutine, so without
+	// an explicit shutdown the runtime's background goroutines (worker pools,
+	// kvLazyWriter, backup-barrier refresh, lifecycle ticker) outlive the test
+	// and keep spinning/retrying against the about-to-die NATS. Across ~30
+	// suites in a package those leaked runtimes accumulate and starve the next
+	// suite's embedded NATS of CPU — the source of the non-deterministic
+	// "context deadline exceeded" failures under -race. Shutdown() closes
+	// r.shutdown (the background loops select on it and exit); we then wait for
+	// the Start() goroutine to fully drain before tearing down NATS.
+	if env.runtimeDone != nil {
+		env.runtime.Shutdown()
+		select {
+		case <-env.runtimeDone:
+		case <-time.After(30 * time.Second):
+		}
+	}
 	system.MsgOnErrorReturn(env.cleanJetStreamStorage())
 	env.srv.Shutdown()
 	env.srv.WaitForShutdown()
