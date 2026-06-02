@@ -83,7 +83,7 @@ func Test_HA_ActivePassive_ExclusivityAndRecovery(t *testing.T) {
 	if rtB.IsActiveInstance() {
 		active, passive = rtB, rtA
 	}
-	active.Shutdown()
+	active.Shutdown(true)
 
 	require.Truef(t, waitForCond(30*time.Second, func() bool { return passive.IsActiveInstance() }),
 		"passive instance must recover to active after the active shuts down")

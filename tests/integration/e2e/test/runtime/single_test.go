@@ -52,7 +52,7 @@ func TestKeyMutexLockUnlock(t *testing.T) {
 
 	<-ctx.Done()
 
-	runtime.Shutdown()
+	runtime.Shutdown(false)
 }
 
 func runKeyMutexTests(ctx context.Context, t *testing.T, runtime *statefun.Runtime) error {
