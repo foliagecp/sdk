@@ -105,20 +105,30 @@ func (env *statefunTestEnvironment) OnAfterStartFunction(f statefun.OnAfterStart
 func (env *statefunTestEnvironment) Stop() {
 	// Stop the RUNTIME first, then NATS. Start() runs in a goroutine, so without
 	// an explicit shutdown the runtime's background goroutines (worker pools,
-	// kvLazyWriter, backup-barrier refresh, lifecycle ticker) outlive the test
-	// and keep spinning/retrying against the about-to-die NATS. Across ~30
-	// suites in a package those leaked runtimes accumulate and starve the next
-	// suite's embedded NATS of CPU — the source of the non-deterministic
-	// "context deadline exceeded" failures under -race. Shutdown() closes
-	// r.shutdown (the background loops select on it and exit); we then wait for
-	// the Start() goroutine to fully drain before tearing down NATS.
+	// kvLazyWriter, backup-barrier refresh, lifecycle ticker, transaction
+	// committer) outlive the test and keep spinning/retrying against the
+	// about-to-die NATS. Across ~30 suites in a package those leaked runtimes
+	// accumulate and starve the next suite's embedded NATS of CPU — the source
+	// of the non-deterministic "context deadline exceeded" failures.
+	//
+	// Use the EMERGENCY shutdown: each test gets a throwaway runtime, so there
+	// is nothing to drain cleanly, and the graceful path would otherwise cost
+	// ~10s per test (it waits for the GC to declare functions idle: 5s function
+	// lifetime + 5s GC interval). With 60+ tests in a package that blows past
+	// the 10m `go test` package timeout. Emergency cancels all contexts and
+	// releases the main loop at once; Start() then closes r.nc and returns,
+	// which closes runtimeDone — usually well under a second.
 	if env.runtimeDone != nil {
-		env.runtime.Shutdown()
+		env.runtime.Shutdown(true)
 		select {
 		case <-env.runtimeDone:
 		case <-time.After(30 * time.Second):
 		}
 	}
+	// Close the test's own NATS connection. Like the runtime's, it is opened
+	// with MaxReconnect=-1, so if left open it reconnect-storms forever once the
+	// embedded server is shut down, leaking its subscription goroutines.
+	env.nc.Close()
 	system.MsgOnErrorReturn(env.cleanJetStreamStorage())
 	env.srv.Shutdown()
 	env.srv.WaitForShutdown()
