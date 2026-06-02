@@ -56,6 +56,7 @@ type Runtime struct {
 
 	isReady                      atomic.Bool
 	shutdown                     chan struct{}
+	shutdownOnce                 sync.Once // guards the single graceful-drain run (signal or explicit Shutdown())
 	gs                           *GracefulShutdown
 	functionsStopCh              chan struct{}
 	wg                           sync.WaitGroup
@@ -103,7 +104,12 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		registeredFunctionTypes:    make(map[string]*FunctionType),
 		canRegisterNewFunctionType: true,
 		shutdown:                   make(chan struct{}),
-		functionsStopCh:            make(chan struct{}),
+		// Buffered (cap 1): the GC sends here when functions are ready to stop
+		// (runGarbageCollector). If a bounded graceful shutdown forces past the
+		// receive without reading, an unbuffered send would block the GC
+		// goroutine forever; a 1-slot buffer lets that final send complete so
+		// the GC can observe r.shutdown/ctx.Done and exit.
+		functionsStopCh: make(chan struct{}, 1),
 	}
 	// Default cacheDirty=true. Between NewCacheStore's initial load and our
 	// first lock acquisition any other active instance may have written to
@@ -209,62 +215,17 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 	logger := lg.GetLogger()
 	r.gs = NewGracefulShutdown(context.Background())
 
-	gracefulShutdownFunc := func() {
+	// Listen for OS termination signals and run the same graceful drain that
+	// an explicit Shutdown() runs. The drain body lives in gracefulShutdown so
+	// it can be triggered programmatically too (embedders, tests), not only by
+	// a signal. shutdownOnce makes the two paths mutually exclusive.
+	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 		<-sig
-		if !r.IsActiveInstance() {
-			logger.Debugf(ctx, "Runtime is not active. Shutting down immediately")
-			r.gs.beginShutdownPhaseOne()
-			r.gs.cancelAllContexts()
-			r.Shutdown()
-			return
-		}
-		startShutdown := time.Now()
-		r.gs.beginShutdownPhaseOne()
 		logger.Debugf(ctx, "Received shutdown signal, shutting down gracefully...")
-		logger.Debugf(ctx, "Shutdown currentPhase 1")
-		r.gs.cancelPhaseOne()
-		timeout := time.NewTimer(10 * time.Second)
-		defer timeout.Stop()
-
-		done := make(chan struct{}, 1)
-		go func() {
-			r.afterStartFunctionsWaitGroup.Wait()
-			done <- struct{}{}
-		}()
-
-		select {
-		case <-timeout.C:
-			logger.Debugf(ctx, "AfterStart functions timed out")
-		case <-done:
-			logger.Debugf(ctx, "AfterStart functions completed")
-		}
-
-		r.drainSignalSubscriptions()
-
-		r.gs.setPhase(ShutdownPhaseTwo)
-
-		logger.Debugf(ctx, "Shutdown currentPhase 2")
-
-		<-r.functionsStopCh
-
-		r.gs.cancelPhaseTwo()
-
-		logger.Debugf(ctx, "Shutdown currentPhase 3")
-
-		<-r.Domain.cache.Synced
-
-		if r.IsActiveInstance() {
-			logger.Debugf(ctx, "Shutdown - waiting for transaction committer")
-			<-r.Domain.shutdown
-		}
-		r.Shutdown()
-		r.gs.cancelPhaseThree()
-		logger.Debugf(ctx, "Shutdown took %v s", time.Since(startShutdown))
-	}
-
-	go gracefulShutdownFunc()
+		r.gracefulShutdown(ctx)
+	}()
 
 	// Disable registering new functions after the runtime has started.
 	r.canRegisterNewFunctionType = false
@@ -325,6 +286,30 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 	// Set Runtime ready
 	r.isReady.Store(true)
 
+	// Run afterStart functions immediately now that the runtime is ready,
+	// instead of waiting for the first runtimeLifecycleUpdater tick (which is
+	// kvMutexLifeTimeSec/2 — by default 5s — away). afterStart functions need
+	// isReady because they issue requests (e.g. cmdbSchemaPrepare creates the
+	// built-in types/objects roots via runtime.Request, which is rejected
+	// before isReady), and we have just set it. Deferring them to a tick added
+	// a multi-second gap before the schema roots existed, which races callers
+	// that expect a ready runtime to already have them. runtimeLifecycleUpdater
+	// keeps the same afterStartRunning CompareAndSwap guard as a fallback, so
+	// the functions still run exactly once. Launched in its own goroutine so a
+	// synchronous afterStart function does not block the main loop's <-shutdown.
+	//
+	// ONLY in single-instance mode. In active/passive (HA) mode the active
+	// status rests on a KV runtime lock that runtimeLifecycleUpdater has to
+	// acquire and keep refreshing; firing a heavy afterStart (extra NATS
+	// connections, consumers, a burst of CMDB requests) in the same instant
+	// starves that first refresh under load (notably -race), the lock lapses,
+	// and the instance flips to passive mid-test. Single-instance runtimes hold
+	// no such lock, so there is nothing to starve — and the lifecycleUpdater
+	// fallback still runs afterStart on its tick for the HA case.
+	if !r.config.activePassiveMode && r.IsActiveInstance() && r.afterStartRunning.CompareAndSwap(false, true) {
+		go r.runAfterStartFunctions(r.gs.phaseOneCtx())
+	}
+
 	// Wait for shutdown signal.
 	<-r.shutdown
 
@@ -342,6 +327,16 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 	case <-waitCh:
 	case <-timeoutCh:
 		logger.Info(ctx, "Timed out waiting WG for runtime to finish")
+	}
+
+	// Release the runtime's NATS connection. It is opened with MaxReconnect=-1
+	// (infinite); if left open after the runtime has stopped it spins forever in
+	// a reconnect loop the moment the server goes away, leaking every
+	// subscription goroutine and burning CPU. In a long-lived test binary that
+	// runs many runtimes back-to-back, those orphaned reconnecting connections
+	// accumulate and starve the live embedded NATS. Closing here stops it.
+	if r.nc != nil {
+		r.nc.Close()
 	}
 	return nil
 }
@@ -410,8 +405,146 @@ func (gs *GracefulShutdown) cancelAllContexts() {
 	gs.cancelPhaseThree()
 }
 
-// Shutdown stops the runtime.
-func (r *Runtime) Shutdown() {
+// Shutdown initiates shutdown of the runtime.
+//
+// With emergency=false it runs the full graceful drain (the same sequence the
+// SIGINT/SIGTERM handler runs): stop accepting work, wait for in-flight
+// handlers, flush the cache WAL, drain the transaction committer, then release
+// the main loop. The call blocks until the drain completes.
+//
+// With emergency=true it tears the runtime down abruptly: it cancels every
+// shutdown context (so context-bound background goroutines unwind at once) and
+// releases the main loop immediately, WITHOUT waiting for in-flight work to
+// settle. Use it when a clean drain is unnecessary or impossible — e.g. a
+// throwaway runtime in a test teardown, or a wedged NATS where the drain
+// cannot make progress. Start() still returns and closes r.nc.
+//
+// Either path is idempotent and safe to call from any goroutine, including
+// concurrently with a signal-triggered shutdown: the first caller wins and the
+// chosen teardown runs exactly once.
+func (r *Runtime) Shutdown(emergency bool) {
+	if emergency {
+		r.emergencyShutdown()
+		return
+	}
+	r.gracefulShutdown(context.Background())
+}
+
+// emergencyShutdown tears the runtime down without the phased drain: it
+// force-cancels all shutdown contexts — so context-bound background goroutines
+// (GC, transaction committer, cache writer, in-flight handlers) unwind via
+// ctx.Done — and releases the main loop. It deliberately does NOT take the
+// phase-transition lock (which can block on an in-flight op against a wedged
+// NATS); the cancelled contexts plus closed r.shutdown are enough to stop the
+// background loops. Guarded by shutdownOnce, so it is mutually exclusive with
+// gracefulShutdown.
+func (r *Runtime) emergencyShutdown() {
+	r.shutdownOnce.Do(func() {
+		if r.gs != nil {
+			r.gs.cancelAllContexts()
+		}
+		r.releaseMainLoop()
+	})
+}
+
+// gracefulShutdown performs the phased drain and then releases the main
+// Start() loop. It executes at most once for the runtime's lifetime (guarded
+// by shutdownOnce), so an OS signal and an explicit Shutdown() are mutually
+// exclusive — whichever fires first performs the drain, the other is a no-op.
+// ctx is used only for logging.
+func (r *Runtime) gracefulShutdown(ctx context.Context) {
+	r.shutdownOnce.Do(func() {
+		logger := lg.GetLogger()
+
+		// Shutdown() invoked before Start() wired the graceful-shutdown state
+		// machine: nothing to drain, just release the main loop.
+		if r.gs == nil {
+			r.releaseMainLoop()
+			return
+		}
+
+		if !r.IsActiveInstance() {
+			logger.Debugf(ctx, "Runtime is not active. Shutting down immediately")
+			r.gs.beginShutdownPhaseOne()
+			r.gs.cancelAllContexts()
+			r.releaseMainLoop()
+			return
+		}
+
+		startShutdown := time.Now()
+		r.gs.beginShutdownPhaseOne()
+		logger.Debugf(ctx, "Shutdown currentPhase 1")
+		r.gs.cancelPhaseOne()
+		timeout := time.NewTimer(10 * time.Second)
+		defer timeout.Stop()
+
+		done := make(chan struct{}, 1)
+		go func() {
+			r.afterStartFunctionsWaitGroup.Wait()
+			done <- struct{}{}
+		}()
+
+		select {
+		case <-timeout.C:
+			logger.Debugf(ctx, "AfterStart functions timed out")
+		case <-done:
+			logger.Debugf(ctx, "AfterStart functions completed")
+		}
+
+		r.drainSignalSubscriptions()
+
+		r.gs.setPhase(ShutdownPhaseTwo)
+		logger.Debugf(ctx, "Shutdown currentPhase 2")
+
+		// Bound the remaining phased drain. A graceful shutdown must not block
+		// forever: if NATS is wedged, in-flight functions never go idle (so the
+		// GC never signals functionsStopCh) and the cache can never flush its
+		// WAL (so Synced never closes). Past the deadline we force the shutdown
+		// contexts down and release the main loop anyway — analogous to a k8s
+		// grace period elapsing into SIGKILL — which guarantees Start() returns
+		// and closes r.nc.
+		deadline := time.NewTimer(gracefulShutdownDrainTimeout)
+		defer deadline.Stop()
+		forced := false
+		waitOrForce := func(ch <-chan struct{}, what string) bool {
+			select {
+			case <-ch:
+				return true
+			case <-deadline.C:
+				logger.Warnf(ctx, "graceful shutdown drain deadline (%s) exceeded waiting for %s; forcing shutdown", gracefulShutdownDrainTimeout, what)
+				forced = true
+				return false
+			}
+		}
+
+		if waitOrForce(r.functionsStopCh, "functions to stop") {
+			r.gs.cancelPhaseTwo()
+			logger.Debugf(ctx, "Shutdown currentPhase 3")
+			if waitOrForce(r.Domain.cache.Synced, "cache to sync") && r.IsActiveInstance() {
+				logger.Debugf(ctx, "Shutdown - waiting for transaction committer")
+				waitOrForce(r.Domain.shutdown, "transaction committer")
+			}
+		}
+
+		if forced {
+			// Force every phase context down so context-bound background
+			// goroutines (GC, transaction committer, cache writer, in-flight
+			// handlers) unwind instead of leaking. The main loop's wg.Wait and
+			// the subsequent r.nc.Close() then finish teardown even if a NATS
+			// call is still blocked.
+			r.gs.cancelAllContexts()
+		}
+
+		r.releaseMainLoop()
+		r.gs.cancelPhaseThree()
+		logger.Debugf(ctx, "Shutdown took %v s", time.Since(startShutdown))
+	})
+}
+
+// releaseMainLoop unblocks the main Start() loop (<-r.shutdown) so it can run
+// its final wait-group drain and return. Called only from gracefulShutdown,
+// which is guarded by shutdownOnce, so the channel is closed exactly once.
+func (r *Runtime) releaseMainLoop() {
 	close(r.shutdown)
 }
 
@@ -424,6 +557,16 @@ func (r *Runtime) GetNatsConnection() *nats.Conn {
 // consumer / subscription creation) keep retrying a transient cluster-
 // availability error before giving up. Tunable via JS_STARTUP_RETRY_TIMEOUT_SEC.
 var jsStartupRetryTimeout = time.Duration(system.GetEnvMustProceed[int]("JS_STARTUP_RETRY_TIMEOUT_SEC", 60)) * time.Second
+
+// gracefulShutdownDrainTimeout bounds the phased drain in gracefulShutdown.
+// Once it elapses the runtime force-cancels all shutdown contexts and releases
+// the main loop instead of waiting forever on a wedged dependency (e.g. a
+// saturated NATS where in-flight functions never go idle, so the GC never
+// signals functionsStopCh, or the cache can never flush its WAL). Forcing
+// guarantees Start() returns and closes r.nc — without it a wedged runtime
+// leaks a reconnect-storming connection that starves the next runtime's NATS.
+// Tunable via SHUTDOWN_DRAIN_TIMEOUT_SEC.
+var gracefulShutdownDrainTimeout = time.Duration(system.GetEnvMustProceed[int]("SHUTDOWN_DRAIN_TIMEOUT_SEC", 10)) * time.Second
 
 // isTransientJSError reports whether a JetStream error is a transient cluster-
 // availability condition — no leader/quorum yet, an election in progress — that
