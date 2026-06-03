@@ -56,7 +56,19 @@ var (
 	typeObjectTriggersCache sync.Map
 	// key: fromType + "|" + toType -> *linkTriggersInfo
 	typesLinkTriggersCache sync.Map
+
+	// key: typeName -> string (the body path the type declares as its
+	// objects' human-readable name source; "" = none/invalid). Loaded once
+	// per type and reused so ReadObject never reads the type body on the hot
+	// path. Invalidated by Create/Update/DeleteType. Note: an empty-string
+	// value is a real (negative) cache entry — Load's ok flag distinguishes
+	// "cached as none" from "not cached".
+	typeHRNFieldCache sync.Map
 )
+
+// humanReadableNameFieldKey is the body field a type uses to declare which
+// path inside its objects' bodies holds the human-readable name.
+const humanReadableNameFieldKey = "human_readable_name_field"
 
 // linkTriggersInfo is the trigger-relevant subset of a TypesLink body,
 // pre-extracted at load time so the hot path needs no further JSON
@@ -282,6 +294,81 @@ func getTypeTriggers(ctx *sfPlugins.StatefunContextProcessor, typeName string) *
 	// next hot-path call short-circuits without another vertex.read.
 	cacheSetTypeObjectTriggers(typeName, nil)
 	return easyjson.NewJSONObject().GetPtr()
+}
+
+func cacheGetTypeHRNField(typeName string) (string, bool) {
+	if v, ok := typeHRNFieldCache.Load(typeName); ok {
+		s, _ := v.(string)
+		return s, true
+	}
+	return "", false
+}
+func cacheSetTypeHRNField(typeName, path string)  { typeHRNFieldCache.Store(typeName, path) }
+func cacheInvalidateTypeHRNField(typeName string) { typeHRNFieldCache.Delete(typeName) }
+
+// getTypeHumanReadableNameField returns the body path the type declares as
+// the source of its objects' human-readable names (the type's
+// body.human_readable_name_field), or "" when the type declares none or it
+// is not a non-empty string.
+//
+// The result is cached per type (typeHRNFieldCache, including the negative
+// "" case) and invalidated by Create/Update/DeleteType, so ReadObject pays
+// at most one vertex.read per type for this — every subsequent object read
+// of the same type is a cache hit with no type access at all.
+func getTypeHumanReadableNameField(ctx *sfPlugins.StatefunContextProcessor, typeName string) string {
+	if cached, ok := cacheGetTypeHRNField(typeName); ok {
+		return cached
+	}
+
+	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", makeSequenceFreeParentBasedID(ctx, typeName), injectParentHoldsLocks(ctx, nil), nil))
+	if som.Status != sfMediators.SYNC_OP_STATUS_OK {
+		// Transient failure — do not poison the cache with a false negative.
+		return ""
+	}
+
+	path := ""
+	if s, ok := som.Data.GetByPath("body." + humanReadableNameFieldKey).AsString(); ok {
+		path = s
+	}
+	cacheSetTypeHRNField(typeName, path)
+	return path
+}
+
+// computeObjectName derives the human-readable name of an object for
+// ReadObject. It first honours the name path the object's type declares
+// (see getTypeHumanReadableNameField) and reads it from the object's own
+// body; if the type declares no path, or the object's body has no non-empty
+// string at that path, it falls back to a stable auto-generated name.
+//
+// objectID is the domain-prefixed object id; objectType is the
+// domain-prefixed type id; objectBody may be nil.
+func computeObjectName(ctx *sfPlugins.StatefunContextProcessor, objectID, objectType string, objectBody *easyjson.JSON) string {
+	if path := getTypeHumanReadableNameField(ctx, objectType); path != "" && objectBody != nil {
+		if s, ok := objectBody.GetByPath(path).AsString(); ok && s != "" {
+			return s
+		}
+	}
+	return autoObjectName(ctx, objectID, objectType)
+}
+
+// autoObjectName builds the fallback name
+// "<last token of the type name>_<first 6 chars of the object uuid>_auto",
+// where the type name is split on '_' and '-' and both ids are taken
+// without their domain prefix.
+func autoObjectName(ctx *sfPlugins.StatefunContextProcessor, objectID, objectType string) string {
+	typeName := ctx.Domain.GetObjectIDWithoutDomain(objectType)
+	lastToken := typeName
+	if fields := strings.FieldsFunc(typeName, func(r rune) bool { return r == '_' || r == '-' }); len(fields) > 0 {
+		lastToken = fields[len(fields)-1]
+	}
+
+	uuid := ctx.Domain.GetObjectIDWithoutDomain(objectID)
+	const shortLen = 6
+	if len(uuid) > shortLen {
+		uuid = uuid[:shortLen]
+	}
+
+	return fmt.Sprintf("%s_%s_auto", lastToken, uuid)
 }
 
 // getLinkTriggersInfo returns trigger metadata for the (fromType,

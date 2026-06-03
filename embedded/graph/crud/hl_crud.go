@@ -77,6 +77,7 @@ func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	// that adds negative caching for "type does not yet exist" cannot
 	// silently break this code path.
 	cacheInvalidateTypeObjectTriggers(selfID)
+	cacheInvalidateTypeHRNField(selfID)
 	om.AggregateOpMsg(m).Reply()
 }
 
@@ -122,6 +123,7 @@ func UpdateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	// Type body may carry the triggers section — invalidate the trigger
 	// cache so the next CRUD hot path observes the latest registration.
 	cacheInvalidateTypeObjectTriggers(selfID)
+	cacheInvalidateTypeHRNField(selfID)
 
 	om.AggregateOpMsg(m)
 	om.Reply()
@@ -174,6 +176,7 @@ func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	// link-trigger entry that mentions it as either endpoint (those
 	// TypesLinks are gone with the type).
 	cacheInvalidateTypeObjectTriggers(selfID)
+	cacheInvalidateTypeHRNField(selfID)
 	cachePurgeLinkTriggersForType(selfID)
 
 	PolyTypeGoalFinalize(ctx, polyTypeData)
@@ -609,6 +612,12 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	result.SetByPath("type", easyjson.NewJSON(objectType))
 	result.SetByPath("to_objects", easyjson.NewJSON(toObjects))
 	result.SetByPath("links", m.Data.GetByPath("links"))
+
+	// Human-readable name: the path the object's type declares
+	// (body.human_readable_name_field) read from this object's body, or a
+	// stable auto-generated fallback. The type's declaration is cached per
+	// type, so this adds no type read on the steady-state hot path.
+	result.SetByPath("name", easyjson.NewJSON(computeObjectName(ctx, selfID, objectType, m.Data.GetByPathPtr("body"))))
 
 	if executeTriggersLater {
 		j := om.GetLastSyncOp().Data.GetByPathPtr("op_stack")
