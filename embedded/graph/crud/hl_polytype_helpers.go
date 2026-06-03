@@ -181,6 +181,24 @@ func UpdateTypeModelVersion(ctx *sfPlugins.StatefunContextProcessor) {
 }
 
 func RecalculateInheritanceCacheForTypeAtSelfIDIfNeeded(ctx *sfPlugins.StatefunContextProcessor) {
+	// Fast path: the inheritance cache only needs recomputing when the global
+	// type-model version has moved past the version this type last synced to.
+	// Check that by reading BOTH versions straight from the in-memory cache
+	// (the source of truth) instead of through functions.graph.api.vertex.read.
+	//
+	// This guard runs on every ReadType, and the global version lives on the
+	// single shared BUILT_IN_TYPES vertex — routing the check through the
+	// mediator (payload build + operation-key lock + reply parse) on each call
+	// turned that vertex into a hotspot under bulk type reads (e.g. naming
+	// triggers). Direct cache reads return the same committed values with none
+	// of that overhead; a momentarily stale read can at worst cause one extra
+	// idempotent recompute on a later call, never a missed one — the
+	// authoritative slow path below still re-reads through the mediator before
+	// it writes.
+	if !typeInheritanceCacheMayBeStale(ctx) {
+		return
+	}
+
 	typeCacheVersion, typeModelVersion, typeBody := getTypeCacheVersionAndGlobalVersion(ctx, ctx.Self.ID)
 
 	if typeCacheVersion != typeModelVersion && typeModelVersion != "" {
@@ -237,6 +255,38 @@ func getTypeCacheVersionAndGlobalVersion(ctx *sfPlugins.StatefunContextProcessor
 	}
 
 	return
+}
+
+// typeInheritanceCacheMayBeStale reports — using only direct in-memory cache
+// reads, no mediator and no locks — whether this type's inheritance cache
+// might be out of date and so warrants the authoritative slow path.
+//
+// It returns false ONLY when it can positively confirm that the type's cached
+// version equals the current global model version (the steady-state common
+// case, where nothing needs doing). In every uncertain case — vertex body not
+// in cache yet, or an empty global version — it returns true and defers to the
+// existing mediator-based path, which preserves the original semantics
+// (including its "do nothing when the global version is empty" behaviour).
+func typeInheritanceCacheMayBeStale(ctx *sfPlugins.StatefunContextProcessor) bool {
+	selfID := getOriginalID(ctx.Self.ID)
+	typesVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false)
+
+	modelBody, err := ctx.Domain.Cache().GetValueJSON(typesVertexId)
+	if err != nil {
+		return true
+	}
+	typeModelVersion := modelBody.GetByPath("version").AsStringDefault("")
+	if typeModelVersion == "" {
+		return true
+	}
+
+	typeBody, err := ctx.Domain.Cache().GetValueJSON(selfID)
+	if err != nil {
+		return true
+	}
+	typeCacheVersion := typeBody.GetByPath("cache.version").AsStringDefault("")
+
+	return typeCacheVersion != typeModelVersion
 }
 
 func getTypeParents(ctx *sfPlugins.StatefunContextProcessor, typeName string) []string {
