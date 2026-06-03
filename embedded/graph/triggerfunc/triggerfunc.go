@@ -1,6 +1,8 @@
 package triggerfunc
 
 import (
+	"time"
+
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/clients/go/db"
 	"github.com/foliagecp/sdk/statefun/logger"
@@ -61,7 +63,32 @@ if (result_name && result_name.length > 0) {
 `
 )
 
+// functionContextTTL bounds how long a per-object name-generator function
+// context lives in the cache after its single, synchronous use.
+const functionContextTTL = time.Minute
+
 func ObjectNameGenerator(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+	// A link trigger fires on the FROM object, but the generated name belongs
+	// to the TO object — forward the trigger to TO immediately, BEFORE reading
+	// anything. The previous order read the FROM object + its type and built
+	// the whole function context first, then discarded all of it on every link
+	// trigger; that hammered high-out-degree vertices and the shared type
+	// vertex with reads that were thrown away.
+	//
+	// Forward with ctx.Request (not ctx.Signal): AutoRequestSelect routes the
+	// call in-process when TO lives in this runtime, sparing an extra NATS
+	// publish/redelivery hop on the bus.
+	if ctx.Payload.PathExists("trigger.link") {
+		link := ctx.Payload.GetByPath("trigger.link")
+		for _, k := range link.ObjectKeys() {
+			toId := link.GetByPath(k + ".to").AsStringDefault("")
+			if len(toId) > 0 {
+				system.MsgOnErrorReturn(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, toId, nil, nil))
+				return // The name belongs to TO; it regenerates there.
+			}
+		}
+	}
+
 	dbc, err := db.NewDBSyncClientFromRequestFunction(ctx.Request)
 	if err != nil {
 		logger.Logf(logger.ErrorLevel, "ObjectNameGenerator cannot create db client")
@@ -97,17 +124,6 @@ func ObjectNameGenerator(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Sta
 	functionContext.SetByPath("type_data", *typeData)
 	ctx.SetFunctionContext(functionContext)
 
-	if ctx.Payload.PathExists("trigger.link") {
-		link := ctx.Payload.GetByPath("trigger.link")
-		for _, k := range link.ObjectKeys() {
-			toId := link.GetByPath(k + ".to").AsStringDefault("")
-			if len(toId) > 0 {
-				system.MsgOnErrorReturn(ctx.Signal(sfPlugins.AutoSignalSelect, ctx.Self.Typename, toId, nil, nil))
-				return // When link trigger function is executed only on "to" object
-			}
-		}
-	}
-
 	if executor != nil {
 		if err := executor.BuildError(); err != nil {
 			logger.Logf(logger.ErrorLevel, "ObjectNameGenerator build script for object of type=%s with id=%s: %s", typeName, ctx.Self.ID, err.Error())
@@ -123,12 +139,18 @@ func ObjectNameGenerator(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Sta
 
 	resultName := functionContext.GetByPath("result_name").AsStringDefault("")
 	if len(resultName) == 0 {
-		resultDetails := functionContext.GetByPath("result_name").AsStringDefault("")
-		logger.Logf(logger.ErrorLevel, "ObjectNameGenerator' execute script for object with id=%s cannot calculate its name: %s", ctx.Self.ID, resultDetails)
+		logger.Logf(logger.ErrorLevel, "ObjectNameGenerator' execute script for object with id=%s cannot calculate its name", ctx.Self.ID)
 	}
 
 	bodyWithName := easyjson.NewJSONObject()
 	path := functionContext.GetByPath("result_name_path").AsStringDefault("__meta.name")
 	bodyWithName.SetByPath(path, easyjson.NewJSON(resultName))
 	system.MsgOnErrorReturn(dbc.CMDB.ObjectUpdate(ctx.Self.ID, bodyWithName, false))
+
+	// The function context set above is per-(function, object id); without an
+	// expiry it lingers in the cache for every named object, accumulating
+	// across a bulk burst. It is only the Go<->JS IPC channel for this single
+	// synchronous invocation, so mark it to expire and let the cache GC reclaim
+	// it.
+	ctx.SetContextExpirationAfter(functionContextTTL)
 }
