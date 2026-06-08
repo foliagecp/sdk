@@ -737,7 +737,18 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	if !linkExists {
 		if upsert {
 			p := payload.Clone()
-			p.SetByPath("force", easyjson.NewJSON(true))
+			// Upsert-create is a genuine create of a not-yet-existing link, so
+			// it MUST honour the link invariants — let link.create run its
+			// constraint checks instead of forcing past them. getFullLinkInfo
+			// above only confirmed the link is absent along the dimension the
+			// caller addressed it by (its name, OR its type+to), but a create
+			// can still violate the OTHER dimension: a different name may
+			// already own this (type -> to) edge (at most one link of a type per
+			// direction), or this name may already be taken by another edge (at
+			// most one out-link per name). Forcing bypassed both checks and let
+			// upsert silently create a duplicate-type edge / steal a name,
+			// corrupting the ltype and out.to indices.
+			p.SetByPath("force", easyjson.NewJSON(false))
 			p.SetByPath("op_time", easyjson.NewJSON(opTime))
 			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &p), ctx.Options)))
 			//operationKeysMutexUnlock(ctx)
