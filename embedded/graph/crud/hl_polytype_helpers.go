@@ -65,19 +65,78 @@ func getObjectAllTypesBaseAndParents(ctx *sfPlugins.StatefunContextProcessor, ob
 	targetObjectType = ctx.Domain.CreateObjectIDWithHubDomain(targetObjectType, true)
 	result[targetObjectType] = struct{}{}
 
-	om := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.read", makeSequenceFreeParentBasedID(ctx, targetObjectType), injectParentHoldsLocks(ctx, nil), nil))
-	if om.Data.PathExists("body.cache.parent_types") {
-		parentTypes := om.Data.GetByPath("body.cache.parent_types")
-		for i := 0; i < parentTypes.ArraySize(); i++ {
-			parentType := parentTypes.ArrayElement(i).AsStringDefault("")
-			parentType = ctx.Domain.CreateObjectIDWithHubDomain(parentType, true)
-			if len(parentType) > 0 {
-				result[parentType] = struct{}{}
-			}
+	for _, parentType := range getTypeResolvedParentTypes(ctx, targetObjectType) {
+		parentType = ctx.Domain.CreateObjectIDWithHubDomain(parentType, true)
+		if len(parentType) > 0 {
+			result[parentType] = struct{}{}
 		}
 	}
 
 	return
+}
+
+// getTypeResolvedParentTypes returns a type's resolved parent types
+// (body.cache.parent_types). It reads them STRAIGHT FROM THE IN-MEMORY CACHE
+// whenever the type's inheritance cache is in sync with the global type-model
+// version — no mediator round-trip.
+//
+// This is the hot path of bulk cross-pack (supertype) link creation. Resolving
+// each endpoint's inheritance through a mediator type.read made every link
+// issue a nested request per endpoint, and because statefun processes one
+// message per id at a time, all links re-reading the SAME few endpoint types
+// serialized on those types' single-threaded per-id workers — so the per-link
+// cost grew with fan-out (a hub object emitting thousands of cross-pack links
+// dropped to ~150 links/s regardless of concurrency). The cached value is
+// identical to what type.read returns once warm. Only when the cache is cold or
+// stale (the type's version != the global version, e.g. while the type model is
+// still moving during a first multi-pack build) does it fall back to the
+// authoritative mediator type.read, which also recomputes and warms the cache.
+func getTypeResolvedParentTypes(ctx *sfPlugins.StatefunContextProcessor, typeId string) []string {
+	if parents, ok := freshTypeParentTypesFromCache(ctx, typeId); ok {
+		return parents
+	}
+	// Cold/stale: authoritative path — recomputes and warms the inheritance cache.
+	om := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.read", makeSequenceFreeParentBasedID(ctx, typeId), injectParentHoldsLocks(ctx, nil), nil))
+	if !om.Data.PathExists("body.cache.parent_types") {
+		return nil
+	}
+	return parentTypesArrayToSlice(om.Data.GetByPath("body.cache.parent_types"))
+}
+
+// freshTypeParentTypesFromCache returns the type's parent types from the
+// in-memory cache, but ONLY when it can confirm the type's cached inheritance
+// version equals the current global type-model version (the same freshness
+// guard typeInheritanceCacheMayBeStale uses). It returns ok=false in every
+// uncertain case (BUILT_IN_TYPES or the type vertex not cached yet, empty or
+// mismatched version) so the caller falls back to the mediator path that
+// recomputes and warms the cache. A momentarily stale read is impossible: a
+// version mismatch always defers to the authoritative path.
+func freshTypeParentTypesFromCache(ctx *sfPlugins.StatefunContextProcessor, typeId string) (parents []string, ok bool) {
+	typesVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false)
+	modelBody, err := ctx.Domain.Cache().GetValueJSON(typesVertexId)
+	if err != nil {
+		return nil, false
+	}
+	modelVersion := modelBody.GetByPath("version").AsStringDefault("")
+	if modelVersion == "" {
+		return nil, false
+	}
+	typeBody, err := ctx.Domain.Cache().GetValueJSON(typeId)
+	if err != nil {
+		return nil, false
+	}
+	if typeBody.GetByPath("cache.version").AsStringDefault("") != modelVersion {
+		return nil, false
+	}
+	return parentTypesArrayToSlice(typeBody.GetByPath("cache.parent_types")), true
+}
+
+func parentTypesArrayToSlice(arr easyjson.JSON) []string {
+	parents := make([]string, 0, arr.ArraySize())
+	for i := 0; i < arr.ArraySize(); i++ {
+		parents = append(parents, arr.ArrayElement(i).AsStringDefault(""))
+	}
+	return parents
 }
 
 func isObjectLinkPermittedForClaimedTypes(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId, fromObjectClaimType, toObjectClaimType string) string {
