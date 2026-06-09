@@ -242,6 +242,164 @@ func (cmdb CMDBSyncClient) TriggerLinkDrop(fromTypeName, toTypeName string, trig
 	)
 }
 
+// ------------------------------------------------------------------------------------------------
+// Meta lifecycle triggers — fire on the lifecycle of the TYPES and type-to-type
+// links (stored in the `types` root vertex body) or, globally, of ALL OBJECTS
+// and object-to-object links (stored in the `objects` root vertex body), under
+// body.meta_triggers.<section>.<event>. section ∈ {type, types_link, object,
+// object_link}; event ∈ {create, update, delete, read}.
+// ------------------------------------------------------------------------------------------------
+
+const (
+	metaRootTypes   = "types"   // BUILT_IN_TYPES root vertex
+	metaRootObjects = "objects" // BUILT_IN_OBJECTS root vertex
+)
+
+// metaRootRead reads a system root vertex (types / objects).
+func (cmdb CMDBSyncClient) metaRootRead(rootName string) (easyjson.JSON, error) {
+	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
+	om := sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.graph.api.vertex.read", seqFree(rootName), &payload, nil))
+	if om.Status != sfMediators.SYNC_OP_STATUS_OK {
+		return easyjson.NewJSONNull(), OpErrorFromOpMsgStrict(om)
+	}
+	return om.Data, nil
+}
+
+// metaTriggerWrite merges meta_triggers.<section>.<triggerType> = fns into the
+// root vertex body with replace=false (a deep merge that replaces only that
+// array, leaving body.version / cache.parent_types and the other sections
+// untouched).
+func (cmdb CMDBSyncClient) metaTriggerWrite(rootName, section string, triggerType TriggerType, fns []string) error {
+	body := easyjson.NewJSONObject()
+	body.SetByPath(fmt.Sprintf("meta_triggers.%s.%s", section, triggerType), easyjson.NewJSON(fns))
+
+	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
+	payload.SetByPath("replace", easyjson.NewJSON(false))
+	payload.SetByPath("body", body)
+	options := easyjson.NewJSONObject()
+	options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
+	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.graph.api.vertex.update", seqFree(rootName), &payload, &options)))
+}
+
+// metaTriggerPrune returns the current statefun list for (section, triggerType)
+// in a root body with the named statefuns removed.
+func metaTriggerPrune(rootBody easyjson.JSON, section string, triggerType TriggerType, remove ...string) []string {
+	path := fmt.Sprintf("meta_triggers.%s.%s", section, triggerType)
+	kept := []string{}
+	if arr, ok := rootBody.GetByPath(path).AsArrayString(); ok {
+		for _, sf := range arr {
+			drop := false
+			for _, r := range remove {
+				if sf == r {
+					drop = true
+					break
+				}
+			}
+			if !drop {
+				kept = append(kept, sf)
+			}
+		}
+	}
+	return kept
+}
+
+func (cmdb CMDBSyncClient) metaTriggerSet(rootName, section string, triggerType TriggerType, statefunName ...string) error {
+	if len(statefunName) == 0 {
+		return fmt.Errorf("at least 1 statefun name is required")
+	}
+	return cmdb.metaTriggerWrite(rootName, section, triggerType, statefunName)
+}
+
+// metaRootReplace writes the FULL root body back with replace=true. Removal MUST
+// use replace: the body merge (replace=false) unions arrays (easyjson DeepMerge
+// append-unique) and so can only ADD trigger fns, never remove them. Reading and
+// rewriting the whole body preserves the types-root `version` marker that lives
+// alongside meta_triggers.
+func (cmdb CMDBSyncClient) metaRootReplace(rootName string, body easyjson.JSON) error {
+	payload := easyjson.NewJSONObject()
+	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
+	payload.SetByPath("replace", easyjson.NewJSON(true))
+	payload.SetByPath("body", body)
+	options := easyjson.NewJSONObject()
+	options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
+	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.graph.api.vertex.update", seqFree(rootName), &payload, &options)))
+}
+
+func (cmdb CMDBSyncClient) metaTriggerDelete(rootName, section string, triggerType TriggerType, statefunName ...string) error {
+	if len(statefunName) == 0 {
+		return fmt.Errorf("at least 1 statefun name is required")
+	}
+	data, err := cmdb.metaRootRead(rootName)
+	if err != nil {
+		return err
+	}
+	body := data.GetByPath("body")
+	if body.IsNull() {
+		body = easyjson.NewJSONObject()
+	}
+	body.SetByPath(fmt.Sprintf("meta_triggers.%s.%s", section, triggerType), easyjson.NewJSON(metaTriggerPrune(body, section, triggerType, statefunName...)))
+	return cmdb.metaRootReplace(rootName, body)
+}
+
+func (cmdb CMDBSyncClient) metaTriggerDrop(rootName, section string, triggerType TriggerType) error {
+	data, err := cmdb.metaRootRead(rootName)
+	if err != nil {
+		return err
+	}
+	body := data.GetByPath("body")
+	if body.IsNull() {
+		body = easyjson.NewJSONObject()
+	}
+	body.SetByPath(fmt.Sprintf("meta_triggers.%s.%s", section, triggerType), easyjson.NewJSONArray())
+	return cmdb.metaRootReplace(rootName, body)
+}
+
+// Type lifecycle triggers (stored in the `types` root).
+func (cmdb CMDBSyncClient) MetaTriggerTypeSet(triggerType TriggerType, statefunName ...string) error {
+	return cmdb.metaTriggerSet(metaRootTypes, "type", triggerType, statefunName...)
+}
+func (cmdb CMDBSyncClient) MetaTriggerTypeDelete(triggerType TriggerType, statefunName ...string) error {
+	return cmdb.metaTriggerDelete(metaRootTypes, "type", triggerType, statefunName...)
+}
+func (cmdb CMDBSyncClient) MetaTriggerTypeDrop(triggerType TriggerType) error {
+	return cmdb.metaTriggerDrop(metaRootTypes, "type", triggerType)
+}
+
+// Type-to-type link lifecycle triggers (stored in the `types` root).
+func (cmdb CMDBSyncClient) MetaTriggerTypesLinkSet(triggerType TriggerType, statefunName ...string) error {
+	return cmdb.metaTriggerSet(metaRootTypes, "types_link", triggerType, statefunName...)
+}
+func (cmdb CMDBSyncClient) MetaTriggerTypesLinkDelete(triggerType TriggerType, statefunName ...string) error {
+	return cmdb.metaTriggerDelete(metaRootTypes, "types_link", triggerType, statefunName...)
+}
+func (cmdb CMDBSyncClient) MetaTriggerTypesLinkDrop(triggerType TriggerType) error {
+	return cmdb.metaTriggerDrop(metaRootTypes, "types_link", triggerType)
+}
+
+// Global object lifecycle triggers (stored in the `objects` root).
+func (cmdb CMDBSyncClient) MetaTriggerObjectSet(triggerType TriggerType, statefunName ...string) error {
+	return cmdb.metaTriggerSet(metaRootObjects, "object", triggerType, statefunName...)
+}
+func (cmdb CMDBSyncClient) MetaTriggerObjectDelete(triggerType TriggerType, statefunName ...string) error {
+	return cmdb.metaTriggerDelete(metaRootObjects, "object", triggerType, statefunName...)
+}
+func (cmdb CMDBSyncClient) MetaTriggerObjectDrop(triggerType TriggerType) error {
+	return cmdb.metaTriggerDrop(metaRootObjects, "object", triggerType)
+}
+
+// Global object-to-object link lifecycle triggers (stored in the `objects` root).
+func (cmdb CMDBSyncClient) MetaTriggerObjectLinkSet(triggerType TriggerType, statefunName ...string) error {
+	return cmdb.metaTriggerSet(metaRootObjects, "object_link", triggerType, statefunName...)
+}
+func (cmdb CMDBSyncClient) MetaTriggerObjectLinkDelete(triggerType TriggerType, statefunName ...string) error {
+	return cmdb.metaTriggerDelete(metaRootObjects, "object_link", triggerType, statefunName...)
+}
+func (cmdb CMDBSyncClient) MetaTriggerObjectLinkDrop(triggerType TriggerType) error {
+	return cmdb.metaTriggerDrop(metaRootObjects, "object_link", triggerType)
+}
+
 func (cmdb CMDBSyncClient) TypeCreate(name string, body ...easyjson.JSON) error {
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
