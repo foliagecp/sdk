@@ -78,7 +78,15 @@ func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	// silently break this code path.
 	cacheInvalidateTypeObjectTriggers(selfID)
 	cacheInvalidateTypeHRNField(selfID)
-	om.AggregateOpMsg(m).Reply()
+	om.AggregateOpMsg(m)
+	if om.GetStatus() == sfMediators.SYNC_OP_STATUS_OK {
+		var newBody *easyjson.JSON
+		if ctx.Payload.PathExists("body") {
+			newBody = ctx.Payload.GetByPath("body").GetPtr()
+		}
+		executeMetaTypeTriggers(ctx, selfID, nil, newBody, 0)
+	}
+	om.Reply()
 }
 
 /*
@@ -117,7 +125,9 @@ func UpdateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	}
 	// ----------------------------------------------------
 
+	metaOld := readVertexBodyFromCache(ctx, selfID) // snapshot before the update (meta trigger)
 	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.update", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, ctx.Payload), nil))
+	metaNew := readVertexBodyFromCache(ctx, selfID) // snapshot after the update, still under lock
 	operationKeysMutexUnlock(ctx)
 
 	// Type body may carry the triggers section — invalidate the trigger
@@ -126,6 +136,9 @@ func UpdateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	cacheInvalidateTypeHRNField(selfID)
 
 	om.AggregateOpMsg(m)
+	if om.GetStatus() == sfMediators.SYNC_OP_STATUS_OK {
+		executeMetaTypeTriggers(ctx, selfID, metaOld, metaNew, 1)
+	}
 	om.Reply()
 }
 
@@ -166,6 +179,7 @@ func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 		}
 	}
 
+	metaOld := readVertexBodyFromCache(ctx, selfID) // snapshot before delete (meta trigger)
 	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.delete", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, ctx.Payload), nil))
 	operationKeysMutexUnlock(ctx)
 
@@ -178,6 +192,13 @@ func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	cacheInvalidateTypeObjectTriggers(selfID)
 	cacheInvalidateTypeHRNField(selfID)
 	cachePurgeLinkTriggersForType(selfID)
+
+	// Global object meta delete triggers already fired per cascaded object
+	// (each object.delete above ran its own DeleteObject hook). Fire the type
+	// meta delete once for the type vertex itself.
+	if om.GetStatus() == sfMediators.SYNC_OP_STATUS_OK {
+		executeMetaTypeTriggers(ctx, selfID, metaOld, nil, 2)
+	}
 
 	PolyTypeGoalFinalize(ctx, polyTypeData)
 
@@ -241,6 +262,13 @@ func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProces
 	result.SetByPath("to_types", easyjson.NewJSON(toTypes))
 	result.SetByPath("object_ids", easyjson.NewJSON(toObjects))
 	result.SetByPath("links", m.Data.GetByPath("links"))
+
+	// Type meta read trigger — only reached for an existing, valid type.
+	var metaNew *easyjson.JSON
+	if result.PathExists("body") {
+		metaNew = result.GetByPath("body").GetPtr()
+	}
+	executeMetaTypeTriggers(ctx, selfID, nil, metaNew, 3)
 
 	system.MsgOnErrorReturn(om.ReplyWithData(&result))
 }
@@ -339,6 +367,7 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 
 	if opStack != nil {
 		executeTriggersFromLLOpStack(ctx, opStack, "", "")
+		executeMetaTriggersFromLLOpStack(ctx, opStack, "", "")
 	}
 	cacheSetObjectType(selfID, originType)
 
@@ -434,6 +463,7 @@ func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	if om.GetLastSyncOp().Data.PathExists("op_stack") {
 		j := om.GetLastSyncOp().Data.GetByPathPtr("op_stack")
 		executeTriggersFromLLOpStack(ctx, j, "", "")
+		executeMetaTriggersFromLLOpStack(ctx, j, "", "")
 	}
 
 	replyWithoutOpStack(om, ctx)
@@ -499,6 +529,7 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	if objectType != "" && om.GetLastSyncOp().Data.PathExists("op_stack") {
 		j := om.GetLastSyncOp().Data.GetByPathPtr("op_stack")
 		executeTriggersFromLLOpStack(ctx, j, selfID, objectType)
+		executeMetaTriggersFromLLOpStack(ctx, j, selfID, objectType)
 	}
 
 	cacheDeleteObjectType(selfID)
@@ -619,6 +650,10 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	// type, so this adds no type read on the steady-state hot path.
 	result.SetByPath("name", easyjson.NewJSON(computeObjectName(ctx, selfID, objectType, m.Data.GetByPathPtr("body"))))
 
+	// Global object meta read trigger — fires for every successful object read,
+	// independent of the op_stack option the per-type read path would need.
+	executeMetaObjectTriggers(ctx, selfID, objectType, nil, m.Data.GetByPathPtr("body"), 3)
+
 	if executeTriggersLater {
 		j := om.GetLastSyncOp().Data.GetByPathPtr("op_stack")
 		executeTriggersFromLLOpStack(ctx, j, "", "")
@@ -676,6 +711,7 @@ func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	if om.GetStatus() == sfMediators.SYNC_OP_STATUS_OK {
 		cacheSetTypeEdge(selfID, toType, objectLinkType)
+		executeMetaTypesLinkTriggers(ctx, selfID, toType, objectLinkType, nil, readLinkBodyFromCache(ctx, selfID, toType), 0)
 	}
 	// A new TypesLink may carry a triggers section in its body —
 	// invalidate any negative entry produced by a prior failed lookup.
@@ -739,7 +775,9 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	link.SetByPath("op_time", easyjson.NewJSON(opTime))
 
 	operationKeysMutexLock(ctx, []string{selfID, toType}, true, opTime)
+	metaOld := readLinkBodyFromCache(ctx, selfID, toType) // snapshot before update (meta trigger)
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.update", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &link), ctx.Options)))
+	metaNew := readLinkBodyFromCache(ctx, selfID, toType) // snapshot after update, still under lock
 	operationKeysMutexUnlock(ctx)
 
 	if om.GetStatus() == sfMediators.SYNC_OP_STATUS_OK {
@@ -752,6 +790,14 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	// Body may carry a triggers section change — drop cached entry so
 	// the next dispatch reloads.
 	cacheInvalidateLinkTriggers(selfID, toType)
+
+	if om.GetStatus() == sfMediators.SYNC_OP_STATUS_OK {
+		olt := ""
+		if metaNew != nil {
+			olt = metaNew.GetByPath("type").AsStringDefault("")
+		}
+		executeMetaTypesLinkTriggers(ctx, selfID, toType, olt, metaOld, metaNew, 1)
+	}
 
 	om.Reply()
 }
@@ -814,6 +860,7 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		}
 	}
 
+	metaOld := readLinkBodyFromCache(ctx, selfID, toType) // snapshot before the TypesLink delete (meta trigger)
 	objectLink := easyjson.NewJSONObject()
 	objectLink.SetByPath("to", easyjson.NewJSON(toType))
 	objectLink.SetByPath("type", easyjson.NewJSON(TO_TYPELINK))
@@ -830,6 +877,12 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 	for _, lateTrigger := range lateTriggersArr {
 		executeTriggersFromLLOpStack(ctx, lateTrigger, "", "")
+	}
+
+	// Type-to-type relation meta delete (the per-object cascade above already
+	// fired its own object-link meta deletes via delete_object_filtered_out_links).
+	if om.GetStatus() == sfMediators.SYNC_OP_STATUS_OK {
+		executeMetaTypesLinkTriggers(ctx, selfID, toType, originLinkType, metaOld, nil, 2)
 	}
 
 	om.Reply()
@@ -864,6 +917,15 @@ func ReadTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 	operationKeysMutexLock(ctx, []string{selfID, toType}, false, opTime)
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &payload), ctx.Options)))
 	operationKeysMutexUnlock(ctx)
+
+	if om.GetStatus() == sfMediators.SYNC_OP_STATUS_OK {
+		metaNew := readLinkBodyFromCache(ctx, selfID, toType)
+		olt := ""
+		if metaNew != nil {
+			olt = metaNew.GetByPath("type").AsStringDefault("")
+		}
+		executeMetaTypesLinkTriggers(ctx, selfID, toType, olt, nil, metaNew, 3)
+	}
 
 	om.Reply()
 }
@@ -923,6 +985,7 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	if om.GetLastSyncOp().Data.PathExists("op_stack") {
 		j := om.GetLastSyncOp().Data.GetByPathPtr("op_stack")
 		executeTriggersFromLLOpStack(ctx, j, "", "")
+		executeMetaTriggersFromLLOpStack(ctx, j, "", "")
 	}
 
 	replyWithoutOpStack(om, ctx)
@@ -999,6 +1062,7 @@ func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	if om.GetLastSyncOp().Data.PathExists("op_stack") {
 		j := om.GetLastSyncOp().Data.GetByPathPtr("op_stack")
 		executeTriggersFromLLOpStack(ctx, j, "", "")
+		executeMetaTriggersFromLLOpStack(ctx, j, "", "")
 	}
 
 	replyWithoutOpStack(om, ctx)
@@ -1048,6 +1112,7 @@ func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	if om.GetLastSyncOp().Data.PathExists("op_stack") {
 		j := om.GetLastSyncOp().Data.GetByPathPtr("op_stack")
 		executeTriggersFromLLOpStack(ctx, j, "", "")
+		executeMetaTriggersFromLLOpStack(ctx, j, "", "")
 	}
 
 	replyWithoutOpStack(om, ctx)
@@ -1105,6 +1170,9 @@ func ReadObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		j := om.GetLastSyncOp().Data.GetByPathPtr("op_stack")
 		executeTriggersFromLLOpStack(ctx, j, "", "")
 	}
+
+	// Global object-link meta read trigger.
+	executeMetaObjectLinkTriggers(ctx, selfID, objectToID, linkType, nil, m.Data.GetByPathPtr("body"), 3)
 
 	result := m.Data
 	result.SetByPath("from_type", easyjson.NewJSON(fromObjectType))
