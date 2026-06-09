@@ -55,32 +55,75 @@ type refMutex struct {
 	refs int32
 }
 
+// keyMutexShardCount is how many independent shards the per-key lock table is
+// split into. Lock/unlock of keys in different shards never contend on the same
+// map mutex, so high-concurrency graph writes (each locking several keys) no
+// longer serialize on a single global mutex. Power of two => the shard index is
+// a cheap mask. Cost is keyMutexShardCount tiny empty maps.
+const keyMutexShardCount = 64
+
+type keyMutexShard struct {
+	m  map[interface{}]*refMutex // map[key] => *refMutex
+	mx sync.Mutex                // protects this shard's map
+}
+
 // KeyMutex provides per-key read-write mutexes with automatic cleanup.
 // Multiple readers can access a key concurrently if no writer holds the lock.
+// The key table is sharded so operations on different keys do not serialize on
+// one global map mutex.
 type KeyMutex struct {
-	m  map[interface{}]*refMutex // map[key] => *refMutex
-	mx sync.Mutex                // protects access to the map
+	shards []keyMutexShard
 }
 
 // NewKeyMutex constructs a new KeyMutex.
 func NewKeyMutex() *KeyMutex {
-	return &KeyMutex{
-		m: make(map[interface{}]*refMutex),
+	k := &KeyMutex{shards: make([]keyMutexShard, keyMutexShardCount)}
+	for i := range k.shards {
+		k.shards[i].m = make(map[interface{}]*refMutex)
 	}
+	return k
+}
+
+// shardFor returns the shard owning key (FNV-1a over string keys; non-string
+// keys — none in practice — land deterministically in shard 0, still correct).
+func (k *KeyMutex) shardFor(key interface{}) *keyMutexShard {
+	var h uint32 = 2166136261 // FNV-1a offset basis
+	if s, ok := key.(string); ok {
+		for i := 0; i < len(s); i++ {
+			h ^= uint32(s[i])
+			h *= 16777619
+		}
+	}
+	return &k.shards[h&(keyMutexShardCount-1)]
+}
+
+// acquire finds-or-creates the refMutex for key in its shard and bumps refs.
+func (k *KeyMutex) acquire(key interface{}) *refMutex {
+	sh := k.shardFor(key)
+	sh.mx.Lock()
+	rm, ok := sh.m[key]
+	if !ok {
+		rm = &refMutex{}
+		sh.m[key] = rm
+	}
+	atomic.AddInt32(&rm.refs, 1)
+	sh.mx.Unlock()
+	return rm
+}
+
+// release decrements refs for key and deletes the entry when it reaches zero.
+func (k *KeyMutex) release(key interface{}, rm *refMutex) {
+	sh := k.shardFor(key)
+	sh.mx.Lock()
+	if atomic.AddInt32(&rm.refs, -1) == 0 {
+		delete(sh.m, key)
+	}
+	sh.mx.Unlock()
 }
 
 // Lock acquires exclusive (write) lock for the specified key.
 func (k *KeyMutex) Lock(key interface{}) {
-	k.mx.Lock()
-	rm, ok := k.m[key]
-	if !ok {
-		rm = &refMutex{}
-		k.m[key] = rm
-	}
-	atomic.AddInt32(&rm.refs, 1)
-	k.mx.Unlock()
-
-	rm.mu.Lock()
+	k.acquire(key).mu.Lock()
 }
 
 // LockTimeout acquires an exclusive (write) lock for the key, giving up after
@@ -89,15 +132,7 @@ func (k *KeyMutex) Lock(key interface{}) {
 // caller blocks on a contended key, so a stuck lock holder cannot make
 // waiters hang indefinitely.
 func (k *KeyMutex) LockTimeout(key interface{}, timeout time.Duration) bool {
-	k.mx.Lock()
-	rm, ok := k.m[key]
-	if !ok {
-		rm = &refMutex{}
-		k.m[key] = rm
-	}
-	atomic.AddInt32(&rm.refs, 1)
-	k.mx.Unlock()
-
+	rm := k.acquire(key)
 	if rm.mu.TryLock() {
 		return true
 	}
@@ -108,11 +143,7 @@ func (k *KeyMutex) LockTimeout(key interface{}, timeout time.Duration) bool {
 	for {
 		select {
 		case <-timer.C:
-			k.mx.Lock()
-			if atomic.AddInt32(&rm.refs, -1) == 0 {
-				delete(k.m, key)
-			}
-			k.mx.Unlock()
+			k.release(key, rm)
 			return false
 		case <-ticker.C:
 			if rm.mu.TryLock() {
@@ -124,15 +155,7 @@ func (k *KeyMutex) LockTimeout(key interface{}, timeout time.Duration) bool {
 
 // RLockTimeout is the shared-lock counterpart of LockTimeout.
 func (k *KeyMutex) RLockTimeout(key interface{}, timeout time.Duration) bool {
-	k.mx.Lock()
-	rm, ok := k.m[key]
-	if !ok {
-		rm = &refMutex{}
-		k.m[key] = rm
-	}
-	atomic.AddInt32(&rm.refs, 1)
-	k.mx.Unlock()
-
+	rm := k.acquire(key)
 	if rm.mu.TryRLock() {
 		return true
 	}
@@ -143,11 +166,7 @@ func (k *KeyMutex) RLockTimeout(key interface{}, timeout time.Duration) bool {
 	for {
 		select {
 		case <-timer.C:
-			k.mx.Lock()
-			if atomic.AddInt32(&rm.refs, -1) == 0 {
-				delete(k.m, key)
-			}
-			k.mx.Unlock()
+			k.release(key, rm)
 			return false
 		case <-ticker.C:
 			if rm.mu.TryRLock() {
@@ -159,44 +178,39 @@ func (k *KeyMutex) RLockTimeout(key interface{}, timeout time.Duration) bool {
 
 // Unlock releases an exclusive (write) lock for the specified key.
 func (k *KeyMutex) Unlock(key interface{}) {
-	k.mx.Lock()
-	rm, ok := k.m[key]
+	sh := k.shardFor(key)
+	sh.mx.Lock()
+	rm, ok := sh.m[key]
 	if !ok {
+		sh.mx.Unlock()
 		panic("KeyMutex: unlock of unlocked key")
 	}
 	rm.mu.Unlock()
 	if atomic.AddInt32(&rm.refs, -1) == 0 {
-		delete(k.m, key)
+		delete(sh.m, key)
 	}
-	k.mx.Unlock()
+	sh.mx.Unlock()
 }
 
 // RLock acquires a shared (read) lock for the specified key.
 func (k *KeyMutex) RLock(key interface{}) {
-	k.mx.Lock()
-	rm, ok := k.m[key]
-	if !ok {
-		rm = &refMutex{}
-		k.m[key] = rm
-	}
-	atomic.AddInt32(&rm.refs, 1)
-	k.mx.Unlock()
-
-	rm.mu.RLock()
+	k.acquire(key).mu.RLock()
 }
 
 // RUnlock releases a shared (read) lock for the specified key.
 func (k *KeyMutex) RUnlock(key interface{}) {
-	k.mx.Lock()
-	rm, ok := k.m[key]
+	sh := k.shardFor(key)
+	sh.mx.Lock()
+	rm, ok := sh.m[key]
 	if !ok {
+		sh.mx.Unlock()
 		panic("KeyMutex: runlock of unlocked key")
 	}
 	rm.mu.RUnlock()
 	if atomic.AddInt32(&rm.refs, -1) == 0 {
-		delete(k.m, key)
+		delete(sh.m, key)
 	}
-	k.mx.Unlock()
+	sh.mx.Unlock()
 }
 
 func UniqueStrings(input []string) []string {

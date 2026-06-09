@@ -279,6 +279,80 @@ func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProces
 		"body": json
 	}
 */
+// createObjectInline performs the object-creation writes — the object vertex
+// plus its three structural links (objects→obj, obj→type, type→obj) — directly,
+// with the SAME KV writes, op_stack, rollback and reply shape CreateObject used
+// to produce via nested ctx.Request calls. It is the shared core of both the
+// CreateObject statefun and UpdateObject's upsert→create branch, so the latter
+// no longer makes a worker-pool round-trip (and its sync.Map / context-processor
+// churn) per new-object upsert.
+//
+// Contract for callers: they MUST already hold the EXCLUSIVE lock on selfID and
+// the SHARED locks on builtInObjectsVertexId and originType (the lock split that
+// lets concurrent creates run in parallel). This function does NOT touch the
+// graph key-mutex, does NOT unlock, and does NOT fire triggers — the caller
+// unlocks, then (on success) fires triggers and sets the type cache. It returns
+// the reply payload and the trigger op_stack; a nil op_stack means the create
+// failed (om carries the failed status) and any partial writes were rolled back.
+func createObjectInline(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators.OpMediator, selfID, originType, builtInObjectsVertexId string, opTime int64) (easyjson.JSON, *easyjson.JSON) {
+	// rollbackStack accumulates the op_stack of every step that succeeded.
+	// If a later step fails we walk this stack in reverse and invoke the
+	// matching LL inverse for each entry, leaving the graph close to its
+	// pre-call state instead of in the half-built "object without __type
+	// link" trap that breaks subsequent recovery.
+	rollbackStack := easyjson.NewJSONArray()
+	var targetReply easyjson.JSON
+
+	if ctx.Domain.Cache().ExistsJson(selfID) { // mirror LLAPIVertexCreate's existence check
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s already exists", selfID)))
+		return om.GetLastSyncOp().Data, nil
+	}
+
+	var objectBody easyjson.JSON
+	if ctx.Payload.GetByPath("body").IsObject() {
+		objectBody = ctx.Payload.GetByPath("body")
+	} else {
+		objectBody = easyjson.NewJSONObject()
+	}
+	vertexOpStack := easyjson.NewJSONArray()
+	writeVertexKV(ctx, selfID, &objectBody, opTime, &vertexOpStack)
+	triggerOpStack := &vertexOpStack // only the object vertex op feeds triggers
+	mergeOpStack(&rollbackStack, &vertexOpStack)
+	targetReply = resultWithOpStack(nil, &vertexOpStack)
+	om.AggregateOpMsg(sfMediators.OpMsgOk(targetReply))
+
+	type _link struct {
+		from, to, name, lt string
+	}
+	needLinks := []_link{
+		{from: builtInObjectsVertexId, to: selfID, name: selfID, lt: OBJECT_TYPELINK},
+		{from: selfID, name: "type", to: originType, lt: TO_TYPELINK},
+		{from: originType, name: selfID, to: selfID, lt: OBJECT_TYPELINK},
+	}
+	for _, l := range needLinks {
+		toId := ctx.Domain.CreateObjectIDWithThisDomain(l.to, false)
+		linkName := ctx.Domain.GetObjectIDWithoutDomain(l.name)
+		linkType := ctx.Domain.GetObjectIDWithoutDomain(l.lt)
+		linkBody := easyjson.NewJSONObject()
+		linkOpStack := easyjson.NewJSONArray()
+		m := writeOutLinkKV(ctx, l.from, toId, linkName, linkType, &linkBody, nil, opTime, &linkOpStack)
+		mergeOpStack(&rollbackStack, &linkOpStack)
+		om.AggregateOpMsg(m)
+		if om.GetStatus() != sfMediators.SYNC_OP_STATUS_OK {
+			break // any non-OK terminates the pipeline
+		}
+	}
+
+	// If the multi-step pipeline did not fully succeed, roll back recorded ops.
+	// Best-effort: any failure during rollback is logged but not propagated.
+	if om.GetStatus() != sfMediators.SYNC_OP_STATUS_OK {
+		rollbackOpStack(ctx, &rollbackStack)
+		cacheDeleteObjectType(selfID) // type cache must not claim the partial state
+		return targetReply, nil
+	}
+	return targetReply, triggerOpStack
+}
+
 func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
 	om := sfMediators.NewOpMediator(ctx)
@@ -295,81 +369,28 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
 	ctx.Payload.SetByPath("op_time", easyjson.NewJSON(opTime))
 
-	options := ctx.Options.Clone()
-	options.SetByPath("op_stack", easyjson.NewJSON(true))
+	// Exclusive lock only on the NEW object itself; SHARED on the objects root
+	// and the type. CreateObject only appends its own distinct membership child
+	// under each of those (objects.out.to.<obj>, type.out.to.<obj>), and the
+	// cache child container already serializes per-child, so concurrent creates
+	// do not conflict there. This stops every object creation from serializing
+	// on the single shared `objects` vertex (and, for a single type, on that
+	// type) — the dominant write-throughput bottleneck. Operations that need
+	// those vertices' whole child set exclusively (e.g. DeleteType's cascade,
+	// which write-locks the type) still mutually exclude in-flight creates.
+	operationKeysMutexLockMixed(ctx, []string{selfID}, []string{builtInObjectsVertexId, originType}, opTime)
 
-	operationKeysMutexLock(ctx, []string{builtInObjectsVertexId, selfID, originType}, true, opTime)
-
-	// rollbackStack accumulates the op_stack of every step that succeeded.
-	// If a later step fails we walk this stack in reverse and invoke the
-	// matching LL inverse for each entry, leaving the graph close to its
-	// pre-call state instead of in the half-built "object without __type
-	// link" trap that breaks subsequent recovery.
-	rollbackStack := easyjson.NewJSONArray()
-
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, ctx.Payload), &options)))
-
-	targetReply := om.GetLastSyncOp().Data
-	var opStack *easyjson.JSON
-	if targetReply.PathExists("op_stack") {
-		opStack = targetReply.GetByPathPtr("op_stack")
-		mergeOpStack(&rollbackStack, opStack)
-	}
-
-	// Only proceed to the link-create pipeline if vertex.create actually
-	// succeeded — earlier code accepted FAILED too because it only filtered
-	// out INCOMPLETE.
-	if om.GetStatus() == sfMediators.SYNC_OP_STATUS_OK {
-		type _link struct {
-			from, to, name, lt string
-		}
-
-		needLinks := []_link{
-			{from: builtInObjectsVertexId, to: selfID, name: selfID, lt: OBJECT_TYPELINK},
-			{from: selfID, name: "type", to: originType, lt: TO_TYPELINK},
-			{from: originType, name: selfID, to: selfID, lt: OBJECT_TYPELINK},
-		}
-
-		for _, l := range needLinks {
-			link := easyjson.NewJSONObject()
-			link.SetByPath("to", easyjson.NewJSON(l.to))
-			link.SetByPath("name", easyjson.NewJSON(l.name))
-			link.SetByPath("type", easyjson.NewJSON(l.lt))
-			link.SetByPath("body", easyjson.NewJSONObject())
-			link.SetByPath("force", easyjson.NewJSON(true))
-			link.SetByPath("op_time", easyjson.NewJSON(opTime))
-
-			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", makeSequenceFreeParentBasedID(ctx, l.from), injectParentHoldsLocks(ctx, &link), ctx.Options)))
-
-			// Record what actually got created so we can undo it if needed.
-			lastReply := om.GetLastSyncOp().Data
-			if lastReply.PathExists("op_stack") {
-				mergeOpStack(&rollbackStack, lastReply.GetByPathPtr("op_stack"))
-			}
-
-			if om.GetStatus() != sfMediators.SYNC_OP_STATUS_OK {
-				break // any non-OK terminates the pipeline; do NOT continue to next link
-			}
-		}
-	}
-
-	// If the multi-step pipeline did not fully succeed, roll back recorded ops.
-	// Best-effort: any failure during rollback is logged but not propagated.
-	if om.GetStatus() != sfMediators.SYNC_OP_STATUS_OK {
-		rollbackOpStack(ctx, &rollbackStack)
-		cacheDeleteObjectType(selfID) // type cache must not claim the partial state
-		operationKeysMutexUnlock(ctx)
-		replyWithoutOpStack(om, ctx, targetReply)
-		return
-	}
+	targetReply, triggerOpStack := createObjectInline(ctx, om, selfID, originType, builtInObjectsVertexId, opTime)
 
 	operationKeysMutexUnlock(ctx)
 
-	if opStack != nil {
-		executeTriggersFromLLOpStack(ctx, opStack, "", "")
-		executeMetaTriggersFromLLOpStack(ctx, opStack, "", "")
+	if om.GetStatus() == sfMediators.SYNC_OP_STATUS_OK {
+		if triggerOpStack != nil {
+			executeTriggersFromLLOpStack(ctx, triggerOpStack, "", "")
+			executeMetaTriggersFromLLOpStack(ctx, triggerOpStack, "", "")
+		}
+		cacheSetObjectType(selfID, originType)
 	}
-	cacheSetObjectType(selfID, originType)
 
 	replyWithoutOpStack(om, ctx, targetReply)
 }
@@ -416,10 +437,27 @@ func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 			vertexExists := ctx.Domain.Cache().ExistsJson(vertexID)
 
 			if !vertexExists {
-				// (b) Object truly absent — delegate to ObjectCreate.
-				om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.create", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, ctx.Payload), ctx.Options)))
+				// (b) Object truly absent — create it INLINE rather than via a
+				// nested object.create request. UpdateObject already holds the
+				// write lock on selfID; add the SHARED locks on the objects root
+				// and the type that CreateObject would take, then run the very
+				// same inline create core. This removes a worker-pool round-trip
+				// per new-object upsert — and with it the reply-channel wait, the
+				// per-id context-processor allocation, and the sync.Map churn
+				// that dominated the crud-write hot path.
+				originType := ctx.Domain.CreateObjectIDWithHubDomain(originTypeShort, true)
+				builtInObjectsVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false)
+				operationKeysMutexLock(ctx, []string{builtInObjectsVertexId, originType}, false, opTime)
+				targetReply, triggerOpStack := createObjectInline(ctx, om, selfID, originType, builtInObjectsVertexId, opTime)
 				operationKeysMutexUnlock(ctx)
-				replyWithoutOpStack(om, ctx)
+				if om.GetStatus() == sfMediators.SYNC_OP_STATUS_OK {
+					if triggerOpStack != nil {
+						executeTriggersFromLLOpStack(ctx, triggerOpStack, "", "")
+						executeMetaTriggersFromLLOpStack(ctx, triggerOpStack, "", "")
+					}
+					cacheSetObjectType(selfID, originType)
+				}
+				replyWithoutOpStack(om, ctx, targetReply)
 				return
 			}
 

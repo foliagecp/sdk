@@ -138,6 +138,62 @@ func operationKeysMutexLock(ctx *sfPlugins.StatefunContextProcessor, keys []stri
 	}
 }
 
+// operationKeysMutexLockMixed locks several graph keys in a SINGLE sorted pass,
+// each in its own mode: writeKeys exclusively, readKeys shared. The single
+// sorted order keeps it deadlock-compatible with operationKeysMutexLock (which
+// also sorts).
+//
+// A shared (read) lock here means "I only append my OWN distinct child under
+// this vertex (e.g. objects.out.to.<myObj>), which the cache child container
+// already serializes per-child (node mutex / shard locks) — so I do not
+// conflict with other appenders, only with operations that need the vertex's
+// whole child set exclusively, which take a write lock". This lets CreateObject
+// stop serializing every creation on the single shared `objects` root and the
+// type vertex. Unlock with operationKeysMutexUnlock as usual (it honours the
+// recorded .w/.r mode per key).
+func operationKeysMutexLockMixed(ctx *sfPlugins.StatefunContextProcessor, writeKeys []string, readKeys []string, opTime int64) {
+	write := map[string]bool{}
+	for _, k := range writeKeys {
+		write[k] = true
+	}
+	for _, k := range readKeys {
+		if _, ok := write[k]; !ok {
+			write[k] = false
+		}
+	}
+	all := make([]string, 0, len(write))
+	for k := range write {
+		all = append(all, k)
+	}
+	sort.Strings(all)
+
+	lockedWriteAny := false
+	for _, k := range all {
+		if write[k] {
+			if !ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s.w", k)) {
+				if graphIdKeyMutex.LockTimeout(k, graphKeyLockTimeout) {
+					ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.%s.w", k), easyjson.NewJSON(true))
+					lockedWriteAny = true
+				} else {
+					lg.Logf(lg.WarnLevel, "operationKeysMutexLockMixed: write-lock acquire for key=%s timed out after %s; proceeding without it", k, graphKeyLockTimeout)
+				}
+			}
+		} else {
+			if !ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s", k)) {
+				if graphIdKeyMutex.RLockTimeout(k, graphKeyLockTimeout) {
+					ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.%s.r", k), easyjson.NewJSON(true))
+				} else {
+					lg.Logf(lg.WarnLevel, "operationKeysMutexLockMixed: read-lock acquire for key=%s timed out after %s; proceeding without it", k, graphKeyLockTimeout)
+				}
+			}
+		}
+	}
+	if lockedWriteAny {
+		ctx.Payload.SetByPath("__key_lock_time", easyjson.NewJSON(opTime))
+		ctx.Domain.Cache().MarkOperationActive(opTime)
+	}
+}
+
 func operationKeysMutexUnlock(ctx *sfPlugins.StatefunContextProcessor) {
 	unlockedWriteAny := false
 	if ctx.Payload.PathExists("__key_locks") {
@@ -180,6 +236,62 @@ Reply:
 		data: json
 			op_stack: json array - optional
 */
+// writeVertexKV performs the cache write + op_stack entry for creating a new
+// vertex — the exact effect of LLAPIVertexCreate's success path. The caller must
+// already hold the write lock on vertexID and have confirmed it does not yet
+// exist. Factored out so the HL CreateObject pipeline (which already holds the
+// locks) can write the object vertex inline instead of paying a worker-pool
+// round-trip via ctx.Request.
+func writeVertexKV(ctx *sfPlugins.StatefunContextProcessor, vertexID string, body *easyjson.JSON, opTime int64, opStack *easyjson.JSON) {
+	vb := easyjson.NewJSONObject()
+	if body != nil && body.IsObject() {
+		vb = *body
+	}
+	ctx.Domain.Cache().SetValueJSON(vertexID, &vb, true, opTime)
+	addVertexOpToOpStack(opStack, "functions.graph.api.vertex.create", vertexID, nil, &vb)
+}
+
+// writeOutLinkKV performs the cache writes + op_stack entry for creating an
+// out-link from `from` to `toId` — the exact effect of LLAPILinkCreate's write
+// section. Arguments are already normalized (from/toId domain-qualified,
+// linkName/linkType domain-stripped). The in-link is written inline when the
+// descendant lives in this domain, otherwise forwarded with one link.create
+// request exactly as LLAPILinkCreate does. The caller must already hold the
+// write locks on `from` and `toId`. Returns a FAILED OpMsg only if a
+// cross-domain in-link forward fails (op_stack left untouched in that case,
+// matching LLAPILinkCreate); otherwise OK.
+func writeOutLinkKV(ctx *sfPlugins.StatefunContextProcessor, from, toId, linkName, linkType string, linkBody *easyjson.JSON, tags []string, opTime int64, opStack *easyjson.JSON) sfMediators.OpMsg {
+	body := easyjson.NewJSONObject()
+	if linkBody != nil && linkBody.IsObject() {
+		body = *linkBody
+	}
+
+	// Create in link on descendant vertex.
+	if ctx.Domain.GetDomainFromObjectID(toId) == ctx.Domain.Name() {
+		ctx.Domain.Cache().SetValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, toId, from, linkName), []byte(linkType), true, opTime)
+	} else {
+		nextCallPayload := easyjson.NewJSONObject()
+		nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
+		nextCallPayload.SetByPath("in_type", easyjson.NewJSON(linkType))
+		nextCallPayload.SetByPath("op_time", easyjson.NewJSON(opTime))
+		m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", makeSequenceFreeParentBasedID(ctx, toId, "inlink"), injectParentHoldsLocks(ctx, &nextCallPayload), ctx.Options))
+		if m.Status == sfMediators.SYNC_OP_STATUS_FAILED {
+			return m
+		}
+	}
+
+	ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, from, linkName), []byte(fmt.Sprintf("%s.%s", linkType, toId)), true, opTime)
+	ctx.Domain.Cache().SetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, from, linkName), &body, true, opTime)
+	ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, from, linkType, toId), []byte(linkName), true, opTime)
+	ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff3Pattern, from, linkName, "type", linkType), nil, true, opTime)
+	for _, linkTag := range tags {
+		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff3Pattern, from, linkName, "tag", linkTag), nil, true, opTime)
+	}
+
+	addLinkOpToOpStack(opStack, "functions.graph.api.link.create", from, toId, linkName, linkType, nil, &body)
+	return sfMediators.OpMsgOk(easyjson.NewJSONNull())
+}
+
 func LLAPIVertexCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
 	om := sfMediators.NewOpMediator(ctx)
@@ -202,11 +314,10 @@ func LLAPIVertexCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		objectBody = easyjson.NewJSONObject()
 	}
 
-	ctx.Domain.Cache().SetValueJSON(selfID, &objectBody, true, opTime)
+	writeVertexKV(ctx, selfID, &objectBody, opTime, opStack)
 
 	operationKeysMutexUnlock(ctx)
 
-	addVertexOpToOpStack(opStack, ctx.Self.Typename, selfID, nil, &objectBody)
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 }
 
@@ -643,51 +754,18 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			// -----------------------------------------------------------
 		}
 
-		// Create in link on descendant vertex --------------------
-		if ctx.Domain.GetDomainFromObjectID(toId) == ctx.Domain.Name() {
-			ctx.Domain.Cache().SetValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, toId, selfID, linkName), []byte(linkType), true, opTime)
-		} else {
-			nextCallPayload := easyjson.NewJSONObject()
-			nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
-			nextCallPayload.SetByPath("in_type", easyjson.NewJSON(linkType))
-			nextCallPayload.SetByPath("op_time", easyjson.NewJSON(opTime))
-
-			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, makeSequenceFreeParentBasedID(ctx, toId, "inlink"), injectParentHoldsLocks(ctx, &nextCallPayload), ctx.Options)))
-			if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
-				operationKeysMutexUnlock(ctx)
-				system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
-				return
-			}
-		}
-		// --------------------------------------------------------
-
-		// Create out link on this vertex -------------------------
-		// Set link target ------------------
-		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, selfID, linkName), []byte(fmt.Sprintf("%s.%s", linkType, toId)), true, opTime) // Store link body in KV
-		// ----------------------------------
-		// Set link body --------------------
-		ctx.Domain.Cache().SetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName), &linkBody, true, opTime) // Store link body in KV
-		// ----------------------------------
-		// Set link type --------------------
-		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfID, linkType, toId), []byte(linkName), true, opTime) // Store link type
-		// ----------------------------------
-		// Index link type ------------------
-		ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff3Pattern, selfID, linkName, "type", linkType), nil, true, opTime)
-		// ----------------------------------
-		// Index link tags ------------------
+		var linkTags []string
 		if payload.GetByPath("tags").IsNonEmptyArray() {
-			if linkTags, ok := payload.GetByPath("tags").AsArrayString(); ok {
-				for _, linkTag := range linkTags {
-					ctx.Domain.Cache().SetValue(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff3Pattern, selfID, linkName, "tag", linkTag), nil, true, opTime)
-				}
-			}
+			linkTags, _ = payload.GetByPath("tags").AsArrayString()
 		}
-		//fmt.Println("create vertex out link: ", selfID, toId)
-		// ----------------------------------
 
-		addLinkOpToOpStack(opStack, ctx.Self.Typename, selfID, toId, linkName, linkType, nil, &linkBody)
-
+		m := writeOutLinkKV(ctx, selfID, toId, linkName, linkType, &linkBody, linkTags, opTime, opStack)
 		operationKeysMutexUnlock(ctx)
+		if m.Status == sfMediators.SYNC_OP_STATUS_FAILED {
+			om.AggregateOpMsg(m)
+			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
+			return
+		}
 		om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 	}
 }
