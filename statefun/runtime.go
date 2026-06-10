@@ -38,6 +38,15 @@ type onAfterStartFunctionWithMode struct {
 	async bool
 }
 
+// OnBecamePassiveFunction is invoked once each time the runtime steps down from
+// active to passive in active-passive HA mode. By the time it runs the runtime
+// has already stopped serving statefun traffic and frozen its cache, so the
+// callback should tear down application-side serving resources (stop serving
+// clients, free memory). It receives a context bounded by
+// PASSIVE_TEARDOWN_TIMEOUT_SEC and MUST honour it — work outliving the deadline
+// is abandoned so a slow teardown cannot wedge the HA lifecycle loop.
+type OnBecamePassiveFunction func(ctx context.Context)
+
 // Runtime represents the runtime environment for stateful functions.
 type Runtime struct {
 	config RuntimeConfig
@@ -49,6 +58,7 @@ type Runtime struct {
 	ftMu                          sync.RWMutex // protects registeredFunctionTypes
 	canRegisterNewFunctionType    bool
 	onAfterStartFunctionsWithMode []onAfterStartFunctionWithMode
+	onBecamePassiveFunctions      []OnBecamePassiveFunction
 
 	gt0  int64 // Global time 0 - time of the very first message receiving by any function type
 	glce int64 // Global last call ended - time of last call of last function handling id of any function type
@@ -206,6 +216,22 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 func (r *Runtime) RegisterOnAfterStartFunction(f OnAfterStartFunction, async bool) {
 	if f != nil {
 		r.onAfterStartFunctionsWithMode = append(r.onAfterStartFunctionsWithMode, onAfterStartFunctionWithMode{f, async})
+	}
+}
+
+// RegisterOnBecamePassive registers a callback invoked once on each
+// active->passive demotion in active-passive HA mode. Register it before Start.
+//
+// It is the teardown counterpart to OnAfterStart: the runtime re-runs the
+// registered OnAfterStart functions on every passive->active promotion ((re)build
+// serving resources there), and invokes the OnBecamePassive callbacks on the
+// reverse transition (tear them down there). Callbacks run synchronously with
+// respect to the demotion — so teardown is serialized before any subsequent
+// re-promotion — but bounded by PASSIVE_TEARDOWN_TIMEOUT_SEC so a slow one
+// cannot wedge the lifecycle loop.
+func (r *Runtime) RegisterOnBecamePassive(f OnBecamePassiveFunction) {
+	if f != nil {
+		r.onBecamePassiveFunctions = append(r.onBecamePassiveFunctions, f)
 	}
 }
 
@@ -568,6 +594,46 @@ var jsStartupRetryTimeout = time.Duration(system.GetEnvMustProceed[int]("JS_STAR
 // Tunable via SHUTDOWN_DRAIN_TIMEOUT_SEC.
 var gracefulShutdownDrainTimeout = time.Duration(system.GetEnvMustProceed[int]("SHUTDOWN_DRAIN_TIMEOUT_SEC", 10)) * time.Second
 
+// passiveTeardownTimeout bounds how long becomePassive waits for the registered
+// OnBecamePassive callbacks. A callback that ignores its context past this
+// deadline is abandoned (its goroutine runs on until it returns) rather than
+// wedging the HA lifecycle loop. Tunable via PASSIVE_TEARDOWN_TIMEOUT_SEC.
+var passiveTeardownTimeout = time.Duration(system.GetEnvMustProceed[int]("PASSIVE_TEARDOWN_TIMEOUT_SEC", 10)) * time.Second
+
+// runOnBecamePassiveFunctions invokes the registered passive-teardown callbacks.
+// They run on their own goroutine; the call returns once they all finish OR the
+// bounded deadline passes, whichever is first. The synchronous wait serializes
+// teardown before any subsequent re-promotion in the common (well-behaved) case,
+// while the deadline guarantees a hung callback cannot wedge the HA loop.
+func (r *Runtime) runOnBecamePassiveFunctions(parentCtx context.Context) {
+	if len(r.onBecamePassiveFunctions) == 0 {
+		return
+	}
+	tctx, cancel := context.WithTimeout(parentCtx, passiveTeardownTimeout)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, f := range r.onBecamePassiveFunctions {
+			func(f OnBecamePassiveFunction) {
+				defer func() {
+					if rec := recover(); rec != nil {
+						lg.Logf(lg.ErrorLevel, "OnBecamePassive callback panicked: %v", rec)
+					}
+				}()
+				f(tctx)
+			}(f)
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-tctx.Done():
+		lg.Logf(lg.WarnLevel, "OnBecamePassive callbacks exceeded %s; proceeding without waiting (a callback may be ignoring its context)", passiveTeardownTimeout)
+	}
+}
+
 // isTransientJSError reports whether a JetStream error is a transient cluster-
 // availability condition — no leader/quorum yet, an election in progress — that
 // clears on its own, as opposed to a real config/logic error which must surface
@@ -928,6 +994,11 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 		// model has no continuous kv.Watch). Mark the cache dirty so the next
 		// promotion does a full RehydrateFromKV before serving requests.
 		r.cacheDirty.Store(true)
+
+		// Application-side teardown: now that statefun traffic is stopped and the
+		// cache is frozen, give registered callbacks a bounded window to stop
+		// serving clients and free memory before any re-promotion.
+		r.runOnBecamePassiveFunctions(ctx)
 	}
 
 	for {
