@@ -280,9 +280,9 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 				return err
 			}
 		} else {
-			r.config.activeRevID = revID
+			r.setActiveRevID(revID)
 			defer func() {
-				system.MsgOnErrorReturn(KeyMutexUnlock(ctx, r, system.GetHashStr(RuntimeName), r.config.activeRevID))
+				system.MsgOnErrorReturn(KeyMutexUnlock(ctx, r, system.GetHashStr(RuntimeName), r.getActiveRevID()))
 			}()
 		}
 	} else {
@@ -1012,8 +1012,8 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 
 			if r.config.activePassiveMode {
 				// Refresh runtime lock if held (active or activating)
-				if r.config.activeRevID != 0 {
-					newRevID, err := KeyMutexLockUpdate(ctx, r, system.GetHashStr(RuntimeName), r.config.activeRevID)
+				if rev := r.getActiveRevID(); rev != 0 {
+					newRevID, err := KeyMutexLockUpdate(ctx, r, system.GetHashStr(RuntimeName), rev)
 					if err != nil {
 						// Three classes of error, ranked safety-critical first:
 						//
@@ -1045,7 +1045,7 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 						lg.Logf(lg.WarnLevel, "runtime lock refresh failed transiently (%v); keeping lock (%.1fs/%ds within soft-TTL)",
 							err, time.Since(lastRuntimeLockRefresh).Seconds(), r.config.kvMutexLifeTimeSec)
 					} else {
-						r.config.activeRevID = newRevID
+						r.setActiveRevID(newRevID)
 						lastRuntimeLockRefresh = time.Now()
 					}
 				}
@@ -1059,7 +1059,7 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 						kvConsistencyCheck = nil
 						if err != nil {
 							lg.Logf(lg.ErrorLevel, "KV consistency check failed: %v", err)
-							system.MsgOnErrorReturn(KeyMutexUnlock(ctx, r, system.GetHashStr(RuntimeName), r.config.activeRevID))
+							system.MsgOnErrorReturn(KeyMutexUnlock(ctx, r, system.GetHashStr(RuntimeName), r.getActiveRevID()))
 							r.activeInstanceMu.Lock()
 							r.config.isActiveInstance = false // lock already held; setActiveInstance would re-lock the same mutex (reentrant deadlock)
 							r.config.activeRevID = 0
@@ -1077,12 +1077,12 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 					default:
 						// Still checking — lock was refreshed above, just wait
 					}
-				} else if r.config.activeRevID == 0 {
+				} else if r.getActiveRevID() == 0 {
 					// Passive: try to acquire lock
 					newRevID, err := KeyMutexLock(ctx, r, system.GetHashStr(RuntimeName), true)
 					if err == nil {
 						lg.Logf(lg.DebugLevel, "Passive instance acquired lock, checking KV consistency")
-						r.config.activeRevID = newRevID
+						r.setActiveRevID(newRevID)
 						lastRuntimeLockRefresh = time.Now()
 						ch := make(chan error, 1)
 						kvConsistencyCheck = ch
@@ -1204,6 +1204,24 @@ func (r *Runtime) setActiveInstance(active bool) {
 	r.activeInstanceMu.Lock()
 	defer r.activeInstanceMu.Unlock()
 	r.config.isActiveInstance = active
+}
+
+// getActiveRevID / setActiveRevID guard the runtime-lock revision id with the
+// same mutex as the active-instance flag. It is written by the lifecycle
+// goroutine but read from another (Start's lock-release defer), so all access
+// goes through these — except the two compound updates that already hold
+// activeInstanceMu (becomePassive and the consistency-check-failed branch),
+// which set activeRevID alongside isActiveInstance under a single lock.
+func (r *Runtime) getActiveRevID() uint64 {
+	r.activeInstanceMu.RLock()
+	defer r.activeInstanceMu.RUnlock()
+	return r.config.activeRevID
+}
+
+func (r *Runtime) setActiveRevID(rev uint64) {
+	r.activeInstanceMu.Lock()
+	defer r.activeInstanceMu.Unlock()
+	r.config.activeRevID = rev
 }
 
 // contains checks if a slice contains a particular string.
