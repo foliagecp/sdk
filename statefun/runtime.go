@@ -780,10 +780,30 @@ func (r *Runtime) startFunctionSubscriptions(ctx context.Context, revisions map[
 		if !ft.config.multipleInstancesAllowed {
 			revision, exist := revisions[ft.name]
 			if !exist {
-				lg.Logf(lg.WarnLevel, "Function type %s is not registered; skipping", ft.name)
-				continue
-			}
-			if revision == 0 {
+				// Single-instance FT registered dynamically (RegisterDynamicFunctionType,
+				// after Start) is absent from the startup revisions map. Previously it
+				// was skipped here on every promotion and so never subscribed — breaking
+				// failover for runtime-registered handlers (the dynamic-FT failover bug).
+				// Treat it like any owned single-instance FT: acquire its per-FT lock and
+				// record the revision (so the lifecycle's refresh loop keeps it alive),
+				// then fall through to subscribe. Same acquire/record path as
+				// handleSingleInstanceFunctions; revisions is the source of truth only for
+				// lock revisions, not for whether a registered FT may be subscribed.
+				revID, err := KeyMutexLock(ctx, r, system.GetHashStr(ft.name), true)
+				if err != nil {
+					if errors.Is(err, ErrMutexLocked) {
+						// Held by another active instance (single-instance semantics
+						// preserved), or briefly by us after a fast demote->promote
+						// before the per-FT lock expired. Mark it so the lifecycle's
+						// tryLock retries once the lock frees; do not subscribe now.
+						revisions[ft.name] = 0
+						lg.Logf(lg.WarnLevel, "Function type %s single-instance lock held elsewhere; will retry on a later tick", ft.name)
+						continue
+					}
+					return err
+				}
+				revisions[ft.name] = revID
+			} else if revision == 0 {
 				lg.Logf(lg.WarnLevel, "Function type %s is already running; skipping", ft.name)
 				continue
 			}
