@@ -260,6 +260,14 @@ func RecalculateInheritanceCacheForTypeAtSelfIDIfNeeded(ctx *sfPlugins.StatefunC
 
 	typeCacheVersion, typeModelVersion, typeBody := getTypeCacheVersionAndGlobalVersion(ctx, ctx.Self.ID)
 
+	// The type vertex does not exist (or carries no body) — e.g. ReadType for a
+	// non-existent type. There is no inheritance to recompute, and proceeding
+	// would dereference a nil body (typeBody.Clone) and panic the worker, leaving
+	// the request unanswered (client times out). Nothing to do.
+	if typeBody == nil {
+		return
+	}
+
 	if typeCacheVersion != typeModelVersion && typeModelVersion != "" {
 		foundParentTypes := map[string]struct{}{}
 
