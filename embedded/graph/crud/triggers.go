@@ -46,6 +46,20 @@ func executeTriggersFromLLOpStack(ctx *sfPlugins.StatefunContextProcessor, opSta
 						toVId := opData.GetByPath("to").AsStringDefault("")
 						lType := opData.GetByPath("type").AsStringDefault("")
 
+						// CMDB plumbing links (__type / __object / __types /
+						// __objects) always have a non-object endpoint (a type
+						// vertex or the builtInObjects root), so the
+						// fromObjectType/toObjectType guard below can never let
+						// them fire a user link-trigger. Skip them BEFORE resolving
+						// endpoint types: findObjectType on those vertices misses
+						// its cache fast path and falls to a full object.read — and
+						// object.read on builtInObjects walks every object's
+						// membership link (O(N) per delete). This walk was ~99% of
+						// DeleteObject's cost on objects carrying only service links.
+						if lType == TO_TYPELINK || lType == OBJECT_TYPELINK || lType == OBJECTS_TYPELINK || lType == TYPES_TYPELINK {
+							continue
+						}
+
 						fromObjectType := ""
 						toObjectType := ""
 						if j == 2 && fromVId == deletedObjectId {
