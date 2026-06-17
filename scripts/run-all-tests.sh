@@ -19,6 +19,7 @@
 #
 set -uo pipefail
 
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"   # absolute self-path, captured BEFORE the cd below
 cd "$(dirname "$0")/.."
 
 RACE=""
@@ -34,7 +35,7 @@ for arg in "$@"; do
     --quick)       PARALLEL="" ;;
     --go-only)     GO_ONLY=1 ;;
     --system-only) SYSTEM_ONLY=1 ;;
-    -h|--help)     sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help)     sed -n '2,20p' "$SELF"; exit 0 ;;
     *) echo "unknown flag: $arg (see --help)"; exit 2 ;;
   esac
 done

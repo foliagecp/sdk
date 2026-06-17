@@ -23,6 +23,7 @@
 # Per-scenario tunables (env): see tests/soak/README.md.
 #
 set -uo pipefail
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"   # absolute self-path, captured BEFORE the cd below
 cd "$(dirname "$0")/.."
 
 SCENARIO="all"
@@ -32,7 +33,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --scenario)     SCENARIO="$2"; shift 2 ;;
     --duration-min) DURATION_MIN="$2"; shift 2 ;;
-    -h|--help)      sed -n '2,30p' "$0"; exit 0 ;;
+    -h|--help)      sed -n '2,30p' "$SELF"; exit 0 ;;
     *) echo "unknown flag: $1 (see --help)"; exit 2 ;;
   esac
 done
