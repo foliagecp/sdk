@@ -428,6 +428,44 @@ Reply:
 		data: json
 			op_stack: json array - optional
 */
+// resolveOutLinkByName resolves the (linkType, toId) of the out-link named
+// linkName owned by ownerID, reading the OutLinkTarget key the same way
+// getFullLinkInfoFromSpecifiedIdentifier does. ownerID must be local.
+func resolveOutLinkByName(ctx *sfPlugins.StatefunContextProcessor, ownerID, linkName string) (linkType, toId string, ok bool) {
+	b, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, ownerID, linkName))
+	if err != nil {
+		return "", "", false
+	}
+	tokens := strings.Split(string(b), ".")
+	if len(tokens) < 2 {
+		return "", "", false
+	}
+	return ctx.Domain.GetObjectIDWithoutDomain(tokens[0]), tokens[1], true
+}
+
+// deleteOutLinkFromSideKeys removes the from-side keys of the link
+// ownerID -> toId (indices, out-link type/body/target), invalidates the __type
+// cache when it was a TO_TYPELINK, and records the op on opStack. ownerID must
+// be local and its {ownerID, toId} write lock already held. The caller deletes
+// the descendant's in-link key separately (in-process for a local descendant,
+// routed for a remote one). Extracted from LLAPILinkDelete so the vertex-delete
+// cascade deletes a link identically, without a per-link statefun round-trip.
+// opName is recorded in the op-stack (the link-delete function, so the op-stack
+// entry matches the routed path byte-for-byte).
+func deleteOutLinkFromSideKeys(ctx *sfPlugins.StatefunContextProcessor, opName, ownerID, linkType, linkName, toId string, oldLinkBody *easyjson.JSON, opStack *easyjson.JSON, opTime int64) {
+	indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff2Pattern, ownerID, linkName, ">"))
+	for _, indexKey := range indexKeys {
+		ctx.Domain.Cache().DeleteValue(indexKey, true, opTime)
+	}
+	ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, ownerID, linkType, toId), true, opTime)
+	ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, ownerID, linkName), true, opTime)
+	ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, ownerID, linkName), true, opTime)
+	if linkType == TO_TYPELINK {
+		cacheDeleteObjectType(ownerID)
+	}
+	addLinkOpToOpStack(opStack, opName, ownerID, toId, linkName, linkType, oldLinkBody, nil)
+}
+
 func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
 
@@ -443,16 +481,34 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	opStack := getOpStackFromOptions(ctx.Options)
 
 	// Delete all out links -------------------------------
+	// When both endpoints are local (the common case) the whole link is deleted
+	// in-process under one {selfID, toId} write lock — selfID-side keys plus the
+	// descendant's in-link key — with no per-link statefun round-trip. A link
+	// whose descendant lives in another domain keeps the routed link.delete (its
+	// in-link key is physically remote).
+	const linkDeleteTypename = "functions.graph.api.link.delete"
 	outLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, ">"))
 	for _, outLinkKey := range outLinkKeys {
-		inLinkKeyTokens := strings.Split(outLinkKey, ".")
-		linkName := inLinkKeyTokens[len(inLinkKeyTokens)-1]
+		outLinkKeyTokens := strings.Split(outLinkKey, ".")
+		linkName := outLinkKeyTokens[len(outLinkKeyTokens)-1]
 
+		if linkType, toId, ok := resolveOutLinkByName(ctx, selfID, linkName); ok && ctx.Domain.GetDomainFromObjectID(toId) == ctx.Domain.Name() {
+			operationKeysMutexLock(ctx, []string{selfID, toId}, true, opTime)
+			var oldLinkBody *easyjson.JSON
+			if opStack != nil {
+				oldLinkBody, _ = ctx.Domain.Cache().GetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName))
+			}
+			deleteOutLinkFromSideKeys(ctx, linkDeleteTypename, selfID, linkType, linkName, toId, oldLinkBody, opStack, opTime)
+			ctx.Domain.Cache().DeleteValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, toId, selfID, linkName), true, opTime)
+			operationKeysMutexUnlock(ctx)
+			continue
+		}
+
+		// Cross-domain descendant (or unresolved): keep the routed link.delete.
 		deleteLinkPayload := easyjson.NewJSONObject()
 		deleteLinkPayload.SetByPath("name", easyjson.NewJSON(linkName))
 		deleteLinkPayload.SetByPath("op_time", easyjson.NewJSON(opTime))
-		//fmt.Println("             Deleting OUT link:", selfID, linkName)
-		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &deleteLinkPayload), ctx.Options)))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, linkDeleteTypename, makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &deleteLinkPayload), ctx.Options)))
 		mergeOpStack(opStack, om.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
 			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
@@ -462,17 +518,33 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	// ----------------------------------------------------
 
 	// Delete all in links --------------------------------
+	// from-vertex local: delete its out-side keys and our in-link key in-process
+	// under one {fromObjectID, selfID} lock. from-vertex in another domain: keep
+	// the routed link.delete (its out-side keys are physically remote).
 	inLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff1Pattern, selfID, ">"))
 	for _, inLinkKey := range inLinkKeys {
 		inLinkKeyTokens := strings.Split(inLinkKey, ".")
 		fromObjectID := inLinkKeyTokens[len(inLinkKeyTokens)-2]
 		linkName := inLinkKeyTokens[len(inLinkKeyTokens)-1]
 
+		if ctx.Domain.GetDomainFromObjectID(fromObjectID) == ctx.Domain.Name() {
+			operationKeysMutexLock(ctx, []string{fromObjectID, selfID}, true, opTime)
+			if linkType, toId, ok := resolveOutLinkByName(ctx, fromObjectID, linkName); ok {
+				var oldLinkBody *easyjson.JSON
+				if opStack != nil {
+					oldLinkBody, _ = ctx.Domain.Cache().GetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, fromObjectID, linkName))
+				}
+				deleteOutLinkFromSideKeys(ctx, linkDeleteTypename, fromObjectID, linkType, linkName, toId, oldLinkBody, opStack, opTime)
+			}
+			ctx.Domain.Cache().DeleteValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, selfID, fromObjectID, linkName), true, opTime)
+			operationKeysMutexUnlock(ctx)
+			continue
+		}
+
 		deleteLinkPayload := easyjson.NewJSONObject()
 		deleteLinkPayload.SetByPath("name", easyjson.NewJSON(linkName))
 		deleteLinkPayload.SetByPath("op_time", easyjson.NewJSON(opTime))
-		//fmt.Println("             Deleting IN link:", fromObjectID, linkName)
-		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", makeSequenceFreeParentBasedID(ctx, fromObjectID), injectParentHoldsLocks(ctx, &deleteLinkPayload), ctx.Options)))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, linkDeleteTypename, makeSequenceFreeParentBasedID(ctx, fromObjectID), injectParentHoldsLocks(ctx, &deleteLinkPayload), ctx.Options)))
 		mergeOpStack(opStack, om.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
 			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
@@ -1059,34 +1131,7 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			return
 		}
 
-		// Remove all indices -----------------------------
-		indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff2Pattern, selfID, linkName, ">"))
-		for _, indexKey := range indexKeys {
-			ctx.Domain.Cache().DeleteValue(indexKey, true, opTime)
-		}
-		// ------------------------------------------------
-
-		// Set link type --------------------
-		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfID, linkType, toId), true, opTime)
-		// ----------------------------------
-		// Delete link body -----------------
-		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName), true, opTime)
-		// ----------------------------------
-		// Delete link target ---------------
-		ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, selfID, linkName), true, opTime)
-		// ----------------------------------
-
-		// If this was the __type link of a CMDB object, invalidate the cached
-		// (objectID -> typeID) mapping. Without this, findObjectType would
-		// keep returning the stale type and HL CMDB operations would falsely
-		// believe the invariant still holds.
-		if linkType == TO_TYPELINK {
-			cacheDeleteObjectType(selfID)
-		}
-
-		//fmt.Println("delete vertex out link: ", selfID, toId)
-
-		addLinkOpToOpStack(opStack, ctx.Self.Typename, selfID, toId, linkName, linkType, oldLinkBody, nil)
+		deleteOutLinkFromSideKeys(ctx, ctx.Self.Typename, selfID, linkType, linkName, toId, oldLinkBody, opStack, opTime)
 
 		// Delete in link on descendant vertex --------------------
 		if ctx.Domain.GetDomainFromObjectID(toId) == ctx.Domain.Name() {
