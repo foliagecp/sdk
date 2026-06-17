@@ -13,6 +13,7 @@
 //	crud-write   sustained ObjectUpdate (upsert) on unique ids
 //	crud-read    sustained ObjectRead on a pre-seeded id range [0..n)
 //	crud-mixed   read/write mix (default 80/20)
+//	crud-delete  sustained create+delete churn on unique ids (delete-path)
 //
 // Shared flags:
 //
@@ -426,6 +427,40 @@ func cmdCrudMixed(args []string) {
 	})
 }
 
+func cmdCrudDelete(args []string) {
+	fs := flag.NewFlagSet("crud-delete", flag.ExitOnError)
+	var s sharedFlags
+	registerSharedFlags(fs, &s)
+	typ := fs.String("type", "perf_del", "object type for the create+delete churn")
+	_ = fs.Parse(args)
+	if s.scenario == "" {
+		s.scenario = "crud-delete"
+	}
+
+	dbc, err := db.NewDBSyncClient(s.nats, s.timeoutSec, s.domain)
+	if err != nil {
+		fatalf("db client: %v", err)
+	}
+	if err := dbc.CMDB.TypeCreate(*typ); err != nil && !isAlreadyExists(err) {
+		fatalf("type create %q: %v", *typ, err)
+	}
+
+	// ObjectDelete is destructive, so a sustained duration workload cannot run on
+	// a fixed id pool. Each op instead creates a fresh unique object and deletes
+	// it — a create+delete churn that drives the ObjectDelete cascade at full
+	// rate without depleting a pool, and mirrors the create/delete churn the HLM
+	// aging path (managerControl GC) generates. The timed op is the create+delete
+	// pair; the delete-path cost is what moves the number between runs.
+	body := easyjson.NewJSONObject()
+	runWorkload(&s, func(ctx context.Context, w int, idx uint64) error {
+		id := fmt.Sprintf("del-w%d-i%d", w, idx)
+		if err := dbc.CMDB.ObjectUpdate(id, body, false, *typ); err != nil {
+			return err
+		}
+		return dbc.CMDB.ObjectDelete(id)
+	})
+}
+
 // -----------------------------------------------------------------------------
 
 func isAlreadyExists(err error) bool {
@@ -439,7 +474,7 @@ func fatalf(format string, args ...interface{}) {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: perfclient <seed|crud-write|crud-read|crud-mixed> [flags]")
+		fmt.Fprintln(os.Stderr, "usage: perfclient <seed|crud-write|crud-read|crud-mixed|crud-delete> [flags]")
 		os.Exit(2)
 	}
 	cmd := os.Args[1]
@@ -453,6 +488,8 @@ func main() {
 		cmdCrudRead(args)
 	case "crud-mixed":
 		cmdCrudMixed(args)
+	case "crud-delete":
+		cmdCrudDelete(args)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", cmd)
 		os.Exit(2)
