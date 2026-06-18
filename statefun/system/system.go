@@ -49,11 +49,46 @@ func (ff *FinalFunctions) Exec() {
 	}
 }
 
-// refMutex wraps a sync.RWMutex together with a reference counter.
+// refMutex wraps a sync.RWMutex with a reference counter and a FIFO entry gate.
+//
+// gate makes the per-key lock FAIR. Go's sync.RWMutex alone is writer-preferring:
+// a goroutine blocked on Lock excludes new RLock callers, so an unbroken stream of
+// writers starves readers indefinitely (the export / front-end "can't read while
+// everyone keeps deleting" convoy). The gate fixes this: every acquirer — reader
+// or writer — must take the single gate token before touching mu, and holds it
+// only until mu is acquired. Go hands a channel's token to waiters in FIFO order,
+// so a reader that arrives mid-write blocks later writers behind it at the gate
+// and gets mu as soon as the current holder releases. The gate is dropped the
+// instant mu is held, so it never serializes the critical sections themselves —
+// concurrent readers still run in parallel; only the brief entry is ordered.
 type refMutex struct {
+	gate chan struct{} // FIFO entry token; cap 1, holds one token while free
 	mu   sync.RWMutex
 	refs int32
 }
+
+// gateChanPool recycles the per-key FIFO gate channels, so cycling a key's lock
+// entry (created/deleted whenever its ref-count passes through 0) does not allocate
+// a fresh channel each time. A channel is only ever returned to the pool at
+// ref-count 0, where the gate provably holds its single token, so a pooled channel
+// is always in the correct "free" state for the next key to reuse as-is.
+var gateChanPool = sync.Pool{
+	New: func() interface{} {
+		ch := make(chan struct{}, 1)
+		ch <- struct{}{} // a fresh gate starts free
+		return ch
+	},
+}
+
+// Contended-acquire retry backoff for the timeout paths. While holding the FIFO
+// gate, a waiter polls TryLock/TryRLock; it starts retrying quickly and backs off
+// up to the cap, so a lock that frees soon is reacquired in tens of microseconds
+// instead of waiting a fixed 5ms tick — which matters because the gate serializes
+// waiters, so a coarse tick would stack across them.
+const (
+	gateRetryMin = 50 * time.Microsecond
+	gateRetryMax = 5 * time.Millisecond
+)
 
 // keyMutexShardCount is how many independent shards the per-key lock table is
 // split into. Lock/unlock of keys in different shards never contend on the same
@@ -103,7 +138,7 @@ func (k *KeyMutex) acquire(key interface{}) *refMutex {
 	sh.mx.Lock()
 	rm, ok := sh.m[key]
 	if !ok {
-		rm = &refMutex{}
+		rm = &refMutex{gate: gateChanPool.Get().(chan struct{})} // pooled, already free
 		sh.m[key] = rm
 	}
 	atomic.AddInt32(&rm.refs, 1)
@@ -117,13 +152,17 @@ func (k *KeyMutex) release(key interface{}, rm *refMutex) {
 	sh.mx.Lock()
 	if atomic.AddInt32(&rm.refs, -1) == 0 {
 		delete(sh.m, key)
+		gateChanPool.Put(rm.gate) // recycle the gate; at refs==0 it holds its token
 	}
 	sh.mx.Unlock()
 }
 
 // Lock acquires exclusive (write) lock for the specified key.
 func (k *KeyMutex) Lock(key interface{}) {
-	k.acquire(key).mu.Lock()
+	rm := k.acquire(key)
+	<-rm.gate    // pass the FIFO gate
+	rm.mu.Lock() // take the write lock while holding the gate
+	rm.gate <- struct{}{}
 }
 
 // LockTimeout acquires an exclusive (write) lock for the key, giving up after
@@ -133,45 +172,108 @@ func (k *KeyMutex) Lock(key interface{}) {
 // waiters hang indefinitely.
 func (k *KeyMutex) LockTimeout(key interface{}, timeout time.Duration) bool {
 	rm := k.acquire(key)
-	if rm.mu.TryLock() {
-		return true
-	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	ticker := time.NewTicker(5 * time.Millisecond)
-	defer ticker.Stop()
-	for {
+
+	// timer is allocated lazily — only when we actually have to block. The
+	// uncontended fast path (gate free + lock free) pays nothing for it, matching
+	// the original's cheap fast path.
+	var timer *time.Timer
+
+	// Take the FIFO gate. Try non-blocking first: a buffered channel holds a token
+	// only when no receiver is queued, so this fast take can never jump ahead of
+	// waiters. If the gate is busy, block for it in FIFO order, bounded by timeout.
+	select {
+	case <-rm.gate:
+	default:
+		timer = time.NewTimer(timeout)
+		defer timer.Stop()
 		select {
+		case <-rm.gate:
 		case <-timer.C:
 			k.release(key, rm)
 			return false
-		case <-ticker.C:
+		}
+	}
+
+	// Holding the gate, take the write lock. Fast path is immediate; otherwise poll
+	// until the holder releases or we time out, with later acquirers parked behind
+	// us at the gate (starvation-free). One shared deadline spans both phases.
+	if rm.mu.TryLock() {
+		rm.gate <- struct{}{}
+		return true
+	}
+	if timer == nil {
+		timer = time.NewTimer(timeout)
+		defer timer.Stop()
+	}
+	wait := gateRetryMin
+	backoff := time.NewTimer(wait)
+	defer backoff.Stop()
+	for {
+		select {
+		case <-timer.C:
+			rm.gate <- struct{}{} // give the gate back; we never took mu
+			k.release(key, rm)
+			return false
+		case <-backoff.C:
 			if rm.mu.TryLock() {
+				rm.gate <- struct{}{}
 				return true
 			}
+			if wait < gateRetryMax {
+				wait *= 2
+			}
+			backoff.Reset(wait)
 		}
 	}
 }
 
-// RLockTimeout is the shared-lock counterpart of LockTimeout.
+// RLockTimeout is the shared-lock counterpart of LockTimeout. Same lazy-timer fast
+// path; the FIFO gate is what stops a continuous write stream from starving this
+// reader (the front-end / export convoy this fixes).
 func (k *KeyMutex) RLockTimeout(key interface{}, timeout time.Duration) bool {
 	rm := k.acquire(key)
-	if rm.mu.TryRLock() {
-		return true
-	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	ticker := time.NewTicker(5 * time.Millisecond)
-	defer ticker.Stop()
-	for {
+
+	var timer *time.Timer
+
+	select {
+	case <-rm.gate:
+	default:
+		timer = time.NewTimer(timeout)
+		defer timer.Stop()
 		select {
+		case <-rm.gate:
 		case <-timer.C:
 			k.release(key, rm)
 			return false
-		case <-ticker.C:
+		}
+	}
+
+	if rm.mu.TryRLock() {
+		rm.gate <- struct{}{}
+		return true
+	}
+	if timer == nil {
+		timer = time.NewTimer(timeout)
+		defer timer.Stop()
+	}
+	wait := gateRetryMin
+	backoff := time.NewTimer(wait)
+	defer backoff.Stop()
+	for {
+		select {
+		case <-timer.C:
+			rm.gate <- struct{}{} // give the gate back; we never took mu
+			k.release(key, rm)
+			return false
+		case <-backoff.C:
 			if rm.mu.TryRLock() {
+				rm.gate <- struct{}{}
 				return true
 			}
+			if wait < gateRetryMax {
+				wait *= 2
+			}
+			backoff.Reset(wait)
 		}
 	}
 }
@@ -188,13 +290,17 @@ func (k *KeyMutex) Unlock(key interface{}) {
 	rm.mu.Unlock()
 	if atomic.AddInt32(&rm.refs, -1) == 0 {
 		delete(sh.m, key)
+		gateChanPool.Put(rm.gate) // recycle the gate; at refs==0 it holds its token
 	}
 	sh.mx.Unlock()
 }
 
 // RLock acquires a shared (read) lock for the specified key.
 func (k *KeyMutex) RLock(key interface{}) {
-	k.acquire(key).mu.RLock()
+	rm := k.acquire(key)
+	<-rm.gate
+	rm.mu.RLock()
+	rm.gate <- struct{}{}
 }
 
 // RUnlock releases a shared (read) lock for the specified key.
@@ -209,6 +315,7 @@ func (k *KeyMutex) RUnlock(key interface{}) {
 	rm.mu.RUnlock()
 	if atomic.AddInt32(&rm.refs, -1) == 0 {
 		delete(sh.m, key)
+		gateChanPool.Put(rm.gate) // recycle the gate; at refs==0 it holds its token
 	}
 	sh.mx.Unlock()
 }
