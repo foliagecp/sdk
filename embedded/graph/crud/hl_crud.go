@@ -952,7 +952,10 @@ func ReadTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 	payload.SetByPath("details", easyjson.NewJSON(true))
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
-	operationKeysMutexLock(ctx, []string{selfID, toType}, false, opTime)
+	// Read locks only the link owner (selfID); the target type vertex (toType) is not
+	// read here, only used to resolve the link name in the delegated link.read. Same
+	// unnecessary-lock / deadlock fix as LLAPILinkRead.
+	operationKeysMutexLock(ctx, []string{selfID}, false, opTime)
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &payload), ctx.Options)))
 	operationKeysMutexUnlock(ctx)
 

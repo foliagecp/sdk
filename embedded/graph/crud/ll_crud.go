@@ -36,6 +36,14 @@ var (
 	graphKeyLockTimeout = time.Duration(system.GetEnvMustProceed[int]("GRAPH_KEY_LOCK_TIMEOUT_SEC", 300)) * time.Second
 )
 
+// SetGraphKeyLockTimeoutForTest overrides graphKeyLockTimeout. graphKeyLockTimeout
+// is resolved once at package init, so a test cannot lower it via the environment;
+// this lets a deadlock-reproduction test bound how long a genuinely stuck operation
+// blocks before proceeding without the lock, keeping the test (and the subsequent
+// runtime shutdown) fast instead of waiting the production default. Call it before
+// issuing operations (e.g. from a test init); not for non-test use.
+func SetGraphKeyLockTimeoutForTest(d time.Duration) { graphKeyLockTimeout = d }
+
 func getVertexBody(ctx *sfPlugins.StatefunContextProcessor, keyValueID string) *easyjson.JSON {
 	if j, err := ctx.Domain.Cache().GetValueJSON(keyValueID); err == nil {
 		return j
@@ -1206,7 +1214,13 @@ func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
 	if details {
-		operationKeysMutexLock(ctx, []string{selfID, toId}, false, opTime)
+		// Read locks only the link owner (selfID): the link's body and tags are stored
+		// under selfID keys; the target (toId) vertex is never read here, only echoed
+		// into the reply. Locking toId is unnecessary AND caused a lock-order deadlock
+		// with the high-level delete cascade — DeleteObject locks object→type (object
+		// first, then type in its nested vertex.delete), the reverse of this read's
+		// sorted [type, object] order.
+		operationKeysMutexLock(ctx, []string{selfID}, false, opTime)
 	}
 
 	linkBody, err := ctx.Domain.Cache().GetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName))
