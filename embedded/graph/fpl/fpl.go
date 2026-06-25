@@ -262,6 +262,56 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultJson)).Reply()
 }
 
+// linkBodyData reads one link's body via functions.graph.api.link.read WITHOUT the
+// "details" flag — that returns just the body and takes no per-key lock (light, and
+// outside the link-read/object-delete deadlock class). fromID is the link OWNER: for
+// an out-link it is the vertex itself; for an in-link it is the link's source
+// ("from"). A missing/failed read yields an empty object so the entry shape stays
+// stable.
+func linkBodyData(ctx *sfPlugins.StatefunContextProcessor, fromID, name string) easyjson.JSON {
+	if len(fromID) == 0 || len(name) == 0 {
+		return easyjson.NewJSONObject()
+	}
+	payload := easyjson.NewJSONObjectWithKeyValue("name", easyjson.NewJSON(name))
+	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", fromID, &payload, nil))
+	if m.Status == sfMediators.SYNC_OP_STATUS_OK {
+		return m.Data.GetByPath("body")
+	}
+	return easyjson.NewJSONObject()
+}
+
+// attachLinkBodies enriches the structured links.in / links.out arrays of one
+// per-uuid result with each link's "body", controlled per direction. An out-link
+// {to,name,type} of selfID has its body stored on selfID; an in-link {from,name,type}
+// has its body stored on the source vertex ("from"). Link bodies are read
+// sequentially within one uuid — callers already fan out uuids concurrently, so the
+// goroutine count stays bounded by the number of uuids.
+func attachLinkBodies(ctx *sfPlugins.StatefunContextProcessor, vertexData *easyjson.JSON, selfID string, inBody, outBody bool) {
+	enrich := func(path, sourceField string) {
+		arr := vertexData.GetByPath(path)
+		if !arr.IsArray() {
+			return
+		}
+		enriched := easyjson.NewJSONArray()
+		for i := 0; i < arr.ArraySize(); i++ {
+			link := arr.ArrayElement(i)
+			owner := selfID
+			if sourceField != "" {
+				owner = link.GetByPath(sourceField).AsStringDefault("")
+			}
+			link.SetByPath("body", linkBodyData(ctx, owner, link.GetByPath("name").AsStringDefault("")))
+			enriched.AddToArray(link)
+		}
+		vertexData.SetByPath(path, enriched)
+	}
+	if outBody {
+		enrich("links.out", "") // out-link body lives on the vertex itself
+	}
+	if inBody {
+		enrich("links.in", "from") // in-link body lives on the source vertex
+	}
+}
+
 /*
 	{
 		"uuids": [...],
@@ -270,9 +320,17 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 				"<field name 1>[:asc|:dsc]",
 				"<field name 2>[:asc|:dsc]",
 				...
-			]
+			],
+			"links_in_body":  bool,  // optional, default false
+			"links_out_body": bool   // optional, default false
 		}
 	}
+
+When links_in_body and/or links_out_body is set, each per-vertex result additionally
+carries the structured links.in / links.out arrays (fetched via vertex.read
+"details_v2"), with the "body" of each link in the requested direction attached to its
+entry. Without these flags the behavior is unchanged: only the vertex body is returned
+and no links are enumerated.
 */
 func PostProcessorVertexBody(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
@@ -281,6 +339,10 @@ func PostProcessorVertexBody(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Statef
 	if arr, ok := ctx.Payload.GetByPath("uuids").AsArrayString(); ok {
 		uuids = arr
 	}
+
+	inBody := ctx.Payload.GetByPath("data.links_in_body").AsBoolDefault(false)
+	outBody := ctx.Payload.GetByPath("data.links_out_body").AsBoolDefault(false)
+	withLinks := inBody || outBody
 
 	var wg sync.WaitGroup
 	uuidDatas := make([]*easyjson.JSON, len(uuids))
@@ -291,16 +353,27 @@ func PostProcessorVertexBody(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Statef
 			defer wg.Done()
 
 			payload := easyjson.NewJSONObject()
+			if withLinks {
+				// details_v2 returns the structured links.in / links.out arrays the
+				// flags attach bodies to; omitted otherwise to keep the default light.
+				payload.SetByPath("details_v2", easyjson.NewJSON(true))
+			}
 			om := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", uuid, &payload, nil))
 
-			uuiDataMutex.Lock()
-			defer uuiDataMutex.Unlock()
+			var data *easyjson.JSON
 			if om.Status == sfMediators.SYNC_OP_STATUS_OK {
-				uuidDatas[i] = &om.Data
+				data = &om.Data
+				if withLinks {
+					attachLinkBodies(ctx, data, uuid, inBody, outBody)
+				}
 			} else {
-				uuidDatas[i] = easyjson.NewJSONObject().GetPtr()
+				data = easyjson.NewJSONObject().GetPtr()
 			}
-			uuidDatas[i].SetByPath("uuid", easyjson.NewJSON(uuid))
+			data.SetByPath("uuid", easyjson.NewJSON(uuid))
+
+			uuiDataMutex.Lock()
+			uuidDatas[i] = data
+			uuiDataMutex.Unlock()
 		}(i, uuid)
 	}
 	wg.Wait()
@@ -344,6 +417,11 @@ want, identical to ObjectReadV2 in clients/go/db.
 Each uuid is fetched concurrently; on a failed read a placeholder empty object
 is inserted (with the "uuid" field still set) so the result array length and
 caller-visible indexing match the input uuids list, mirroring vbody behavior.
+
+links_in_body / links_out_body in "data" behave exactly as in .pp.vbody: when set,
+the body of each link in the requested direction is attached to its entry in the
+links.in / links.out arrays (object.read already returns those arrays via details_v2,
+so unlike vbody no extra request shape is needed to expose them).
 */
 func PostProcessorObjectBody(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
@@ -352,6 +430,9 @@ func PostProcessorObjectBody(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Statef
 	if arr, ok := ctx.Payload.GetByPath("uuids").AsArrayString(); ok {
 		uuids = arr
 	}
+
+	inBody := ctx.Payload.GetByPath("data.links_in_body").AsBoolDefault(false)
+	outBody := ctx.Payload.GetByPath("data.links_out_body").AsBoolDefault(false)
 
 	var wg sync.WaitGroup
 	uuidDatas := make([]*easyjson.JSON, len(uuids))
@@ -365,14 +446,20 @@ func PostProcessorObjectBody(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Statef
 			payload.SetByPath("details_v2", easyjson.NewJSON(true))
 			om := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", uuid, &payload, nil))
 
-			uuiDataMutex.Lock()
-			defer uuiDataMutex.Unlock()
+			var data *easyjson.JSON
 			if om.Status == sfMediators.SYNC_OP_STATUS_OK {
-				uuidDatas[i] = &om.Data
+				data = &om.Data
+				if inBody || outBody {
+					attachLinkBodies(ctx, data, uuid, inBody, outBody)
+				}
 			} else {
-				uuidDatas[i] = easyjson.NewJSONObject().GetPtr()
+				data = easyjson.NewJSONObject().GetPtr()
 			}
-			uuidDatas[i].SetByPath("uuid", easyjson.NewJSON(uuid))
+			data.SetByPath("uuid", easyjson.NewJSON(uuid))
+
+			uuiDataMutex.Lock()
+			uuidDatas[i] = data
+			uuiDataMutex.Unlock()
 		}(i, uuid)
 	}
 	wg.Wait()
