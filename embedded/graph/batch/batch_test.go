@@ -124,6 +124,30 @@ func (s *BatchSuite) Test_ParallelBatch() {
 	s.Equal("p2", results[1].ID)
 }
 
+// Parallel().StopOnError(): stopOnError must be a no-op across sub-batch splits when
+// Parallel is set — a failure in chunk N must not prevent chunk N+1 from being sent.
+func (s *BatchSuite) Test_Parallel_StopOnError_DoesNotAbortSubBatches() {
+	s.boot()
+	s.NoError(s.dbc.CMDB.TypeCreate("t1"))
+	s.NoError(s.dbc.CMDB.ObjectCreate("exists", "t1"))
+
+	// SubBatchSize(1) → each op is its own chunk.
+	// chunk 1: read "missing" → idle (not ok)
+	// chunk 2: read "exists"  → ok — must still execute despite chunk 1 failing
+	results, err := s.dbc.BatchCreate().
+		Operation("functions.cmdb.api.object.read", "missing", easyjson.NewJSONObject()).
+		Operation("functions.cmdb.api.object.read", "exists", easyjson.NewJSONObject()).
+		Parallel().
+		StopOnError().
+		SubBatchSize(1).
+		Commit()
+
+	s.NoError(err)
+	s.Require().Len(results, 2, "Parallel() must suppress StopOnError: both chunks must execute")
+	s.False(results[0].OK(), "read of missing id must not be ok")
+	s.True(results[1].OK(), "read of existing id in chunk 2 must succeed despite prior failure")
+}
+
 // A per-batch SubBatchSize overrides the package default and actually splits the batch
 // into that many ops per request — proven by counting executor invocations — while
 // every op still runs and results stay in global input order.

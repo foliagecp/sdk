@@ -130,9 +130,11 @@ func (b *Batch) Commit() ([]BatchResult, error) {
 			return out, err
 		}
 
-		// A sequential StopOnError must not spill into later sub-batches: if this
-		// chunk reported a non-ok op (the executor stopped on it), stop here too.
-		if b.stopOnErr {
+		// StopOnError is a sequential concept and is ignored when Parallel is set
+		// (matching both the executor and the StopOnError doc) — so it must NOT abort
+		// later sub-batches in parallel mode. In sequential mode: if this chunk reported
+		// a non-ok op (the executor stopped on it), stop sending further sub-batches too.
+		if b.stopOnErr && !b.parallel {
 			for _, r := range results {
 				if !r.OK() {
 					return out, nil
