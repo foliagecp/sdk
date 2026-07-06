@@ -10,6 +10,7 @@ import (
 	sf "github.com/foliagecp/sdk/statefun"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfp "github.com/foliagecp/sdk/statefun/plugins"
+	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
 	"golang.org/x/sync/singleflight"
 )
@@ -160,7 +161,19 @@ func getRequestFunc(nc *nats.Conn, NatsRequestTimeoutSec int, HubDomainName stri
 	}
 }
 
-func seqFree(name string) string {
-	//return name + "===" + system.GetUniqueStrID()
-	return name
+// SeqFree returns a per-call "sequence free" dispatch id for a LINK operation:
+// "<owner>===<random>". The runtime processes one message per id at a time, so
+// dispatching every link op on the bare owner id serializes ALL out-link
+// operations of a vertex on that vertex's single per-id worker. The random
+// "===" salt lands each call on a distinct per-id worker so operations on a
+// vertex's links run in parallel; getOriginalID strips the suffix inside the
+// CRUD functions, recovering the owner id unchanged. Concurrent operations on
+// the SAME edge are still serialized downstream by the per-edge graph mutex
+// (keyed by link name). Use ONLY for link functions.
+//
+// Exported so callers wiring their own link dispatch (e.g. a custom
+// SFRequestFunc, or direct low-level link ops) can reuse the same fan-out
+// scheme instead of serializing every link of a vertex on one worker.
+func SeqFree(name string) string {
+	return name + "===" + system.GetUniqueStrID()
 }

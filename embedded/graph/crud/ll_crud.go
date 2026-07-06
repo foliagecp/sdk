@@ -83,6 +83,23 @@ func getOriginalID(ID string) string {
 	return strings.Split(ID, "===")[0]
 }
 
+// edgeLockKey is the graph-mutex key identifying a single out-link (owner, name).
+// Write-locking the EDGE (instead of the whole owner vertex) lets operations on
+// DIFFERENT out-links of the same vertex run concurrently; operations on the SAME
+// edge still serialize on it. The owner and target vertices are taken as READ
+// guards alongside (see the mixed-lock call sites), so a concurrent vertex delete
+// is still excluded.
+//
+// The key MUST be dot-free: operationKeysMutexLock* records held locks via
+// ctx.Payload SetByPath("__key_locks.<key>.w"), which treats "." as a path
+// separator — a KV-style key like "owner.out.body.name" would nest into the
+// payload and operationKeysMutexUnlock would never find the ".w"/".r" leaf to
+// release, LEAKING the lock (and blocking the next op for GRAPH_KEY_LOCK_TIMEOUT_SEC).
+// A hash gives a dot-free key that is unique per edge and never equals a vertex id.
+func edgeLockKey(ownerID, linkName string) string {
+	return "edge_" + system.GetHashStr(ownerID+"\x00"+linkName)
+}
+
 // All child operations must be sequence free
 func makeSequenceFreeParentBasedID(ctx *sfPlugins.StatefunContextProcessor, targetID string, arbitrarySuffix ...string) string {
 	finalId := targetID
@@ -815,7 +832,7 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			return
 		}
 
-		operationKeysMutexLock(ctx, []string{selfID, toId}, true, opTime)
+		operationKeysMutexLockMixed(ctx, []string{edgeLockKey(selfID, linkName)}, []string{selfID, toId}, opTime)
 
 		if !forceCreate {
 			// Check if link with this name already exists --------------
@@ -924,7 +941,7 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	}
 	//operationKeysMutexUnlock(ctx)
 
-	operationKeysMutexLock(ctx, []string{selfID, toId}, true, opTime)
+	operationKeysMutexLockMixed(ctx, []string{edgeLockKey(selfID, linkName)}, []string{selfID, toId}, opTime)
 
 	oldLinkBody, err := ctx.Domain.Cache().GetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName))
 	if err != nil {
@@ -1130,7 +1147,7 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		}
 		//operationKeysMutexUnlock(ctx)
 
-		operationKeysMutexLock(ctx, []string{selfID, toId}, true, opTime)
+		operationKeysMutexLockMixed(ctx, []string{edgeLockKey(selfID, linkName)}, []string{selfID, toId}, opTime)
 
 		oldLinkBody, err := ctx.Domain.Cache().GetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName))
 		if err != nil {
@@ -1219,8 +1236,10 @@ func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 		// into the reply. Locking toId is unnecessary AND caused a lock-order deadlock
 		// with the high-level delete cascade — DeleteObject locks object→type (object
 		// first, then type in its nested vertex.delete), the reverse of this read's
-		// sorted [type, object] order.
-		operationKeysMutexLock(ctx, []string{selfID}, false, opTime)
+		// sorted [type, object] order. Read-lock the EDGE (not the owner vertex)
+		// so a concurrent update/delete of THIS link is excluded (no dirty read)
+		// while operations on the owner's OTHER links run in parallel.
+		operationKeysMutexLock(ctx, []string{edgeLockKey(selfID, linkName)}, false, opTime)
 	}
 
 	linkBody, err := ctx.Domain.Cache().GetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName))

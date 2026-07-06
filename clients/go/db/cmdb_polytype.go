@@ -46,7 +46,7 @@ func (cmdb CMDBSyncClient) ObjectsLinkSuperTypeCreate(from, to, fromClaimType, t
 
 	options := easyjson.NewJSONObject()
 	options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
-	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.objects.link.supertype.create", from, &payload, &options)))
+	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.objects.link.supertype.create", SeqFree(from), &payload, &options)))
 }
 
 func (cmdb CMDBSyncClient) ObjectsLinkSuperTypeUpdate(from, to, fromClaimType, toClaimType, name string, tags []string, body easyjson.JSON, replace bool) error {
@@ -66,7 +66,7 @@ func (cmdb CMDBSyncClient) ObjectsLinkSuperTypeUpdate(from, to, fromClaimType, t
 
 	options := easyjson.NewJSONObject()
 	options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
-	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.objects.link.supertype.update", seqFree(from), &payload, &options)))
+	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.objects.link.supertype.update", SeqFree(from), &payload, &options)))
 }
 
 func (cmdb CMDBSyncClient) ObjectsLinkSuperTypeDelete(from, to, fromClaimType, toClaimType string) error {
@@ -78,5 +78,5 @@ func (cmdb CMDBSyncClient) ObjectsLinkSuperTypeDelete(from, to, fromClaimType, t
 
 	options := easyjson.NewJSONObject()
 	options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
-	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.objects.link.supertype.delete", from, &payload, &options)))
+	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.objects.link.supertype.delete", SeqFree(from), &payload, &options)))
 }
