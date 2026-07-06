@@ -743,7 +743,7 @@ func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	link.SetByPath("body.type", easyjson.NewJSON(objectLinkType))
 	link.SetByPath("op_time", easyjson.NewJSON(opTime))
 
-	operationKeysMutexLock(ctx, []string{selfID, toType}, true, opTime)
+	operationKeysMutexLockMixed(ctx, []string{edgeLockKey(selfID, toType)}, []string{selfID, toType}, opTime)
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &link), ctx.Options)))
 	operationKeysMutexUnlock(ctx)
 
@@ -812,7 +812,7 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	}
 	link.SetByPath("op_time", easyjson.NewJSON(opTime))
 
-	operationKeysMutexLock(ctx, []string{selfID, toType}, true, opTime)
+	operationKeysMutexLockMixed(ctx, []string{edgeLockKey(selfID, toType)}, []string{selfID, toType}, opTime)
 	metaOld := readLinkBodyFromCache(ctx, selfID, toType) // snapshot before update (meta trigger)
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.update", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &link), ctx.Options)))
 	metaNew := readLinkBodyFromCache(ctx, selfID, toType) // snapshot after update, still under lock
@@ -868,7 +868,7 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	}
 	toType = ctx.Domain.CreateObjectIDWithHubDomain(toType, true)
 
-	operationKeysMutexLock(ctx, []string{selfID, toType}, true, opTime)
+	operationKeysMutexLockMixed(ctx, []string{edgeLockKey(selfID, toType)}, []string{selfID, toType}, opTime)
 
 	originLinkType, err := getObjectsLinkTypeFromTypesLink(ctx, selfID, toType)
 	if err != nil {
@@ -955,7 +955,7 @@ func ReadTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 	// Read locks only the link owner (selfID); the target type vertex (toType) is not
 	// read here, only used to resolve the link name in the delegated link.read. Same
 	// unnecessary-lock / deadlock fix as LLAPILinkRead.
-	operationKeysMutexLock(ctx, []string{selfID}, false, opTime)
+	operationKeysMutexLock(ctx, []string{edgeLockKey(selfID, toType)}, false, opTime)
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.read", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &payload), ctx.Options)))
 	operationKeysMutexUnlock(ctx)
 
@@ -1000,7 +1000,10 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		linkName = objectToID
 	}
 
-	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true, opTime)
+	// Lock the EDGE (owner+name), not the owner vertex; read-guard the endpoints
+	// against deletion. Links to DIFFERENT targets of the same `from` create in
+	// parallel; only operations on the SAME edge serialize.
+	operationKeysMutexLockMixed(ctx, []string{edgeLockKey(selfID, linkName)}, []string{selfID, objectToID}, opTime)
 	_, _, linkType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, selfID, objectToID)
 	if err != nil {
 		operationKeysMutexUnlock(ctx)
@@ -1076,19 +1079,21 @@ func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	options := ctx.Options.Clone()
 	options.SetByPath("op_stack", easyjson.NewJSON(true))
 
-	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true, opTime)
-
-	// Hot path: cheap KV-only resolution. Falls back to the schema-based
-	// resolver only when the edge does not yet exist (upsert / cold path).
+	// Resolve the link's identity (name) BEFORE locking so we lock the EDGE
+	// (owner+name), not the owner vertex — updates to DIFFERENT links of the same
+	// `from` then run in parallel. The resolve is a cheap KV read; the low-level
+	// link.update re-validates the edge under the same lock.
 	linkName, linkType, edgeExists := resolveLinkBetweenTwoObjects(ctx, selfID, objectToID)
 	if !edgeExists {
+		// Upsert / cold path: the edge does not exist yet. Its name is the one the
+		// caller supplied, else the canonical default (the target id).
 		_, _, lt, err := getReferenceLinkTypeBetweenTwoObjects(ctx, selfID, objectToID)
 		if err != nil {
-			operationKeysMutexUnlock(ctx)
 			om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
 			return
 		}
 		linkType = lt
+		linkName = ctx.Payload.GetByPath("name").AsStringDefault(objectToID)
 	} else if !objectLink.PathExists("name") && linkName != "" {
 		// Prefer the resolved link name when the caller did not provide one,
 		// so LL link.update can target the edge unambiguously.
@@ -1096,6 +1101,9 @@ func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	}
 
 	objectLink.SetByPath("type", easyjson.NewJSON(linkType))
+
+	// Lock the EDGE (owner+name); read-guard the endpoints against deletion.
+	operationKeysMutexLockMixed(ctx, []string{edgeLockKey(selfID, linkName)}, []string{selfID, objectToID}, opTime)
 
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.update", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &objectLink), &options)))
 	operationKeysMutexUnlock(ctx)
@@ -1128,16 +1136,17 @@ func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	}
 	objectToID = ctx.Domain.CreateObjectIDWithThisDomain(objectToID, false)
 
-	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true, opTime)
-
-	// Cheap KV-only resolution of (linkName, linkType) for the existing edge.
-	// No object.read calls; idempotent if the edge is already gone.
+	// Resolve the link's identity (name) BEFORE locking so we lock the EDGE
+	// (owner+name), not the owner vertex — deletes of DIFFERENT links of the same
+	// `from` run in parallel. Cheap KV read; idempotent if the edge is already gone.
 	linkName, linkType, edgeExists := resolveLinkBetweenTwoObjects(ctx, selfID, objectToID)
 	if !edgeExists {
-		operationKeysMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("object link from=%s to=%s does not exist", selfID, objectToID))).Reply()
 		return
 	}
+
+	// Lock the EDGE (owner+name); read-guard the endpoints against deletion.
+	operationKeysMutexLockMixed(ctx, []string{edgeLockKey(selfID, linkName)}, []string{selfID, objectToID}, opTime)
 
 	objectLink := easyjson.NewJSONObject()
 	objectLink.SetByPath("to", easyjson.NewJSON(objectToID))
@@ -1176,7 +1185,7 @@ func ReadObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	objectToID = ctx.Domain.CreateObjectIDWithThisDomain(objectToID, false)
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
-	operationKeysMutexLock(ctx, []string{selfID, objectToID}, false, opTime)
+	operationKeysMutexLock(ctx, []string{edgeLockKey(selfID, objectToID)}, false, opTime)
 
 	// ReadObjectsLink reads the link of the BASE type declared by the TypesLink
 	// between the two objects' DIRECT (parent) types. SuperType/composition

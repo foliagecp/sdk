@@ -52,6 +52,10 @@ func TypeSetSubType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContext
 	childTypeWithDomain := ctx.Domain.CreateObjectIDWithHubDomain(childType, true)
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	// Whole-vertex write lock (NOT edge-granular): this op's type-model cascade
+	// (UpdateTypeModelVersion / PolyType goal finalize) mutates shared type state
+	// under the lock and its nested ops need write access to these vertices, so a
+	// read guard would self-deadlock. Low-traffic schema op — no parallelism need.
 	operationKeysMutexLock(ctx, []string{selfID, childTypeWithDomain}, true, opTime)
 	defer operationKeysMutexUnlock(ctx)
 
@@ -88,6 +92,10 @@ func TypeRemoveSubType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	childTypeWithDomain := ctx.Domain.CreateObjectIDWithHubDomain(childType, true)
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	// Whole-vertex write lock (NOT edge-granular): the subtype-removal cascade
+	// (PolyType goal prepare/finalize) mutates shared type state under the lock and
+	// its nested ops need write access to these vertices, so a read guard would
+	// self-deadlock. Low-traffic schema op — no parallelism need.
 	operationKeysMutexLock(ctx, []string{selfID, childTypeWithDomain}, true, opTime)
 	defer operationKeysMutexUnlock(ctx)
 
@@ -140,6 +148,10 @@ func CreateObjectsLinkFromSuperTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugin
 
 	fromObjectClaimType = ctx.Domain.CreateObjectIDWithHubDomain(fromObjectClaimType, true)
 	toObjectClaimType = ctx.Domain.CreateObjectIDWithHubDomain(toObjectClaimType, true)
+
+	// Lock the EDGE (owner + name), read-guard the endpoints; supertype links to
+	// DIFFERENT targets of the same `from` create in parallel.
+	operationKeysMutexLockMixed(ctx, []string{edgeLockKey(selfID, linkName)}, []string{selfID, objectToID}, opTime)
 
 	objectLinkType := isObjectLinkPermittedForClaimedTypes(ctx, selfID, objectToID, fromObjectClaimType, toObjectClaimType)
 	if len(objectLinkType) == 0 {
@@ -203,7 +215,8 @@ func UpdateObjectsLinkFromSuperTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugin
 	fromObjectClaimType = ctx.Domain.CreateObjectIDWithHubDomain(fromObjectClaimType, true)
 	toObjectClaimType = ctx.Domain.CreateObjectIDWithHubDomain(toObjectClaimType, true)
 
-	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true, opTime)
+	// Lock the EDGE (owner + name), read-guard the endpoints.
+	operationKeysMutexLockMixed(ctx, []string{edgeLockKey(selfID, linkName)}, []string{selfID, objectToID}, opTime)
 
 	objectLinkType := isObjectLinkPermittedForClaimedTypes(ctx, selfID, objectToID, fromObjectClaimType, toObjectClaimType)
 	if len(objectLinkType) == 0 {
@@ -278,15 +291,16 @@ func DeleteObjectsLinkFromSuperTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugin
 		ctx.Domain.CreateObjectIDWithHubDomain(ctx.Payload.GetByPath("to_super_type").AsStringDefault(""), true))
 	compoundPrefix := fromClaimShort + "#" + toClaimShort + "#"
 
-	operationKeysMutexLock(ctx, []string{selfID, objectToID}, true, opTime)
-
-	// Resolve the SPECIFIC edge by KV only (no object.read).
+	// Resolve the SPECIFIC edge (by KV) BEFORE locking so we lock the edge itself,
+	// not the owner vertex — supertype deletes of DIFFERENT links run in parallel.
 	linkName, linkType, edgeExists := resolveLinkBetweenTwoObjectsByTypePrefix(ctx, selfID, objectToID, compoundPrefix)
 	if !edgeExists {
-		operationKeysMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("object link from=%s to=%s with claimed types (%s,%s) does not exist", selfID, objectToID, fromClaimShort, toClaimShort))).Reply()
 		return
 	}
+
+	// Lock the EDGE (owner + name), read-guard the endpoints.
+	operationKeysMutexLockMixed(ctx, []string{edgeLockKey(selfID, linkName)}, []string{selfID, objectToID}, opTime)
 
 	objectLink := easyjson.NewJSONObject()
 	objectLink.SetByPath("to", easyjson.NewJSON(objectToID))
@@ -337,14 +351,16 @@ func ReadObjectsLinkFromSuperTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.
 		ctx.Domain.CreateObjectIDWithHubDomain(ctx.Payload.GetByPath("to_super_type").AsStringDefault(""), true))
 	compoundPrefix := fromClaimShort + "#" + toClaimShort + "#"
 
-	operationKeysMutexLock(ctx, []string{selfID, objectToID}, false, opTime)
-
+	// Resolve the SPECIFIC edge (by KV) BEFORE locking so we read-lock the edge
+	// itself, not the owner vertex.
 	linkName, _, edgeExists := resolveLinkBetweenTwoObjectsByTypePrefix(ctx, selfID, objectToID, compoundPrefix)
 	if !edgeExists {
-		operationKeysMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("object link from=%s to=%s with claimed types (%s,%s) does not exist", selfID, objectToID, fromClaimShort, toClaimShort))).Reply()
 		return
 	}
+
+	// Read-lock the EDGE (owner + name).
+	operationKeysMutexLock(ctx, []string{edgeLockKey(selfID, linkName)}, false, opTime)
 
 	payload := easyjson.NewJSONObject()
 	payload.SetByPath("name", easyjson.NewJSON(linkName))
