@@ -10,6 +10,8 @@ import (
 	"github.com/foliagecp/sdk/clients/go/db"
 	"github.com/foliagecp/sdk/embedded/graph/batch"
 	"github.com/foliagecp/sdk/embedded/graph/crud"
+	"github.com/foliagecp/sdk/statefun"
+	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfp "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/foliagecp/sdk/statefun/test"
@@ -188,4 +190,68 @@ func (s *BatchSuite) Test_SubBatchSize_PerBatchOverride() {
 		s.Equal(id, results[i].ID)
 		s.True(results[i].OK(), "op %d (%s): %s", i, id, results[i].Status)
 	}
+}
+
+// Batch.Timeout bounds the sub-batch request: a batch whose op blocks past the
+// per-call timeout must fail fast AT that timeout, not ride the (60s) runtime
+// default. Regression guard for the timeout being forwarded from Batch.Timeout()
+// through commitChunk into the request.
+//
+// Exercised over the NATS request path, because that is (a) the real deployment
+// topology of the DB client — an external process talking to the runtime, where
+// the production request func (clients/go/db/common.go getRequestFunc) always
+// nc.Request()s with the per-call timeout — and (b) the ONLY path a request
+// timeout actually bounds: a co-located GolangLocalRequest runs the target
+// handler synchronously (function_type.go workerTaskExecutor) before the timeout
+// timer is even armed, so it cannot cut off a blocked handler. The request func
+// below forces NatsCoreGlobalRequest exactly as getRequestFunc ignores the
+// provider and always goes over NATS.
+func (s *BatchSuite) Test_Batch_Timeout_BoundsSubBatchRequest() {
+	// Target op that withholds its reply well past the 300ms per-call timeout but
+	// under the 60s runtime default: a fast return can then only mean the per-call
+	// timeout was applied. time.After(3s) lets the op finish on its own on the
+	// "timeout not forwarded" regression path (so that case fails fast, ~3s, not at
+	// 60s); release unblocks it promptly on teardown of the happy path.
+	release := make(chan struct{})
+	defer close(release)
+	slow := func(_ sfp.StatefunExecutor, ctx *sfp.StatefunContextProcessor) {
+		select {
+		case <-release:
+		case <-time.After(3 * time.Second):
+		}
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONObject())).Reply()
+	}
+	s.RegisterFunction("test.batch.slow", slow,
+		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfp.AutoRequestSelect))
+	batch.RegisterAllFunctionTypes(s.Runtime())
+	s.NoError(s.StartRuntime())
+
+	// Client over the NATS request path (mirrors the external DB client), forwarding
+	// the per-call timeout — the getRequestFunc contract.
+	natsReq := func(_ sfp.RequestProvider, typename, id string, payload, options *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
+		return s.Runtime().Request(sfp.NatsCoreGlobalRequest, typename, id, payload, options, timeout...)
+	}
+	dbc, err := db.NewDBSyncClientFromRequestFunction(natsReq)
+	s.NoError(err)
+
+	const perCall = 300 * time.Millisecond
+	start := time.Now()
+	results, err := dbc.BatchCreate("timeout_batch").
+		Operation("test.batch.slow", "s1", easyjson.NewJSONObject()).
+		Timeout(perCall).
+		Commit()
+	elapsed := time.Since(start)
+
+	// Must fail on the timeout (not return an OK result on the 60s default) ...
+	s.Require().Error(err, "batch must fail on the per-call timeout, not complete on the runtime default")
+	s.Contains(err.Error(), "timeout", "error should be a request timeout: %v", err)
+	// ... genuinely after ~perCall (rules out an instant fast-fail making the ceiling
+	// below vacuous) ...
+	s.Require().GreaterOrEqual(elapsed, perCall-50*time.Millisecond,
+		"returned before the per-call timeout could elapse (elapsed=%v) — not a real timeout", elapsed)
+	// ... and bounded by the per-call Timeout(), NOT the 60s runtime default. Without
+	// the forwarding this blocks until the 3s op reply and blows past the ceiling.
+	s.Require().Less(elapsed, 1500*time.Millisecond,
+		"Batch.Timeout() was not honored; fell back to the runtime default (elapsed=%v)", elapsed)
+	s.Empty(results, "no sub-batch results expected on a transport timeout")
 }

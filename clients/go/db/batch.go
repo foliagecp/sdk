@@ -1,6 +1,8 @@
 package db
 
 import (
+	"time"
+
 	"github.com/foliagecp/easyjson"
 
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
@@ -54,7 +56,8 @@ type Batch struct {
 	ops          []batchEntry
 	parallel     bool
 	stopOnErr    bool
-	subBatchSize int // per-batch override of batchSubBatchSize; <= 0 means use the package default
+	subBatchSize int           // per-batch override of batchSubBatchSize; <= 0 means use the package default
+	timeout      time.Duration // per-sub-batch request timeout; <= 0 means use the request func's default
 }
 
 // BatchCreate starts a new batch. batchID is the id the executor is invoked on; it is
@@ -96,6 +99,16 @@ func (b *Batch) StopOnError() *Batch { b.stopOnErr = true; return b }
 // sub-batch request, bypassing the package default (DB_BATCH_SUBBATCH_SIZE). A value
 // <= 0 is ignored and the package default is used. Returns the batch for chaining.
 func (b *Batch) SubBatchSize(n int) *Batch { b.subBatchSize = n; return b }
+
+// Timeout bounds EACH sub-batch request-reply round-trip (not the aggregate Commit
+// across sub-batches). A batch is exactly where the fixed request-timeout default is
+// most likely to bite: one sub-batch carries up to SubBatchSize operations in a
+// single round-trip, so it can legitimately take far longer than any single call and
+// would otherwise time out on the caller's default while the executor is still
+// working. Raise it for large/slow batches (or lower it to fail fast). A value <= 0
+// is ignored and the request travels on the request func's default timeout. Returns
+// the batch for chaining.
+func (b *Batch) Timeout(d time.Duration) *Batch { b.timeout = d; return b }
 
 // Len returns the number of queued operations.
 func (b *Batch) Len() int { return len(b.ops) }
@@ -168,7 +181,13 @@ func (b *Batch) commitChunk(ops []batchEntry, indexOffset int) ([]BatchResult, e
 		payload.SetByPath("stop_on_error", easyjson.NewJSON(true))
 	}
 
-	om := sfMediators.OpMsgFromSfReply(b.request(sfp.AutoRequestSelect, batchFunctionTypename, b.id, &payload, nil))
+	// Forward the per-batch timeout (if any) into the request. Empty variadic when
+	// unset, so the request func applies its own default exactly as before.
+	var to []time.Duration
+	if b.timeout > 0 {
+		to = []time.Duration{b.timeout}
+	}
+	om := sfMediators.OpMsgFromSfReply(b.request(sfp.AutoRequestSelect, batchFunctionTypename, b.id, &payload, nil, to...))
 	if err := OpErrorFromOpMsg(om); err != nil {
 		return nil, err
 	}
