@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/foliagecp/easyjson"
+	lg "github.com/foliagecp/sdk/statefun/logger"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 )
@@ -140,30 +141,57 @@ func resultWithOpStack(existingResult *easyjson.JSON, opStack *easyjson.JSON) ea
 	}
 }
 
+// getFullLinkInfoFromSpecifiedIdentifier resolves the out-link a payload
+// addresses, trying BOTH identities a link has:
+//
+//  1. by "name" via the out.to.<name> index;
+//  2. by "type"+"to" via the from.ltype.<type>.<to> index — a link's semantic
+//     identity for the uniqueness invariant (at most one link of a type per
+//     direction).
+//
+// A name miss falls through to (2) when type+to are present: the payload may
+// address an existing (type, to) edge under a different name, and reporting it
+// absent would send an upsert into link.create only to be rejected by the very
+// index this fallback consults. The type is normalized with
+// GetObjectIDWithoutDomain exactly like LLAPILinkCreate normalizes it before
+// writing the ltype index — a raw domain-prefixed type can never match a key
+// that was written stripped.
 func getFullLinkInfoFromSpecifiedIdentifier(ctx *sfPlugins.StatefunContextProcessor) (linkType, linkName, toId string, linkExists bool) {
 	selfID := getOriginalID(ctx.Self.ID)
-	if linkName, ok := ctx.Payload.GetByPath("name").AsString(); ok {
-		linkName = ctx.Domain.GetObjectIDWithoutDomain(linkName)
+	requestedName := "" // set to the payload "name" ONLY when it named a link that does not exist (name miss)
+	if name, ok := ctx.Payload.GetByPath("name").AsString(); ok {
+		name = ctx.Domain.GetObjectIDWithoutDomain(name)
 
-		linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, selfID, linkName))
-		if err != nil {
-			return "", "", "", false
+		linkTargetBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, selfID, name))
+		if err == nil {
+			linkTargetStr := string(linkTargetBytes)
+			linkTargetTokens := strings.Split(linkTargetStr, ".")
+			linkType := linkTargetTokens[0]
+			toId := linkTargetTokens[1]
+
+			return ctx.Domain.GetObjectIDWithoutDomain(linkType), name, toId, true
 		}
-
-		linkTargetStr := string(linkTargetBytes)
-		linkTargetTokens := strings.Split(linkTargetStr, ".")
-		linkType := linkTargetTokens[0]
-		toId := linkTargetTokens[1]
-
-		return ctx.Domain.GetObjectIDWithoutDomain(linkType), linkName, toId, true
-	} else {
-		if toVertexId, ok := ctx.Payload.GetByPath("to").AsString(); ok {
-			toVertexId = ctx.Domain.CreateObjectIDWithThisDomain(toVertexId, false)
-			if lt, ok := ctx.Payload.GetByPath("type").AsString(); ok {
-				linkNameBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfID, lt, toVertexId))
-				if err == nil {
-					return ctx.Domain.GetObjectIDWithoutDomain(lt), ctx.Domain.GetObjectIDWithoutDomain(string(linkNameBytes)), toVertexId, true
+		requestedName = name
+		// name miss — fall through to the type+to identity
+	}
+	if toVertexId, ok := ctx.Payload.GetByPath("to").AsString(); ok {
+		toVertexId = ctx.Domain.CreateObjectIDWithThisDomain(toVertexId, false)
+		if lt, ok := ctx.Payload.GetByPath("type").AsString(); ok {
+			lt = ctx.Domain.GetObjectIDWithoutDomain(lt)
+			linkNameBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfID, lt, toVertexId))
+			if err == nil {
+				actualName := ctx.Domain.GetObjectIDWithoutDomain(string(linkNameBytes))
+				// The caller named a link that does not exist, yet its (type, to)
+				// resolves an existing edge under a DIFFERENT name. A link name is
+				// its identifier and cannot be renamed via update — the mismatched
+				// name is ignored and the edge is updated under its real name. Warn
+				// loudly: the caller's notion of this link's name is broken.
+				if requestedName != "" && requestedName != actualName {
+					lg.Logf(lg.WarnLevel,
+						"getFullLinkInfoFromSpecifiedIdentifier: broken link name on vertex %s — addressed with name=%q which does not exist, but edge (type=%s, to=%s) actually exists under name=%q; a link name is an identifier and cannot be renamed via update, so resolving to %q and ignoring the requested name (use delete+create to change a link name)",
+						selfID, requestedName, lt, toVertexId, actualName, actualName)
 				}
+				return lt, actualName, toVertexId, true
 			}
 		}
 	}

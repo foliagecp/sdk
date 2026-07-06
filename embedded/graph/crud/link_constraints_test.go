@@ -61,6 +61,9 @@ func (s *LinkConstraintsTestSuite) upsertLink(from, to, name, ltype string) *eas
 	p.SetByPath("name", easyjson.NewJSON(name))
 	p.SetByPath("type", easyjson.NewJSON(ltype))
 	p.SetByPath("upsert", easyjson.NewJSON(true))
+	// A real body change: a body-less upsert of an existing link is a no-op
+	// and short-circuits to "idle", which is not what these tests probe.
+	p.SetByPath("body", easyjson.NewJSONObjectWithKeyValue("upd", easyjson.NewJSON(true)))
 	r, err := s.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.update", from, &p, nil)
 	s.NoError(err)
 	return r
@@ -101,18 +104,21 @@ func (s *LinkConstraintsTestSuite) Test_C1_Create_DuplicateTypeToSameTarget_Reje
 	s.Equal("e1", s.linkNameForTypeTo("a", "rel", "b"))
 }
 
-// The bug: upsert-update with a NEW name but the SAME (type, to) as an existing
-// link must NOT create a second link — it would put two rel-links a->b and
-// corrupt the ltype index. This previously force-created the duplicate.
-func (s *LinkConstraintsTestSuite) Test_C1_UpsertUpdate_DuplicateTypeToSameTarget_Rejected() {
+// Upsert-update with a NEW name but the SAME (type, to) as an existing link
+// must NOT create a second link — it would put two rel-links a->b and corrupt
+// the ltype index. The resolver falls back to the type+to identity, so the
+// upsert targets the EXISTING e1 link and updates it (an early version
+// force-created the duplicate; an intermediate one dead-ended with "already
+// exists"). The C1 invariant is the unchanged part: exactly one rel-link a->b.
+func (s *LinkConstraintsTestSuite) Test_C1_UpsertUpdate_DuplicateTypeToSameTarget_UpdatesExisting() {
 	s.setup()
 	s.createVertex("a")
 	s.createVertex("b")
 
 	s.Equal("ok", status(s.createLink("a", "b", "e1", "rel")))
 
-	s.Equal("failed", status(s.upsertLink("a", "b", "e2", "rel")),
-		"upsert-update must not create a second rel-link a->b under a new name")
+	s.Equal("ok", status(s.upsertLink("a", "b", "e2", "rel")),
+		"upsert-update addressing the existing (rel, a->b) edge must update it")
 
 	// The original link is intact and no duplicate appeared.
 	s.True(s.outLinkExists("a", "e1"), "original link e1 must survive")
