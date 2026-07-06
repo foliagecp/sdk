@@ -264,6 +264,9 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 	if len(timeout) > 0 {
 		requestTimeoutDuration = timeout[0]
 	}
+	if requestTimeoutDuration <= 0 {
+		requestTimeoutDuration = time.Duration(r.config.requestTimeoutSec) * time.Second
+	}
 	natsCoreGlobalRequest := func() (*easyjson.JSON, error) {
 		var (
 			resp *nats.Msg
@@ -376,7 +379,7 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 				selection = sfPlugins.GolangLocalRequest
 			}
 		}
-		return r.request(selection, callerTypename, callerID, targetTypename, targetID, payload, options, traceCtx)
+		return r.request(selection, callerTypename, callerID, targetTypename, targetID, payload, options, traceCtx, timeout...)
 	default:
 		return nil, fmt.Errorf("unknown request provider: %d", requestProvider)
 	}

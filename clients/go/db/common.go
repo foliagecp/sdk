@@ -140,11 +140,15 @@ func getRequestFunc(nc *nats.Conn, NatsRequestTimeoutSec int, HubDomainName stri
 		if len(tokens) == 2 {
 			targetDomain = tokens[0]
 		}
+		requestTimeout := time.Duration(NatsRequestTimeoutSec) * time.Second
+		if len(timeout) > 0 && timeout[0] > 0 {
+			requestTimeout = timeout[0]
+		}
 
 		resp, err := nc.Request(
 			fmt.Sprintf("%s.%s.%s.%s", sf.RequestPrefix, targetDomain, targetTypename, targetID),
 			buildNatsData("cli", "cli", payload, options),
-			time.Duration(NatsRequestTimeoutSec)*time.Second,
+			requestTimeout,
 		)
 		if err == nil {
 			if j, ok := easyjson.JSONFromBytes(resp.Data); ok {
