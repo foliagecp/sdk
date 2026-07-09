@@ -108,8 +108,8 @@ func NewRuntimeConfig() *RuntimeConfig {
 		kvStreamMaxMsgs:     KVStreamMaxMsgs,
 		kvStreamMaxBytes:    KVStreamMaxBytes,
 		kvStreamMaxAge:      KVStreamMaxAge,
-		traceStreamMaxMsgs:  int64(system.GetEnvMustProceed("TRACE_STREAM_MAX_BYTES", TraceStreamMaxMsgs)),
-		traceStreamMaxBytes: int64(system.GetEnvMustProceed("TRACE_STREAM_MAX_MSG", TraceStreamMaxBytes)),
+		traceStreamMaxMsgs:  int64(system.GetEnvMustProceed("TRACE_STREAM_MAX_MSG", TraceStreamMaxMsgs)),
+		traceStreamMaxBytes: int64(system.GetEnvMustProceed("TRACE_STREAM_MAX_BYTES", TraceStreamMaxBytes)),
 		traceStreamMaxAge:   time.Duration(system.GetEnvMustProceed("TRACE_STREAM_MAX_AGE_HOURS", TraceStreamMaxAge)) * time.Hour,
 	}
 
