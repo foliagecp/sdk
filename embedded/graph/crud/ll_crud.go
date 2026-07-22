@@ -578,6 +578,14 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	}
 	// ----------------------------------------------------
 
+	// links_only=true: run ONLY the link cascade above and keep the vertex body.
+	// Used by the trash can (hl_crud DeleteObject): a "deleted" object keeps its
+	// body and gets re-linked under the trash-can type instead of being erased.
+	if ctx.Payload.GetByPath("links_only").AsBoolDefault(false) {
+		om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
+		return
+	}
+
 	operationKeysMutexLock(ctx, []string{selfID}, true, opTime)
 
 	var oldBody *easyjson.JSON = nil

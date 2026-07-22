@@ -26,6 +26,9 @@ const (
 	BUILT_IN_ROOT       = "root"
 	BUILT_IN_TYPE_GROUP = "group"
 	BUILT_IN_OBJECT_NAV = "nav"
+	// BUILT_IN_TRASH_CAN is the built-in type deleted objects are re-linked to
+	// ("nothing dies instantly"); see trash_can.go.
+	BUILT_IN_TRASH_CAN = "trash_can"
 )
 
 // ----------------------------
@@ -589,6 +592,8 @@ func cmdbSchemaPrepare(ctx context.Context, runtime *statefun.Runtime) error {
 
 	// ----------------------------------------------------
 	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.create", BUILT_IN_TYPE_GROUP, nil, nil))
+	// Trash can type — deleted objects are re-linked here (see trash_can.go).
+	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.create", BUILT_IN_TRASH_CAN, nil, nil))
 
 	v = easyjson.NewJSONObjectWithKeyValue("to", easyjson.NewJSON(BUILT_IN_TYPE_GROUP))
 	v.SetByPath("object_type", easyjson.NewJSON(GROUP_TYPELINK))
