@@ -63,8 +63,20 @@ func TypeSetSubType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContext
 	link.SetByPath("to", easyjson.NewJSON(childTypeWithDomain))
 	link.SetByPath("name", easyjson.NewJSON("child_"+childType))
 	link.SetByPath("type", easyjson.NewJSON(TYPES_SUBTYPELINK))
+	link.SetByPath("upsert", easyjson.NewJSON(true))
 
-	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &link), ctx.Options)))
+	// link.update in upsert mode instead of bare link.create: this op is part
+	// of every application's bootstrap schema setup and MUST be idempotent
+	// across restarts. link.create fails a repeat call with "link ... already
+	// exists" — noise in logs and a FAILED reply on every reboot. Upsert keeps
+	// both outcomes clean:
+	//   - edge absent  → link.update delegates to link.create with all its
+	//     invariant checks intact → OK (same as before);
+	//   - edge present → empty-body merge with no tags is a provable no-op →
+	//     IDLE, nothing written, no indices touched.
+	// All three of name/to/type are supplied above, which is exactly what the
+	// upsert contract requires (see LLAPILinkUpdate docs).
+	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.update", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &link), ctx.Options)))
 
 	UpdateTypeModelVersion(ctx)
 

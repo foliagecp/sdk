@@ -86,6 +86,38 @@ func (s *InheritanceCacheTestSuite) Test_InheritanceRecomputedAfterSubtypeLink()
 		"parent must remain on a second read (fast-path skip must not drop it)")
 }
 
+// Test_SetSubTypeIdempotentAcrossBootstrapRestarts pins the schema-bootstrap
+// contract: applications re-run their full type-schema setup on every restart,
+// so a repeated TypeSetSubType for an already-linked pair must be a clean
+// no-op — nil error, inheritance intact — NOT a "link already exists" failure.
+// (TypeSetSubType issues link.update with upsert=true: absent edge delegates
+// to link.create with full invariant checks; present edge is an IDLE no-op.)
+func (s *InheritanceCacheTestSuite) Test_SetSubTypeIdempotentAcrossBootstrapRestarts() {
+	s.bootstrap()
+
+	s.NoError(s.dbc.CMDB.TypeCreate("itbase3"))
+	s.NoError(s.dbc.CMDB.TypeCreate("itchild3"))
+
+	// First bootstrap: fresh link, must succeed exactly as before.
+	s.NoError(s.dbc.CMDB.TypeSetSubType("itbase3", "itchild3"))
+	s.True(containsToken(s.parentTypes("itchild3"), "itbase3"),
+		"child must list itbase3 as a parent after the first subtype link")
+
+	// Simulated restarts: same call repeated must stay error-free and must
+	// not disturb the existing inheritance state.
+	for i := 0; i < 3; i++ {
+		s.NoErrorf(s.dbc.CMDB.TypeSetSubType("itbase3", "itchild3"),
+			"repeat #%d of TypeSetSubType must be an idempotent no-op", i+1)
+	}
+	s.True(containsToken(s.parentTypes("itchild3"), "itbase3"),
+		"parent must survive repeated subtype-set calls")
+
+	// The no-op repeats must not have broken removal either.
+	s.NoError(s.dbc.CMDB.TypeRemoveSubType("itbase3", "itchild3"))
+	s.False(containsToken(s.parentTypes("itchild3"), "itbase3"),
+		"parent must be gone after removal following repeated sets")
+}
+
 func (s *InheritanceCacheTestSuite) Test_InheritanceRecomputedAfterSubtypeRemoval() {
 	s.bootstrap()
 
