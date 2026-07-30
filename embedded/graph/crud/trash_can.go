@@ -12,10 +12,20 @@ package crud
 // flagged. Everything rides the ordinary cache→WAL→export pipeline — zero
 // extra round-trips, zero extra storages.
 //
-// Retention is by OBJECT COUNT: when parking an object pushes the bin over
-// OBJECT_TRASH_CAN_MAX_OBJECTS, the OLDEST parked object is physically deleted
-// (and logged). Counting/eviction are ordinary graph reads off the trash-can
-// type's link indices.
+// Retention has TWO dimensions, both configurable, both enforced by physically
+// deleting what falls out (and logging it):
+//
+//	age   — OBJECT_TRASH_CAN_MAX_AGE_SEC (default 7 days): the product-level
+//	        "configurable retention period" a parked object is guaranteed;
+//	set 0 to disable either dimension.
+//	count — OBJECT_TRASH_CAN_MAX_OBJECTS (default 10000): bounds growth under
+//	        heavy churn, evicting the oldest parked objects first;
+//
+// Enforcement runs both after each parking (prompt count enforcement) and from
+// a periodic per-domain sweep (OBJECT_TRASH_CAN_SWEEP_INTERVAL_SEC, active
+// instance only) — without the sweep the age dimension would depend on delete
+// traffic. Counting/eviction are ordinary graph reads off the trash-can type's
+// link indices.
 //
 // A TRUE re-creation of a parked id (plain create and upsert both) restores
 // it: the PROTECTED body fields (PROTECTED_BODY_FIELDS, default "usr") are
@@ -24,10 +34,14 @@ package crud
 // are built. Deleting an already-parked object is the physical deletion.
 
 import (
+	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/foliagecp/easyjson"
+	"github.com/foliagecp/sdk/statefun"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
@@ -41,9 +55,24 @@ var (
 	// protection of body fields.
 	protectedBodyFields = parseProtectedBodyFields(system.GetEnvMustProceed[string]("PROTECTED_BODY_FIELDS", "usr"))
 
+	// trashCanMaxAge is the retention PERIOD of a parked object
+	// (env OBJECT_TRASH_CAN_MAX_AGE_SEC, default 7 days; 0 disables the
+	// dimension). This is the product-level "configurable retention" — user
+	// knowledge outlives an object's disappearance for at least this long.
+	trashCanMaxAge = time.Duration(system.GetEnvMustProceed[int]("OBJECT_TRASH_CAN_MAX_AGE_SEC", 7*24*3600)) * time.Second
 	// trashCanMaxObjects caps how many objects the trash can holds
-	// (env OBJECT_TRASH_CAN_MAX_OBJECTS). Exceeding the cap evicts the oldest.
+	// (env OBJECT_TRASH_CAN_MAX_OBJECTS, 0 disables the dimension). It bounds
+	// growth under heavy churn, where the age dimension alone would keep
+	// everything; exceeding the cap evicts the oldest.
 	trashCanMaxObjects = system.GetEnvMustProceed[int]("OBJECT_TRASH_CAN_MAX_OBJECTS", 10000)
+	// trashCanSweepInterval is how often the periodic retention sweep runs
+	// (env OBJECT_TRASH_CAN_SWEEP_INTERVAL_SEC, default 5 min).
+	trashCanSweepInterval = time.Duration(system.GetEnvMustProceed[int]("OBJECT_TRASH_CAN_SWEEP_INTERVAL_SEC", 300)) * time.Second
+	// trashCanEvictBatchSize caps how many objects one retention run evicts
+	// (env OBJECT_TRASH_CAN_EVICT_BATCH_SIZE, default 64; <= 0 means unbounded),
+	// so a lowered cap or a long outage cannot turn a single run into a storm;
+	// the remainder is logged and picked up by the next sweep.
+	trashCanEvictBatchSize = system.GetEnvMustProceed[int]("OBJECT_TRASH_CAN_EVICT_BATCH_SIZE", 64)
 )
 
 func parseProtectedBodyFields(raw string) []string {
@@ -62,6 +91,17 @@ func SetProtectedBodyFieldsForTest(fields []string) { protectedBodyFields = fiel
 
 // SetTrashCanMaxObjectsForTest overrides the trash can capacity for tests.
 func SetTrashCanMaxObjectsForTest(n int) { trashCanMaxObjects = n }
+
+// SetTrashCanMaxAgeForTest overrides the trash can retention period for tests.
+func SetTrashCanMaxAgeForTest(d time.Duration) { trashCanMaxAge = d }
+
+// SetTrashCanSweepIntervalForTest overrides the periodic sweep interval; call it
+// BEFORE the runtime starts (the ticker is created once, at sweep startup).
+func SetTrashCanSweepIntervalForTest(d time.Duration) { trashCanSweepInterval = d }
+
+// SetTrashCanEvictBatchSizeForTest overrides the per-run eviction cap for tests
+// (<= 0 means unbounded).
+func SetTrashCanEvictBatchSizeForTest(n int) { trashCanEvictBatchSize = n }
 
 func trashCanTypeID(ctx *sfPlugins.StatefunContextProcessor) string {
 	return ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TRASH_CAN, false)
@@ -176,46 +216,152 @@ func restoreObjectFromTrashCan(ctx *sfPlugins.StatefunContextProcessor, selfID, 
 	cacheDeleteObjectType(selfID) // the create pipeline re-caches the real type
 }
 
-// enforceTrashCanLimit evicts the oldest parked objects while the bin exceeds
-// trashCanMaxObjects. Called AFTER the parking operation released its locks;
-// best-effort — an eviction failure only defers cleanup to the next parking.
-// Counting and oldest-selection are ordinary reads of the trash-can type's
-// link indices in the cache.
-func enforceTrashCanLimit(ctx *sfPlugins.StatefunContextProcessor) {
-	trashType := trashCanTypeID(ctx)
-	for i := 0; i < 8; i++ { // bounded: evict at most a few per parking
-		linkNames := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, trashType, ">"))
-		if len(linkNames) <= trashCanMaxObjects {
-			return
-		}
+// trashCanEntry is one parked object as recorded on the trash-can type's edges.
+type trashCanEntry struct {
+	objectID  string
+	deletedAt int64
+}
 
-		oldestID, oldestName, oldestAt := "", "", int64(0)
-		for _, key := range linkNames {
-			toks := strings.Split(key, ".")
-			name := toks[len(toks)-1]
-			b, err := ctx.Domain.Cache().GetValueJSON(key)
-			if err != nil {
+// listTrashCanEntries lists the parked objects of THIS domain, oldest first, in
+// a single cache scan (the trash-can edges of a domain's objects live in that
+// domain's own cache — same as any type→object link). No round-trips.
+func listTrashCanEntries(dm sfPlugins.Domain) []trashCanEntry {
+	trashType := dm.CreateObjectIDWithHubDomain(BUILT_IN_TRASH_CAN, false)
+	keys := dm.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, trashType, ">"))
+
+	entries := make([]trashCanEntry, 0, len(keys))
+	for _, key := range keys {
+		toks := strings.Split(key, ".")
+		name := toks[len(toks)-1]
+		_, objectID, ok := resolveOutLinkByNameInDomain(dm, trashType, name)
+		if !ok {
+			continue
+		}
+		deletedAt := int64(0)
+		if b, err := dm.Cache().GetValueJSON(key); err == nil {
+			deletedAt = int64(b.GetByPath("deleted_at").AsNumericDefault(0))
+		}
+		entries = append(entries, trashCanEntry{objectID: objectID, deletedAt: deletedAt})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].deletedAt < entries[j].deletedAt })
+	return entries
+}
+
+// enforceTrashCanRetention applies BOTH retention dimensions to this domain's
+// bin and physically deletes what falls out:
+//
+//	age   — parked longer than OBJECT_TRASH_CAN_MAX_AGE_SEC (the product-level
+//	        "configurable retention period"); 0 disables the dimension;
+//	count — while still over OBJECT_TRASH_CAN_MAX_OBJECTS, the oldest remaining
+//	        ones (protects the model from unbounded growth under churn, where the
+//	        age dimension alone would keep everything); 0 disables it.
+//
+// Called after a parking released its locks (prompt count enforcement) and from
+// the periodic sweep (so the age dimension holds even with no delete traffic).
+// Best-effort: an eviction failure only defers cleanup to the next run. Work is
+// capped per invocation at trashCanEvictBatchSize, and a truncated batch is
+// logged — never silently dropped.
+func enforceTrashCanRetention(dm sfPlugins.Domain, request sfPlugins.SFRequestFunc, evictID func(string) string, now int64) {
+	entries := listTrashCanEntries(dm)
+
+	type victim struct {
+		entry  trashCanEntry
+		reason string
+	}
+	var victims []victim
+	evicted := map[string]struct{}{}
+
+	if trashCanMaxAge > 0 {
+		cutoff := now - trashCanMaxAge.Nanoseconds()
+		for _, e := range entries {
+			if e.deletedAt > 0 && e.deletedAt < cutoff {
+				victims = append(victims, victim{e, "retention age exceeded"})
+				evicted[e.objectID] = struct{}{}
+			}
+		}
+	}
+	if trashCanMaxObjects > 0 {
+		over := len(entries) - len(evicted) - trashCanMaxObjects
+		for _, e := range entries {
+			if over <= 0 {
+				break
+			}
+			if _, done := evicted[e.objectID]; done {
 				continue
 			}
-			deletedAt := int64(b.GetByPath("deleted_at").AsNumericDefault(0))
-			if oldestName == "" || deletedAt < oldestAt {
-				if _, toId, ok := resolveOutLinkByName(ctx, trashType, name); ok {
-					oldestID, oldestName, oldestAt = toId, name, deletedAt
-				}
-			}
+			victims = append(victims, victim{e, "object count over capacity"})
+			evicted[e.objectID] = struct{}{}
+			over--
 		}
-		if oldestName == "" {
-			return
-		}
+	}
+	if len(victims) == 0 {
+		return
+	}
 
+	deferred := 0
+	if trashCanEvictBatchSize > 0 && len(victims) > trashCanEvictBatchSize {
+		deferred = len(victims) - trashCanEvictBatchSize
+		victims = victims[:trashCanEvictBatchSize]
+	}
+
+	for _, v := range victims {
 		lg.Logf(lg.WarnLevel,
-			"trash can is over capacity (%d > %d): permanently deleting the oldest parked object %s (deleted_at=%d)",
-			len(linkNames), trashCanMaxObjects, oldestID, oldestAt)
+			"trash can: permanently deleting parked object %s (%s; parked=%d, max_objects=%d, max_age=%s)",
+			v.entry.objectID, v.reason, len(entries), trashCanMaxObjects, trashCanMaxAge)
 
 		payload := easyjson.NewJSONObjectWithKeyValue("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
-		if _, err := ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.delete", makeSequenceFreeParentBasedID(ctx, oldestID, "trashevict"), &payload, nil); err != nil {
-			lg.Logf(lg.WarnLevel, "trash can eviction of %s failed: %v", oldestID, err)
+		if _, err := request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.delete", evictID(v.entry.objectID), &payload, nil); err != nil {
+			lg.Logf(lg.WarnLevel, "trash can eviction of %s failed: %v; retrying on the next sweep", v.entry.objectID, err)
 			return
 		}
 	}
+	if deferred > 0 {
+		lg.Logf(lg.WarnLevel, "trash can: %d more objects still due for eviction, deferred to the next sweep", deferred)
+	}
+}
+
+// enforceTrashCanRetentionFromStatefun runs the retention from inside a CRUD
+// handler (the parking path). Eviction targets a DIFFERENT object than the one
+// being handled, so its id is made sequence-free the usual way to keep the
+// nested delete off this handler's per-id worker.
+func enforceTrashCanRetentionFromStatefun(ctx *sfPlugins.StatefunContextProcessor) {
+	enforceTrashCanRetention(ctx.Domain, ctx.Request,
+		func(objectID string) string { return makeSequenceFreeParentBasedID(ctx, objectID, "trashevict") },
+		system.GetCurrentTimeNs())
+}
+
+// trashCanRetentionSweep starts the periodic retention sweep of this domain's
+// bin. Registered as a (non-async) after-start hook: it only spawns the ticker
+// goroutine and returns, so it never holds the after-start wait group. The
+// goroutine exits when the runtime's phase-one context is cancelled (shutdown),
+// and only acts on the ACTIVE instance so HA peers do not evict in parallel.
+//
+// Without this sweep the age dimension would depend on delete traffic:
+// enforcement from the parking path alone means a bin that stops receiving
+// deletions keeps its content past the retention period indefinitely.
+func trashCanRetentionSweep(ctx context.Context, runtime *statefun.Runtime) error {
+	if trashCanMaxAge <= 0 && trashCanMaxObjects <= 0 {
+		return nil // both dimensions disabled — nothing to sweep
+	}
+	go func() {
+		system.GlobalPrometrics.GetRoutinesCounter().Started("crud_trash_can_sweep")
+		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("crud_trash_can_sweep")
+
+		ticker := time.NewTicker(trashCanSweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if ctx.Err() != nil || !runtime.IsActiveInstance() {
+					continue
+				}
+				enforceTrashCanRetention(runtime.Domain, runtime.Request,
+					func(objectID string) string { return objectID },
+					system.GetCurrentTimeNs())
+			}
+		}
+	}()
+	return nil
 }

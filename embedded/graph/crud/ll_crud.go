@@ -457,7 +457,14 @@ Reply:
 // linkName owned by ownerID, reading the OutLinkTarget key the same way
 // getFullLinkInfoFromSpecifiedIdentifier does. ownerID must be local.
 func resolveOutLinkByName(ctx *sfPlugins.StatefunContextProcessor, ownerID, linkName string) (linkType, toId string, ok bool) {
-	b, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, ownerID, linkName))
+	return resolveOutLinkByNameInDomain(ctx.Domain, ownerID, linkName)
+}
+
+// resolveOutLinkByNameInDomain is resolveOutLinkByName without a statefun
+// context — usable from plain goroutines (e.g. the trash-can retention sweep),
+// which have a Domain but no in-flight message.
+func resolveOutLinkByNameInDomain(dm sfPlugins.Domain, ownerID, linkName string) (linkType, toId string, ok bool) {
+	b, err := dm.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, ownerID, linkName))
 	if err != nil {
 		return "", "", false
 	}
@@ -465,7 +472,7 @@ func resolveOutLinkByName(ctx *sfPlugins.StatefunContextProcessor, ownerID, link
 	if len(tokens) < 2 {
 		return "", "", false
 	}
-	return ctx.Domain.GetObjectIDWithoutDomain(tokens[0]), tokens[1], true
+	return dm.GetObjectIDWithoutDomain(tokens[0]), tokens[1], true
 }
 
 // deleteOutLinkFromSideKeys removes the from-side keys of the link

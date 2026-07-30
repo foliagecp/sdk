@@ -181,12 +181,103 @@ func (s *TrashCanTestSuite) Test_RestoreUnderDifferentType_WarnsButRestores() {
 	s.False(s.typeHoldsObject(crud.BUILT_IN_TRASH_CAN, "tc7"))
 }
 
+// Retention AGE: a parked object older than OBJECT_TRASH_CAN_MAX_AGE_SEC is
+// physically evicted, while a freshly parked one survives — the count cap is
+// left wide open so only the age dimension can be responsible.
+func (s *TrashCanTestSuite) Test_RetentionAge_EvictsExpired() {
+	s.boot()
+	crud.SetTrashCanMaxAgeForTest(150 * time.Millisecond)
+	defer crud.SetTrashCanMaxAgeForTest(7 * 24 * time.Hour)
+
+	s.NoError(s.cmdb.TypeCreate("tc_t"))
+	s.NoError(s.cmdb.ObjectCreate("tage_old", "tc_t", usrBody("h", "x")))
+	s.NoError(s.cmdb.ObjectCreate("tage_new", "tc_t", usrBody("h", "y")))
+	s.NoError(s.cmdb.ObjectCreate("tage_trigger", "tc_t", easyjson.NewJSONObject()))
+
+	s.NoError(s.cmdb.ObjectDelete("tage_old")) // will age out
+	time.Sleep(250 * time.Millisecond)
+	s.NoError(s.cmdb.ObjectDelete("tage_new")) // fresh
+
+	// Any parking runs the retention pass; tage_old is now over the age.
+	s.NoError(s.cmdb.ObjectDelete("tage_trigger"))
+
+	s.False(s.vertexExists("tage_old"), "a parked object past the retention age must be evicted")
+	s.False(s.typeHoldsObject(crud.BUILT_IN_TRASH_CAN, "tage_old"))
+	s.True(s.vertexExists("tage_new"), "a freshly parked object must survive the age pass")
+	s.True(s.typeHoldsObject(crud.BUILT_IN_TRASH_CAN, "tage_new"))
+}
+
+// The periodic sweep enforces the age dimension WITHOUT any delete traffic:
+// park one object, then simply wait — no further CRUD operations at all.
+func (s *TrashCanTestSuite) Test_RetentionAge_PeriodicSweepWithoutTraffic() {
+	crud.SetTrashCanSweepIntervalForTest(100 * time.Millisecond) // before StartRuntime
+	defer crud.SetTrashCanSweepIntervalForTest(300 * time.Second)
+	s.boot()
+	crud.SetTrashCanMaxAgeForTest(100 * time.Millisecond)
+	defer crud.SetTrashCanMaxAgeForTest(7 * 24 * time.Hour)
+
+	s.NoError(s.cmdb.TypeCreate("tc_t"))
+	s.NoError(s.cmdb.ObjectCreate("tsweep", "tc_t", usrBody("h", "z")))
+	s.NoError(s.cmdb.ObjectDelete("tsweep"))
+	s.True(s.vertexExists("tsweep"), "sanity: parked right after delete")
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && s.vertexExists("tsweep") {
+		time.Sleep(50 * time.Millisecond)
+	}
+	s.False(s.vertexExists("tsweep"), "the periodic sweep must evict an expired parked object with no delete traffic")
+	s.False(s.typeHoldsObject(crud.BUILT_IN_TRASH_CAN, "tsweep"))
+}
+
+// The per-run eviction cap (OBJECT_TRASH_CAN_EVICT_BATCH_SIZE) bounds one
+// retention pass: with 3 expired objects and a batch of 1, a single pass evicts
+// exactly one, and the remainder is picked up by subsequent passes.
+func (s *TrashCanTestSuite) Test_EvictBatchSize_BoundsOneRunAndDefersRest() {
+	s.boot()
+	crud.SetTrashCanMaxAgeForTest(100 * time.Millisecond)
+	defer crud.SetTrashCanMaxAgeForTest(7 * 24 * time.Hour)
+	crud.SetTrashCanEvictBatchSizeForTest(1)
+	defer crud.SetTrashCanEvictBatchSizeForTest(64)
+
+	s.NoError(s.cmdb.TypeCreate("tc_t"))
+	expired := []string{"tbat1", "tbat2", "tbat3"}
+	for _, id := range expired {
+		s.NoError(s.cmdb.ObjectCreate(id, "tc_t", usrBody("h", "x")))
+		s.NoError(s.cmdb.ObjectDelete(id))
+	}
+	for i := 1; i <= 3; i++ {
+		s.NoError(s.cmdb.ObjectCreate(fmt.Sprintf("tbat_trig%d", i), "tc_t", easyjson.NewJSONObject()))
+	}
+	time.Sleep(200 * time.Millisecond) // all three are now past the retention age
+
+	alive := func() int {
+		n := 0
+		for _, id := range expired {
+			if s.vertexExists(id) {
+				n++
+			}
+		}
+		return n
+	}
+
+	// Each parking runs exactly one retention pass → at most one eviction.
+	s.NoError(s.cmdb.ObjectDelete("tbat_trig1"))
+	s.Equal(2, alive(), "a single pass with batch=1 must evict exactly one expired object")
+	s.NoError(s.cmdb.ObjectDelete("tbat_trig2"))
+	s.Equal(1, alive(), "the second pass evicts the next one")
+	s.NoError(s.cmdb.ObjectDelete("tbat_trig3"))
+	s.Equal(0, alive(), "the deferred remainder is picked up by later passes")
+}
+
 // Capacity: parking beyond OBJECT_TRASH_CAN_MAX_OBJECTS evicts the OLDEST
-// parked object (physically) and logs it.
+// parked object (physically) and logs it. The age dimension is disabled so only
+// the count cap can be responsible.
 func (s *TrashCanTestSuite) Test_Capacity_EvictsOldest() {
 	s.boot()
 	crud.SetTrashCanMaxObjectsForTest(2)
 	defer crud.SetTrashCanMaxObjectsForTest(10000)
+	crud.SetTrashCanMaxAgeForTest(0) // age dimension off
+	defer crud.SetTrashCanMaxAgeForTest(7 * 24 * time.Hour)
 
 	s.NoError(s.cmdb.TypeCreate("tc_t"))
 	for i := 1; i <= 3; i++ {

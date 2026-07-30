@@ -69,4 +69,7 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 	if runtime.Domain.Name() == runtime.Domain.HubDomainName() {
 		runtime.RegisterOnAfterStartFunction(cmdbSchemaPrepare, false)
 	}
+	// Trash can retention sweep — in EVERY domain: a domain's parked objects
+	// live in its own cache, so each domain sweeps its own bin.
+	runtime.RegisterOnAfterStartFunction(trashCanRetentionSweep, false)
 }
