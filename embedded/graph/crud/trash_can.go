@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/foliagecp/easyjson"
@@ -48,60 +49,55 @@ import (
 	"github.com/foliagecp/sdk/statefun/system"
 )
 
+// Retention tunables. Stored atomically: the periodic sweep goroutine reads
+// them concurrently with the test setters below (and any future runtime
+// reconfiguration), so plain package vars would be a data race.
 var (
-	// protectedBodyFields is the ordered list of protected top-level body keys
-	// (env PROTECTED_BODY_FIELDS, comma-separated, default "usr"). The trash-can
-	// restore grafts exactly these; the same list drives the write-path
-	// protection of body fields.
-	protectedBodyFields = parseProtectedBodyFields(system.GetEnvMustProceed[string]("PROTECTED_BODY_FIELDS", "usr"))
-
-	// trashCanMaxAge is the retention PERIOD of a parked object
+	// trashCanMaxAgeNs is the retention PERIOD of a parked object
 	// (env OBJECT_TRASH_CAN_MAX_AGE_SEC, default 7 days; 0 disables the
 	// dimension). This is the product-level "configurable retention" — user
 	// knowledge outlives an object's disappearance for at least this long.
-	trashCanMaxAge = time.Duration(system.GetEnvMustProceed[int]("OBJECT_TRASH_CAN_MAX_AGE_SEC", 7*24*3600)) * time.Second
-	// trashCanMaxObjects caps how many objects the trash can holds
+	trashCanMaxAgeNs atomic.Int64
+	// trashCanMaxObjectsV caps how many objects the trash can holds
 	// (env OBJECT_TRASH_CAN_MAX_OBJECTS, 0 disables the dimension). It bounds
 	// growth under heavy churn, where the age dimension alone would keep
 	// everything; exceeding the cap evicts the oldest.
-	trashCanMaxObjects = system.GetEnvMustProceed[int]("OBJECT_TRASH_CAN_MAX_OBJECTS", 10000)
-	// trashCanSweepInterval is how often the periodic retention sweep runs
+	trashCanMaxObjectsV atomic.Int64
+	// trashCanSweepIntervalNs is how often the periodic retention sweep runs
 	// (env OBJECT_TRASH_CAN_SWEEP_INTERVAL_SEC, default 5 min).
-	trashCanSweepInterval = time.Duration(system.GetEnvMustProceed[int]("OBJECT_TRASH_CAN_SWEEP_INTERVAL_SEC", 300)) * time.Second
-	// trashCanEvictBatchSize caps how many objects one retention run evicts
+	trashCanSweepIntervalNs atomic.Int64
+	// trashCanEvictBatchSizeV caps how many objects one retention run evicts
 	// (env OBJECT_TRASH_CAN_EVICT_BATCH_SIZE, default 64; <= 0 means unbounded),
 	// so a lowered cap or a long outage cannot turn a single run into a storm;
 	// the remainder is logged and picked up by the next sweep.
-	trashCanEvictBatchSize = system.GetEnvMustProceed[int]("OBJECT_TRASH_CAN_EVICT_BATCH_SIZE", 64)
+	trashCanEvictBatchSizeV atomic.Int64
 )
 
-func parseProtectedBodyFields(raw string) []string {
-	var out []string
-	for _, tok := range strings.Split(raw, ",") {
-		if f := strings.TrimSpace(tok); len(f) > 0 {
-			out = append(out, f)
-		}
-	}
-	return out
+func init() {
+	trashCanMaxAgeNs.Store(int64(time.Duration(system.GetEnvMustProceed[int]("OBJECT_TRASH_CAN_MAX_AGE_SEC", 7*24*3600)) * time.Second))
+	trashCanMaxObjectsV.Store(int64(system.GetEnvMustProceed[int]("OBJECT_TRASH_CAN_MAX_OBJECTS", 10000)))
+	trashCanSweepIntervalNs.Store(int64(time.Duration(system.GetEnvMustProceed[int]("OBJECT_TRASH_CAN_SWEEP_INTERVAL_SEC", 300)) * time.Second))
+	trashCanEvictBatchSizeV.Store(int64(system.GetEnvMustProceed[int]("OBJECT_TRASH_CAN_EVICT_BATCH_SIZE", 64)))
 }
 
-// SetProtectedBodyFieldsForTest overrides the protected fields list; resolved
-// once from the environment at package init, so tests cannot use os.Setenv.
-func SetProtectedBodyFieldsForTest(fields []string) { protectedBodyFields = fields }
+func trashCanMaxAge() time.Duration        { return time.Duration(trashCanMaxAgeNs.Load()) }
+func trashCanMaxObjects() int              { return int(trashCanMaxObjectsV.Load()) }
+func trashCanSweepInterval() time.Duration { return time.Duration(trashCanSweepIntervalNs.Load()) }
+func trashCanEvictBatchSize() int          { return int(trashCanEvictBatchSizeV.Load()) }
 
 // SetTrashCanMaxObjectsForTest overrides the trash can capacity for tests.
-func SetTrashCanMaxObjectsForTest(n int) { trashCanMaxObjects = n }
+func SetTrashCanMaxObjectsForTest(n int) { trashCanMaxObjectsV.Store(int64(n)) }
 
 // SetTrashCanMaxAgeForTest overrides the trash can retention period for tests.
-func SetTrashCanMaxAgeForTest(d time.Duration) { trashCanMaxAge = d }
+func SetTrashCanMaxAgeForTest(d time.Duration) { trashCanMaxAgeNs.Store(int64(d)) }
 
 // SetTrashCanSweepIntervalForTest overrides the periodic sweep interval; call it
 // BEFORE the runtime starts (the ticker is created once, at sweep startup).
-func SetTrashCanSweepIntervalForTest(d time.Duration) { trashCanSweepInterval = d }
+func SetTrashCanSweepIntervalForTest(d time.Duration) { trashCanSweepIntervalNs.Store(int64(d)) }
 
 // SetTrashCanEvictBatchSizeForTest overrides the per-run eviction cap for tests
 // (<= 0 means unbounded).
-func SetTrashCanEvictBatchSizeForTest(n int) { trashCanEvictBatchSize = n }
+func SetTrashCanEvictBatchSizeForTest(n int) { trashCanEvictBatchSizeV.Store(int64(n)) }
 
 func trashCanTypeID(ctx *sfPlugins.StatefunContextProcessor) string {
 	return ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TRASH_CAN, false)
@@ -109,20 +105,6 @@ func trashCanTypeID(ctx *sfPlugins.StatefunContextProcessor) string {
 
 func isTrashCanType(ctx *sfPlugins.StatefunContextProcessor, typeID string) bool {
 	return typeID != "" && ctx.Domain.GetObjectIDWithoutDomain(typeID) == BUILT_IN_TRASH_CAN
-}
-
-// jsonNonEmpty reports whether v is worth grafting: a non-empty object, a
-// non-empty array, or any other existing non-null value. Empty containers are
-// skipped so an empty protected space never materializes in a body (snapshot
-// diff semantics: "absent = empty").
-func jsonNonEmpty(v easyjson.JSON) bool {
-	if v.IsObject() {
-		return v.IsNonEmptyObject()
-	}
-	if v.IsArray() {
-		return v.IsNonEmptyArray()
-	}
-	return !v.IsNull()
 }
 
 // moveObjectToTrashCan re-homes a just-unlinked object under the trash-can
@@ -187,7 +169,7 @@ func restoreObjectFromTrashCan(ctx *sfPlugins.StatefunContextProcessor, selfID, 
 	// Graft the protected slice of the parked body; stale inventory fields
 	// stay dead — inventory brings fresh truth itself.
 	parkedBody := getVertexBody(ctx, selfID)
-	for _, field := range protectedBodyFields {
+	for _, field := range getProtectedBodyFields() {
 		if incomingBody.PathExists(field) {
 			continue
 		}
@@ -271,8 +253,9 @@ func enforceTrashCanRetention(dm sfPlugins.Domain, request sfPlugins.SFRequestFu
 	var victims []victim
 	evicted := map[string]struct{}{}
 
-	if trashCanMaxAge > 0 {
-		cutoff := now - trashCanMaxAge.Nanoseconds()
+	maxAge, maxObjects := trashCanMaxAge(), trashCanMaxObjects()
+	if maxAge > 0 {
+		cutoff := now - maxAge.Nanoseconds()
 		for _, e := range entries {
 			if e.deletedAt > 0 && e.deletedAt < cutoff {
 				victims = append(victims, victim{e, "retention age exceeded"})
@@ -280,8 +263,8 @@ func enforceTrashCanRetention(dm sfPlugins.Domain, request sfPlugins.SFRequestFu
 			}
 		}
 	}
-	if trashCanMaxObjects > 0 {
-		over := len(entries) - len(evicted) - trashCanMaxObjects
+	if maxObjects > 0 {
+		over := len(entries) - len(evicted) - maxObjects
 		for _, e := range entries {
 			if over <= 0 {
 				break
@@ -299,15 +282,15 @@ func enforceTrashCanRetention(dm sfPlugins.Domain, request sfPlugins.SFRequestFu
 	}
 
 	deferred := 0
-	if trashCanEvictBatchSize > 0 && len(victims) > trashCanEvictBatchSize {
-		deferred = len(victims) - trashCanEvictBatchSize
-		victims = victims[:trashCanEvictBatchSize]
+	if batch := trashCanEvictBatchSize(); batch > 0 && len(victims) > batch {
+		deferred = len(victims) - batch
+		victims = victims[:batch]
 	}
 
 	for _, v := range victims {
 		lg.Logf(lg.WarnLevel,
 			"trash can: permanently deleting parked object %s (%s; parked=%d, max_objects=%d, max_age=%s)",
-			v.entry.objectID, v.reason, len(entries), trashCanMaxObjects, trashCanMaxAge)
+			v.entry.objectID, v.reason, len(entries), maxObjects, maxAge)
 
 		payload := easyjson.NewJSONObjectWithKeyValue("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 		if _, err := request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.delete", evictID(v.entry.objectID), &payload, nil); err != nil {
@@ -340,14 +323,14 @@ func enforceTrashCanRetentionFromStatefun(ctx *sfPlugins.StatefunContextProcesso
 // enforcement from the parking path alone means a bin that stops receiving
 // deletions keeps its content past the retention period indefinitely.
 func trashCanRetentionSweep(ctx context.Context, runtime *statefun.Runtime) error {
-	if trashCanMaxAge <= 0 && trashCanMaxObjects <= 0 {
+	if trashCanMaxAge() <= 0 && trashCanMaxObjects() <= 0 {
 		return nil // both dimensions disabled — nothing to sweep
 	}
 	go func() {
 		system.GlobalPrometrics.GetRoutinesCounter().Started("crud_trash_can_sweep")
 		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("crud_trash_can_sweep")
 
-		ticker := time.NewTicker(trashCanSweepInterval)
+		ticker := time.NewTicker(trashCanSweepInterval())
 		defer ticker.Stop()
 		for {
 			select {
