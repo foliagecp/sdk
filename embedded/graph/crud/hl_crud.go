@@ -543,7 +543,10 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 		// so findObjectType's error text alone cannot distinguish them.
 		vertexID := ctx.Domain.CreateObjectIDWithThisDomain(selfID, false)
 		if !ctx.Domain.Cache().ExistsJson(vertexID) {
-			// (a) Vertex truly absent — idempotent IDLE.
+			// (a) Vertex truly absent — idempotent IDLE. Still drop the
+			// objectTypeCache entry: a partially deleted object would keep
+			// it in the process-global cache forever otherwise.
+			cacheDeleteObjectType(selfID)
 			operationKeysMutexUnlock(ctx)
 			om.AggregateOpMsg(sfMediators.OpMsgIdle(err.Error())).Reply()
 			return

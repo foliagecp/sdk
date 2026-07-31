@@ -440,7 +440,12 @@ func findObjectType(ctx *sfPlugins.StatefunContextProcessor, objectID string) (s
 	som := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", makeSequenceFreeParentBasedID(ctx, id), injectParentHoldsLocks(ctx, nil), &options))
 	if som.Status == sfMediators.SYNC_OP_STATUS_OK {
 		tp := som.Data.GetByPath("type").AsStringDefault("")
-		cacheSetObjectType(objectID, tp)
+		// Never cache an empty type: cacheGetObjectType rejects "" so such an
+		// entry can never be a hit — it would only sit in the process-global
+		// map forever, re-stored on every miss.
+		if tp != "" {
+			cacheSetObjectType(objectID, tp)
+		}
 		return tp, nil
 	}
 

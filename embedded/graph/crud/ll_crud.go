@@ -543,6 +543,10 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	om := sfMediators.NewOpMediator(ctx)
 
 	if !ctx.Domain.Cache().ExistsJson(selfID) { // If vertex does not exist
+		// Even an idempotent no-op delete must drop the objectTypeCache
+		// entry: a partially deleted vertex (body already gone) otherwise
+		// keeps its entry in the process-global cache forever.
+		cacheDeleteObjectType(selfID)
 		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("vertex with id=%s does not exist", selfID))).Reply()
 		return
 	}
@@ -580,6 +584,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, linkDeleteTypename, makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &deleteLinkPayload), ctx.Options)))
 		mergeOpStack(opStack, om.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
+			cacheDeleteObjectType(selfID) // aborted mid-delete: drop the possibly-stale cache entry
 			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
 			return
 		}
@@ -616,6 +621,7 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, linkDeleteTypename, makeSequenceFreeParentBasedID(ctx, fromObjectID), injectParentHoldsLocks(ctx, &deleteLinkPayload), ctx.Options)))
 		mergeOpStack(opStack, om.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
 		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
+			cacheDeleteObjectType(selfID) // aborted mid-delete: drop the possibly-stale cache entry
 			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
 			return
 		}
@@ -630,6 +636,12 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	}
 
 	ctx.Domain.Cache().DeleteValue(selfID, true, opTime) // Delete vertex's body
+
+	// Belt-and-braces: the __type-link branch of deleteOutLinkFromSideKeys
+	// already purged the objectTypeCache entry for a well-formed object; this
+	// covers vertices deleted without a __type link so the invariant is
+	// simple — after vertex.delete the entry for this id is always gone.
+	cacheDeleteObjectType(selfID)
 
 	operationKeysMutexUnlock(ctx)
 

@@ -10,9 +10,8 @@ import (
 )
 
 // S2 — CMDB object churn (types, objects, object links) with fresh ids every
-// cycle, plus a targeted probe for the object-type cache orphaned by a
-// partial delete. Main churn expected: PASS. Probe expected: FAIL until the
-// objectTypeCache lifecycle is fixed (finding L3).
+// cycle, plus a regression probe for the object-type cache lifecycle on
+// partial deletes (finding L3).
 
 type S2Suite struct{ leakSuite }
 
@@ -62,15 +61,14 @@ func (s *S2Suite) Test_CMDBObjectChurn() {
 	s.assertCoreStable(rep)
 }
 
-// Test_ObjectTypeCacheOrphanedByPartialDelete — EXPECTED TO FAIL today (L3).
+// Test_ObjectTypeCacheOrphanedByPartialDelete — regression guard for L3.
 //
 // A partially deleted object (its body key already gone, exactly the state an
-// aborted cross-domain delete leaves behind, see LLAPILinkDelete/-VertexDelete
-// abort paths) makes functions.graph.api.vertex.delete short-circuit IDLE
-// without purging anything (ll_crud.go body-existence check). The object's
-// entry in the process-global objectTypeCache then survives forever — one
-// orphaned map entry per interrupted delete. The probe asserts the cache
-// returns to baseline; it will not until the lifecycle is fixed.
+// aborted cross-domain delete leaves behind) makes vertex.delete
+// short-circuit IDLE. Historically that path purged nothing and the object's
+// entry in the process-global objectTypeCache survived forever. The delete
+// paths now drop the entry unconditionally (idle, abort and success alike),
+// so the cache must return to baseline.
 func (s *S2Suite) Test_ObjectTypeCacheOrphanedByPartialDelete() {
 	s.bootCRUD()
 	s.Require().NoError(s.dbc.CMDB.TypeCreate("t_s2p"))
