@@ -93,7 +93,9 @@ func (s *S4Suite) Test_ContextWithTTLIsReclaimed() {
 		if n := s.kvCount(fn + ".>"); n > 0 {
 			return fmt.Errorf("%d expiring contexts not reclaimed within 15s", n)
 		}
-		return nil
+		// Idle out the per-id handler machinery of the fresh ids too, so the
+		// sample never races the runtime GC (same protocol as S5/S6).
+		return s.waitIDHandlersDecay([]string{fn}, 15*time.Second)
 	}
 
 	collect := func(smp *Sample) {

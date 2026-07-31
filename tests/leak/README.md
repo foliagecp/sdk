@@ -10,10 +10,15 @@ NATS + fresh runtime, with two classes of evidence per scenario:
    machinery, the mediator reply store, export sessions, goroutines.
 2. **Statistical drift bound** — over M measured cycles the OLS slope `b`
    of each heap metric is computed with its standard error. **LEAK ⇔
-   `b > 3·SE(b)` AND `b > floor`.** Every run also reports the residual
-   bound `b + 3·SE` ("growth is ≤ this per cycle at 3σ") and the detection
-   floor `max(3·SE, floor)` ("a leak slower than this was not detectable
-   in this run") — the honest limits of any "no leaks" claim.
+   `b > 3·SE(b)` AND `b > floor` AND the tail slope (second half of the
+   window) `> floor`.** The tail condition separates a real leak — a trend
+   that keeps going — from a one-time STEP to a high-water mark (pools,
+   request-path timers, map capacities crossing a growth threshold
+   mid-window), which a small-M OLS fit would otherwise flag. Every run
+   also reports the residual bound `b + 3·SE` ("growth is ≤ this per cycle
+   at 3σ") and the detection floor `max(3·SE, floor)` ("a leak slower than
+   this was not detectable in this run") — the honest limits of any
+   "no leaks" claim.
 
 Every sample is taken after a full **quiesce**: WAL drained
 (`HasPendingWrites`), ≥2 cache maintenance sweeps strictly after the drain

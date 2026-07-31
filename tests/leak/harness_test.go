@@ -69,14 +69,20 @@ type Sample struct {
 }
 
 // Verdict is the statistical decision for one drift metric over the measured
-// cycles: LEAK iff the OLS slope is both 3-sigma significant and above the
-// absolute floor. Bound3Sigma and DetectionFloor make the claim honest — they
-// state what residual drift is still compatible with the data and what leak
-// rate this run could not have seen at all.
+// cycles: LEAK iff the OLS slope is 3-sigma significant, above the absolute
+// floor AND the growth persists in the tail of the window (TailSlope). The
+// tail condition separates a real leak — a trend that keeps going — from a
+// one-time STEP to a high-water mark (pools, request-path timers, map
+// capacities crossing a growth threshold mid-window), which a small-M OLS
+// fit would otherwise flag as a significant slope. Bound3Sigma and
+// DetectionFloor make the claim honest — they state what residual drift is
+// still compatible with the data and what leak rate this run could not have
+// seen at all.
 type Verdict struct {
 	Metric         string
-	Slope          float64 // units per cycle
+	Slope          float64 // units per cycle, full window
 	StdErr         float64 // standard error of the slope
+	TailSlope      float64 // slope over the second half of the window
 	Floor          float64 // absolute significance floor
 	Bound3Sigma    float64 // slope + 3*SE: residual-drift upper bound
 	DetectionFloor float64 // max(3*SE, floor): smallest leak this run could flag
@@ -123,14 +129,25 @@ func olsSlope(y []float64) (b, se float64) {
 
 func verdictFor(metric string, y []float64, floor float64) Verdict {
 	b, se := olsSlope(y)
+	// Tail slope: the second half of the window (needs >= 3 points to fit).
+	// With too few samples the discriminator degrades to the full slope, so
+	// short runs keep the plain criterion.
+	tail := b
+	if half := y[len(y)/2:]; len(half) >= 3 {
+		tail, _ = olsSlope(half)
+	}
 	return Verdict{
 		Metric:         metric,
 		Slope:          b,
 		StdErr:         se,
+		TailSlope:      tail,
 		Floor:          floor,
 		Bound3Sigma:    b + 3*se,
 		DetectionFloor: math.Max(3*se, floor),
-		Leaking:        b > 3*se && b > floor,
+		// A leak is a PERSISTENT trend: significant over the full window AND
+		// still above the floor in the tail. A mid-window step (one-time
+		// high-water-mark growth) fails the tail condition and passes.
+		Leaking: b > 3*se && b > floor && tail > floor,
 	}
 }
 
@@ -397,8 +414,8 @@ func (rep *Report) AssertClean(t *testing.T) {
 	diffWritten := false
 	for _, v := range rep.Verdicts {
 		kv := []string{
-			"slope=" + f1(v.Slope), "se=" + f1(v.StdErr), "floor=" + f1(v.Floor),
-			"bound3s=" + f1(v.Bound3Sigma), "dfloor=" + f1(v.DetectionFloor),
+			"slope=" + f1(v.Slope), "se=" + f1(v.StdErr), "tail=" + f1(v.TailSlope),
+			"floor=" + f1(v.Floor), "bound3s=" + f1(v.Bound3Sigma), "dfloor=" + f1(v.DetectionFloor),
 		}
 		if v.ReportOnly {
 			emitCheck(rep.Scenario, v.Metric, "REPORT", kv...)
