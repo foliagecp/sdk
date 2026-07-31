@@ -499,17 +499,43 @@ Reply:
 */
 // resolveOutLinkByName resolves the (linkType, toId) of the out-link named
 // linkName owned by ownerID, reading the OutLinkTarget key the same way
-// getFullLinkInfoFromSpecifiedIdentifier does. ownerID must be local.
+// getFullLinkInfoFromSpecifiedIdentifier does. ownerID must be local. When
+// the out.to key is missing or corrupt, falls back to the ltype scan so a
+// partially written link stays deletable.
 func resolveOutLinkByName(ctx *sfPlugins.StatefunContextProcessor, ownerID, linkName string) (linkType, toId string, ok bool) {
 	b, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, ownerID, linkName))
 	if err != nil {
-		return "", "", false
+		return resolveOutLinkByLtypeScan(ctx, ownerID, linkName)
 	}
 	tokens := strings.Split(string(b), ".")
 	if len(tokens) < 2 {
-		return "", "", false
+		return resolveOutLinkByLtypeScan(ctx, ownerID, linkName)
 	}
 	return ctx.Domain.GetObjectIDWithoutDomain(tokens[0]), tokens[1], true
+}
+
+// resolveOutLinkByLtypeScan recovers the (linkType, toId) of the out-link
+// named linkName when its out.to key is MISSING (interrupted write, partial
+// replication). The ltype family encodes both the type and the target in the
+// KEY itself (`<owner>.ltype.<type>.<toId>` -> value: link name), so a scan
+// of the owner's ltype subtree — local, bounded by the vertex's out-degree —
+// rebuilds what out.to lost. Without this fallback such a link was
+// permanently undeletable: every delete path resolved the target via out.to,
+// gave up with IDLE and left the remaining key families behind forever.
+func resolveOutLinkByLtypeScan(ctx *sfPlugins.StatefunContextProcessor, ownerID, linkName string) (linkType, toId string, ok bool) {
+	prefix := fmt.Sprintf(OutLinkTypeKeyPrefPattern, ownerID)
+	for _, key := range ctx.Domain.Cache().GetKeysByPattern(prefix + ">") {
+		nameBytes, err := ctx.Domain.Cache().GetValue(key)
+		if err != nil || string(nameBytes) != linkName {
+			continue
+		}
+		tokens := strings.SplitN(strings.TrimPrefix(key, prefix), ".", 2)
+		if len(tokens) < 2 {
+			continue
+		}
+		return ctx.Domain.GetObjectIDWithoutDomain(tokens[0]), tokens[1], true
+	}
+	return "", "", false
 }
 
 // deleteOutLinkFromSideKeys removes the from-side keys of the link
@@ -905,7 +931,36 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 		operationKeysMutexLockMixed(ctx, []string{edgeLockKey(selfID, linkName)}, []string{selfID, toId}, opTime)
 
-		if !forceCreate {
+		if forceCreate {
+			// force is an atomic REPLACE of an existing link with this name:
+			// the old link's keys are dropped first. Historically force only
+			// overwrote the name-keyed keys, so retargeting stranded the old
+			// target's ltype and in keys forever — no delete path ever finds
+			// them afterwards. The old target is not additionally locked (a
+			// second, unsorted acquisition would reopen the lock-order
+			// deadlock class); the only writes to it are idempotent deletes,
+			// so racing a concurrent delete is benign.
+			if oldType, oldTo, ok := resolveOutLinkByName(ctx, selfID, linkName); ok && (oldType != linkType || oldTo != toId) {
+				var oldLinkBody *easyjson.JSON
+				if opStack != nil {
+					oldLinkBody, _ = ctx.Domain.Cache().GetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName))
+				}
+				deleteOutLinkFromSideKeys(ctx, "functions.graph.api.link.delete", selfID, oldType, linkName, oldTo, oldLinkBody, opStack, opTime)
+				if ctx.Domain.GetDomainFromObjectID(oldTo) == ctx.Domain.Name() {
+					ctx.Domain.Cache().DeleteValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, oldTo, selfID, linkName), true, opTime)
+				} else {
+					nextCallPayload := easyjson.NewJSONObject()
+					nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
+					nextCallPayload.SetByPath("op_time", easyjson.NewJSON(opTime))
+					om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", makeSequenceFreeParentBasedID(ctx, oldTo, "inlink"), injectParentHoldsLocks(ctx, &nextCallPayload), ctx.Options)))
+					if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
+						operationKeysMutexUnlock(ctx)
+						system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
+						return
+					}
+				}
+			}
+		} else {
 			// Check if link with this name already exists --------------
 			if ctx.Domain.Cache().ExistsJson(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName)) {
 				operationKeysMutexUnlock(ctx)

@@ -74,13 +74,13 @@ func (s *S9Suite) forceLinkCreate(from, to, name, linkType string) error {
 	return db.OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(reply, err))
 }
 
-// Test_ForceLinkRetargetLeavesResidue — EXPECTED TO FAIL today (L4).
+// Test_ForceLinkRetargetLeavesResidue — regression guard for finding L4.
 //
-// link.create force=true over an existing link with a NEW target overwrites
-// the name-keyed key families but writes fresh `<from>.ltype.<type>.<newTo>`
-// and `<newTo>.in...` keys WITHOUT deleting the old target's pair. After
-// deleting the link and all three vertices the stale keys survive — the
-// cache tree никогда не возвращается к бейслайну.
+// link.create force=true over an existing link with a NEW target historically
+// overwrote only the name-keyed key families, stranding the old target's
+// `ltype` and `in` keys forever. force is now an atomic replace — the old
+// link's keys are dropped first — so after deleting the link and all three
+// vertices the cache tree must return to baseline.
 func (s *S9Suite) Test_ForceLinkRetargetLeavesResidue() {
 	s.bootCRUD()
 	k := scaled(10)
@@ -103,7 +103,7 @@ func (s *S9Suite) Test_ForceLinkRetargetLeavesResidue() {
 			if err := s.forceLinkCreate(a, c2, "e", "rel"); err != nil {
 				return err
 			}
-			// Full teardown through the public API...
+			// Full teardown through the public API must leave nothing behind.
 			if err := s.dbc.Graph.VerticesLinkDelete(a, "e"); err != nil {
 				return err
 			}
@@ -112,22 +112,24 @@ func (s *S9Suite) Test_ForceLinkRetargetLeavesResidue() {
 					return err
 				}
 			}
-			// ...and yet the old-target keys are still in the cache.
 		}
 		return nil
 	}
 
 	rep := s.newRunner("s9_force_retarget", cycle, s.collectCore).Run(s.T())
-	rep.AssertStable(s.T(), "cache_live_values")
+	rep.AssertClean(s.T())
+	s.assertCoreStable(rep)
 }
 
-// Test_OrphanOutToUndeletable — EXPECTED TO FAIL today (L5).
+// Test_OrphanOutToUndeletable — regression guard for finding L5.
 //
 // A link whose `<from>.out.to.<name>` key is missing (interrupted write,
-// partial replication) cannot be deleted at all: link.delete and
-// vertex.delete both resolve the target through that key, give up with IDLE
-// and leave `out.body`/`out.index`/`ltype` (and the target's `in` key)
-// behind forever. There is no repair/sweep path for them.
+// partial replication) was historically undeletable: every delete path
+// resolved the target through that key, gave up with IDLE and left
+// `out.body`/`out.index`/`ltype`/`in` behind forever. The delete paths now
+// recover the target from the ltype family (which encodes type and target in
+// the key itself), so the orphaned link deletes cleanly and the cache tree
+// returns to baseline.
 func (s *S9Suite) Test_OrphanOutToUndeletable() {
 	s.bootCRUD()
 	k := scaled(10)
@@ -147,15 +149,22 @@ func (s *S9Suite) Test_OrphanOutToUndeletable() {
 			}
 			// Manufacture the orphan: the out.to key vanishes.
 			s.cacheStore().DeleteValue(s.domainID(a)+".out.to.e", true, -1)
-			// Neither the link nor the vertices can clean it up now; the
-			// delete statuses are intentionally ignored (they reply IDLE).
-			_ = s.dbc.Graph.VerticesLinkDelete(a, "e")
-			_ = s.dbc.Graph.VertexDelete(a)
-			_ = s.dbc.Graph.VertexDelete(b)
+			// The orphaned link must still delete cleanly via the ltype
+			// fallback, and the vertices after it.
+			if err := s.dbc.Graph.VerticesLinkDelete(a, "e"); err != nil {
+				return fmt.Errorf("link.delete of orphaned link: %w", err)
+			}
+			if err := s.dbc.Graph.VertexDelete(a); err != nil {
+				return fmt.Errorf("vertex.delete %s: %w", a, err)
+			}
+			if err := s.dbc.Graph.VertexDelete(b); err != nil {
+				return fmt.Errorf("vertex.delete %s: %w", b, err)
+			}
 		}
 		return nil
 	}
 
 	rep := s.newRunner("s9_orphan_outto", cycle, s.collectCore).Run(s.T())
-	rep.AssertStable(s.T(), "cache_live_values")
+	rep.AssertClean(s.T())
+	s.assertCoreStable(rep)
 }

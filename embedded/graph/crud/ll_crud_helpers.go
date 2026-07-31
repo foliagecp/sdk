@@ -171,6 +171,12 @@ func getFullLinkInfoFromSpecifiedIdentifier(ctx *sfPlugins.StatefunContextProces
 
 			return ctx.Domain.GetObjectIDWithoutDomain(linkType), name, toId, true
 		}
+		// out.to missing: the link may still exist partially (interrupted
+		// write) — recover the target from the ltype family so it stays
+		// addressable and deletable.
+		if lt, to, ok := resolveOutLinkByLtypeScan(ctx, selfID, name); ok {
+			return lt, name, to, true
+		}
 		requestedName = name
 		// name miss — fall through to the type+to identity
 	}
