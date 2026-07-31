@@ -91,7 +91,18 @@ rx_for() {
     *) return 1 ;;
   esac
 }
-RX="$(rx_for "$SCENARIO")" || { echo "unknown scenario: $SCENARIO (s0..s12|core|all)"; exit 2; }
+# Scenario list: EACH scenario runs in its OWN go test process. All scenarios
+# in one process would share heap, timers and whatever the per-scenario
+# emergency teardown leaves behind — process-wide plateau shifts then land in
+# whichever scenario happens to be measuring and read as false leaks. Fresh
+# process per scenario = clean baselines, zero cross-contamination. The test
+# binary is compiled once and reused by go test's build cache.
+case "$SCENARIO" in
+  all)  SCEN_LIST="s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11 s12" ;;
+  core) SCEN_LIST="s0 s1 s2 s5 s9" ;;
+  *)    rx_for "$SCENARIO" >/dev/null || { echo "unknown scenario: $SCENARIO (s0..s12|core|all)"; exit 2; }
+        SCEN_LIST="$SCENARIO" ;;
+esac
 
 # ----------------------------------------------------------------------------
 # results dir
@@ -111,10 +122,19 @@ echo "=================================================================="
 echo "Leak suite  mode=$MODE  scenario=$SCENARIO  (warmup=$LEAK_WARMUP cycles=$LEAK_CYCLES scale=$LEAK_SCALE)"
 echo "artifacts:  $RESULTS"
 echo "=================================================================="
-# shellcheck disable=SC2086
-go test -tags leak $RACE -count=1 -timeout "$TIMEOUT" -v -run "$RX" ./tests/leak/ 2>&1 \
-  | tee "$LOG" | grep -vE "$SHUTDOWN_NOISE"
-status="${PIPESTATUS[0]}"
+: > "$LOG"
+status=0
+for sc in $SCEN_LIST; do
+  RX="$(rx_for "$sc")"
+  echo "---- $sc  (-run $RX) ----"
+  # shellcheck disable=SC2086
+  go test -tags leak $RACE -count=1 -timeout "$TIMEOUT" -v -run "$RX" ./tests/leak/ 2>&1 \
+    | tee -a "$LOG" | grep -vE "$SHUTDOWN_NOISE"
+  st="${PIPESTATUS[0]}"
+  if [ "$st" -ne 0 ]; then
+    status="$st"
+  fi
+done
 
 # ----------------------------------------------------------------------------
 # summary from LEAKCHECK lines

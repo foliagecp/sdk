@@ -35,6 +35,14 @@ splits the in-use heap by allocation stack: the SDK share is **asserted**,
 the server share and raw process totals are **REPORT-only**. In production
 the server is a separate process; its by-design growth is quantified by S12.
 
+**Process isolation.** `run-leak-tests.sh` runs every scenario in its OWN
+`go test` process. Scenarios sharing one process share heap, timers and
+whatever each per-scenario emergency teardown leaves behind — process-wide
+plateau shifts then land in whichever scenario happens to be measuring and
+read as false leaks. A fresh process per scenario gives clean, deterministic
+baselines and zero cross-contamination (the test binary is compiled once and
+reused).
+
 ## Running
 
 ```sh
