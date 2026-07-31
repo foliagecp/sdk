@@ -74,3 +74,33 @@ func TestS0ControlIsClean(t *testing.T) {
 	rep := r.Run(t)
 	rep.AssertClean(t)
 }
+
+// TestS0StepIsNotALeak plants a ONE-TIME plateau shift — a single retained
+// 1MiB allocation landing mid-measurement (a pool/timer high-water mark
+// crossing its threshold) — and requires the harness to classify it clean.
+// This is the false-positive class observed in the wild: process-wide steps
+// (e.g. the request-path timer pool reaching steady state) float into
+// whatever scenario happens to be running and must never read as a leak.
+func TestS0StepIsNotALeak(t *testing.T) {
+	var retained []byte
+	// Land the step in the TAIL of the window: an early step is already
+	// cleared by the tail-slope condition, a late one exercises the explicit
+	// step-hypothesis test.
+	stepAt := warmupCycles() + measureCycles() - 3
+
+	r := &CycleRunner{
+		Scenario: "s0_step",
+		Warmup:   warmupCycles(),
+		Measure:  measureCycles(),
+		Cycle: func(i int) error {
+			if i == stepAt && retained == nil {
+				retained = make([]byte, 1<<20)
+			}
+			return nil
+		},
+	}
+	rep := r.Run(t)
+	rep.AssertClean(t)
+
+	runtime.KeepAlive(retained)
+}

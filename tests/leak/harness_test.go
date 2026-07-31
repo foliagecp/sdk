@@ -87,6 +87,10 @@ type Verdict struct {
 	Bound3Sigma    float64 // slope + 3*SE: residual-drift upper bound
 	DetectionFloor float64 // max(3*SE, floor): smallest leak this run could flag
 	Leaking        bool
+	// StepExplained marks a verdict cleared by the step hypothesis: the
+	// series is two flat plateaus (one-time high-water-mark growth), not a
+	// persistent trend.
+	StepExplained bool
 	// ReportOnly verdicts are informational: emitted as REPORT lines and
 	// never fail the test. Used for growth that is real but lives outside
 	// the SDK's own heap (the embedded NATS server shares the test process;
@@ -94,12 +98,13 @@ type Verdict struct {
 	ReportOnly bool
 }
 
-// olsSlope fits y = a + b*x over x = 0..n-1 and returns the slope with its
-// standard error. Fewer than 3 points cannot support an error estimate.
-func olsSlope(y []float64) (b, se float64) {
+// olsSlope fits y = a + b*x over x = 0..n-1 and returns the slope, its
+// standard error and the fit's residual sum of squares. Fewer than 3 points
+// cannot support an error estimate.
+func olsSlope(y []float64) (b, se, sse float64) {
 	n := float64(len(y))
 	if len(y) < 3 {
-		return 0, math.Inf(1)
+		return 0, math.Inf(1), 0
 	}
 	var sx, sy float64
 	for i, v := range y {
@@ -114,29 +119,78 @@ func olsSlope(y []float64) (b, se float64) {
 		sxy += dx * (v - my)
 	}
 	if sxx == 0 {
-		return 0, math.Inf(1)
+		return 0, math.Inf(1), 0
 	}
 	b = sxy / sxx
 	a := my - b*mx
-	var sse float64
 	for i, v := range y {
 		e := v - (a + b*float64(i))
 		sse += e * e
 	}
 	se = math.Sqrt(sse / (n - 2) / sxx)
-	return b, se
+	return b, se, sse
+}
+
+// segSlope estimates a segment's internal growth rate: OLS slope for >= 3
+// points, endpoint difference per cycle for 2, zero for fewer.
+func segSlope(y []float64) float64 {
+	switch {
+	case len(y) >= 3:
+		b, _, _ := olsSlope(y)
+		return b
+	case len(y) == 2:
+		return y[1] - y[0]
+	default:
+		return 0
+	}
+}
+
+// stepExplains tests the competing hypothesis to a leak: a one-time STEP to a
+// new plateau (a pool/timer/map high-water mark crossed mid-window). It fits
+// the series as two flat plateaus around the best split point; the step wins
+// iff it fits the data clearly better than the straight line AND neither
+// plateau grows internally above the floor. A genuine linear leak cannot be
+// explained this way — the line fits it (near-)perfectly, so the step model
+// never wins.
+func stepExplains(y []float64, sseLine, floor float64) bool {
+	n := len(y)
+	if n < 6 {
+		return false
+	}
+	mean := func(v []float64) float64 {
+		s := 0.0
+		for _, x := range v {
+			s += x
+		}
+		return s / float64(len(v))
+	}
+	sq := func(v []float64, m float64) float64 {
+		s := 0.0
+		for _, x := range v {
+			s += (x - m) * (x - m)
+		}
+		return s
+	}
+	for s := 2; s <= n-2; s++ {
+		left, right := y[:s], y[s:]
+		sseStep := sq(left, mean(left)) + sq(right, mean(right))
+		if sseStep < sseLine*0.5 && segSlope(left) <= floor && segSlope(right) <= floor {
+			return true
+		}
+	}
+	return false
 }
 
 func verdictFor(metric string, y []float64, floor float64) Verdict {
-	b, se := olsSlope(y)
+	b, se, sseLine := olsSlope(y)
 	// Tail slope: the second half of the window (needs >= 3 points to fit).
 	// With too few samples the discriminator degrades to the full slope, so
 	// short runs keep the plain criterion.
 	tail := b
 	if half := y[len(y)/2:]; len(half) >= 3 {
-		tail, _ = olsSlope(half)
+		tail, _, _ = olsSlope(half)
 	}
-	return Verdict{
+	v := Verdict{
 		Metric:         metric,
 		Slope:          b,
 		StdErr:         se,
@@ -145,10 +199,18 @@ func verdictFor(metric string, y []float64, floor float64) Verdict {
 		Bound3Sigma:    b + 3*se,
 		DetectionFloor: math.Max(3*se, floor),
 		// A leak is a PERSISTENT trend: significant over the full window AND
-		// still above the floor in the tail. A mid-window step (one-time
-		// high-water-mark growth) fails the tail condition and passes.
+		// still above the floor in the tail. An early step (one-time
+		// high-water-mark growth) fails the tail condition already.
 		Leaking: b > 3*se && b > floor && tail > floor,
 	}
+	// A LATE step passes the tail condition (its plateau shift sits inside
+	// the tail), so before declaring a leak test the competing step
+	// hypothesis explicitly.
+	if v.Leaking && stepExplains(y, sseLine, floor) {
+		v.Leaking = false
+		v.StepExplained = true
+	}
+	return v
 }
 
 // ---------------------------------------------------------------------------
@@ -417,6 +479,9 @@ func (rep *Report) AssertClean(t *testing.T) {
 			"slope=" + f1(v.Slope), "se=" + f1(v.StdErr), "tail=" + f1(v.TailSlope),
 			"floor=" + f1(v.Floor), "bound3s=" + f1(v.Bound3Sigma), "dfloor=" + f1(v.DetectionFloor),
 		}
+		if v.StepExplained {
+			kv = append(kv, "step=true")
+		}
 		if v.ReportOnly {
 			emitCheck(rep.Scenario, v.Metric, "REPORT", kv...)
 			continue
@@ -481,7 +546,7 @@ func (rep *Report) ReportMetric(t *testing.T, metric string) {
 	for i, s := range rep.Samples {
 		y[i] = s.Custom[metric]
 	}
-	b, se := olsSlope(y)
+	b, se, _ := olsSlope(y)
 	base := rep.Baseline.Custom[metric]
 	last := rep.Samples[len(rep.Samples)-1].Custom[metric]
 	emitCheck(rep.Scenario, metric, "REPORT",

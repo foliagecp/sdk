@@ -11,10 +11,14 @@ NATS + fresh runtime, with two classes of evidence per scenario:
 2. **Statistical drift bound** — over M measured cycles the OLS slope `b`
    of each heap metric is computed with its standard error. **LEAK ⇔
    `b > 3·SE(b)` AND `b > floor` AND the tail slope (second half of the
-   window) `> floor`.** The tail condition separates a real leak — a trend
-   that keeps going — from a one-time STEP to a high-water mark (pools,
-   request-path timers, map capacities crossing a growth threshold
-   mid-window), which a small-M OLS fit would otherwise flag. Every run
+   window) `> floor`, and the series is NOT better explained as a one-time
+   STEP.** These conditions separate a real leak — a trend that keeps going —
+   from a one-time plateau shift to a high-water mark (pools, request-path
+   timers, map capacities crossing a growth threshold mid-window), which a
+   small-M OLS fit would otherwise flag: an early step flattens the tail, a
+   late one is caught by explicitly fitting the two-plateau step model
+   against the line (the step must fit clearly better AND neither plateau may
+   grow internally). Every run
    also reports the residual bound `b + 3·SE` ("growth is ≤ this per cycle
    at 3σ") and the detection floor `max(3·SE, floor)` ("a leak slower than
    this was not detectable in this run") — the honest limits of any
