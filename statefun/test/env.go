@@ -21,6 +21,14 @@ var (
 	defaultCacheID     = "test_cache"
 )
 
+// RuntimeConfigMutatorForTest, when non-nil, is applied to every new test
+// environment's RuntimeConfig right before the runtime is built. Set it from
+// TestMain, never mid-suite — the environment is recreated per test method.
+// Leak tests use it to shorten GC cadence (SetGCIntervalSec /
+// SetFunctionTypeIDLifetimeMs) so idle per-id machinery is reclaimed within
+// the test window.
+var RuntimeConfigMutatorForTest func(*statefun.RuntimeConfig)
+
 type statefunTestEnvironment struct {
 	srv         *server.Server
 	runtime     *statefun.Runtime
@@ -44,6 +52,10 @@ func newStatefunTestEnvironment() *statefunTestEnvironment {
 		// time out at the ~5s nats default, making CMDB ops return "failed".
 		SetNatsAPITimeoutSec(30)
 	cacheConfig := cache.NewCacheConfig(defaultCacheID)
+
+	if RuntimeConfigMutatorForTest != nil {
+		RuntimeConfigMutatorForTest(runtimeConfig)
+	}
 
 	return &statefunTestEnvironment{
 		srv:        srv,

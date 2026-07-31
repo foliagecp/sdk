@@ -34,6 +34,15 @@ var (
 	replyStoreLastGCTime time.Time
 )
 
+// ReplyStoreSizeForTest returns the number of entries in the package-global
+// aggregation replyStore. Test-only observability: on a quiesced runtime with
+// all aggregations completed this must be zero (modulo the lazy TTL sweep).
+func ReplyStoreSizeForTest() int {
+	replyStoreMutex.Lock()
+	defer replyStoreMutex.Unlock()
+	return len(replyStore)
+}
+
 type OpMediator struct {
 	ctx        *sfPlugins.StatefunContextProcessor
 	opMsgs     []OpMsg

@@ -33,7 +33,9 @@ var chunkSize = func() int {
 	return v
 }()
 
-const sessionTTL = 10 * time.Minute
+// sessionTTL is how long an export session survives without reads. A var so
+// tests can shrink it via SetSessionTTLForTest.
+var sessionTTL = 10 * time.Minute
 
 type exportSession struct {
 	data      string
@@ -124,4 +126,30 @@ func (s *ExportSessionStore) cleanupLoop() {
 		}
 		s.mu.Unlock()
 	}
+}
+
+// SessionCountForTest returns the number of live export sessions. Test-only.
+func SessionCountForTest() int {
+	defaultStore.mu.Lock()
+	defer defaultStore.mu.Unlock()
+	return len(defaultStore.sessions)
+}
+
+// SetSessionTTLForTest overrides the export-session TTL so tests can expire
+// abandoned sessions in seconds instead of 10 minutes. Set it before starting
+// any exports. The background sweep still ticks every 2 minutes — pair with
+// SweepExpiredForTest for deterministic expiry.
+func SetSessionTTLForTest(ttl time.Duration) { sessionTTL = ttl }
+
+// SweepExpiredForTest synchronously removes expired sessions, independent of
+// the background cleanup ticker. Test-only.
+func SweepExpiredForTest() {
+	now := time.Now()
+	defaultStore.mu.Lock()
+	for id, sess := range defaultStore.sessions {
+		if now.After(sess.expiresAt) {
+			delete(defaultStore.sessions, id)
+		}
+	}
+	defaultStore.mu.Unlock()
 }

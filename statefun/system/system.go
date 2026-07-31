@@ -213,6 +213,20 @@ func (k *KeyMutex) RUnlock(key interface{}) {
 	sh.mx.Unlock()
 }
 
+// EntryCountForTest returns the number of live per-key entries across all
+// shards. Entries are refcounted and removed on final unlock, so on a
+// quiesced KeyMutex this must be zero — leak tests assert exactly that.
+// Test-only observability; briefly takes each shard mutex in turn.
+func (k *KeyMutex) EntryCountForTest() int {
+	total := 0
+	for i := range k.shards {
+		k.shards[i].mx.Lock()
+		total += len(k.shards[i].m)
+		k.shards[i].mx.Unlock()
+	}
+	return total
+}
+
 func UniqueStrings(input []string) []string {
 	seen := make(map[string]struct{})
 	var result []string

@@ -1253,3 +1253,19 @@ func contains(slice []string, item string) bool {
 	}
 	return false
 }
+
+// FunctionTypeIDStatsForTest returns, per registered function typename, the
+// number of live per-id handler entries. Test-only observability for leak
+// tests: after a function type has been idle past the id-lifetime GC, its
+// entry count must decay back to zero.
+func (r *Runtime) FunctionTypeIDStatsForTest() map[string]int {
+	r.ftMu.RLock()
+	defer r.ftMu.RUnlock()
+	stats := make(map[string]int, len(r.registeredFunctionTypes))
+	for name, ft := range r.registeredFunctionTypes {
+		n := 0
+		ft.idHandlersChannel.Range(func(_, _ interface{}) bool { n++; return true })
+		stats[name] = n
+	}
+	return stats
+}

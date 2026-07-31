@@ -833,6 +833,52 @@ func (cs *Store) sweepSubtree(csv *StoreValue, result *maintenanceResult) bool {
 	return canRemove
 }
 
+// StoreStatsForTest is a read-only diagnostic snapshot of the in-memory store
+// for leak tests: tree population, sweep progress and WAL backlog.
+type StoreStatsForTest struct {
+	TotalNodes   int   // every StoreValue node in the tree, including the root
+	LiveValues   int   // nodes currently carrying a value (valueExists)
+	Tombstones   int   // value-less non-root nodes (tombstoned or structural)
+	SweepRuns    int64 // lifetime maintenance passes (mirrors cache_sweep_runs_total)
+	SweepRemoved int64 // lifetime nodes physically removed by the sweep
+	PendingTxs   int   // WAL transactions buffered and not yet published
+	ActiveOps    int   // in-flight write operations tracked by opTime
+}
+
+// StatsForTest walks the tree read-only and returns a StoreStatsForTest.
+// Test-only observability. Safe concurrently with cache use (per-node RLock,
+// lockless child iteration like the maintenance sweep); on a quiescent cache
+// the counts are exact, under concurrent writes they are a best-effort
+// snapshot (the transient 1->2 child migration may double-count a node).
+func (cs *Store) StatsForTest() StoreStatsForTest {
+	st := StoreStatsForTest{
+		SweepRuns:    atomic.LoadInt64(&cs.totalSweepRuns),
+		SweepRemoved: atomic.LoadInt64(&cs.totalSweepRemoved),
+	}
+	cs.countSubtreeForTest(cs.rootValue, &st)
+	cs.pendingTxs.Range(func(_, _ interface{}) bool { st.PendingTxs++; return true })
+	cs.activeOps.Range(func(_, _ interface{}) bool { st.ActiveOps++; return true })
+	return st
+}
+
+func (cs *Store) countSubtreeForTest(csv *StoreValue, st *StoreStatsForTest) {
+	st.TotalNodes++
+	csv.RLock("StatsForTest")
+	exists := csv.getValueExists()
+	csv.RUnlock("StatsForTest")
+	if exists {
+		st.LiveValues++
+	} else if csv.parent != nil {
+		st.Tombstones++
+	}
+	csv.Range(func(_, value interface{}) bool {
+		if child, ok := value.(*StoreValue); ok {
+			cs.countSubtreeForTest(child, st)
+		}
+		return true
+	})
+}
+
 func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamContext, kv nats.KeyValue) *Store {
 	le := lg.GetLogger()
 	var inited atomic.Bool
