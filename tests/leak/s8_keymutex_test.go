@@ -6,17 +6,13 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/stretchr/testify/suite"
 )
 
 // S8 — the graph per-key mutex. Under normal churn every entry is refcounted
-// away on unlock (PASS). The probe demonstrates finding L6: a vertex id
-// containing dots breaks operationKeysMutexUnlock's payload parsing (it walks
-// `__key_locks.<key>.{w,r}` two levels deep, a dotted key nests deeper), so
-// the lock is never released — one permanently write-locked KeyMutex entry
-// per dotted id, and every later operation on that id stalls for the full
-// graph-key lock timeout. EXPECTED FAIL until ids are validated or the
-// unlock parsing handles dotted keys.
+// away on unlock (PASS). The dotted-id probe pins the L6 fix: rejected at
+// creation, and legacy dotted data neither leaks locks nor wedges the WAL.
 
 type S8Suite struct{ leakSuite }
 
@@ -46,47 +42,47 @@ func (s *S8Suite) Test_KeyMutexChurn() {
 	s.assertCoreStable(rep)
 }
 
-// Test_DottedIdLeaksKeyMutexEntry — EXPECTED TO FAIL today (L6). One
-// vertex.create per dotted id is enough: the create succeeds, the unlock is
-// silently skipped, the entry (and its write lock) stays forever. Fresh ids
-// every cycle keep the probe stall-free (nothing ever touches a poisoned id
-// twice).
+// Test_DottedIdsAreSafe — regression guard for finding L6.
 //
-// The blast radius goes beyond the mutex entry: MarkOperationDone also lives
-// in the skipped unlock path, so every dotted-id operation orphans an
-// activeOps entry. hasActiveOperationsUpTo then holds true forever and the
-// WAL publisher is WEDGED for the runtime's remaining lifetime — pendingTxs
-// only grows and nothing reaches KV anymore. One unvalidated id is enough to
-// silently kill persistence. The runner therefore deliberately skips the
-// WAL-drain quiesce (it can never succeed here) and asserts all three
-// symptoms; each stays red until ids are validated or the unlock parsing
-// handles dotted keys.
-func (s *S8Suite) Test_DottedIdLeaksKeyMutexEntry() {
+// Historically a dotted vertex id broke the payload lock bookkeeping: the
+// unlock walk could not find the record, leaving a permanently write-locked
+// KeyMutex entry AND skipping MarkOperationDone — the orphaned activeOps
+// entry then wedged the WAL publisher for the runtime's lifetime. The fix is
+// three-layered: dotted ids are rejected at creation, held-lock records are
+// keyed by a hash (parse-proof for any key content), and completion marking
+// is decoupled from the lock records. This probe pins all three:
+//   1. creating a dotted id must be REJECTED (and must not leak a lock);
+//   2. legacy dotted vertices (seeded directly into the cache, as if created
+//      before validation existed) must be deletable without leaving a mutex
+//      entry, an activeOps orphan or an undrainable WAL.
+func (s *S8Suite) Test_DottedIdsAreSafe() {
 	s.bootCRUD()
 	k := scaled(10)
 
 	cycle := func(c int) error {
 		for i := 0; i < k; i++ {
 			id := fmt.Sprintf("leak.probe.%d.%d", c, i)
-			if err := s.dbc.Graph.VertexCreate(id, leakBody(20)); err != nil {
-				return fmt.Errorf("vertex.create %s: %w", id, err)
+			if err := s.dbc.Graph.VertexCreate(id, leakBody(20)); err == nil {
+				return fmt.Errorf("vertex.create accepted dotted id %s", id)
+			}
+		}
+		for i := 0; i < k; i++ {
+			plain := fmt.Sprintf("legacy.%d.%d", c, i)
+			body := leakBody(20)
+			if !s.cacheStore().SetValueJSON(s.domainID(plain), &body, true, system.GetCurrentTimeNs()) {
+				return fmt.Errorf("cannot seed legacy dotted vertex %s", plain)
+			}
+			if err := s.dbc.Graph.VertexDelete(plain); err != nil {
+				return fmt.Errorf("vertex.delete of legacy dotted id %s: %w", plain, err)
 			}
 		}
 		return nil
 	}
 
-	r := &CycleRunner{
-		Scenario:      "s8_dotted_id",
-		Warmup:        warmupCycles(),
-		Measure:       measureCycles(),
-		Cycle:         cycle,
-		Collect:       s.collectCore,
-		SplitNatsHeap: true,
-		// No Quiesce: the first dotted-id op wedges the WAL publisher, so a
-		// drain wait would only ever time out — the wedge IS the finding.
-	}
-	rep := r.Run(s.T())
+	rep := s.newRunner("s8_dotted_id", cycle, s.collectCore).Run(s.T())
+	rep.AssertClean(s.T())
 	rep.AssertStable(s.T(), "graph_keymutex_entries")
 	rep.AssertStable(s.T(), "cache_active_ops")
 	rep.AssertStable(s.T(), "cache_pending_txs")
+	rep.AssertStable(s.T(), "cache_live_values")
 }

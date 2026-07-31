@@ -22,7 +22,14 @@ import (
 )*/
 
 var (
-	validLinkName                    = regexp.MustCompile(`\A[a-zA-Z0-9\/_$#@%+=-]+\z`)
+	validLinkName = regexp.MustCompile(`\A[a-zA-Z0-9\/_$#@%+=-]+\z`)
+	// validVertexID: same class as link names — in particular NO dots. "." is
+	// the cache key separator: a dotted vertex id nests into foreign key
+	// families in the KV tree and breaks every path-based piece of bookkeeping
+	// built on ids. Enforced on CREATE paths only (vertex.create and the `to`
+	// of link.create); reading/deleting pre-existing dotted ids stays possible
+	// so legacy data can be cleaned up.
+	validVertexID                    = regexp.MustCompile(`\A[a-zA-Z0-9\/_$#@%+=-]+\z`)
 	graphIdKeyMutex *system.KeyMutex = system.NewKeyMutex()
 
 	// graphKeyLockTimeout bounds how long operationKeysMutexLock blocks trying
@@ -90,14 +97,36 @@ func getOriginalID(ID string) string {
 // guards alongside (see the mixed-lock call sites), so a concurrent vertex delete
 // is still excluded.
 //
-// The key MUST be dot-free: operationKeysMutexLock* records held locks via
-// ctx.Payload SetByPath("__key_locks.<key>.w"), which treats "." as a path
-// separator — a KV-style key like "owner.out.body.name" would nest into the
-// payload and operationKeysMutexUnlock would never find the ".w"/".r" leaf to
-// release, LEAKING the lock (and blocking the next op for GRAPH_KEY_LOCK_TIMEOUT_SEC).
-// A hash gives a dot-free key that is unique per edge and never equals a vertex id.
+// A hash gives a key that is unique per edge and never equals a vertex id.
+// (Historically the hash also had to keep the key dot-free for the payload
+// lock bookkeeping; the bookkeeping now hashes recorded keys itself — see
+// lockRecSeg — so that constraint is no longer load-bearing here.)
 func edgeLockKey(ownerID, linkName string) string {
 	return "edge_" + system.GetHashStr(ownerID+"\x00"+linkName)
+}
+
+// lockRecSeg returns the payload path segment under which a held graph-key
+// lock is recorded inside __key_locks / __parent_holds_locks. The segment is a
+// HASH of the key, never the key itself: SetByPath treats "." as a path
+// separator, so recording a raw key containing dots (an unvalidated legacy id,
+// a KV-style key) would nest it into the payload where the unlock walk could
+// never find it — leaking a permanently held lock AND skipping the operation-
+// completion mark, which wedges the WAL publisher for good. The original key
+// is stored alongside under "k" so unlock never needs to reverse the hash.
+func lockRecSeg(key string) string { return system.GetHashStr(key) }
+
+func recordHeldLock(ctx *sfPlugins.StatefunContextProcessor, key, mode string) {
+	seg := lockRecSeg(key)
+	ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.%s.m", seg), easyjson.NewJSON(mode))
+	ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.%s.k", seg), easyjson.NewJSON(key))
+}
+
+func parentHoldsWriteLock(ctx *sfPlugins.StatefunContextProcessor, key string) bool {
+	return ctx.Payload.GetByPath(fmt.Sprintf("__parent_holds_locks.%s.m", lockRecSeg(key))).AsStringDefault("") == "w"
+}
+
+func parentHoldsAnyLock(ctx *sfPlugins.StatefunContextProcessor, key string) bool {
+	return ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s", lockRecSeg(key)))
 }
 
 // All child operations must be sequence free
@@ -111,7 +140,8 @@ func makeSequenceFreeParentBasedID(ctx *sfPlugins.StatefunContextProcessor, targ
 		added = true
 		finalId += "===" + tokens[1]
 	} else {
-		if ctx.Payload.PathExists(fmt.Sprintf("__key_locks.%s", targetID)) || ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s", targetID)) {
+		seg := lockRecSeg(targetID)
+		if ctx.Payload.PathExists(fmt.Sprintf("__key_locks.%s", seg)) || ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s", seg)) {
 			added = true
 			finalId += "===" + system.GetHashStr(ctx.Self.Typename+ctx.Self.ID)
 		}
@@ -135,22 +165,22 @@ func operationKeysMutexLock(ctx *sfPlugins.StatefunContextProcessor, keys []stri
 	lockedWriteAny := false
 	for _, k := range keys {
 		if writeOperation {
-			if !ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s.w", k)) {
+			if !parentHoldsWriteLock(ctx, k) {
 				// Bounded acquire: never hang a worker forever on a stuck
 				// holder. On timeout we record nothing (so Unlock won't touch a
 				// lock we don't hold) and proceed — the holder is presumed
 				// deadlocked/frozen, so it is not actively mutating this key.
 				if graphIdKeyMutex.LockTimeout(k, graphKeyLockTimeout) {
-					ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.%s.w", k), easyjson.NewJSON(true))
+					recordHeldLock(ctx, k, "w")
 					lockedWriteAny = true
 				} else {
 					lg.Logf(lg.WarnLevel, "operationKeysMutexLock: write-lock acquire for key=%s timed out after %s; proceeding without it", k, graphKeyLockTimeout)
 				}
 			}
 		} else {
-			if !ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s", k)) {
+			if !parentHoldsAnyLock(ctx, k) {
 				if graphIdKeyMutex.RLockTimeout(k, graphKeyLockTimeout) {
-					ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.%s.r", k), easyjson.NewJSON(true))
+					recordHeldLock(ctx, k, "r")
 				} else {
 					lg.Logf(lg.WarnLevel, "operationKeysMutexLock: read-lock acquire for key=%s timed out after %s; proceeding without it", k, graphKeyLockTimeout)
 				}
@@ -195,18 +225,18 @@ func operationKeysMutexLockMixed(ctx *sfPlugins.StatefunContextProcessor, writeK
 	lockedWriteAny := false
 	for _, k := range all {
 		if write[k] {
-			if !ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s.w", k)) {
+			if !parentHoldsWriteLock(ctx, k) {
 				if graphIdKeyMutex.LockTimeout(k, graphKeyLockTimeout) {
-					ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.%s.w", k), easyjson.NewJSON(true))
+					recordHeldLock(ctx, k, "w")
 					lockedWriteAny = true
 				} else {
 					lg.Logf(lg.WarnLevel, "operationKeysMutexLockMixed: write-lock acquire for key=%s timed out after %s; proceeding without it", k, graphKeyLockTimeout)
 				}
 			}
 		} else {
-			if !ctx.Payload.PathExists(fmt.Sprintf("__parent_holds_locks.%s", k)) {
+			if !parentHoldsAnyLock(ctx, k) {
 				if graphIdKeyMutex.RLockTimeout(k, graphKeyLockTimeout) {
-					ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.%s.r", k), easyjson.NewJSON(true))
+					recordHeldLock(ctx, k, "r")
 				} else {
 					lg.Logf(lg.WarnLevel, "operationKeysMutexLockMixed: read-lock acquire for key=%s timed out after %s; proceeding without it", k, graphKeyLockTimeout)
 				}
@@ -220,23 +250,32 @@ func operationKeysMutexLockMixed(ctx *sfPlugins.StatefunContextProcessor, writeK
 }
 
 func operationKeysMutexUnlock(ctx *sfPlugins.StatefunContextProcessor) {
-	unlockedWriteAny := false
 	if ctx.Payload.PathExists("__key_locks") {
-		for _, k := range ctx.Payload.GetByPath("__key_locks").ObjectKeys() {
-			for _, t := range ctx.Payload.GetByPath(fmt.Sprintf("__key_locks.%s", k)).ObjectKeys() {
-				switch t {
-				case "w":
-					graphIdKeyMutex.Unlock(k)
-					unlockedWriteAny = true
-				case "r":
-					graphIdKeyMutex.RUnlock(k)
-				}
+		held := ctx.Payload.GetByPath("__key_locks")
+		for _, seg := range held.ObjectKeys() {
+			key := held.GetByPath(fmt.Sprintf("%s.k", seg)).AsStringDefault("")
+			if key == "" {
+				continue // unrecognized record — nothing safe to release
+			}
+			switch held.GetByPath(fmt.Sprintf("%s.m", seg)).AsStringDefault("") {
+			case "w":
+				graphIdKeyMutex.Unlock(key)
+			case "r":
+				graphIdKeyMutex.RUnlock(key)
 			}
 		}
 		ctx.Payload.RemoveByPath("__key_locks")
 	}
-	if opTime, ok := ctx.Payload.GetByPath("__key_lock_time").AsInt64(); unlockedWriteAny && ok {
+	// Completion marking is deliberately DECOUPLED from the lock records:
+	// __key_lock_time is a flat field that always parses, and it is set exactly
+	// when MarkOperationActive was called — so even a bookkeeping bug that
+	// loses a lock record can orphan at most that one lock, never the
+	// activeOps entry (an orphaned entry wedges the WAL publisher forever).
+	// The field is consumed so repeated lock/unlock pairs within one handler
+	// stay symmetric.
+	if opTime, ok := ctx.Payload.GetByPath("__key_lock_time").AsInt64(); ok {
 		ctx.Domain.Cache().MarkOperationDone(opTime)
+		ctx.Payload.RemoveByPath("__key_lock_time")
 	}
 }
 
@@ -320,6 +359,11 @@ func writeOutLinkKV(ctx *sfPlugins.StatefunContextProcessor, from, toId, linkNam
 func LLAPIVertexCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
 	om := sfMediators.NewOpMediator(ctx)
+
+	if !validVertexID.MatchString(selfID) {
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("invalid vertex id=%s: allowed characters are a-zA-Z0-9/_$#@%%+=- (\".\" is the cache key separator)", selfID))).Reply()
+		return
+	}
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
 	operationKeysMutexLock(ctx, []string{selfID}, true, opTime)
@@ -810,6 +854,10 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 			return
 		}
 		toId = ctx.Domain.CreateObjectIDWithThisDomain(toId, false)
+		if !validVertexID.MatchString(toId) {
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("invalid link target id=%s: allowed characters are a-zA-Z0-9/_$#@%%+=- (\".\" is the cache key separator)", toId))).Reply()
+			return
+		}
 
 		var linkName string
 		if s, ok := payload.GetByPath("name").AsString(); ok {
