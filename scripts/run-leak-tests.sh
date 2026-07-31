@@ -15,9 +15,9 @@
 # LEAK_FLOOR_HEAP_BYTES, LEAK_FLOOR_HEAP_OBJECTS.
 #
 # Every check prints one LEAKCHECK line; the summary table below aggregates
-# them. Checks that are EXPECTED to fail until their underlying finding is
-# fixed are listed in tests/leak/README.md — any OTHER failure is new
-# information. Exit code: 0 = suite passed, 1 = failures, 2 = usage.
+# them. All known findings are fixed and their probes are green regression
+# guards (see tests/leak/README.md) — ANY red check is a leak. Exit code:
+# 0 = suite passed, 1 = failures, 2 = usage.
 set -uo pipefail
 
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"   # absolute self-path, captured BEFORE the cd below
@@ -142,7 +142,7 @@ END {
   if (count["FAIL"] == 0)
     print "  No leaks detected at the 3-sigma level within the reported detection floors.";
   else
-    print "  FAIL rows above: match them against the expected-red findings in tests/leak/README.md — anything NOT listed there is a NEW leak.";
+    print "  FAIL rows above are leaks: either a regression of a fixed finding (tests/leak/README.md) or a new one.";
 }' "$LOG"
 echo
 if [ "$status" -eq 0 ]; then
