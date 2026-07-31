@@ -106,15 +106,17 @@ func (s *S4Suite) Test_ContextWithTTLIsReclaimed() {
 	rep.AssertStable(s.T(), "fn_ctx_keys")
 }
 
-// Test_NamegenBuildErrorLeaksContext — EXPECTED TO FAIL today (L2).
+// Test_NamegenBuildErrorLeaksContext — regression guard for finding L2.
 //
 // The PRODUCTION handler triggerfunc.ObjectNameGenerator stores the whole
-// object body + type body as its function context and only marks it to expire
-// at the very end. On the executor build-error path it returns right after
-// the store, before the expiry — leaving one permanent, GC-invisible context
-// per touched object. The executor here is registered with a non-compiling
-// source to make that branch fire for every id; the handler, flow and
-// context write are the production ones.
+// object body + type body as its function context; historically it only
+// marked the context to expire at the very end, so the executor build-error
+// path returned in between and left one permanent, GC-invisible context per
+// touched object. The executor here is registered with a non-compiling source
+// to make that branch fire for every id; the handler, flow and context write
+// are the production ones. The probe requires every context the handler
+// writes to carry the expiration mark even on the error path, and the
+// GC-invisible population to stay at baseline.
 func (s *S4Suite) Test_NamegenBuildErrorLeaksContext() {
 	const fn = "functions.triggers.object.namegen"
 	s.bootCRUD(func(rt *statefun.Runtime) {
@@ -124,7 +126,6 @@ func (s *S4Suite) Test_NamegenBuildErrorLeaksContext() {
 	})
 	s.Require().NoError(s.dbc.CMDB.TypeCreate("t_s4b"))
 	k := scaled(15)
-	total := 0
 
 	cycle := func(c int) error {
 		ids := make([]string, 0, k)
@@ -140,15 +141,25 @@ func (s *S4Suite) Test_NamegenBuildErrorLeaksContext() {
 				return fmt.Errorf("signal namegen %s: %w", id, err)
 			}
 		}
-		// Every invocation writes the context key (broken or fixed build
-		// alike) — wait until all signals of this run have been processed.
-		total += k
+		// Wait until every invocation of THIS cycle has written its context
+		// (they persist for the 1min production TTL, so presence is stable).
 		deadline := time.Now().Add(20 * time.Second)
-		for s.kvCount(fn+".>") < total && time.Now().Before(deadline) {
-			time.Sleep(100 * time.Millisecond)
+		for _, id := range ids {
+			key := fn + "." + s.domainID(id)
+			for !s.cacheStore().ExistsJson(key) {
+				if time.Now().After(deadline) {
+					return fmt.Errorf("namegen invocation for %s never wrote its context", id)
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
 		}
-		if n := s.kvCount(fn + ".>"); n < total {
-			return fmt.Errorf("only %d of %d namegen invocations wrote their context", n, total)
+		// The L2 pin: even on the build-error path every stored context must
+		// already carry the expiration mark.
+		for _, id := range ids {
+			key := fn + "." + s.domainID(id)
+			if j, err := s.cacheStore().GetValueJSON(key); err == nil && !j.PathExists(contextExpirationMark) {
+				return fmt.Errorf("namegen context for %s carries no expiration mark", id)
+			}
 		}
 		for _, id := range ids {
 			if err := s.dbc.CMDB.ObjectDelete(id); err != nil {

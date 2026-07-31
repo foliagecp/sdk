@@ -123,6 +123,13 @@ func ObjectNameGenerator(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Sta
 	functionContext.SetByPath("object_data", *objectData)
 	functionContext.SetByPath("type_data", *typeData)
 	ctx.SetFunctionContext(functionContext)
+	// Mark the context to expire IMMEDIATELY after storing it: every early
+	// return below (executor build error, script run error) must not leave a
+	// permanent, GC-invisible context carrying the whole object+type bodies —
+	// one per touched object. The closing SetContextExpirationAfter at the end
+	// stays: the JS side may overwrite the context (statefun_setFunctionContext),
+	// which drops this mark, and the final call restores it on the happy path.
+	ctx.SetContextExpirationAfter(functionContextTTL)
 
 	if executor != nil {
 		if err := executor.BuildError(); err != nil {
