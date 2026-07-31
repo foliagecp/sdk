@@ -78,4 +78,20 @@ func (s *S12Suite) Test_KVStreamGrowth() {
 	rep.ReportMetric(s.T(), "kv_stream_bytes")
 	rep.ReportMetric(s.T(), "js_total_msgs")
 	rep.ReportMetric(s.T(), "js_total_bytes")
+
+	// The accumulated tombstones are reclaimable: the maintenance loop purges
+	// delete markers periodically (KV_PURGE_DELETES_INTERVAL_SEC). Verify the
+	// mechanism end-to-end by purging ALL markers now and re-reading the
+	// stream — the churned keys' markers must be gone.
+	msgsBefore, _ := s.streamStats("cache_bucket")
+	s.Require().NoError(s.cacheStore().PurgeKVDeleteMarkers(-1))
+	msgsAfter, _ := s.streamStats("cache_bucket")
+	if msgsAfter < msgsBefore {
+		emitCheck("s12_kv_growth", "kv_purge_delete_markers", "PASS",
+			"before="+f1(msgsBefore), "after="+f1(msgsAfter))
+	} else {
+		emitCheck("s12_kv_growth", "kv_purge_delete_markers", "FAIL",
+			"before="+f1(msgsBefore), "after="+f1(msgsAfter))
+		s.T().Errorf("PurgeKVDeleteMarkers did not shrink the KV stream: %.0f -> %.0f msgs", msgsBefore, msgsAfter)
+	}
 }

@@ -875,6 +875,10 @@ func (r *Runtime) runGarbageCollector(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			// Without this return a cancelled context turned the select into
+			// a busy-spin: ctx.Done() is closed forever, so the loop re-fired
+			// this case at 100% CPU until r.shutdown was also closed.
+			return
 		case <-r.shutdown:
 			return
 		case <-ticker.C:

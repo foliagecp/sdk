@@ -94,6 +94,19 @@ func (csv *StoreValue) nodeMutex() *sync.RWMutex {
 	return &lockPool[csv.lockIdx&lockPoolMask]
 }
 
+// KV delete markers are pure dead weight in this architecture: the cache is
+// the source of truth and every KV load runs with IgnoreDeletes, so nothing
+// ever consumes the markers — they only accumulate, one retained message per
+// key ever deleted (MaxMsgsPerSubject=1 keeps the marker as the subject's
+// last message), growing the broker's stream without bound under key churn.
+// An ACTIVE instance therefore purges markers periodically from its
+// maintenance loop. KV_PURGE_DELETES_INTERVAL_SEC <= 0 disables the periodic
+// purge; the age threshold keeps a safety margin for anything mid-flight.
+var (
+	kvPurgeDeletesInterval  = time.Duration(system.GetEnvMustProceed[int]("KV_PURGE_DELETES_INTERVAL_SEC", 600)) * time.Second
+	kvPurgeMarkersOlderThan = time.Duration(system.GetEnvMustProceed[int]("KV_PURGE_DELETE_MARKERS_OLDER_THAN_SEC", 600)) * time.Second
+)
+
 type StoreValue struct {
 	parent      *StoreValue
 	keyInParent string
@@ -539,6 +552,12 @@ type Store struct {
 	// but the Prometheus snapshot is happening on another goroutine.
 	totalSweepRuns    int64
 	totalSweepRemoved int64
+
+	// Periodic KV delete-marker purge state (see PurgeKVDeleteMarkers):
+	// last trigger time (touched only by the kvLazyWriter goroutine) and a
+	// guard against overlapping purge goroutines.
+	lastKVPurgeDeletes time.Time
+	kvPurgeRunning     atomic.Bool
 }
 
 type maintenanceResult struct {
@@ -879,6 +898,19 @@ func (cs *Store) countSubtreeForTest(csv *StoreValue, st *StoreStatsForTest) {
 	})
 }
 
+// PurgeKVDeleteMarkers removes KV delete/purge markers older than olderThan
+// (negative removes them all regardless of age). Markers are never consumed
+// in this architecture — the cache is the source of truth and every KV load
+// runs with IgnoreDeletes — so they are pure broker-side growth: one retained
+// message per key ever deleted. Called periodically by the active instance's
+// maintenance loop; safe to call manually (ops/tests). No-op without a KV.
+func (cs *Store) PurgeKVDeleteMarkers(olderThan time.Duration) error {
+	if cs.kv == nil {
+		return nil
+	}
+	return cs.kv.PurgeDeletes(nats.DeleteMarkersOlderThan(olderThan))
+}
+
 func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamContext, kv nats.KeyValue) *Store {
 	le := lg.GetLogger()
 	var inited atomic.Bool
@@ -1050,6 +1082,21 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 				maintenanceCounter++
 				if maintenanceCounter >= maintenanceInterval {
 					maintenanceCounter = 0
+
+					// Purge KV delete markers periodically, off the hot loop
+					// (see PurgeKVDeleteMarkers for why they are dead weight).
+					if kvPurgeDeletesInterval > 0 && time.Since(cs.lastKVPurgeDeletes) >= kvPurgeDeletesInterval {
+						cs.lastKVPurgeDeletes = time.Now()
+						if cs.kvPurgeRunning.CompareAndSwap(false, true) {
+							go func() {
+								defer cs.kvPurgeRunning.Store(false)
+								if err := cs.PurgeKVDeleteMarkers(kvPurgeMarkersOlderThan); err != nil {
+									le.Debugf(ctx, "kvLazyWriter: PurgeKVDeleteMarkers: %s", err)
+								}
+							}()
+						}
+					}
+
 					maintResult := cs.traverseCacheForMaintenance()
 					cs.valuesInCache = maintResult.valueCount
 
