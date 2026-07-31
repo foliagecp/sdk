@@ -4,6 +4,9 @@ package main
 
 import (
 	"context"
+	"net/http"
+	_ "net/http/pprof"
+	"os"
 
 	graphCRUD "github.com/foliagecp/sdk/embedded/graph/crud"
 	"github.com/foliagecp/sdk/embedded/graph/fpl"
@@ -34,6 +37,16 @@ func RegisterFunctionTypes(runtime *statefun.Runtime) {
 
 func Start() {
 	system.GlobalPrometrics = system.NewPrometrics("", ":9901")
+
+	// Opt-in pprof endpoint for soak/leak observation: the tests/soak compose
+	// files set PPROF_ADDR=:6060 and curl /debug/pprof/{heap,goroutine}.
+	if addr := os.Getenv("PPROF_ADDR"); addr != "" {
+		go func() {
+			if err := http.ListenAndServe(addr, nil); err != nil {
+				lg.Logf(lg.WarnLevel, "pprof server on %s stopped: %s", addr, err)
+			}
+		}()
+	}
 
 	if runtime, err := statefun.NewRuntime(*statefun.NewRuntimeConfigSimple(NatsURL, "clean").UseJSDomainAsHubDomainName()); err == nil {
 		RegisterFunctionTypes(runtime)
