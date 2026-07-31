@@ -1254,6 +1254,20 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
+// registeredFunctionTypeNames returns a snapshot of every registered function
+// typename. Exposed to statefun handlers via
+// StatefunContextProcessor.ListRegisteredFunctionTypes (graph vertex deletion
+// uses it to drop the deleted vertex's per-id function contexts).
+func (r *Runtime) registeredFunctionTypeNames() []string {
+	r.ftMu.RLock()
+	defer r.ftMu.RUnlock()
+	names := make([]string, 0, len(r.registeredFunctionTypes))
+	for name := range r.registeredFunctionTypes {
+		names = append(names, name)
+	}
+	return names
+}
+
 // FunctionTypeIDStatsForTest returns, per registered function typename, the
 // number of live per-id handler entries. Test-only observability for leak
 // tests: after a function type has been idle past the id-lifetime GC, its

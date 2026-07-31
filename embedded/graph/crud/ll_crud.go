@@ -637,6 +637,17 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	ctx.Domain.Cache().DeleteValue(selfID, true, opTime) // Delete vertex's body
 
+	// The vertex's per-id FUNCTION CONTEXTS (`<typename>.<id>` cache keys) die
+	// with the vertex. Without this, a context written without an expiration
+	// mark outlived its object forever: the context GC reclaims only marked
+	// contexts and nothing ever references a deleted id again. One cheap
+	// mostly-miss cache lookup per registered function type.
+	if ctx.ListRegisteredFunctionTypes != nil {
+		for _, tn := range ctx.ListRegisteredFunctionTypes() {
+			ctx.Domain.Cache().DeleteValue(tn+"."+selfID, true, opTime)
+		}
+	}
+
 	// Belt-and-braces: the __type-link branch of deleteOutLinkFromSideKeys
 	// already purged the objectTypeCache entry for a well-formed object; this
 	// covers vertices deleted without a __type link so the invariant is

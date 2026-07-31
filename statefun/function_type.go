@@ -372,12 +372,13 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 		typenameIDContextProcessor = v.(*sfPlugins.StatefunContextProcessor)
 	} else {
 		v := sfPlugins.StatefunContextProcessor{
-			GetFunctionContext:        func() *easyjson.JSON { return ft.getContext(ft.name + "." + id) },
-			SetFunctionContext:        func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
-			SetContextExpirationAfter: func(after time.Duration) { ft.setContextExpirationAfter(ft.name+"."+id, after) },
-			GetObjectContext:          func() *easyjson.JSON { return ft.getObjectContext(id) },
-			SetObjectContext:          func(context *easyjson.JSON) { ft.setObjectContext(id, context) },
-			GetObjectImplTypes:        func() (types []string, err error) { return ft.getObjectImplTypes(id) },
+			GetFunctionContext:          func() *easyjson.JSON { return ft.getContext(ft.name + "." + id) },
+			SetFunctionContext:          func(context *easyjson.JSON) { ft.setContext(ft.name+"."+id, context) },
+			SetContextExpirationAfter:   func(after time.Duration) { ft.setContextExpirationAfter(ft.name+"."+id, after) },
+			GetObjectContext:            func() *easyjson.JSON { return ft.getObjectContext(id) },
+			SetObjectContext:            func(context *easyjson.JSON) { ft.setObjectContext(id, context) },
+			GetObjectImplTypes:          func() (types []string, err error) { return ft.getObjectImplTypes(id) },
+			ListRegisteredFunctionTypes: func() []string { return ft.runtime.registeredFunctionTypeNames() },
 			Domain:                    ft.runtime.Domain,
 			Self:                      sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
 			ObjectSignal: func(signalProvider sfPlugins.SignalProvider, query sfPlugins.LinkQuery, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) (map[string]error, error) {

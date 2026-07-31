@@ -19,13 +19,12 @@ import (
 
 // S4 — statefun function contexts (cache keys `<typename>.<id>`).
 //
-// (a) a context WITH an expiry is reclaimed by the runtime GC — PASS, and it
-//     proves the observation channel the two red probes below rely on;
-// (b) the production namegen trigger leaks its context on the executor
-//     build-error path — EXPECTED FAIL today (finding L2);
-// (c) a context without an expiry survives the deletion of its object —
-//     EXPECTED FAIL today (finding L1: no cleanup hook on vertex/object
-//     delete, reclaim is opt-in TTL only).
+// (a) a context WITH an expiry is reclaimed by the runtime GC — and it
+//     proves the observation channel the two regression probes rely on;
+// (b) the production namegen trigger marks its context to expire even on the
+//     executor error paths (finding L2);
+// (c) contexts die with their object: vertex.delete drops every
+//     `<typename>.<id>` key of the deleted vertex (finding L1).
 
 // contextExpirationMark mirrors the unexported contextExpirationKey constant
 // in statefun/function_type.go — the marker the GC requires before it will
@@ -176,12 +175,13 @@ func (s *S4Suite) Test_NamegenBuildErrorLeaksContext() {
 	rep.AssertStable(s.T(), "namegen_ctx_no_ttl")
 }
 
-// Test_ContextOfDeletedObjectSurvives — EXPECTED TO FAIL today (L1).
+// Test_ContextOfDeletedObjectSurvives — regression guard for finding L1.
 //
-// A function context written without an expiry for an object id stays in the
-// cache forever after the object is deleted: neither vertex.delete nor
-// object.delete touches `<typename>.<id>` keys, and the GC only reclaims
-// contexts carrying the expiration mark.
+// Historically a function context written without an expiry stayed in the
+// cache forever after its object was deleted (no cleanup hook existed, the
+// GC reclaims only expiry-marked contexts). vertex.delete now drops every
+// `<typename>.<id>` context of the deleted vertex, so the population must
+// return to baseline.
 func (s *S4Suite) Test_ContextOfDeletedObjectSurvives() {
 	const fn = "test.leak.ctx.noexpiry"
 	s.bootCRUD(s.registerCtxFn(fn, 0))
