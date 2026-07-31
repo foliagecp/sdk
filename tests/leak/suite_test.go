@@ -3,8 +3,10 @@
 package leak
 
 import (
+	"strings"
 	"time"
 
+	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/clients/go/db"
 	"github.com/foliagecp/sdk/embedded/graph/crud"
 	"github.com/foliagecp/sdk/statefun"
@@ -98,5 +100,48 @@ func (s *leakSuite) newRunner(scenario string, cycle func(i int) error, collect 
 		Cycle:    cycle,
 		Collect:  collect,
 		Quiesce:  s.quiesce,
+		// The embedded NATS server shares this process: JetStream/KV churn
+		// grows ITS heap by design (per-subject state, retained tombstones).
+		// Assert the SDK's own share; report the server's.
+		SplitNatsHeap: true,
 	}
+}
+
+// coreMetrics are the deterministic invariants every graph-churn scenario
+// asserts: cache tree population, WAL backlog, the graph key mutex and the
+// process-global object-type cache must all return to their post-warmup
+// baseline once a cycle's state has been fully deleted.
+var coreMetrics = []string{
+	"cache_live_values",
+	"cache_total_nodes",
+	"cache_tombstones",
+	"cache_pending_txs",
+	"cache_active_ops",
+	"graph_keymutex_entries",
+	"object_type_cache",
+}
+
+func (s *leakSuite) collectCore(smp *Sample) {
+	st := s.cacheStore().StatsForTest()
+	smp.Custom["cache_live_values"] = float64(st.LiveValues)
+	smp.Custom["cache_total_nodes"] = float64(st.TotalNodes)
+	smp.Custom["cache_tombstones"] = float64(st.Tombstones)
+	smp.Custom["cache_pending_txs"] = float64(st.PendingTxs)
+	smp.Custom["cache_active_ops"] = float64(st.ActiveOps)
+	smp.Custom["graph_keymutex_entries"] = float64(crud.GraphKeyMutexEntriesForTest())
+	smp.Custom["object_type_cache"] = float64(crud.ObjectTypeCacheSizeForTest())
+}
+
+func (s *leakSuite) assertCoreStable(rep *Report) {
+	for _, m := range coreMetrics {
+		rep.AssertStable(s.T(), m)
+	}
+}
+
+// leakBody builds a vertex/object body with a blob of roughly `size` bytes so
+// churned state has realistic weight.
+func leakBody(size int) easyjson.JSON {
+	b := easyjson.NewJSONObject()
+	b.SetByPath("payload", easyjson.NewJSON(strings.Repeat("x", size)))
+	return b
 }

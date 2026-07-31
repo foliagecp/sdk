@@ -3,6 +3,7 @@
 package leak
 
 import (
+	"bytes"
 	"encoding/csv"
 	"fmt"
 	"math"
@@ -12,6 +13,7 @@ import (
 	"runtime/pprof"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,6 +81,11 @@ type Verdict struct {
 	Bound3Sigma    float64 // slope + 3*SE: residual-drift upper bound
 	DetectionFloor float64 // max(3*SE, floor): smallest leak this run could flag
 	Leaking        bool
+	// ReportOnly verdicts are informational: emitted as REPORT lines and
+	// never fail the test. Used for growth that is real but lives outside
+	// the SDK's own heap (the embedded NATS server shares the test process;
+	// in production it is a separate process).
+	ReportOnly bool
 }
 
 // olsSlope fits y = a + b*x over x = 0..n-1 and returns the slope with its
@@ -158,6 +165,14 @@ type CycleRunner struct {
 	// SettleTimeout bounds the final wait for goroutines to return to the
 	// baseline count. 0 means 15s.
 	SettleTimeout time.Duration
+	// SplitNatsHeap separates the process heap by allocation stack into the
+	// SDK's own share and the embedded NATS server's share (per-sample heap
+	// profile). The SDK share is ASSERTED; the server share and the raw
+	// process totals become REPORT-only. Runtime-backed scenarios need this:
+	// JetStream/KV churn grows server-side state (per-subject tree nodes,
+	// file-store buffers, retained KV tombstones) inside the same process,
+	// which in production belongs to a separate NATS process.
+	SplitNatsHeap bool
 }
 
 type Report struct {
@@ -229,21 +244,46 @@ func (r *CycleRunner) Run(t *testing.T) *Report {
 		dumpGoroutines(filepath.Join(dir, "goroutines-final.txt"))
 	}
 
-	heapAlloc := make([]float64, len(rep.Samples))
-	heapObjects := make([]float64, len(rep.Samples))
-	for i, s := range rep.Samples {
-		heapAlloc[i] = float64(s.HeapAlloc)
-		heapObjects[i] = float64(s.HeapObjects)
+	bytesFloor := envFloat("LEAK_FLOOR_HEAP_BYTES", 64*1024)
+	objectsFloor := envFloat("LEAK_FLOOR_HEAP_OBJECTS", 500)
+	addVerdict := func(metric string, floorDef float64, reportOnly bool) {
+		v := verdictFor(metric, rep.metricSeries(metric), r.floor(metric, floorDef))
+		v.ReportOnly = reportOnly
+		rep.Verdicts = append(rep.Verdicts, v)
 	}
-	rep.Verdicts = []Verdict{
-		verdictFor("heap_alloc", heapAlloc, r.floor("heap_alloc", envFloat("LEAK_FLOOR_HEAP_BYTES", 64*1024))),
-		verdictFor("heap_objects", heapObjects, r.floor("heap_objects", envFloat("LEAK_FLOOR_HEAP_OBJECTS", 500))),
+	if r.SplitNatsHeap {
+		addVerdict("sdk_inuse_bytes", bytesFloor, false)
+		addVerdict("sdk_inuse_objects", objectsFloor, false)
+		addVerdict("nats_inuse_bytes", 0, true)
+		addVerdict("nats_inuse_objects", 0, true)
+		addVerdict("heap_alloc", bytesFloor, true)
+		addVerdict("heap_objects", objectsFloor, true)
+	} else {
+		addVerdict("heap_alloc", bytesFloor, false)
+		addVerdict("heap_objects", objectsFloor, false)
 	}
 
 	if err := rep.writeCSV(); err != nil {
 		t.Fatalf("[%s] cannot write samples CSV: %v", r.Scenario, err)
 	}
 	return rep
+}
+
+// metricSeries extracts a metric's per-cycle series: built-in fields by name,
+// everything else from Custom.
+func (rep *Report) metricSeries(metric string) []float64 {
+	y := make([]float64, len(rep.Samples))
+	for i, s := range rep.Samples {
+		switch metric {
+		case "heap_alloc":
+			y[i] = float64(s.HeapAlloc)
+		case "heap_objects":
+			y[i] = float64(s.HeapObjects)
+		default:
+			y[i] = s.Custom[metric]
+		}
+	}
+	return y
 }
 
 func (r *CycleRunner) settleTimeout() time.Duration {
@@ -286,10 +326,64 @@ func (r *CycleRunner) sample(cycle int) Sample {
 		Goroutines:  g,
 		Custom:      map[string]float64{},
 	}
+	if r.SplitNatsHeap {
+		sdkB, sdkO, natsB, natsO := heapSplitByOwner()
+		s.Custom["sdk_inuse_bytes"] = float64(sdkB)
+		s.Custom["sdk_inuse_objects"] = float64(sdkO)
+		s.Custom["nats_inuse_bytes"] = float64(natsB)
+		s.Custom["nats_inuse_objects"] = float64(natsO)
+	}
 	if r.Collect != nil {
 		r.Collect(&s)
 	}
 	return s
+}
+
+// heapSplitByOwner snapshots the in-use heap (as of the GC that just ran) and
+// splits it by allocation stack: a sample whose stack contains any
+// nats-io/nats-server frame is the embedded server's, everything else is the
+// SDK's (tests, sdk packages, stdlib on their behalf).
+func heapSplitByOwner() (sdkBytes, sdkObjects, natsBytes, natsObjects int64) {
+	var buf bytes.Buffer
+	if err := pprof.WriteHeapProfile(&buf); err != nil {
+		return 0, 0, 0, 0
+	}
+	prof, err := profile.Parse(&buf)
+	if err != nil {
+		return 0, 0, 0, 0
+	}
+	bytesIdx, objectsIdx := -1, -1
+	for i, st := range prof.SampleType {
+		switch st.Type {
+		case "inuse_space":
+			bytesIdx = i
+		case "inuse_objects":
+			objectsIdx = i
+		}
+	}
+	if bytesIdx == -1 || objectsIdx == -1 {
+		return 0, 0, 0, 0
+	}
+	for _, s := range prof.Sample {
+		nats := false
+	frames:
+		for _, loc := range s.Location {
+			for _, line := range loc.Line {
+				if line.Function != nil && strings.HasPrefix(line.Function.Name, "github.com/nats-io/nats-server") {
+					nats = true
+					break frames
+				}
+			}
+		}
+		if nats {
+			natsBytes += s.Value[bytesIdx]
+			natsObjects += s.Value[objectsIdx]
+		} else {
+			sdkBytes += s.Value[bytesIdx]
+			sdkObjects += s.Value[objectsIdx]
+		}
+	}
+	return sdkBytes, sdkObjects, natsBytes, natsObjects
 }
 
 // ---------------------------------------------------------------------------
@@ -305,6 +399,10 @@ func (rep *Report) AssertClean(t *testing.T) {
 		kv := []string{
 			"slope=" + f1(v.Slope), "se=" + f1(v.StdErr), "floor=" + f1(v.Floor),
 			"bound3s=" + f1(v.Bound3Sigma), "dfloor=" + f1(v.DetectionFloor),
+		}
+		if v.ReportOnly {
+			emitCheck(rep.Scenario, v.Metric, "REPORT", kv...)
+			continue
 		}
 		if v.Leaking {
 			emitCheck(rep.Scenario, v.Metric, "FAIL", kv...)
