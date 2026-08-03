@@ -71,7 +71,7 @@ Env knobs: `LEAK_WARMUP`, `LEAK_CYCLES`, `LEAK_SCALE`,
 | S1 | `TestS1LLCrudChurn` | low-level vertex/link create-update-delete, fresh ids each cycle | PASS |
 | S2 | `TestS2CMDBObjectChurn` (+probe) | CMDB objects/links churn; probe: object-type cache lifecycle on partial deletes (L3) | PASS |
 | S3 | `TestS3TypeCascadeChurn` | fresh type + objects + `type.delete` cascade per cycle | PASS |
-| S4 | `TestS4FunctionContexts` | (a) TTL context reclaimed; (b) namegen contexts expire even on executor error paths (L2); (c) contexts die with their object (L1) | PASS |
+| S4 | `TestS4FunctionContexts` | (a) TTL context reclaimed; (b) namegen contexts expire even on executor error paths (L2); (c) contexts die with their object (L1); (d) salted-id contexts (`id===hash`) die with the vertex too (L1b); (e) batch create/delete with a real namegen trigger leaves no contexts | PASS |
 | S5 | `TestS5JPGQL` | jpgql queries over static+churning graph; per-id machinery decay | PASS |
 | S6 | `TestS6FPL` | FPL incl. vbody/obody with `links_in_body`/`links_out_body`; unique-id minting decay | PASS |
 | S7 | `TestS7Batch` | sequential + parallel (sub-batch split) batches | PASS |
@@ -90,6 +90,7 @@ check is a leak** — either a regression of the findings below or a new one.
 | Finding | Check | What used to leak / what is guarded now |
 |---|---|---|
 | **L1** | `s4c_ctx_orphans / orphan_ctx_keys` | contexts `<typename>.<id>` without a TTL outlived their object forever; `vertex.delete` now drops every registered function type's context for the deleted id |
+| **L1b** | `s4d_salted_ctx / salted_ctx_keys` | contexts written by SALTED invocations (`<id>===<hash>`, the sequence-free parallelization suffix) live under sibling keys the exact delete missed; `vertex.delete` now also scans each typename's context level for `<id>===` prefixed keys (`s4e` guards the batch→trigger→context chain end-to-end) |
 | **L2** | `s4b_namegen_builderr / namegen_ctx_no_ttl` | namegen stored object+type bodies as context and set the TTL only at the end; the mark is now set immediately after the store, so executor error paths cannot strand it |
 | **L3** | `s2_otc_orphan / object_type_cache` | partial deletes (IDLE/abort paths) kept `objectTypeCache` entries forever; every delete path now purges unconditionally, and empty types are never cached |
 | **L4** | `s9_force_retarget / cache tree` | `force=true` retarget stranded the old target's `ltype`/`in` keys; force is now an atomic replace (old link's keys dropped first) |

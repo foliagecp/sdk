@@ -667,10 +667,20 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	// with the vertex. Without this, a context written without an expiration
 	// mark outlived its object forever: the context GC reclaims only marked
 	// contexts and nothing ever references a deleted id again. One cheap
-	// mostly-miss cache lookup per registered function type.
+	// mostly-miss cache lookup per registered function type — plus one
+	// single-level scan for SALTED variants: an invocation parallelized via
+	// the sequence-free suffix (`<id>===<hash>`) stores its context under the
+	// full salted id, a sibling key of the exact one, which the exact delete
+	// would miss.
 	if ctx.ListRegisteredFunctionTypes != nil {
+		saltedPrefix := selfID + "==="
 		for _, tn := range ctx.ListRegisteredFunctionTypes() {
 			ctx.Domain.Cache().DeleteValue(tn+"."+selfID, true, opTime)
+			for _, key := range ctx.Domain.Cache().GetKeysByPattern(tn + ".*") {
+				if strings.HasPrefix(key[len(tn)+1:], saltedPrefix) {
+					ctx.Domain.Cache().DeleteValue(key, true, opTime)
+				}
+			}
 		}
 	}
 

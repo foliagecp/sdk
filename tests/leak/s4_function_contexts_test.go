@@ -4,10 +4,12 @@ package leak
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/foliagecp/easyjson"
+	"github.com/foliagecp/sdk/embedded/graph/batch"
 	"github.com/foliagecp/sdk/embedded/graph/triggerfunc"
 	"github.com/foliagecp/sdk/statefun"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
@@ -175,6 +177,121 @@ func (s *S4Suite) Test_NamegenBuildErrorLeaksContext() {
 	}
 	rep := s.newRunner("s4b_namegen_builderr", cycle, collect).Run(s.T())
 	rep.AssertStable(s.T(), "namegen_ctx_no_ttl")
+}
+
+// Test_SaltedContextsDieWithVertex — regression guard for finding L1b.
+//
+// A function invoked on a SALTED id (`<id>===<hash>`, the sequence-free
+// suffix used to parallelize calls on one vertex) writes its context under
+// the full salted key `<typename>.<id>===<salt>`. The vertex-delete cleanup
+// must drop those sibling keys too, not only the exact `<typename>.<id>` —
+// otherwise every parallelized invocation leaks one context per salt
+// forever.
+func (s *S4Suite) Test_SaltedContextsDieWithVertex() {
+	const fn = "test.leak.ctx.salted"
+	s.bootCRUD(s.registerCtxFn(fn, 0))
+	s.Require().NoError(s.dbc.CMDB.TypeCreate("t_s4d"))
+	k := scaled(15)
+
+	cycle := func(c int) error {
+		ids := make([]string, 0, k)
+		for i := 0; i < k; i++ {
+			id := fmt.Sprintf("s4d-%d-%d", c, i)
+			if err := s.dbc.CMDB.ObjectCreate(id, "t_s4d"); err != nil {
+				return fmt.Errorf("object.create %s: %w", id, err)
+			}
+			ids = append(ids, id)
+		}
+		for _, id := range ids {
+			// Plain invocation plus two parallelized (salted) ones — the
+			// exact shape makeSequenceFreeParentBasedID produces.
+			if err := s.callFn(fn, id); err != nil {
+				return fmt.Errorf("ctx write %s: %w", id, err)
+			}
+			for _, salt := range []string{"aaaa1111", "bbbb2222"} {
+				if err := s.callFn(fn, id+"==="+salt); err != nil {
+					return fmt.Errorf("salted ctx write %s===%s: %w", id, salt, err)
+				}
+			}
+		}
+		for _, id := range ids {
+			if err := s.dbc.CMDB.ObjectDelete(id); err != nil {
+				return fmt.Errorf("object.delete %s: %w", id, err)
+			}
+		}
+		return nil
+	}
+
+	collect := func(smp *Sample) {
+		smp.Custom["salted_ctx_keys"] = float64(s.kvCount(fn + ".>"))
+	}
+	rep := s.newRunner("s4d_salted_ctx", cycle, collect).Run(s.T())
+	rep.AssertStable(s.T(), "salted_ctx_keys")
+}
+
+// Test_BatchChurnLeavesNoTriggerContexts — batch create/delete with a real
+// namegen create-trigger attached: the trigger runs on every created object
+// and stores its per-object context; deleting the objects through a batch
+// must remove every one of those contexts immediately (plain or salted, and
+// without waiting out the 1-minute production TTL).
+func (s *S4Suite) Test_BatchChurnLeavesNoTriggerContexts() {
+	const fn = "functions.triggers.object.namegen"
+	s.bootCRUD(triggerfunc.RegisterObjectNameGenerator, batch.RegisterAllFunctionTypes)
+	s.Require().NoError(s.dbc.CMDB.TypeCreate("t_s4e"))
+	s.Require().NoError(s.dbc.CMDB.TriggerObjectSet("t_s4e", "create", fn))
+	k := scaled(15)
+
+	cycle := func(c int) error {
+		ids := make([]string, 0, k)
+		b := s.dbc.BatchCreate(fmt.Sprintf("s4e-create-%d", c))
+		for i := 0; i < k; i++ {
+			id := fmt.Sprintf("s4e-%d-%d", c, i)
+			ids = append(ids, id)
+			b.Operation("functions.cmdb.api.object.update", id, upsertPayload("t_s4e", leakBody(50)))
+		}
+		if _, err := b.Commit(); err != nil {
+			return fmt.Errorf("batch create: %w", err)
+		}
+
+		// The create-trigger fires asynchronously; wait until every object
+		// has stored its namegen context (plain or salted key alike).
+		deadline := time.Now().Add(20 * time.Second)
+		for {
+			keys := s.cacheStore().GetKeysByPattern(fn + ".*")
+			covered := 0
+			for _, id := range ids {
+				pref := fn + "." + s.domainID(id)
+				for _, key := range keys {
+					if key == pref || strings.HasPrefix(key, pref+"===") {
+						covered++
+						break
+					}
+				}
+			}
+			if covered == len(ids) {
+				break
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("only %d of %d trigger contexts appeared", covered, len(ids))
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		d := s.dbc.BatchCreate(fmt.Sprintf("s4e-delete-%d", c))
+		for _, id := range ids {
+			d.Operation("functions.cmdb.api.object.delete", id, opTimePayload())
+		}
+		if _, err := d.Commit(); err != nil {
+			return fmt.Errorf("batch delete: %w", err)
+		}
+		return nil
+	}
+
+	collect := func(smp *Sample) {
+		smp.Custom["trigger_ctx_keys"] = float64(s.kvCount(fn + ".>"))
+	}
+	rep := s.newRunner("s4e_batch_trigger_ctx", cycle, collect).Run(s.T())
+	rep.AssertStable(s.T(), "trigger_ctx_keys")
 }
 
 // Test_ContextOfDeletedObjectSurvives — regression guard for finding L1.
