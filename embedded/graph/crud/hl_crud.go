@@ -799,7 +799,11 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		link.SetByPath("upsert", ctx.Payload.GetByPath("upsert"))
 
 		objectLinkType := ""
-		if olt, e := getObjectsLinkTypeFromTypesLink(ctx, ctx.Self.ID, toType); e == nil {
+		// selfID, not the raw ctx.Self.ID: a salted invocation (`id===hash`)
+		// would otherwise make the helper cacheSetTypeEdge the result under
+		// the SALTED fromType — a permanent entry no clean-name purge path
+		// (cachePurgeTypeEdgesForType / cacheDeleteTypeEdge) ever removes.
+		if olt, e := getObjectsLinkTypeFromTypesLink(ctx, selfID, toType); e == nil {
 			objectLinkType = olt
 		} else {
 			objectLinkType = toType

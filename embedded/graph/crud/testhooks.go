@@ -21,6 +21,14 @@ func GraphKeyMutexEntriesForTest() int {
 	return graphIdKeyMutex.EntryCountForTest()
 }
 
+// TypeEdgeCacheSizeForTest returns the number of outer fromType entries in
+// the package-global type2TypeObjectLinkTypeCache.
+func TypeEdgeCacheSizeForTest() int {
+	n := 0
+	type2TypeObjectLinkTypeCache.Range(func(_, _ any) bool { n++; return true })
+	return n
+}
+
 // ResetPackageCachesForTest clears every package-global cache sync.Map
 // (objectTypeCache, type2TypeObjectLinkTypeCache, typeObjectTriggersCache,
 // typesLinkTriggersCache, typeHRNFieldCache). The caches survive across
