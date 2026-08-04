@@ -86,6 +86,7 @@ rx_for() {
     s10) echo '^TestS10GoroutineHygiene$' ;;
     s11) echo '^TestS11ExportSessions$' ;;
     s12) echo '^TestS12KVGrowthReport$' ;;
+    s13) echo '^TestS13SaltedHLChurn$' ;;
     core) echo '^(TestS0PlantedLeakIsFlagged|TestS0ControlIsClean|TestS1LLCrudChurn|TestS2CMDBObjectChurn|TestS5JPGQL|TestS9CacheStore)$' ;;
     all) echo '^TestS[0-9]' ;;
     *) return 1 ;;
@@ -98,7 +99,7 @@ rx_for() {
 # process per scenario = clean baselines, zero cross-contamination. The test
 # binary is compiled once and reused by go test's build cache.
 case "$SCENARIO" in
-  all)  SCEN_LIST="s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11 s12" ;;
+  all)  SCEN_LIST="s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11 s12 s13" ;;
   core) SCEN_LIST="s0 s1 s2 s5 s9" ;;
   *)    rx_for "$SCENARIO" >/dev/null || { echo "unknown scenario: $SCENARIO (s0..s12|core|all)"; exit 2; }
         SCEN_LIST="$SCENARIO" ;;

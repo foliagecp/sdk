@@ -24,8 +24,30 @@ func GraphKeyMutexEntriesForTest() int {
 // TypeEdgeCacheSizeForTest returns the number of outer fromType entries in
 // the package-global type2TypeObjectLinkTypeCache.
 func TypeEdgeCacheSizeForTest() int {
+	return syncMapLenForTest(&type2TypeObjectLinkTypeCache)
+}
+
+// TypeObjectTriggersCacheSizeForTest returns the number of entries in the
+// package-global typeObjectTriggersCache.
+func TypeObjectTriggersCacheSizeForTest() int {
+	return syncMapLenForTest(&typeObjectTriggersCache)
+}
+
+// TypesLinkTriggersCacheSizeForTest returns the number of entries in the
+// package-global typesLinkTriggersCache.
+func TypesLinkTriggersCacheSizeForTest() int {
+	return syncMapLenForTest(&typesLinkTriggersCache)
+}
+
+// TypeHRNFieldCacheSizeForTest returns the number of entries in the
+// package-global typeHRNFieldCache.
+func TypeHRNFieldCacheSizeForTest() int {
+	return syncMapLenForTest(&typeHRNFieldCache)
+}
+
+func syncMapLenForTest(m *sync.Map) int {
 	n := 0
-	type2TypeObjectLinkTypeCache.Range(func(_, _ any) bool { n++; return true })
+	m.Range(func(_, _ any) bool { n++; return true })
 	return n
 }
 

@@ -6,8 +6,13 @@ NATS + fresh runtime, with two classes of evidence per scenario:
 1. **Deterministic invariants** — exact counters must return to their own
    post-warmup baseline (delta == 0): cache-tree population (live values /
    total nodes / tombstones), WAL backlog (`pendingTxs`, `activeOps`), the
-   graph key mutex, the process-global object-type cache, per-id statefun
-   machinery, the mediator reply store, export sessions, goroutines.
+   graph key mutex, ALL five process-global crud caches (object-type,
+   type-edge, object-trigger, link-trigger, HRN), per-id statefun machinery,
+   the mediator reply store, export sessions, goroutines. Counter coverage
+   is deliberately exhaustive: a per-entry structural leak (one map record
+   per call, tens of bytes) sits far below any statistically honest heap
+   floor, so counters — not heap slopes — are the instrument that catches
+   that class.
 2. **Statistical drift bound** — over M measured cycles the OLS slope `b`
    of each heap metric is computed with its standard error. **LEAK ⇔
    `b > 3·SE(b)` AND `b > floor` AND the tail slope (second half of the
@@ -80,6 +85,7 @@ Env knobs: `LEAK_WARMUP`, `LEAK_CYCLES`, `LEAK_SCALE`,
 | S10 | `TestS10GoroutineHygiene` | mixed churn+query+batch, exact goroutine settle | PASS |
 | S11 | `TestS11ExportSessions` | chunked exports: completed + abandoned, TTL drain | PASS |
 | S12 | `TestS12KVGrowthReport` | NATS-side KV/stream growth under fresh-id churn + delete-marker purge check | REPORT + PASS |
+| S13 | `TestS13SaltedHLChurn` | HL CRUD (object create/read/delete, types.link upsert-update) driven entirely through salted ids with fresh salts per call; born from the salted type-edge cache leak | PASS |
 
 ## Fixed findings (probes are green regression guards)
 

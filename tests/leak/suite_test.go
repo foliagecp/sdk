@@ -119,6 +119,10 @@ var coreMetrics = []string{
 	"cache_active_ops",
 	"graph_keymutex_entries",
 	"object_type_cache",
+	"type_edge_cache",
+	"type_object_triggers_cache",
+	"types_link_triggers_cache",
+	"type_hrn_field_cache",
 }
 
 func (s *leakSuite) collectCore(smp *Sample) {
@@ -129,7 +133,16 @@ func (s *leakSuite) collectCore(smp *Sample) {
 	smp.Custom["cache_pending_txs"] = float64(st.PendingTxs)
 	smp.Custom["cache_active_ops"] = float64(st.ActiveOps)
 	smp.Custom["graph_keymutex_entries"] = float64(crud.GraphKeyMutexEntriesForTest())
+	// EVERY process-global crud cache is under an invariant. Lesson learned
+	// the hard way: a per-entry structural leak (one sync.Map record per
+	// call) is far below any statistically honest heap floor — deterministic
+	// counters are the only instrument that catches it, so their coverage
+	// must be exhaustive, not representative.
 	smp.Custom["object_type_cache"] = float64(crud.ObjectTypeCacheSizeForTest())
+	smp.Custom["type_edge_cache"] = float64(crud.TypeEdgeCacheSizeForTest())
+	smp.Custom["type_object_triggers_cache"] = float64(crud.TypeObjectTriggersCacheSizeForTest())
+	smp.Custom["types_link_triggers_cache"] = float64(crud.TypesLinkTriggersCacheSizeForTest())
+	smp.Custom["type_hrn_field_cache"] = float64(crud.TypeHRNFieldCacheSizeForTest())
 }
 
 func (s *leakSuite) assertCoreStable(rep *Report) {
