@@ -42,6 +42,20 @@ done
 
 fail=0
 
+# sweep_systest_leftovers removes containers/volumes surviving an interrupted
+# prior run (or a manual run.sh). System tests need it for the host ports they
+# bind; the GO phase needs it too — a leftover NATS+JetStream container is
+# steady background load that skews timing-sensitive integration tests
+# (observed: a stray backup-restore nats container flaking the statefun
+# export-committer test).
+sweep_systest_leftovers() {
+  if command -v docker >/dev/null 2>&1; then
+    echo ">> sweeping leftover foliage-systest containers/volumes"
+    docker ps -aq --filter 'name=foliage-systest-' | xargs -r docker rm -f >/dev/null 2>&1 || true
+    docker volume ls -q --filter 'name=foliage-systest-' | xargs -r docker volume rm -f >/dev/null 2>&1 || true
+  fi
+}
+
 # -----------------------------------------------------------------------------
 # Phase 1 — Go tests
 # -----------------------------------------------------------------------------
@@ -49,6 +63,7 @@ if [ "$SYSTEM_ONLY" -eq 0 ]; then
   echo "=================================================================="
   echo "Phase 1: Go tests  (go test ${PARALLEL} -count=1 ${RACE} ${COVER} ./...)"
   echo "=================================================================="
+  sweep_systest_leftovers
   # shellcheck disable=SC2086
   if go test ${PARALLEL} -count=1 ${RACE} ${COVER} ./...; then
     echo ">> Go tests: PASS"
@@ -74,15 +89,10 @@ if [ "$GO_ONLY" -eq 0 ]; then
   echo "Phase 2: system tests (docker-compose)"
   echo "=================================================================="
   # Every system test binds the same host ports (e.g. NATS monitoring :8222), so
-  # they must run one at a time on a clean slate. A container left over from an
-  # interrupted prior run — or from a manual `run.sh` — keeps holding those ports
-  # and makes the next `docker compose up` fail with "port is already allocated"
-  # (and can be silently reused with stale data). Sweep any stragglers first.
-  if command -v docker >/dev/null 2>&1; then
-    echo ">> sweeping leftover foliage-systest containers/volumes"
-    docker ps -aq --filter 'name=foliage-systest-' | xargs -r docker rm -f >/dev/null 2>&1 || true
-    docker volume ls -q --filter 'name=foliage-systest-' | xargs -r docker volume rm -f >/dev/null 2>&1 || true
-  fi
+  # they must run one at a time on a clean slate: a leftover container keeps
+  # holding those ports and makes the next `docker compose up` fail with "port
+  # is already allocated" (and can be silently reused with stale data).
+  sweep_systest_leftovers
 
   SYS_DIR="tests/system"
   if [ -d "$SYS_DIR" ] && compgen -G "$SYS_DIR/*/run.sh" > /dev/null; then

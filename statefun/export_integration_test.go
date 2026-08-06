@@ -237,20 +237,33 @@ verify:
 	assert.True(t, foundLink, "expected link_put for srv01->rackA")
 }
 
+// hasAllOps reports whether the export stream has delivered THIS test's own
+// operations. Counting just "any 2 vertex_put + 1 link_put" is not enough:
+// under load the first WAL flush may carry only the built-in CRUD schema
+// bootstrap (types/objects roots and their links), which satisfied the old
+// counters and cut the wait short — the verify block then failed on
+// srv01/rackA that were still in flight in a later transaction, with 10s of
+// the 15s budget left unused.
 func hasAllOps(events []statefun.ExportEvent) bool {
-	vertexCount := 0
-	linkCount := 0
+	foundSrv01, foundRackA, foundLink := false, false, false
 	for _, evt := range events {
 		for _, op := range evt.Ops {
 			switch op.Op {
 			case "vertex_put":
-				vertexCount++
+				if op.ID == evt.Domain+"/srv01" {
+					foundSrv01 = true
+				}
+				if op.ID == evt.Domain+"/rackA" {
+					foundRackA = true
+				}
 			case "link_put":
-				linkCount++
+				if op.From == evt.Domain+"/srv01" && op.Name == "hosts" {
+					foundLink = true
+				}
 			}
 		}
 	}
-	return vertexCount >= 2 && linkCount >= 1
+	return foundSrv01 && foundRackA && foundLink
 }
 
 func TestExportCommitter_Disabled(t *testing.T) {

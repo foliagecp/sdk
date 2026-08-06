@@ -43,6 +43,18 @@ func startWorkerPoolTestRuntime(t *testing.T, register func(rt *Runtime)) (*Runt
 	cfg := NewRuntimeConfigSimple(srv.ClientURL(), "wp_test").SetActivePassiveMode(false)
 	rt, err := NewRuntime(*cfg)
 	require.NoError(t, err)
+	// Tear the runtime down when the test ends. Without this every test on
+	// this harness leaked a live runtime for the rest of the package run:
+	// its lifecycle ticker kept refreshing per-function locks against the
+	// by-then-dead embedded NATS every 5s (each attempt a 5s context
+	// deadline), and its cache lazy-writer kept retrying WAL publishes —
+	// dozens of zombie goroutines of pure noise that skewed
+	// timing-sensitive tests later in the package. Emergency mode is the
+	// documented path for a throwaway test runtime: it cancels the
+	// background contexts without draining and does not depend on NATS
+	// reachability (the tests' own `defer srv.Shutdown()` runs BEFORE
+	// t.Cleanup, so NATS is already gone by the time this fires).
+	t.Cleanup(func() { rt.Shutdown(true) })
 
 	register(rt)
 
