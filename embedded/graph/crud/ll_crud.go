@@ -666,22 +666,15 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	// The vertex's per-id FUNCTION CONTEXTS (`<typename>.<id>` cache keys) die
 	// with the vertex. Without this, a context written without an expiration
 	// mark outlived its object forever: the context GC reclaims only marked
-	// contexts and nothing ever references a deleted id again. One cheap
-	// mostly-miss cache lookup per registered function type — plus one
-	// single-level scan for SALTED variants: an invocation parallelized via
-	// the sequence-free suffix (`<id>===<hash>`) stores its context under the
-	// full salted id, a sibling key of the exact one, which the exact delete
-	// would miss.
-	if ctx.ListRegisteredFunctionTypes != nil {
-		saltedPrefix := selfID + "==="
-		for _, tn := range ctx.ListRegisteredFunctionTypes() {
-			ctx.Domain.Cache().DeleteValue(tn+"."+selfID, true, opTime)
-			for _, key := range ctx.Domain.Cache().GetKeysByPattern(tn + ".*") {
-				if strings.HasPrefix(key[len(tn)+1:], saltedPrefix) {
-					ctx.Domain.Cache().DeleteValue(key, true, opTime)
-				}
-			}
-		}
+	// contexts and nothing ever references a deleted id again. SALTED
+	// variants (`<id>===<hash>`, the sequence-free parallelization suffix)
+	// live under sibling keys the exact delete would miss — they are resolved
+	// through the runtime's salted-context index (fed by every context write,
+	// restored from the cache once per process), NOT by scanning the whole
+	// `<typename>.*` context level here: that scan cost O(all contexts of
+	// the type) on every vertex.delete.
+	if ctx.DropFunctionContextsForID != nil {
+		ctx.DropFunctionContextsForID(selfID, opTime)
 	}
 
 	// Belt-and-braces: the __type-link branch of deleteOutLinkFromSideKeys

@@ -101,10 +101,15 @@ type StatefunContextProcessor struct {
 	SetObjectContext          func(*easyjson.JSON)
 	GetObjectImplTypes        func() (types []string, err error)
 	// ListRegisteredFunctionTypes returns a snapshot of every function
-	// typename registered in this runtime. Graph vertex deletion uses it to
-	// drop the per-id function contexts (`<typename>.<id>` cache keys) of the
-	// vertex being deleted.
+	// typename registered in this runtime.
 	ListRegisteredFunctionTypes func() []string
+	// DropFunctionContextsForID deletes every registered function type's
+	// stored context for the given unsalted id: the exact `<typename>.<id>`
+	// cache key plus every salted `<typename>.<id>===<hash>` variant tracked
+	// by the runtime's salted-context index. Graph vertex deletion calls it
+	// so function contexts die with their vertex — as a set of point deletes,
+	// not a scan of a whole context level.
+	DropFunctionContextsForID func(id string, opTime int64)
 	ObjectMutexLock           func(objectId string, errorOnLocked bool) error
 	ObjectMutexUnlock         func(objectId string) error
 	Domain                    Domain

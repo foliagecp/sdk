@@ -1272,6 +1272,28 @@ func (r *Runtime) registeredFunctionTypeNames() []string {
 	return names
 }
 
+// dropAllFunctionTypesContextsForID deletes every registered function type's
+// stored context for the given unsalted id — the exact `<typename>.<id>` key
+// plus every salted `<typename>.<id>===<hash>` variant tracked by the
+// per-function-type salted-context index. Exposed to statefun handlers via
+// StatefunContextProcessor.DropFunctionContextsForID; graph vertex deletion
+// calls it so contexts die with their vertex without scanning a whole
+// context level per delete.
+func (r *Runtime) dropAllFunctionTypesContextsForID(id string, opTime int64) {
+	r.ftMu.RLock()
+	fts := make([]*FunctionType, 0, len(r.registeredFunctionTypes))
+	for _, ft := range r.registeredFunctionTypes {
+		fts = append(fts, ft)
+	}
+	r.ftMu.RUnlock()
+	// Deletions run outside ftMu: dropContextsForID may pay the one-time
+	// index-restore scan, and holding the lock across cache writes would
+	// stall dynamic function-type registration for no reason.
+	for _, ft := range fts {
+		ft.dropContextsForID(id, opTime)
+	}
+}
+
 // FunctionTypeIDStatsForTest returns, per registered function typename, the
 // number of live per-id handler entries. Test-only observability for leak
 // tests: after a function type has been idle past the id-lifetime GC, its

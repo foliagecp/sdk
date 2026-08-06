@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,6 +32,22 @@ type FunctionType struct {
 	idKeyMutex            *system.KeyMutex
 	idHandlersLastMsgTime sync.Map
 	contextProcessors     sync.Map
+
+	// saltedCtxIndex tracks contexts stored under SALTED ids: unsalted origId
+	// -> *sync.Map(full salted id -> struct{}). A salted invocation
+	// (`<id>===<hash>`, the sequence-free parallelization suffix) stores its
+	// context under the full salted id — a sibling key of the plain one. When
+	// the vertex dies, those siblings must die too; this index makes that a
+	// point lookup instead of the previous scan of the ENTIRE `<typename>.*`
+	// context level on every vertex.delete (O(all contexts of the type)).
+	// Fed by setContext, pruned by setContext(nil)/the context gc sweep,
+	// dropped whole per origId on vertex deletion. Contexts persist in KV
+	// across restarts while this index starts empty, so it is lazily restored
+	// by ONE level scan per process (saltedCtxIndexOnce). An origId entry
+	// whose salt set has been emptied by prunes is kept until the vertex
+	// dies — one small record per object that ever stored a salted context.
+	saltedCtxIndex     sync.Map
+	saltedCtxIndexOnce sync.Once
 
 	// activeIDChannels mirrors the live entry count of idHandlersChannel.
 	// Channels are created in exactly one place (sendMsg, under the per-id
@@ -387,6 +404,9 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 			SetObjectContext:            func(context *easyjson.JSON) { ft.setObjectContext(id, context) },
 			GetObjectImplTypes:          func() (types []string, err error) { return ft.getObjectImplTypes(id) },
 			ListRegisteredFunctionTypes: func() []string { return ft.runtime.registeredFunctionTypeNames() },
+			DropFunctionContextsForID: func(id string, opTime int64) {
+				ft.runtime.dropAllFunctionTypesContextsForID(id, opTime)
+			},
 			Domain:                    ft.runtime.Domain,
 			Self:                      sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
 			ObjectSignal: func(signalProvider sfPlugins.SignalProvider, query sfPlugins.LinkQuery, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) (map[string]error, error) {
@@ -592,6 +612,7 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 		if expirationTime > 0 {
 			if expirationTime < now {
 				ft.runtime.Domain.Cache().DeleteValue(funcCtxKey, true, -1)
+				ft.saltedCtxIndexTrack(funcCtxKey, false)
 			}
 		}
 	}
@@ -655,6 +676,56 @@ func (ft *FunctionType) setContext(keyValueID string, context *easyjson.JSON) {
 		ft.runtime.Domain.cache.DeleteValue(keyValueID, true, -1)
 	} else {
 		ft.runtime.Domain.cache.SetValueJSON(keyValueID, context, true, -1)
+	}
+	ft.saltedCtxIndexTrack(keyValueID, context != nil)
+}
+
+// saltedCtxIndexTrack keeps saltedCtxIndex in sync with a context write or
+// delete. keyValueID is the full cache key `<typename>.<id>`; only salted ids
+// are tracked. Removing a salt leaves the (possibly empty) per-origId set in
+// place — deleting it here would race a concurrent Store on the same origId,
+// and the whole entry is dropped anyway when the vertex dies.
+func (ft *FunctionType) saltedCtxIndexTrack(keyValueID string, stored bool) {
+	id := strings.TrimPrefix(keyValueID, ft.name+".")
+	sep := strings.Index(id, "===")
+	if sep < 0 {
+		return
+	}
+	origId := id[:sep]
+	if stored {
+		set, _ := ft.saltedCtxIndex.LoadOrStore(origId, &sync.Map{})
+		set.(*sync.Map).Store(id, struct{}{})
+	} else if set, ok := ft.saltedCtxIndex.Load(origId); ok {
+		set.(*sync.Map).Delete(id)
+	}
+}
+
+// ensureSaltedCtxIndex restores the index from the cache once per process:
+// contexts persist in KV across restarts while the in-memory index starts
+// empty. One `<typename>.*` level scan per function type per process replaces
+// the level scan the vertex-delete path used to pay on EVERY deletion.
+// Concurrent setContext calls during the scan index themselves, and a key
+// deleted mid-scan at worst leaves a phantom salt whose DeleteValue is a
+// no-op.
+func (ft *FunctionType) ensureSaltedCtxIndex() {
+	ft.saltedCtxIndexOnce.Do(func() {
+		for _, key := range ft.runtime.Domain.Cache().GetKeysByPattern(ft.name + ".*") {
+			ft.saltedCtxIndexTrack(key, true)
+		}
+	})
+}
+
+// dropContextsForID deletes this function type's stored contexts for the given
+// UNSALTED id: the exact `<typename>.<id>` key plus every salted
+// `<typename>.<id>===<hash>` sibling known to the index.
+func (ft *FunctionType) dropContextsForID(origId string, opTime int64) {
+	ft.ensureSaltedCtxIndex()
+	ft.runtime.Domain.Cache().DeleteValue(ft.name+"."+origId, true, opTime)
+	if set, ok := ft.saltedCtxIndex.LoadAndDelete(origId); ok {
+		set.(*sync.Map).Range(func(saltedId, _ any) bool {
+			ft.runtime.Domain.Cache().DeleteValue(ft.name+"."+saltedId.(string), true, opTime)
+			return true
+		})
 	}
 }
 
