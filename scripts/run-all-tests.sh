@@ -47,12 +47,17 @@ fail=0
 # bind; the GO phase needs it too — a leftover NATS+JetStream container is
 # steady background load that skews timing-sensitive integration tests
 # (observed: a stray backup-restore nats container flaking the statefun
-# export-committer test).
+# export-committer test). Covers ALL our compose project families — systest,
+# soak (tests/soak/*) and perf (tests/perf/*) — they bind the same host ports
+# (observed: a leftover foliage-soak nats holding :4222 failed every system
+# test with "port is already allocated").
 sweep_systest_leftovers() {
   if command -v docker >/dev/null 2>&1; then
-    echo ">> sweeping leftover foliage-systest containers/volumes"
-    docker ps -aq --filter 'name=foliage-systest-' | xargs -r docker rm -f >/dev/null 2>&1 || true
-    docker volume ls -q --filter 'name=foliage-systest-' | xargs -r docker volume rm -f >/dev/null 2>&1 || true
+    echo ">> sweeping leftover foliage test containers/volumes (systest/soak/perf)"
+    for prefix in foliage-systest- foliage-soak- foliage-perf-; do
+      docker ps -aq --filter "name=${prefix}" | xargs -r docker rm -f >/dev/null 2>&1 || true
+      docker volume ls -q --filter "name=${prefix}" | xargs -r docker volume rm -f >/dev/null 2>&1 || true
+    done
   fi
 }
 
