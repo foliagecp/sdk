@@ -25,14 +25,6 @@ var (
 func KeyMutexLock(ctx context.Context, runtime *Runtime, key string, errorOnLocked bool) (uint64, error) {
 	le := lg.GetLogger()
 	kv := runtime.Domain.kv
-	mutexResetLock := func(keyMutex string, now int64) (uint64, error) {
-		lockRevisionID, err := kv.Put(keyMutex, system.Int64ToBytes(now))
-		if err == nil {
-			le.Tracef(ctx, "Locked %s", keyMutex)
-			return lockRevisionID, nil
-		}
-		return 0, err
-	}
 	mutexMereLock := func(entry nats.KeyValueEntry, now int64) (uint64, error) {
 		// Try to lock mutex by updating it with current time value using revision obtained during last Get
 		lockRevisionID, err := kv.Update(entry.Key(), system.Int64ToBytes(now), entry.Revision())
@@ -80,43 +72,55 @@ func KeyMutexLock(ctx context.Context, runtime *Runtime, key string, errorOnLock
 	}
 
 	keyMutex := key + ".mutex"
-	mutexResetLockNeeded := false
 	le.Tracef(ctx, "Locking %s", keyMutex)
 	for {
 		now := system.GetCurrentTimeNs()
 
-		//keyValueMutexOperationMutex.Lock()
-
 		entry, err := kv.Get(keyMutex) // Getting last mutex state for key
 		if err != nil {
 			if errors.Is(err, nats.ErrKeyNotFound) {
-				mutexResetLockNeeded = true
-			} else {
-				//keyValueMutexOperationMutex.Unlock()
-				return 0, err
+				// First-ever lock on this key: atomic create-if-absent. Losing
+				// the race (someone created the entry between our Get and this
+				// Create) means the lock is fresh and theirs — re-read and take
+				// the locked path.
+				lockRevisionID, cerr := kv.Create(keyMutex, system.Int64ToBytes(now))
+				if cerr == nil {
+					le.Tracef(ctx, "Locked %s", keyMutex)
+					return lockRevisionID, nil
+				}
+				if errors.Is(cerr, nats.ErrKeyExists) {
+					continue
+				}
+				return 0, cerr
 			}
-		}
-		if mutexResetLockNeeded {
-			//defer keyValueMutexOperationMutex.Unlock()
-			return mutexResetLock(keyMutex, now)
+			return 0, err
 		}
 
 		lockTime := system.BytesToInt64(entry.Value())
 		if lockTime == 0 { // Mutex is ready to be locked
-			//defer keyValueMutexOperationMutex.Unlock()
 			revId, err := mutexMereLock(entry, now)
 			if revId == 0 && err == nil { // Did not succeed in locking, other lock was faster
 				continue
 			}
 			return revId, err
 		} else if lockTime+int64(runtime.config.kvMutexLifeTimeSec)*int64(time.Second) < now { // Mutex was locked by someone else and its lock is too old
+			// Expired foreign lock: seize it with the SAME compare-and-swap as
+			// a free one — an Update against the revision we just read. The
+			// previous takeover did an unconditional kv.Put, so every
+			// concurrent contender "won" (each overwrote the other; the loser
+			// learned only on its next refresh tick, after having grabbed
+			// per-function locks in the meantime — the ha-3-node failover
+			// cascade), and a Put pending from an earlier loop iteration could
+			// even stomp a FRESH lock legitimately taken in between. With CAS
+			// exactly one contender wins; the rest re-read and see a fresh
+			// foreign lock.
 			le.Warnf(ctx, "Context mutex for key=%s is too old, will be unlocked!", key)
-			mutexResetLockNeeded = true
-			//keyValueMutexOperationMutex.Unlock()
-			continue
+			revId, err := mutexMereLock(entry, now)
+			if revId == 0 && err == nil { // lost the takeover race
+				continue
+			}
+			return revId, err
 		}
-
-		//keyValueMutexOperationMutex.Unlock()
 
 		if errorOnLocked {
 			return 0, ErrMutexLocked
