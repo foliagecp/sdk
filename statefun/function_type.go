@@ -32,6 +32,18 @@ type FunctionType struct {
 	idHandlersLastMsgTime sync.Map
 	contextProcessors     sync.Map
 
+	// activeIDChannels mirrors the live entry count of idHandlersChannel.
+	// Channels are created in exactly one place (sendMsg, under the per-id
+	// key mutex) and deleted in exactly one place (gc, under the same lock),
+	// so the incremental counter is exact. The ft_active_id_channels gauge
+	// used to be computed with a full idHandlersChannel.Range on EVERY
+	// NATS-delivered message; under a stream of fresh (salted `id===hash`)
+	// ids the map holds rate×5-10s entries, and the Store-new-key/Range
+	// interleaving additionally forces sync.Map to rebuild its dirty map —
+	// an O(N) copy — on almost every message (measured: 683 µs/msg at
+	// N=10k, 6.7 ms/msg at N=50k, vs ~3 µs without the scan).
+	activeIDChannels atomic.Int64
+
 	executor      *sfPlugins.TypenameExecutorPlugin
 	resourceMutex sync.Mutex
 
@@ -224,13 +236,8 @@ func (ft *FunctionType) startSubscriptions() error {
 }
 
 func (ft *FunctionType) prometricsMeasureIdChannels() {
-	activeIDChannels := 0
-	ft.idHandlersChannel.Range(func(key, value any) bool {
-		activeIDChannels++
-		return true
-	})
 	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_active_id_channels", "", []string{"typename"}); err == nil {
-		gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(float64(activeIDChannels))
+		gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(float64(ft.activeIDChannels.Load()))
 	}
 }
 
@@ -313,6 +320,7 @@ func (ft *FunctionType) sendMsg(originId string, msg FunctionTypeMsg) {
 		msgChannel = make(chan FunctionTypeMsg, ft.config.idChannelSize)
 		ft.idHandlersChannel.Store(id, msgChannel)
 		ft.idHandlersLastMsgTime.Store(id, int64(0)) // no time yet
+		ft.activeIDChannels.Add(1)
 	}
 	ft.prometricsMeasureIdChannels()
 
@@ -597,12 +605,17 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 			}
 			if remove {
 				ft.idHandlersLastMsgTime.Delete(id)
-				ft.idHandlersChannel.Delete(id)
+				// Conditional decrement: ids that arrived only via the
+				// in-process golang path (workerTaskExecutor) have a
+				// lastMsgTime entry but never got a channel — blindly
+				// decrementing here would drift the counter negative.
+				if _, hadChannel := ft.idHandlersChannel.LoadAndDelete(id); hadChannel {
+					ft.activeIDChannels.Add(-1)
+				}
 				ft.contextProcessors.Delete(id)
 				if ft.executor != nil {
 					ft.executor.RemoveForID(id)
 				}
-				ft.prometricsMeasureIdChannels()
 				garbageCollected++
 			} else {
 				handlersRunning++
@@ -614,6 +627,7 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 		}
 		return true
 	})
+	ft.prometricsMeasureIdChannels()
 	if garbageCollected > 0 && handlersRunning == 0 {
 		lg.Logf(lg.TraceLevel, "Garbage collected for typename %s - no id handlers left", ft.name)
 	}
