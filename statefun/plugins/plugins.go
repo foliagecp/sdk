@@ -196,8 +196,14 @@ func (tnex *TypenameExecutorPlugin) RemoveForID(id string) {
 }
 
 func (tnex *TypenameExecutorPlugin) GetForID(id string) StatefunExecutor {
+	// Comma-ok: a missing entry (id never added or already gc'd) and the
+	// nil placeholder AddForID stores when the constructor is absent must
+	// both come back as a nil executor, not panic the worker on a bare
+	// interface type assertion. Callers already handle a nil executor —
+	// it is what logic handlers receive when no executor plugin is set.
 	value, _ := tnex.idExecutors.Load(id)
-	return value.(StatefunExecutor)
+	se, _ := value.(StatefunExecutor)
+	return se
 }
 
 type ObjectRequestReply struct {

@@ -76,6 +76,62 @@ type FunctionType struct {
 	shutdownCh          chan struct{}
 	lastMsgTimeNs       atomic.Uint64
 	//-----------------------------------
+
+	// metrics caches this function type's prometheus series. Every label set
+	// here is constant (typename / delivery type), yet the hot paths used to
+	// resolve each series through Ensure*VecSimple on EVERY message — and that
+	// helper takes the process-global Prometrics.metricsMutex, so token
+	// acquire/release, the execution-time gauge and the delivery histogram
+	// cost 4-5 global mutex acquisitions per message between them. Built
+	// lazily (GlobalPrometrics may not exist yet when the function type is
+	// constructed) and retried on the next call after a failure.
+	metrics atomic.Pointer[ftMetrics]
+}
+
+type ftMetrics struct {
+	activeIdChannels prometheus.Gauge
+	tokensLoad       prometheus.Gauge
+	execTime         prometheus.Gauge
+	msgDeliver       map[MeasureMsgDeliverType]prometheus.Observer
+}
+
+// getMetrics returns the cached per-function-type metric series, resolving
+// them once. Returns nil (and stays retryable) while GlobalPrometrics is
+// absent or registration fails — callers then skip the measurement exactly
+// like the old per-call Ensure* error path did. A concurrent double build is
+// harmless: both resolve the same registered collectors.
+func (ft *FunctionType) getMetrics() *ftMetrics {
+	if m := ft.metrics.Load(); m != nil {
+		return m
+	}
+	gp := system.GlobalPrometrics
+	if gp == nil {
+		return nil
+	}
+	gaugeFor := func(name string) prometheus.Gauge {
+		if gv, err := gp.EnsureGaugeVecSimple(name, "", []string{"typename"}); err == nil {
+			return gv.With(prometheus.Labels{"typename": ft.name})
+		}
+		return nil
+	}
+	m := &ftMetrics{
+		activeIdChannels: gaugeFor("ft_active_id_channels"),
+		tokensLoad:       gaugeFor("ft_tokens_percentage"),
+		execTime:         gaugeFor("ft_execution_time"),
+	}
+	if m.activeIdChannels == nil || m.tokensLoad == nil || m.execTime == nil {
+		return nil
+	}
+	hv, err := gp.EnsureHistogramVecSimple("ft_msg_delivery", "messages receive", []float64{1.0}, []string{"typename", "delivery_type"})
+	if err != nil {
+		return nil
+	}
+	m.msgDeliver = make(map[MeasureMsgDeliverType]prometheus.Observer, 4)
+	for _, dt := range []MeasureMsgDeliverType{NatsPub, NatsPubRedelivery, NatsReq, GolangReq} {
+		m.msgDeliver[dt] = hv.WithLabelValues(ft.name, string(dt))
+	}
+	ft.metrics.Store(m)
+	return m
 }
 
 const (
@@ -253,8 +309,8 @@ func (ft *FunctionType) startSubscriptions() error {
 }
 
 func (ft *FunctionType) prometricsMeasureIdChannels() {
-	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_active_id_channels", "", []string{"typename"}); err == nil {
-		gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(float64(ft.activeIDChannels.Load()))
+	if m := ft.getMetrics(); m != nil {
+		m.activeIdChannels.Set(float64(ft.activeIDChannels.Load()))
 	}
 }
 
@@ -268,30 +324,16 @@ const (
 )
 
 func (ft *FunctionType) prometricsMeasureMsgDeliver(deliveryType MeasureMsgDeliverType) {
-	buckets := []float64{1.0}
-	labelNames := []string{"typename", "delivery_type"}
-
-	histogram, err := system.GlobalPrometrics.EnsureHistogramVecSimple("ft_msg_delivery", "messages receive", buckets, labelNames)
-	if err != nil {
-		lg.Logf(lg.ErrorLevel, "Failed to create histogram: %s", err.Error())
+	if m := ft.getMetrics(); m != nil {
+		if obs, ok := m.msgDeliver[deliveryType]; ok {
+			obs.Observe(1.0)
+		}
 	}
-
-	histogram.WithLabelValues(ft.name, string(deliveryType)).Observe(1.0)
-
-	/*activeIDChannels := 0
-	ft.idHandlersChannel.Range(func(key, value any) bool {
-		activeIDChannels++
-		return true
-	})
-	system.GlobalPrometrics.EnsureHistogramVec()
-	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_msg_delivery", "", []string{"typename", "delivery_type"}); err == nil {
-		gaugeVec.With(prometheus.Labels{"typename": ft.name, "delivery_type": string(deliveryType)}).Set(float64(1.0))
-	}*/
 }
 
 func (ft *FunctionType) prometricsMeasureTokensLoad() {
-	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_tokens_percentage", "", []string{"typename"}); err == nil {
-		gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(ft.tokens.GetLoadPercentage())
+	if m := ft.getMetrics(); m != nil {
+		m.tokensLoad.Set(ft.tokens.GetLoadPercentage())
 	}
 }
 
@@ -573,8 +615,8 @@ func (ft *FunctionType) handleMsgForID(id string, msg FunctionTypeMsg, typenameI
 	}
 	// -------------------------------------------------------
 
-	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("ft_execution_time", "", []string{"typename"}); err == nil {
-		gaugeVec.With(prometheus.Labels{"typename": ft.name}).Set(float64(time.Since(start).Microseconds()))
+	if m := ft.getMetrics(); m != nil {
+		m.execTime.Set(float64(time.Since(start).Microseconds()))
 	}
 
 	if msg.AckCallback != nil {

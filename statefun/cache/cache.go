@@ -558,6 +558,35 @@ type Store struct {
 	// guard against overlapping purge goroutines.
 	lastKVPurgeDeletes time.Time
 	kvPurgeRunning     atomic.Bool
+
+	// metrics caches this store's prometheus series (label id=cacheConfig.id
+	// is constant). GetKeysByPattern is called several times per CRUD
+	// operation, and resolving the gauge through EnsureGaugeVecSimple on
+	// every call took the process-global Prometrics.metricsMutex each time.
+	// Built lazily, retried after failures — same contract as the old
+	// per-call error path: no Prometrics, no measurement.
+	metrics atomic.Pointer[storeMetrics]
+}
+
+type storeMetrics struct {
+	getKeysByPattern prometheus.Gauge
+}
+
+func (cs *Store) getMetrics() *storeMetrics {
+	if m := cs.metrics.Load(); m != nil {
+		return m
+	}
+	gp := system.GlobalPrometrics
+	if gp == nil {
+		return nil
+	}
+	gv, err := gp.EnsureGaugeVecSimple("cache_get_keys_by_pattern", "", []string{"id"})
+	if err != nil {
+		return nil
+	}
+	m := &storeMetrics{getKeysByPattern: gv.With(prometheus.Labels{"id": cs.cacheConfig.id})}
+	cs.metrics.Store(m)
+	return m
 }
 
 type maintenanceResult struct {
@@ -1550,8 +1579,8 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 		i++
 	}
 
-	if gaugeVec, err := system.GlobalPrometrics.EnsureGaugeVecSimple("cache_get_keys_by_pattern", "", []string{"id"}); err == nil {
-		gaugeVec.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(time.Since(start).Microseconds()))
+	if m := cs.getMetrics(); m != nil {
+		m.getKeysByPattern.Set(float64(time.Since(start).Microseconds()))
 	}
 
 	return keysSlice
