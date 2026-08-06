@@ -580,7 +580,15 @@ func (ft *FunctionType) gc(typenameIDLifetimeMs int) (garbageCollected int, hand
 
 	// Deleting function contexts which are expired ---------
 	for _, funcCtxKey := range ft.runtime.Domain.Cache().GetKeysByPattern(ft.name + ".>") {
-		expirationTime := int64(ft.getContext(funcCtxKey).GetByPath(contextExpirationKey).AsNumericDefault(-1))
+		// Read ONLY the expiration mark. getContext/GetValueJSON would
+		// deep-clone the whole stored context for every key on every gc
+		// tick just to inspect this one field — namegen contexts carry
+		// full object+type bodies, so on C live contexts that was O(C)
+		// full-body clones every gcIntervalSec.
+		expirationTime := int64(-1)
+		if v, err := ft.runtime.Domain.cache.GetValueJSONByPath(funcCtxKey, contextExpirationKey); err == nil {
+			expirationTime = int64(v.AsNumericDefault(-1))
+		}
 		if expirationTime > 0 {
 			if expirationTime < now {
 				ft.runtime.Domain.Cache().DeleteValue(funcCtxKey, true, -1)
