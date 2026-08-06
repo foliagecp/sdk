@@ -41,15 +41,22 @@ echo ">> seeding $N objects via the active"
 assert seed -n "$N" || fail "seed failed"
 assert verify -n "$N" || fail "initial verify failed"
 
+# Post-failover verifies retry for up to VERIFY_WAIT: after a hard kill the
+# new active legally cannot serve a single-instance function until the dead
+# holder's per-function lock expires (kvMutexLifeTimeSec ~10s) plus a
+# lifecycle tick — and ping only proves ONE function is up. ~2×TTL keeps the
+# check honest: slower than that is a genuine wedge, not the TTL window.
+VERIFY_WAIT=20
+
 echo ">> kill runtime-a; system must fail over and stay consistent"
 dc kill runtime-a || fail "kill runtime-a errored"
 assert ping -wait "$FAILOVER_WAIT" || fail "no failover after killing runtime-a (possible wedge)"
-assert verify -n "$N" || fail "data lost after killing runtime-a"
+assert verify -n "$N" -wait "$VERIFY_WAIT" || fail "data lost after killing runtime-a"
 
 echo ">> kill runtime-b; sole survivor (runtime-c) must serve"
 dc kill runtime-b || fail "kill runtime-b errored"
 assert ping -wait "$FAILOVER_WAIT" || fail "no failover after killing runtime-b (possible wedge)"
-assert verify -n "$N" || fail "data lost after killing runtime-b"
+assert verify -n "$N" -wait "$VERIFY_WAIT" || fail "data lost after killing runtime-b"
 
 echo ">> consistency on the surviving single node"
 assert consistency -type systest_node -n "$N" || fail "consistency failed on survivor"

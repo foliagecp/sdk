@@ -173,12 +173,22 @@ func cmdSeed(args []string) {
 
 // cmdVerify reads every seeded object back and fails if any is missing or its
 // {idx} body does not round-trip. This is the "no committed op lost" check.
+//
+// -wait N retries the whole pass for up to N seconds before failing. Use it
+// right after a failover: with TTL-based leadership the new active may not
+// serve single-instance functions until the dead holder's per-function locks
+// expire (kvMutexLifeTimeSec, ~10s) plus a lifecycle tick — a legal
+// availability window, not data loss. Keep the deadline moderate (~2×TTL):
+// a pass that cannot complete within it IS a real failure (wedged promotion,
+// dragging cache rehydrate). Per-object diagnostics are printed only for the
+// final failing pass so retries do not flood the log.
 func cmdVerify(args []string) {
 	fs := flag.NewFlagSet("verify", flag.ExitOnError)
 	c := bindConn(fs)
 	n := fs.Int("n", 100, "number of objects expected")
 	typ := fs.String("type", "systest_node", "object type")
 	prefix := fs.String("prefix", "node", "object id prefix")
+	wait := fs.Int("wait", 0, "retry window in seconds for post-failover eventual availability (0 = single pass)")
 	_ = fs.Parse(args)
 	_ = typ
 
@@ -187,30 +197,54 @@ func cmdVerify(args []string) {
 		die("connect: %v", err)
 	}
 
-	missing, mismatched := 0, 0
-	for i := 0; i < *n; i++ {
-		id := objID(*prefix, i)
-		data, err := dbc.CMDB.ObjectReadV2(id)
-		if err != nil {
-			missing++
-			fmt.Fprintf(os.Stderr, "  MISSING %s: %v\n", id, err)
-			continue
+	pass := func(diagnose bool) (missing, mismatched int) {
+		for i := 0; i < *n; i++ {
+			id := objID(*prefix, i)
+			data, err := dbc.CMDB.ObjectReadV2(id)
+			if err != nil {
+				missing++
+				if diagnose {
+					fmt.Fprintf(os.Stderr, "  MISSING %s: %v\n", id, err)
+				}
+				continue
+			}
+			if !data.PathExists("body.idx") {
+				// Body shape changed unexpectedly (idx did not round-trip).
+				mismatched++
+				if diagnose {
+					fmt.Fprintf(os.Stderr, "  NO-BODY %s\n", id)
+				}
+				continue
+			}
+			if got := int(data.GetByPath("body.idx").AsNumericDefault(-1)); got != i {
+				mismatched++
+				if diagnose {
+					fmt.Fprintf(os.Stderr, "  MISMATCH %s: idx=%d want %d\n", id, got, i)
+				}
+			}
 		}
-		if !data.PathExists("body.idx") {
-			// Body shape changed unexpectedly (idx did not round-trip).
-			mismatched++
-			fmt.Fprintf(os.Stderr, "  NO-BODY %s\n", id)
-			continue
-		}
-		if got := int(data.GetByPath("body.idx").AsNumericDefault(-1)); got != i {
-			mismatched++
-			fmt.Fprintf(os.Stderr, "  MISMATCH %s: idx=%d want %d\n", id, got, i)
-		}
+		return
 	}
-	if missing > 0 || mismatched > 0 {
-		die("verify FAILED: %d missing, %d mismatched of %d", missing, mismatched, *n)
+
+	deadline := time.Now().Add(time.Duration(*wait) * time.Second)
+	attempt := 0
+	for {
+		attempt++
+		lastTry := *wait == 0 || !time.Now().Before(deadline)
+		missing, mismatched := pass(lastTry)
+		if missing == 0 && mismatched == 0 {
+			if attempt > 1 {
+				fmt.Printf("verified %d objects present and intact (after %d attempts)\n", *n, attempt)
+			} else {
+				fmt.Printf("verified %d objects present and intact\n", *n)
+			}
+			return
+		}
+		if lastTry {
+			die("verify FAILED: %d missing, %d mismatched of %d (attempt %d)", missing, mismatched, *n, attempt)
+		}
+		time.Sleep(1 * time.Second)
 	}
-	fmt.Printf("verified %d objects present and intact\n", *n)
 }
 
 // ---- count ------------------------------------------------------------------
