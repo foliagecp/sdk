@@ -145,23 +145,26 @@ func (s *S4Suite) Test_NamegenBuildErrorLeaksContext() {
 			}
 		}
 		// Wait until every invocation of THIS cycle has written its context
-		// (they persist for the 1min production TTL, so presence is stable).
+		// AND its expiration mark — the L2 pin: even on the build-error path
+		// every stored context must carry the mark. The two are separate
+		// writes (SetFunctionContext, then SetContextExpirationAfter's
+		// read-modify-write), so probing the instant the key appears can
+		// land in the microsecond gap between them and read a mark-less
+		// context that is NOT a leak — observed once as a 1-in-dozens flake.
+		// An L2 regression leaves the mark absent forever, which this wait
+		// still fails on via the deadline (and the namegen_ctx_no_ttl
+		// invariant below guards it at every sample too).
 		deadline := time.Now().Add(20 * time.Second)
 		for _, id := range ids {
 			key := fn + "." + s.domainID(id)
-			for !s.cacheStore().ExistsJson(key) {
+			for {
+				if j, err := s.cacheStore().GetValueJSON(key); err == nil && j.PathExists(contextExpirationMark) {
+					break
+				}
 				if time.Now().After(deadline) {
-					return fmt.Errorf("namegen invocation for %s never wrote its context", id)
+					return fmt.Errorf("namegen context for %s absent or carries no expiration mark", id)
 				}
 				time.Sleep(50 * time.Millisecond)
-			}
-		}
-		// The L2 pin: even on the build-error path every stored context must
-		// already carry the expiration mark.
-		for _, id := range ids {
-			key := fn + "." + s.domainID(id)
-			if j, err := s.cacheStore().GetValueJSON(key); err == nil && !j.PathExists(contextExpirationMark) {
-				return fmt.Errorf("namegen context for %s carries no expiration mark", id)
 			}
 		}
 		for _, id := range ids {
