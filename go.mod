@@ -7,7 +7,7 @@ require (
 	github.com/PaesslerAG/gval v1.2.2
 	github.com/dop251/goja v0.0.0-20250630131328-58d95d85e994
 	github.com/emicklei/dot v1.6.1
-	github.com/foliagecp/easyjson v0.1.11
+	github.com/foliagecp/easyjson v0.1.14
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.5.5
@@ -88,7 +88,6 @@ require (
 	go.opentelemetry.io/otel/metric v1.24.0 // indirect
 	go.opentelemetry.io/otel/trace v1.24.0 // indirect
 	golang.org/x/crypto v0.22.0 // indirect
-	golang.org/x/sync v0.7.0 // indirect
 	golang.org/x/sys v0.21.0 // indirect
 	golang.org/x/text v0.16.0 // indirect
 	golang.org/x/time v0.5.0 // indirect

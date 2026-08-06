@@ -66,6 +66,8 @@ github.com/foliagecp/easyjson v0.1.10 h1:jDUwQEOn9kFhPWMqLyjJtq8STIIsdPK1ff4rlvM
 github.com/foliagecp/easyjson v0.1.10/go.mod h1:GTJFL3X3UXLq65yYiZZ6aOv6EMUtxGHhblPPvW7a5/s=
 github.com/foliagecp/easyjson v0.1.11 h1:DdP3566V1bVvXzvhKF2B5CfsXAAZZPpBt4zR4WO5Z/k=
 github.com/foliagecp/easyjson v0.1.11/go.mod h1:GTJFL3X3UXLq65yYiZZ6aOv6EMUtxGHhblPPvW7a5/s=
+github.com/foliagecp/easyjson v0.1.14 h1:mbBP5wJpbj1BkF4OpfUb+3DjDTLka57ejy0c4ySVf3o=
+github.com/foliagecp/easyjson v0.1.14/go.mod h1:GTJFL3X3UXLq65yYiZZ6aOv6EMUtxGHhblPPvW7a5/s=
 github.com/go-logr/logr v1.2.2/go.mod h1:jdQByPbusPIv2/zmleS9BjJVeZ6kBagPoEUsqbVz/1A=
 github.com/go-logr/logr v1.4.1 h1:pKouT5E8xu9zeFC39JXRDukb6JFQPXM5p5I91188VAQ=
 github.com/go-logr/logr v1.4.1/go.mod h1:9T104GzyrTigFIr8wt5mBrctHMim0Nb2HLGrmQ40KvY=
