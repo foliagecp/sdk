@@ -452,6 +452,14 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		newBody := oldBody.Clone().GetPtr()
 		newBody.DeepMerge(body)
 		body = *newBody
+	} else {
+		// Protected body fields (PROTECTED_BODY_FIELDS, e.g. "usr") survive a
+		// destructive replace-write: a field the request does not carry is
+		// grafted from the current body, a field it does carry is merged into
+		// the current value ("brought wins, omitted survives"). Done BEFORE the
+		// no-op check below so an inventory rebuild re-sending unchanged
+		// discovery fields stays idle instead of producing a fake write.
+		body = applyProtectedFieldsOnReplace(oldBody, body)
 	}
 
 	// No-op short-circuit: if the resulting body is structurally identical
@@ -503,7 +511,14 @@ Reply:
 // the out.to key is missing or corrupt, falls back to the ltype scan so a
 // partially written link stays deletable.
 func resolveOutLinkByName(ctx *sfPlugins.StatefunContextProcessor, ownerID, linkName string) (linkType, toId string, ok bool) {
-	b, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, ownerID, linkName))
+	return resolveOutLinkByNameInDomain(ctx.Domain, ownerID, linkName)
+}
+
+// resolveOutLinkByNameInDomain is resolveOutLinkByName without a statefun
+// context — usable from plain goroutines (e.g. the trash-can retention sweep),
+// which have a Domain but no in-flight message.
+func resolveOutLinkByNameInDomain(dm sfPlugins.Domain, ownerID, linkName string) (linkType, toId string, ok bool) {
+	b, err := dm.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, ownerID, linkName))
 	if err != nil {
 		return resolveOutLinkByLtypeScan(ctx, ownerID, linkName)
 	}
@@ -511,7 +526,7 @@ func resolveOutLinkByName(ctx *sfPlugins.StatefunContextProcessor, ownerID, link
 	if len(tokens) < 2 {
 		return resolveOutLinkByLtypeScan(ctx, ownerID, linkName)
 	}
-	return ctx.Domain.GetObjectIDWithoutDomain(tokens[0]), tokens[1], true
+	return dm.GetObjectIDWithoutDomain(tokens[0]), tokens[1], true
 }
 
 // resolveOutLinkByLtypeScan recovers the (linkType, toId) of the out-link
@@ -653,6 +668,14 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		}
 	}
 	// ----------------------------------------------------
+
+	// links_only=true: run ONLY the link cascade above and keep the vertex body.
+	// Used by the trash can (hl_crud DeleteObject): a "deleted" object keeps its
+	// body and gets re-linked under the trash-can type instead of being erased.
+	if ctx.Payload.GetByPath("links_only").AsBoolDefault(false) {
+		om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
+		return
+	}
 
 	operationKeysMutexLock(ctx, []string{selfID}, true, opTime)
 

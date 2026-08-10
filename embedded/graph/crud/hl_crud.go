@@ -303,17 +303,28 @@ func createObjectInline(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators
 	rollbackStack := easyjson.NewJSONArray()
 	var targetReply easyjson.JSON
 
-	if ctx.Domain.Cache().ExistsJson(selfID) { // mirror LLAPIVertexCreate's existence check
-		om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s already exists", selfID)))
-		return om.GetLastSyncOp().Data, nil
-	}
-
 	var objectBody easyjson.JSON
 	if ctx.Payload.GetByPath("body").IsObject() {
 		objectBody = ctx.Payload.GetByPath("body")
 	} else {
 		objectBody = easyjson.NewJSONObject()
 	}
+
+	if ctx.Domain.Cache().ExistsJson(selfID) { // mirror LLAPIVertexCreate's existence check
+		t, terr := findObjectType(ctx, selfID)
+		if terr != nil || !isTrashCanType(ctx, t) {
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("vertex with id=%s already exists", selfID)))
+			return om.GetLastSyncOp().Data, nil
+		}
+		// The id is parked in the trash can — this create IS the object's
+		// return. Graft the protected fields of the parked body into the
+		// incoming one and drop the trash links; the ordinary pipeline below
+		// then writes the fresh body and the CMDB links, so the create event
+		// carries the object already whole (no "created without knowledge"
+		// intermediate state for CDC consumers).
+		restoreObjectFromTrashCan(ctx, selfID, originType, &objectBody, opTime)
+	}
+
 	vertexOpStack := easyjson.NewJSONArray()
 	writeVertexKV(ctx, selfID, &objectBody, opTime, &vertexOpStack)
 	triggerOpStack := &vertexOpStack // only the object vertex op feeds triggers
@@ -378,7 +389,7 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	// type) — the dominant write-throughput bottleneck. Operations that need
 	// those vertices' whole child set exclusively (e.g. DeleteType's cascade,
 	// which write-locks the type) still mutually exclude in-flight creates.
-	operationKeysMutexLockMixed(ctx, []string{selfID}, []string{builtInObjectsVertexId, originType}, opTime)
+	operationKeysMutexLockMixed(ctx, []string{selfID}, []string{builtInObjectsVertexId, originType, trashCanTypeID(ctx)}, opTime)
 
 	targetReply, triggerOpStack := createObjectInline(ctx, om, selfID, originType, builtInObjectsVertexId, opTime)
 
@@ -418,7 +429,32 @@ func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 
 	if upsert {
 		ctx.Payload.RemoveByPath("upsert")
-		if _, err := findObjectType(ctx, selfID); err != nil {
+		if resolvedType, rerr := findObjectType(ctx, selfID); rerr == nil && isTrashCanType(ctx, resolvedType) {
+			// The id is parked in the trash can — this upsert is the object's
+			// RETURN from inventory. Route it through the inline create core,
+			// which grafts the protected fields and rebuilds the CMDB links
+			// (same shape as the absent-vertex branch below).
+			originTypeShort, hasOriginType := ctx.Payload.GetByPath("origin_type").AsString()
+			if !hasOriginType {
+				operationKeysMutexUnlock(ctx)
+				om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("object with id=%s is parked in the trash can, upsert=true requires origin_type to restore it", selfID))).Reply()
+				return
+			}
+			originType := ctx.Domain.CreateObjectIDWithHubDomain(originTypeShort, true)
+			builtInObjectsVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false)
+			operationKeysMutexLock(ctx, []string{builtInObjectsVertexId, originType, trashCanTypeID(ctx)}, false, opTime)
+			targetReply, triggerOpStack := createObjectInline(ctx, om, selfID, originType, builtInObjectsVertexId, opTime)
+			operationKeysMutexUnlock(ctx)
+			if om.GetStatus() == sfMediators.SYNC_OP_STATUS_OK {
+				if triggerOpStack != nil {
+					executeTriggersFromLLOpStack(ctx, triggerOpStack, "", "")
+					executeMetaTriggersFromLLOpStack(ctx, triggerOpStack, "", "")
+				}
+				cacheSetObjectType(selfID, originType)
+			}
+			replyWithoutOpStack(om, ctx, targetReply)
+			return
+		} else if rerr != nil {
 			// Object's __type cannot be resolved. Three sub-cases:
 			//   (a) origin_type missing in payload → cannot upsert at all.
 			//   (b) vertex truly absent → original CreateObject path.
@@ -535,6 +571,11 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 
 	om := sfMediators.NewOpMediator(ctx)
 
+	// Write lock on the object only. The trash-can type is read-guarded LATE,
+	// in the park branch right before re-linking: the physical branch's nested
+	// vertex.delete needs a WRITE on the trash-can type (to remove the
+	// trash_can→object in-link), and holding a read guard across it would be a
+	// same-goroutine read→write upgrade — a deadlock.
 	operationKeysMutexLock(ctx, []string{selfID}, true, opTime)
 	objectType, err := findObjectType(ctx, selfID)
 	if err != nil {
@@ -560,6 +601,50 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 
 	options := ctx.Options.Clone()
 	options.SetByPath("op_stack", easyjson.NewJSON(true))
+
+	// Trash can: a LIVE typed object is not erased — it loses all its links
+	// (the usual cascade, links_only) but keeps its body and is re-linked under
+	// the trash-can type, original type + deletion moment on the edge. Deleting
+	// an already-parked object is the physical erase below; a type-less ORPHAN
+	// (partial-failure debris) is also erased physically — parking it would
+	// preserve garbage that cannot be meaningfully restored, and would break
+	// the "a subsequent delete cleans up" recovery contract.
+	if objectType != "" && !isTrashCanType(ctx, objectType) {
+		oldBody := getVertexBody(ctx, selfID) // for the delete CDC event
+
+		linksPayload := ctx.Payload.Clone()
+		linksPayload.SetByPath("links_only", easyjson.NewJSON(true))
+		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.delete", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &linksPayload), &options)))
+		if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
+			operationKeysMutexUnlock(ctx)
+			replyWithoutOpStack(om, ctx)
+			return
+		}
+		cascadeOpStack := om.GetLastSyncOp().Data.GetByPath("op_stack")
+		// Late SHARED guard on the trash-can type: parking only appends this
+		// object's own child under it (per-child serialized by the cache).
+		operationKeysMutexLock(ctx, []string{trashCanTypeID(ctx)}, false, opTime)
+		om.AggregateOpMsg(moveObjectToTrashCan(ctx, selfID, objectType, opTime))
+		operationKeysMutexUnlock(ctx)
+
+		// CDC: the object LEFT the observable model — dispatch the very same
+		// delete-trigger event the physical path produces (link ops from the
+		// cascade + the synthesized vertex op old_body→nil). The parked body
+		// stays in the graph, but no consumer must keep seeing the object.
+		if objectType != "" && om.GetStatus() != sfMediators.SYNC_OP_STATUS_FAILED {
+			triggerStack := easyjson.NewJSONArray()
+			if cascadeOpStack.IsArray() {
+				mergeOpStack(&triggerStack, cascadeOpStack.GetPtr())
+			}
+			addVertexOpToOpStack(&triggerStack, "functions.graph.api.vertex.delete", selfID, oldBody, nil)
+			executeTriggersFromLLOpStack(ctx, &triggerStack, selfID, objectType)
+			executeMetaTriggersFromLLOpStack(ctx, &triggerStack, selfID, objectType)
+		}
+
+		enforceTrashCanRetentionFromStatefun(ctx)
+		replyWithoutOpStack(om, ctx)
+		return
+	}
 
 	om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.delete", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, ctx.Payload), &options)))
 	operationKeysMutexUnlock(ctx)
@@ -648,6 +733,15 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 		// The body itself is cleaned up by Option 1B (DeleteObject)
 		// when something — HLMB rebuild, user code, manual operator
 		// action — issues a delete against this id.
+		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("object with id=%s does not exist", selfID)))
+		system.MsgOnErrorReturn(om.ReplyWithData(easyjson.NewJSONObject().GetPtr()))
+		return
+	}
+
+	// Trash can is OUTSIDE the observable model: reading a parked object must
+	// look exactly like reading a missing one (IDLE / "not found"), not leak
+	// the parked state to consumers.
+	if isTrashCanType(ctx, objectType) {
 		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("object with id=%s does not exist", selfID)))
 		system.MsgOnErrorReturn(om.ReplyWithData(easyjson.NewJSONObject().GetPtr()))
 		return
