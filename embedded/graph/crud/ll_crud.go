@@ -520,11 +520,11 @@ func resolveOutLinkByName(ctx *sfPlugins.StatefunContextProcessor, ownerID, link
 func resolveOutLinkByNameInDomain(dm sfPlugins.Domain, ownerID, linkName string) (linkType, toId string, ok bool) {
 	b, err := dm.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, ownerID, linkName))
 	if err != nil {
-		return resolveOutLinkByLtypeScan(ctx, ownerID, linkName)
+		return resolveOutLinkByLtypeScanInDomain(dm, ownerID, linkName)
 	}
 	tokens := strings.Split(string(b), ".")
 	if len(tokens) < 2 {
-		return resolveOutLinkByLtypeScan(ctx, ownerID, linkName)
+		return resolveOutLinkByLtypeScanInDomain(dm, ownerID, linkName)
 	}
 	return dm.GetObjectIDWithoutDomain(tokens[0]), tokens[1], true
 }
@@ -538,9 +538,17 @@ func resolveOutLinkByNameInDomain(dm sfPlugins.Domain, ownerID, linkName string)
 // permanently undeletable: every delete path resolved the target via out.to,
 // gave up with IDLE and left the remaining key families behind forever.
 func resolveOutLinkByLtypeScan(ctx *sfPlugins.StatefunContextProcessor, ownerID, linkName string) (linkType, toId string, ok bool) {
+	return resolveOutLinkByLtypeScanInDomain(ctx.Domain, ownerID, linkName)
+}
+
+// resolveOutLinkByLtypeScanInDomain is resolveOutLinkByLtypeScan without a
+// statefun context — the same domain-only form as resolveOutLinkByNameInDomain,
+// so plain goroutines (e.g. the trash-can retention sweep) get the recovery
+// fallback too.
+func resolveOutLinkByLtypeScanInDomain(dm sfPlugins.Domain, ownerID, linkName string) (linkType, toId string, ok bool) {
 	prefix := fmt.Sprintf(OutLinkTypeKeyPrefPattern, ownerID)
-	for _, key := range ctx.Domain.Cache().GetKeysByPattern(prefix + ">") {
-		nameBytes, err := ctx.Domain.Cache().GetValue(key)
+	for _, key := range dm.Cache().GetKeysByPattern(prefix + ">") {
+		nameBytes, err := dm.Cache().GetValue(key)
 		if err != nil || string(nameBytes) != linkName {
 			continue
 		}
@@ -548,7 +556,7 @@ func resolveOutLinkByLtypeScan(ctx *sfPlugins.StatefunContextProcessor, ownerID,
 		if len(tokens) < 2 {
 			continue
 		}
-		return ctx.Domain.GetObjectIDWithoutDomain(tokens[0]), tokens[1], true
+		return dm.GetObjectIDWithoutDomain(tokens[0]), tokens[1], true
 	}
 	return "", "", false
 }
