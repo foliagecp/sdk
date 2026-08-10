@@ -696,6 +696,14 @@ Request:
 
 	payload: json - optional
 		details: bool - optional // "false" - (default) only body will be returned, "true" - body and links info will be returned
+		details_v2: bool - optional // structured links format: links.out as array of {to, name, type} objects (implies details)
+		with_link_content: bool - optional // "false" - (default). Only together with details_v2: each links.out
+		                                   // element additionally carries the link's `body` (omitted when the body
+		                                   // is empty/absent) and `tags` (omitted when there are none). Without
+		                                   // details_v2 the flag is IGNORED. The content lives in the cache under
+		                                   // the owner vertex being read, so this costs no extra requests — but
+		                                   // the reply grows by the total size of the vertex's out-link bodies;
+		                                   // batch readers should size their sub-batches accordingly.
 
 	options: json - optional
 		op_stack: bool - optional
@@ -746,6 +754,7 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		outLinkKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, selfID, ">"))
 
 		if detailsV2 {
+			withLinkContent := ctx.Payload.GetByPath("with_link_content").AsBoolDefault(false)
 			// Structured format: links.out as array of {to, name, type} objects
 			outLinks := easyjson.NewJSONArray()
 			for _, outLinkKey := range outLinkKeys {
@@ -766,6 +775,24 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 				outLinkJson := easyjson.NewJSONObjectWithKeyValue("to", easyjson.NewJSON(toId))
 				outLinkJson.SetByPath("name", easyjson.NewJSON(linkName))
 				outLinkJson.SetByPath("type", easyjson.NewJSON(linkType))
+				if withLinkContent {
+					// Opt-in: the link's body and tags live in the cache under
+					// the OWNER vertex (selfID) — the same keys LLAPILinkRead
+					// reads and the same vertex this handler already holds the
+					// read lock for, so this is a pure in-process read with no
+					// extra requests. Empty body / no tags → field omitted.
+					if linkBody, err := ctx.Domain.Cache().GetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName)); err == nil && linkBody.IsNonEmptyObject() {
+						outLinkJson.SetByPath("body", *linkBody)
+					}
+					if tagKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff3Pattern, selfID, linkName, "tag", ">")); len(tagKeys) > 0 {
+						tags := make([]string, 0, len(tagKeys))
+						for _, tagKey := range tagKeys {
+							tagKeyTokens := strings.Split(tagKey, ".")
+							tags = append(tags, tagKeyTokens[len(tagKeyTokens)-1])
+						}
+						outLinkJson.SetByPath("tags", easyjson.NewJSON(tags))
+					}
+				}
 				outLinks.AddToArray(outLinkJson)
 			}
 			result.SetByPath("links.out", outLinks)

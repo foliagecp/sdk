@@ -71,11 +71,21 @@ func (gc GraphSyncClient) VertexDelete(id string) error {
 	return OpErrorFromOpMsg(sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.vertex.delete", id, &payload, nil)))
 }
 
+// VertexRead reads a vertex. Optional flags, in order:
+//   - details[0] — legacy details: body plus links info (as before);
+//   - details[1] — link content: each out-link additionally carries its body
+//     and tags. Link content exists only in the details_v2 reply format, so
+//     passing details[1]=true switches the request to details_v2 — links.out
+//     comes back as an array of {to, name, type, body?, tags?} objects
+//     instead of the legacy parallel arrays.
 func (gc GraphSyncClient) VertexRead(id string, details ...bool) (easyjson.JSON, error) {
-	// Details flag affects response shape — fold it into the key so a
-	// "with details" reader does not collapse into a "without details"
-	// in-flight call.
+	// Details flags affect response shape — fold them into the key so readers
+	// requesting different shapes do not collapse into one in-flight call.
 	withDetails := len(details) > 0 && details[0]
+	withLinkContent := len(details) > 1 && details[1]
+	if withLinkContent {
+		return gc.VertexReadDetailsV2(id, true)
+	}
 	key := "VertexRead:" + strconv.FormatBool(withDetails) + ":" + id
 	return doRead(gc.readFlight, key, func() (any, error) {
 		payload := easyjson.NewJSONObject()
@@ -87,9 +97,19 @@ func (gc GraphSyncClient) VertexRead(id string, details ...bool) (easyjson.JSON,
 	})
 }
 
-func (gc GraphSyncClient) VertexReadDetailsV2(id string) (easyjson.JSON, error) {
-	return doRead(gc.readFlight, "VertexRead:v2:"+id, func() (any, error) {
+// VertexReadDetailsV2 reads a vertex with the structured links format.
+// linkContent[0]=true additionally requests each out-link's body and tags
+// (with_link_content): fields are omitted for links with an empty body / no
+// tags, and the reply grows by the total size of the vertex's out-link
+// bodies — batch readers should size their sub-batches accordingly.
+func (gc GraphSyncClient) VertexReadDetailsV2(id string, linkContent ...bool) (easyjson.JSON, error) {
+	withLinkContent := len(linkContent) > 0 && linkContent[0]
+	key := "VertexRead:v2:" + strconv.FormatBool(withLinkContent) + ":" + id
+	return doRead(gc.readFlight, key, func() (any, error) {
 		payload := easyjson.NewJSONObjectWithKeyValue("details_v2", easyjson.NewJSON(true))
+		if withLinkContent {
+			payload.SetByPath("with_link_content", easyjson.NewJSON(true))
+		}
 		om := sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.vertex.read", id, &payload, nil))
 		return readResult{data: om.Data, err: OpErrorFromOpMsgStrict(om)}, nil
 	})
