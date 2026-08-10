@@ -126,13 +126,22 @@ func (s *VertexReadLinkContentTestSuite) Test_WithLinkContent_Contract() {
 	}
 
 	// 2. With the flag: per-link presence/omission.
-	data, err = s.dbc.Graph.VertexReadDetailsV2("lc-src", true)
+	data, err = s.dbc.Graph.VertexReadDetailsV2Full("lc-src", true)
 	s.NoError(err)
 	s.assertContentShape(outLinksByName(data))
 
+	// VertexReadDetailsV2Full without arguments behaves exactly like
+	// VertexReadDetailsV2 (no content fields).
+	data, err = s.dbc.Graph.VertexReadDetailsV2Full("lc-src")
+	s.NoError(err)
+	for name, l := range outLinksByName(data) {
+		s.Falsef(l.PathExists("body"), "Full without linkContent: %q must carry no body", name)
+		s.Falsef(l.PathExists("tags"), "Full without linkContent: %q must carry no tags", name)
+	}
+
 	// 3. links.in never carries content — the edge's content travels with
 	// its source vertex only.
-	data, err = s.dbc.Graph.VertexReadDetailsV2("lc-body", true)
+	data, err = s.dbc.Graph.VertexReadDetailsV2Full("lc-body", true)
 	s.NoError(err)
 	in := data.GetByPath("links.in")
 	s.True(in.IsArray())

@@ -77,14 +77,14 @@ func (gc GraphSyncClient) VertexDelete(id string) error {
 //     and tags. Link content exists only in the details_v2 reply format, so
 //     passing details[1]=true switches the request to details_v2 — links.out
 //     comes back as an array of {to, name, type, body?, tags?} objects
-//     instead of the legacy parallel arrays.
+//     instead of the legacy parallel arrays (same as VertexReadDetailsV2Full).
 func (gc GraphSyncClient) VertexRead(id string, details ...bool) (easyjson.JSON, error) {
 	// Details flags affect response shape — fold them into the key so readers
 	// requesting different shapes do not collapse into one in-flight call.
 	withDetails := len(details) > 0 && details[0]
 	withLinkContent := len(details) > 1 && details[1]
 	if withLinkContent {
-		return gc.VertexReadDetailsV2(id, true)
+		return gc.VertexReadDetailsV2Full(id, true)
 	}
 	key := "VertexRead:" + strconv.FormatBool(withDetails) + ":" + id
 	return doRead(gc.readFlight, key, func() (any, error) {
@@ -98,13 +98,35 @@ func (gc GraphSyncClient) VertexRead(id string, details ...bool) (easyjson.JSON,
 }
 
 // VertexReadDetailsV2 reads a vertex with the structured links format.
-// linkContent[0]=true additionally requests each out-link's body and tags
-// (with_link_content): fields are omitted for links with an empty body / no
-// tags, and the reply grows by the total size of the vertex's out-link
-// bodies — batch readers should size their sub-batches accordingly.
-func (gc GraphSyncClient) VertexReadDetailsV2(id string, linkContent ...bool) (easyjson.JSON, error) {
+// The signature is frozen: downstream applications pin it in their own
+// interfaces, so new capabilities go into separate methods
+// (VertexReadDetailsV2Full), never into new parameters here.
+func (gc GraphSyncClient) VertexReadDetailsV2(id string) (easyjson.JSON, error) {
+	return doRead(gc.readFlight, "VertexRead:v2:"+id, func() (any, error) {
+		payload := easyjson.NewJSONObjectWithKeyValue("details_v2", easyjson.NewJSON(true))
+		om := sfMediators.OpMsgFromSfReply(gc.request(sfp.AutoRequestSelect, "functions.graph.api.vertex.read", id, &payload, nil))
+		return readResult{data: om.Data, err: OpErrorFromOpMsgStrict(om)}, nil
+	})
+}
+
+// VertexReadDetailsV2Full is VertexReadDetailsV2 with optional out-link
+// content: linkContent[0]=true adds with_link_content to the request, and
+// each links.out element then also carries the link's body and tags — fields
+// are omitted for links with an empty body / no tags, and the reply grows by
+// the total size of the vertex's out-link bodies, so batch readers should
+// size their sub-batches accordingly. On a runtime without with_link_content
+// support the reply degrades to the plain VertexReadDetailsV2 shape, without
+// errors. Without arguments it behaves exactly like VertexReadDetailsV2 —
+// that method's signature is frozen for downstream interfaces, which is why
+// the variadic capabilities live here.
+func (gc GraphSyncClient) VertexReadDetailsV2Full(id string, linkContent ...bool) (easyjson.JSON, error) {
 	withLinkContent := len(linkContent) > 0 && linkContent[0]
-	key := "VertexRead:v2:" + strconv.FormatBool(withLinkContent) + ":" + id
+	// Without content this is the same request VertexReadDetailsV2 sends —
+	// share its in-flight key; the content shape gets its own.
+	key := "VertexRead:v2:" + id
+	if withLinkContent {
+		key = "VertexRead:v2full:" + id
+	}
 	return doRead(gc.readFlight, key, func() (any, error) {
 		payload := easyjson.NewJSONObjectWithKeyValue("details_v2", easyjson.NewJSON(true))
 		if withLinkContent {

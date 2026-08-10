@@ -269,6 +269,13 @@ func readCases() []readCase {
 			},
 		},
 		{
+			name:     "Graph.VertexReadDetailsV2Full",
+			typename: "functions.graph.api.vertex.read",
+			invoke: func(t *testing.T, r map[string]mockReply) (easyjson.JSON, error) {
+				return newGraph(t, r, nil).VertexReadDetailsV2Full("v", true)
+			},
+		},
+		{
 			name:     "Graph.VerticesLinkRead",
 			typename: "functions.graph.api.link.read",
 			invoke: func(t *testing.T, r map[string]mockReply) (easyjson.JSON, error) {
