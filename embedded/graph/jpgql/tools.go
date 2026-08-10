@@ -231,6 +231,43 @@ func GetSpecificLinkIndices(cacheStore *cache.Store, fromObjectID string, linkNa
 	return resultIndices
 }
 
+// parseHasValueType normalizes a has-filter value_type argument. The type is
+// recognized by its first letter (historically "string"/"str"/"s" and the
+// like all work); a "-ci" suffix ("string-ci") marks STRING comparisons as
+// case-insensitive. The suffix carries no meaning for numeric/bool and is
+// ignored there. An empty value_type yields no type and matches nothing.
+func parseHasValueType(valueType string) (typeStr string, ci bool) {
+	lt := strings.ToLower(valueType)
+	if lt == "" {
+		return "", false
+	}
+	return lt[:1], strings.HasSuffix(lt, "-ci")
+}
+
+// stringMeetsRequirement is THE string comparator for has-filters, shared by
+// the scalar and the array paths. Semantics: "==" / "!=" exact; "<" — the
+// field value is a substring of the target; ">" — the target is a substring
+// of the field value. With ci=true (the "string-ci" value_type) both sides
+// are lower-cased first, giving all four operations one uniform simple case
+// folding.
+func stringMeetsRequirement(valString, operation, targetValue string, ci bool) bool {
+	if ci {
+		valString = strings.ToLower(valString)
+		targetValue = strings.ToLower(targetValue)
+	}
+	switch operation {
+	case "==":
+		return valString == targetValue
+	case "!=":
+		return valString != targetValue
+	case "<":
+		return strings.Contains(targetValue, valString)
+	case ">":
+		return strings.Contains(valString, targetValue)
+	}
+	return false
+}
+
 // IsVertexBodyHasIndexValue reports whether the vertex body field `key`
 // satisfies the scalar requirement. The name retains "Index" for backward
 // API compatibility, but there is no longer a separate body-value index:
@@ -241,30 +278,31 @@ func GetSpecificLinkIndices(cacheStore *cache.Store, fromObjectID string, linkNa
 // maintaining the index. GetValueJSONByPath reads only the requested field
 // without cloning the whole body.
 func IsVertexBodyHasIndexValue(cacheStore *cache.Store, vertexId, key, valueType, operation, targetValue string) bool {
-	typeStr := strings.ToLower(valueType)[:1]
+	typeStr, ci := parseHasValueType(valueType)
 	value, err := cacheStore.GetValueJSONByPath(vertexId, key)
 	if err != nil || value == nil {
 		return false
 	}
-	return isFieldValueMeetsRequirements(*value, typeStr, operation, targetValue)
+	return isFieldValueMeetsRequirements(*value, typeStr, operation, targetValue, ci)
 }
 
 // IsLinkBodyHasIndexValue is the link-body counterpart of
 // IsVertexBodyHasIndexValue. See that function for why no index is involved.
 func IsLinkBodyHasIndexValue(cacheStore *cache.Store, fromVertexId, linkName, key, valueType, operation, targetValue string) bool {
-	typeStr := strings.ToLower(valueType)[:1]
+	typeStr, ci := parseHasValueType(valueType)
 	value, err := cacheStore.GetValueJSONByPath(fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.KeySuff1Pattern, fromVertexId, linkName), key)
 	if err != nil || value == nil {
 		return false
 	}
-	return isFieldValueMeetsRequirements(*value, typeStr, operation, targetValue)
+	return isFieldValueMeetsRequirements(*value, typeStr, operation, targetValue, ci)
 }
 
 // isFieldValueMeetsRequirements evaluates a scalar comparison against an
 // already-resolved field value (no body traversal — the caller passes the
 // field directly). A missing field arrives as JSON{nil}, which fails every
-// Is* type check below and yields false.
-func isFieldValueMeetsRequirements(value easyjson.JSON, typeStr, operation, targetValue string) bool {
+// Is* type check below and yields false. ci applies to string comparisons
+// only (the "string-ci" value_type).
+func isFieldValueMeetsRequirements(value easyjson.JSON, typeStr, operation, targetValue string, ci bool) bool {
 	switch typeStr {
 	case "b":
 		if !value.IsBool() {
@@ -298,22 +336,12 @@ func isFieldValueMeetsRequirements(value easyjson.JSON, typeStr, operation, targ
 		if !value.IsString() {
 			return false
 		}
-		valString := value.AsStringDefault("")
-		switch operation {
-		case "==":
-			return valString == targetValue
-		case "!=":
-			return valString != targetValue
-		case "<":
-			return strings.Contains(targetValue, valString)
-		case ">":
-			return strings.Contains(valString, targetValue)
-		}
+		return stringMeetsRequirement(value.AsStringDefault(""), operation, targetValue, ci)
 	}
 	return false
 }
 
-func isArrayElementMeetsRequirements(arr easyjson.JSON, typeStr, operation, targetValue string) bool {
+func isArrayElementMeetsRequirements(arr easyjson.JSON, typeStr, operation, targetValue string, ci bool) bool {
 	if !arr.IsArray() {
 		return false
 	}
@@ -364,24 +392,8 @@ func isArrayElementMeetsRequirements(arr easyjson.JSON, typeStr, operation, targ
 			}
 		case "s":
 			if elemJSON.IsString() {
-				valString := elemJSON.AsStringDefault("")
-				switch operation {
-				case "==":
-					if valString == targetValue {
-						return true
-					}
-				case "!=":
-					if valString != targetValue {
-						return true
-					}
-				case "<":
-					if strings.Contains(targetValue, valString) {
-						return true
-					}
-				case ">":
-					if strings.Contains(valString, targetValue) {
-						return true
-					}
+				if stringMeetsRequirement(elemJSON.AsStringDefault(""), operation, targetValue, ci) {
+					return true
 				}
 			}
 		}
@@ -390,21 +402,21 @@ func isArrayElementMeetsRequirements(arr easyjson.JSON, typeStr, operation, targ
 }
 
 func IsVertexBodyHasArrayValue(cacheStore *cache.Store, vertexId, key, valueType, operation, targetValue string) bool {
-	typeStr := strings.ToLower(valueType)[:1]
+	typeStr, ci := parseHasValueType(valueType)
 	value, err := cacheStore.GetValueJSONByPath(vertexId, key)
 	if err != nil || value == nil {
 		return false
 	}
-	return isArrayElementMeetsRequirements(*value, typeStr, operation, targetValue)
+	return isArrayElementMeetsRequirements(*value, typeStr, operation, targetValue, ci)
 }
 
 func IsLinkBodyHasArrayValue(cacheStore *cache.Store, fromVertexId, linkName, key, valueType, operation, targetValue string) bool {
-	typeStr := strings.ToLower(valueType)[:1]
+	typeStr, ci := parseHasValueType(valueType)
 	value, err := cacheStore.GetValueJSONByPath(fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.KeySuff1Pattern, fromVertexId, linkName), key)
 	if err != nil || value == nil {
 		return false
 	}
-	return isArrayElementMeetsRequirements(*value, typeStr, operation, targetValue)
+	return isArrayElementMeetsRequirements(*value, typeStr, operation, targetValue, ci)
 }
 
 // IsLinkSatifiesFilterCreteria parses linkFilterQuery and evaluates it against a
