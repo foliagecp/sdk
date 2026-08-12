@@ -28,7 +28,7 @@ const (
 	BUILT_IN_OBJECT_NAV = "nav"
 	// BUILT_IN_TRASH_CAN is the built-in type deleted objects are re-linked to
 	// ("nothing dies instantly"); see trash_can.go.
-	BUILT_IN_TRASH_CAN = "trash_can"
+	BUILT_IN_TRASH_CAN = "trash-can"
 )
 
 // ----------------------------

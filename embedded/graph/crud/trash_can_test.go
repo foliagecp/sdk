@@ -61,7 +61,7 @@ func (s *TrashCanTestSuite) typeHoldsObject(typeName, id string) bool {
 	return s.Runtime().Domain.Cache().Exists(key)
 }
 
-// trashEdgeBody returns the trash_can→object edge body (null JSON if absent).
+// trashEdgeBody returns the trash-can→object edge body (null JSON if absent).
 func (s *TrashCanTestSuite) trashEdgeBody(id string) *easyjson.JSON {
 	key := fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.KeySuff1Pattern,
 		s.SetThisDomainPreffix(crud.BUILT_IN_TRASH_CAN), id)

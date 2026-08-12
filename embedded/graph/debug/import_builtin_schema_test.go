@@ -6,7 +6,7 @@ package debug_test
 // `root`, `types`, `objects` and the built-in types the source system had. The
 // import used to delete and recreate every dumped vertex — and deleting `types`
 // cascades away its registrations, of which only the ones present in the dump
-// come back. A dump taken before a built-in type existed (here: `trash_can`)
+// come back. A dump taken before a built-in type existed (here: `trash-can`)
 // therefore left that type unregistered, and CRUD stopped recognizing it.
 
 import (
@@ -60,7 +60,7 @@ func (s *ImportBuiltInSchemaTestSuite) typeRegistered(typeName string) bool {
 }
 
 // legacyDump mimics an export taken by an older system: it carries the skeleton
-// and one user type, and knows nothing about `trash_can`.
+// and one user type, and knows nothing about `trash-can`.
 const legacyDump = `<?xml version="1.0" encoding="UTF-8"?>
 <graphml>
   <graph id="G" edgedefault="directed">
@@ -109,7 +109,7 @@ func (s *ImportBuiltInSchemaTestSuite) Test_ImportStillLoadsDumpContent() {
 }
 
 // CRUD must actually work on the built-in types after an import — the trash can
-// is the strictest witness: deleting an object parks it under `trash_can`.
+// is the strictest witness: deleting an object parks it under `trash-can`.
 func (s *ImportBuiltInSchemaTestSuite) Test_AfterImport_TrashCanStillFunctional() {
 	s.boot()
 	s.importDump(legacyDump)

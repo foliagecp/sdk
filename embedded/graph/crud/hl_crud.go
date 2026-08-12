@@ -574,7 +574,7 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	// Write lock on the object only. The trash-can type is read-guarded LATE,
 	// in the park branch right before re-linking: the physical branch's nested
 	// vertex.delete needs a WRITE on the trash-can type (to remove the
-	// trash_can→object in-link), and holding a read guard across it would be a
+	// trash-can→object in-link), and holding a read guard across it would be a
 	// same-goroutine read→write upgrade — a deadlock.
 	operationKeysMutexLock(ctx, []string{selfID}, true, opTime)
 	objectType, err := findObjectType(ctx, selfID)

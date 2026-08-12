@@ -443,7 +443,7 @@ func LLAPIImportGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statef
 		// skeleton is only as complete as the file was: pieces it never carried
 		// are absent, and pieces it DID carry were deleted and recreated —
 		// which cascaded away the links of anything the dump predates (a
-		// pre-trash-can dump leaves `trash_can` unregistered under `types`).
+		// pre-trash-can dump leaves `trash-can` unregistered under `types`).
 		// Repair whatever is missing; correct pieces stay untouched.
 		crud.EnsureBuiltInSchema(ctx.Request, ctx.Domain)
 

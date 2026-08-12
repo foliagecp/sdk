@@ -108,7 +108,7 @@ func isTrashCanType(ctx *sfPlugins.StatefunContextProcessor, typeID string) bool
 }
 
 // moveObjectToTrashCan re-homes a just-unlinked object under the trash-can
-// type: trash_can→object (OBJECT_TYPELINK, edge body {original_type,
+// type: trash-can→object (OBJECT_TYPELINK, edge body {original_type,
 // deleted_at}) plus the object's own __type link to the trash can, so
 // findObjectType resolves parked objects to the trash-can type. Called by
 // DeleteObject under the object's write lock (trash-can type read-guarded),
@@ -133,7 +133,7 @@ func moveObjectToTrashCan(ctx *sfPlugins.StatefunContextProcessor, selfID, origi
 	return sfMediators.OpMsgOk(easyjson.NewJSONNull())
 }
 
-// trashCanEdgeInfo reads the trash_can→object edge body of a parked object.
+// trashCanEdgeInfo reads the trash-can→object edge body of a parked object.
 func trashCanEdgeInfo(ctx *sfPlugins.StatefunContextProcessor, selfID string) (originalType string, deletedAt int64) {
 	trashType := trashCanTypeID(ctx)
 	linkName := ctx.Domain.GetObjectIDWithoutDomain(selfID)

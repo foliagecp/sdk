@@ -4,7 +4,7 @@ package crud_test
 // rewrites the graph from a file: pieces the file never carried are simply
 // absent afterwards, and pieces it DID carry are deleted and recreated — which
 // cascades away the links of everything the dump predates (a pre-trash-can dump
-// leaves `trash_can` unregistered under `types`). These tests pin that
+// leaves `trash-can` unregistered under `types`). These tests pin that
 // EnsureBuiltInSchema repairs each of those leftovers.
 
 import (
@@ -95,7 +95,7 @@ func (s *BuiltInSchemaTestSuite) Test_TypesVertexRebuilt_RegistrationsRestored()
 
 	s.ensure()
 
-	s.True(s.typeRegistered(crud.BUILT_IN_TRASH_CAN), "trash_can must be registered under types again")
+	s.True(s.typeRegistered(crud.BUILT_IN_TRASH_CAN), "trash-can must be registered under types again")
 	s.True(s.typeRegistered(crud.BUILT_IN_TYPE_GROUP), "group must be registered under types again")
 }
 
