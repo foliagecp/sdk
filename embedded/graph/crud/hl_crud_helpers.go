@@ -577,35 +577,9 @@ func getObjectsLinkTypeFromTypesLink(ctx *sfPlugins.StatefunContextProcessor, fr
 }
 
 func cmdbSchemaPrepare(ctx context.Context, runtime *statefun.Runtime) error {
-	// ----------------------------------------------------
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", BUILT_IN_ROOT, easyjson.NewJSONObject().GetPtr(), nil))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", BUILT_IN_TYPES, easyjson.NewJSONObject().GetPtr(), nil))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", BUILT_IN_OBJECTS, easyjson.NewJSONObject().GetPtr(), nil))
-
-	v := easyjson.NewJSONObject()
-	v.SetByPath("to", easyjson.NewJSON(BUILT_IN_TYPES))
-	v.SetByPath("type", easyjson.NewJSON(TYPES_TYPELINK))
-	v.SetByPath("name", easyjson.NewJSON(runtime.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false)))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", BUILT_IN_ROOT, &v, nil))
-
-	v = easyjson.NewJSONObject()
-	v.SetByPath("to", easyjson.NewJSON(BUILT_IN_OBJECTS))
-	v.SetByPath("type", easyjson.NewJSON(OBJECTS_TYPELINK))
-	v.SetByPath("name", easyjson.NewJSON(runtime.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false)))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", BUILT_IN_ROOT, &v, nil))
-	// ----------------------------------------------------
-
-	// ----------------------------------------------------
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.create", BUILT_IN_TYPE_GROUP, nil, nil))
-	// Trash can type — deleted objects are re-linked here (see trash_can.go).
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.create", BUILT_IN_TRASH_CAN, nil, nil))
-
-	v = easyjson.NewJSONObjectWithKeyValue("to", easyjson.NewJSON(BUILT_IN_TYPE_GROUP))
-	v.SetByPath("object_type", easyjson.NewJSON(GROUP_TYPELINK))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.types.link.create", BUILT_IN_TYPE_GROUP, &v, nil))
-
-	v = easyjson.NewJSONObjectWithKeyValue("origin_type", easyjson.NewJSON(BUILT_IN_TYPE_GROUP))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.create", BUILT_IN_OBJECT_NAV, &v, nil))
-	// ----------------------------------------------------
+	// Same repair-capable routine the import path uses: a runtime starting on a
+	// graph that was imported (or otherwise mangled) heals the skeleton instead
+	// of leaving half of it broken.
+	EnsureBuiltInSchema(runtime.Request, runtime.Domain)
 	return nil
 }
