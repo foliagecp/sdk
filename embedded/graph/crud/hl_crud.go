@@ -228,6 +228,17 @@ func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProces
 
 	om.AggregateOpMsg(m)
 
+	// No vertex — no type: reply IDLE ("not found") and stop, exactly as
+	// ReadObject does. Going on would inspect the in-links of a vertex that does
+	// not exist, find none, and aggregate FAILED over the IDLE (IDLE+FAILED =
+	// FAILED) — so a plain "no such type" reached callers as a hard failure, and
+	// an API asking for objects of a misspelled type answered 500 instead of 404
+	// (the client maps IDLE to ErrNotFound, everything else to a real error).
+	if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_IDLE {
+		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("type with id=%s does not exist", selfID))).Reply()
+		return
+	}
+
 	vertexIsType := false
 	typesVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false)
 	for i := 0; i < m.Data.GetByPath("links.in").ArraySize(); i++ {
