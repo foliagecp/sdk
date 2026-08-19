@@ -42,10 +42,13 @@ func (s *leakSuite) bootCRUD(register ...func(*statefun.Runtime)) {
 	s.dbc = dbc
 }
 
-// purgeObject removes an object PHYSICALLY, which takes two deletes: the first
-// PARKS it in the trash can — the object keeps its body and is re-linked under
-// the built-in trash-can type so it can be restored — and a delete of an
-// already-parked object is the erase.
+// purgeObject deletes an object and then erases what the delete left behind.
+//
+// object.delete PARKS the object in the trash can: it keeps its body and is
+// re-linked under the built-in trash-can type so it can be restored. From then
+// on the object does not exist for the object API at all — the erase is the
+// low-level vertex delete, the only API that still sees it (which is also how
+// retention evicts).
 //
 // Parking is by design and bounded by retention, so it is not a leak; but it
 // does leave the graph above its baseline, and a cycle that does not return the
@@ -55,7 +58,7 @@ func (s *leakSuite) purgeObject(id string) error {
 	if err := s.dbc.CMDB.ObjectDelete(id); err != nil {
 		return err
 	}
-	return s.dbc.CMDB.ObjectDelete(id)
+	return s.dbc.Graph.VertexDelete(id)
 }
 
 func (s *leakSuite) waitForVertex(id string) {

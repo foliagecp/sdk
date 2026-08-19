@@ -115,14 +115,16 @@ exact). Boot with `bootCRUD(...)`, express the workload as ONE cycle function
 that returns the world to its logical baseline, and build the runner with
 `s.newRunner(scenario, cycle, collect)`.
 
-**Deleting an object takes two deletes.** The first PARKS it in the trash can —
-it keeps its body and is re-linked under the built-in trash-can type so it can
-be restored — and only a delete of an already-parked object erases it. Parking
-is by design and bounded by retention, so it is not a leak, but a cycle that
-stops after one delete leaves the object (and its function contexts) behind and
-ends up measuring the bin filling up. Use `s.purgeObject(id)`, or issue the
-second delete explicitly where the calls are batched or salted. A cascade
-(`type.delete`) parks the type's objects the same way. Keep the whole warmup+measure loop
+**Deleting an object leaves it in the trash can.** `object.delete` PARKS it —
+the body is kept and the object is re-linked under the built-in trash-can type
+so it can be restored — and from then on it does not exist for the object API
+at all. What erases it is the low-level `vertex.delete` (the same way retention
+evicts). Parking is by design and bounded by retention, so it is not a leak, but
+a cycle that stops after the object delete leaves the object (and its function
+contexts) behind and ends up measuring the bin filling up. Use
+`s.purgeObject(id)`, or issue the vertex delete explicitly where the calls are
+batched or salted. A cascade (`type.delete`) parks the type's objects the same
+way. Keep the whole warmup+measure loop
 inside a single `Test` method — the harness rebuilds the runtime per method.
 Assert with `rep.AssertClean` (heap+goroutines), `s.assertCoreStable(rep)`
 and `rep.AssertStable(t, metric)` for scenario counters;

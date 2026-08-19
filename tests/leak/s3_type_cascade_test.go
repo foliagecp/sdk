@@ -49,11 +49,12 @@ func (s *S3Suite) Test_TypeCascadeChurn() {
 			return fmt.Errorf("type.delete %s: %w", tp, err)
 		}
 		// The cascade PARKS every object of the type in the trash can (it goes
-		// through object.delete); erase them, or each cycle leaves a whole
-		// family behind and the scenario measures the bin, not the cascade.
+		// through object.delete); erase them through the vertex API, or each
+		// cycle leaves a whole family behind and the scenario measures the bin
+		// instead of the cascade.
 		for i := 0; i < n; i++ {
-			if err := s.dbc.CMDB.ObjectDelete(id(i)); err != nil {
-				return fmt.Errorf("parked object.delete %s: %w", id(i), err)
+			if err := s.dbc.Graph.VertexDelete(id(i)); err != nil {
+				return fmt.Errorf("parked vertex.delete %s: %w", id(i), err)
 			}
 		}
 		return nil

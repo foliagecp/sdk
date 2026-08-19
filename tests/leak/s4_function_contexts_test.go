@@ -280,15 +280,16 @@ func (s *S4Suite) Test_BatchChurnLeavesNoTriggerContexts() {
 			time.Sleep(100 * time.Millisecond)
 		}
 
-		// Twice: the first delete parks the object in the trash can, the second
-		// erases the parked one. A parked object keeps its contexts.
-		for pass := 0; pass < 2; pass++ {
+		// Two passes: object.delete parks the object in the trash can, and the
+		// low-level vertex.delete erases the parked one — a parked object keeps
+		// its contexts, and only its erasure drops them.
+		for pass, typename := range []string{"functions.cmdb.api.object.delete", "functions.graph.api.vertex.delete"} {
 			d := s.dbc.BatchCreate(fmt.Sprintf("s4e-delete-%d-%d", c, pass))
 			for _, id := range ids {
-				d.Operation("functions.cmdb.api.object.delete", id, opTimePayload())
+				d.Operation(typename, id, opTimePayload())
 			}
 			if _, err := d.Commit(); err != nil {
-				return fmt.Errorf("batch delete pass %d: %w", pass, err)
+				return fmt.Errorf("batch %s: %w", typename, err)
 			}
 		}
 		return nil
