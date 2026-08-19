@@ -40,6 +40,19 @@ splits the in-use heap by allocation stack: the SDK share is **asserted**,
 the server share and raw process totals are **REPORT-only**. In production
 the server is a separate process; its by-design growth is quantified by S12.
 
+**Profile resolution.** That split comes from the heap profile, whose values are
+ESTIMATES: the runtime samples one allocation per `MemProfileRate` bytes and
+scales the result back up. At Go's 512KiB default the split can only move in
+half-megabyte steps — eight times coarser than the 64KiB floor these checks
+assert against — so a couple of sampled allocations landing inside one window
+draw a straight, "3-sigma significant" line through a scenario that leaks
+nothing (the series is a staircase of 524432-byte steps, and the same scenario
+run alone reports slope=0 because no sampled allocation happened to land in the
+window). The suite therefore samples finely: `LEAK_MEMPROFILE_RATE`, 4096 bytes
+by default, set in the package's `init` because the profile writer scales every
+record by the CURRENT rate and so it must be set once, before anything
+allocates.
+
 **Process isolation.** `run-leak-tests.sh` runs every scenario in its OWN
 `go test` process. Scenarios sharing one process share heap, timers and
 whatever each per-scenario emergency teardown leaves behind — process-wide
@@ -66,7 +79,8 @@ heap FAIL, goroutine stacks on a settle FAIL. Every check prints a
 machine-readable `LEAKCHECK|...` line; the script aggregates them.
 
 Env knobs: `LEAK_WARMUP`, `LEAK_CYCLES`, `LEAK_SCALE`,
-`LEAK_FLOOR_HEAP_BYTES`, `LEAK_FLOOR_HEAP_OBJECTS`, `LEAK_RESULTS_DIR`.
+`LEAK_FLOOR_HEAP_BYTES`, `LEAK_FLOOR_HEAP_OBJECTS`, `LEAK_RESULTS_DIR`,
+`LEAK_MEMPROFILE_RATE`.
 
 ## Scenarios
 

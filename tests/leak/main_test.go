@@ -5,6 +5,7 @@ package leak
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"testing"
 	"time"
 
@@ -13,6 +14,27 @@ import (
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/foliagecp/sdk/statefun/test"
 )
+
+// init sets the heap-profile resolution before anything else in this package
+// allocates.
+//
+// The SDK/NATS heap split is derived from the heap profile, whose values are
+// ESTIMATES: the runtime samples one allocation per MemProfileRate bytes and
+// scales the result back up. At Go's 512KiB default the split can therefore
+// only move in half-megabyte steps — EIGHT TIMES coarser than the 64KiB floor
+// these checks assert against — so a couple of sampled allocations landing
+// inside one measurement window draw a straight, "3-sigma significant" line
+// through a scenario that leaks nothing. That is exactly how clean runs of
+// s9/s10 were flagged: their sdk_inuse_bytes series is a staircase of 524432-
+// byte steps, and in isolation the very same scenario reports slope=0 because
+// no sampled allocation happened to land in the window at all.
+//
+// A fine rate makes the metric near-exact, so the floors mean what they say.
+// It must be set ONCE and as early as possible (the profile writer scales every
+// record by the CURRENT rate), which is why it lives here and not in TestMain.
+func init() {
+	runtime.MemProfileRate = system.GetEnvMustProceed("LEAK_MEMPROFILE_RATE", 4096)
+}
 
 // resultsDir is where every scenario writes its artifacts (CSV samples, heap
 // profiles, diffs). Relative paths resolve against this package's directory,
