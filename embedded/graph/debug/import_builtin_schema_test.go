@@ -25,7 +25,8 @@ import (
 
 type ImportBuiltInSchemaTestSuite struct {
 	test.StatefunTestSuite
-	cmdb db.CMDBSyncClient
+	cmdb  db.CMDBSyncClient
+	graph db.GraphSyncClient
 }
 
 func TestImportBuiltInSchemaTestSuite(t *testing.T) {
@@ -45,7 +46,7 @@ func (s *ImportBuiltInSchemaTestSuite) boot() {
 	}
 	dbc, err := db.NewDBSyncClientFromRequestFunction(s.Runtime().Request)
 	s.NoError(err)
-	s.cmdb = dbc.CMDB
+	s.cmdb, s.graph = dbc.CMDB, dbc.Graph
 }
 
 func (s *ImportBuiltInSchemaTestSuite) vertexExists(id string) bool {
@@ -73,6 +74,21 @@ const legacyDump = `<?xml version="1.0" encoding="UTF-8"?>
     <edge source="root" target="objects"><data key="tps">__objects</data><data key="nms">objects</data></edge>
     <edge source="types" target="group"><data key="tps">__type</data><data key="nms">group</data></edge>
     <edge source="types" target="legacy_t"><data key="tps">__type</data><data key="nms">legacy_t</data></edge>
+  </graph>
+</graphml>`
+
+// dumpWithSkeletonBodies carries bodies ON the skeleton vertices — an export
+// from a system that kept something of its own on `root` and `objects`.
+const dumpWithSkeletonBodies = `<?xml version="1.0" encoding="UTF-8"?>
+<graphml>
+  <graph id="G" edgedefault="directed">
+    <node id="root"><data key="bdj">{"from_dump":"yes"}</data></node>
+    <node id="types"/>
+    <node id="objects"><data key="bdj">{"obj_note":"from dump"}</data></node>
+    <node id="group"/>
+    <edge source="root" target="types"><data key="tps">__types</data><data key="nms">types</data></edge>
+    <edge source="root" target="objects"><data key="tps">__objects</data><data key="nms">objects</data></edge>
+    <edge source="types" target="group"><data key="tps">__type</data><data key="nms">group</data></edge>
   </graph>
 </graphml>`
 
@@ -106,6 +122,66 @@ func (s *ImportBuiltInSchemaTestSuite) Test_ImportStillLoadsDumpContent() {
 
 	s.True(s.vertexExists("legacy_t"), "a vertex from the dump must be imported")
 	s.True(s.typeRegistered("legacy_t"), "and its registration from the dump must be applied")
+}
+
+// bodyOf reads a vertex body through the graph API.
+func (s *ImportBuiltInSchemaTestSuite) bodyOf(id string) easyjson.JSON {
+	data, err := s.graph.VertexRead(id)
+	s.Require().NoError(err)
+	return data.GetByPath("body")
+}
+
+// An import must not wipe what the skeleton vertices carry. Those bodies hold
+// configuration of THIS graph — the protected-field policy on `root`, the
+// meta-trigger registrations on the `types` and `objects` roots — which no dump
+// is authoritative about: it knows only what its source system had at export
+// time. The dumped body is merged in, not swapped for.
+func (s *ImportBuiltInSchemaTestSuite) Test_ImportMergesSkeletonBodies_KeepsLocalSettings() {
+	s.boot()
+
+	// What this graph has configured, of which the dump knows nothing.
+	p := easyjson.NewJSONObjectWithKeyValue("replace", easyjson.NewJSON(false))
+	p.SetByPath("body."+crud.ProtectedBodyFieldsBodyPath, easyjson.NewJSON([]string{"usr"}))
+	p.SetByPath("body.local_setting", easyjson.NewJSON("keep me"))
+	_, err := s.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.update", crud.BUILT_IN_ROOT, &p, nil)
+	s.Require().NoError(err)
+
+	s.importDump(dumpWithSkeletonBodies)
+
+	root := s.bodyOf(crud.BUILT_IN_ROOT)
+	list, _ := root.GetByPath(crud.ProtectedBodyFieldsBodyPath).AsArrayString()
+	s.Equal([]string{"usr"}, list, "the protected-field policy must survive an import")
+	s.Equal("keep me", root.GetByPath("local_setting").AsStringDefault(""),
+		"anything else living on root must survive too")
+	s.Equal("yes", root.GetByPath("from_dump").AsStringDefault(""),
+		"and what the dump carries must still land")
+
+	s.Equal("from dump", s.bodyOf(crud.BUILT_IN_OBJECTS).GetByPath("obj_note").AsStringDefault(""),
+		"the same for the other skeleton vertices")
+}
+
+// The protected-field list is not just stored — it must still be IN FORCE after
+// an import, which is what a runtime reads it for.
+func (s *ImportBuiltInSchemaTestSuite) Test_AfterImport_ProtectedFieldsStillEnforced() {
+	s.boot()
+	crud.EnsureBuiltInSchema(s.Runtime().Request, s.Runtime().Domain, "usr")
+
+	s.importDump(dumpWithSkeletonBodies)
+	crud.LoadProtectedBodyFieldsFromGraph(s.Runtime().Request, s.Runtime().Domain)
+	s.Equal([]string{"usr"}, s.Runtime().Domain.ProtectedBodyFields())
+
+	s.NoError(s.cmdb.TypeCreate("imp_pf_t"))
+	body := easyjson.NewJSONObjectWithKeyValue("hostname", easyjson.NewJSON("srv"))
+	body.SetByPath("usr.attrs.responsible", easyjson.NewJSON("alice"))
+	s.NoError(s.cmdb.ObjectCreate("imp_pf1", "imp_pf_t", body))
+
+	// An inventory rebuild: whole body, replace=true, no usr.
+	s.NoError(s.cmdb.ObjectUpdate("imp_pf1", easyjson.NewJSONObjectWithKeyValue("hostname", easyjson.NewJSON("srv-2")), true))
+
+	read, err := s.cmdb.ObjectRead("imp_pf1")
+	s.Require().NoError(err)
+	s.Equal("alice", read.GetByPath("body.usr.attrs.responsible").AsStringDefault(""),
+		"protection declared before the import must still hold after it")
 }
 
 // CRUD must actually work on the built-in types after an import — the trash can

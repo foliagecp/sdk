@@ -380,13 +380,23 @@ func LLAPIImportGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statef
 					body, _ := ExtractBodyAsJSON(n.Attributes)
 
 					// Built-in skeleton (root/types/objects/nav and the built-in
-					// types): replace the body but KEEP the vertex and its links.
-					// Deleting it would cascade away registrations the dump cannot
-					// restore — a dump taken before a built-in type existed carries
-					// no edge for it, so wiping `types` would silently unregister
-					// it and CRUD would stop recognizing the type.
+					// types): MERGE the dumped body and KEEP the vertex with its
+					// links. Deleting it would cascade away registrations the dump
+					// cannot restore — a dump taken before a built-in type existed
+					// carries no edge for it, so wiping `types` would silently
+					// unregister it and CRUD would stop recognizing the type.
+					//
+					// Merge, not replace, because these bodies are not the dump's
+					// to own: `root` carries the graph's protected-field policy,
+					// the `types` and `objects` roots carry meta-trigger
+					// registrations. A dump knows only what its source system had
+					// at export time, and replacing would silently drop whatever
+					// this graph has configured since — settings no import was
+					// asked to touch. What the dump does carry still lands (merge
+					// gives the incoming value the last word), so importing a
+					// skeleton body remains meaningful.
 					if crud.IsBuiltInSchemaID(ctx.Domain, uuid) {
-						if err := dbc.Graph.VertexUpdate(uuid, body, true, true); err != nil {
+						if err := dbc.Graph.VertexUpdate(uuid, body, false, true); err != nil {
 							system.MsgOnErrorReturn(err)
 						}
 						continue
