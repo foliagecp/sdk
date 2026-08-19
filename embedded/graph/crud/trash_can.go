@@ -28,10 +28,11 @@ package crud
 // link indices.
 //
 // A TRUE re-creation of a parked id (plain create and upsert both) restores
-// it: the PROTECTED body fields (PROTECTED_BODY_FIELDS, default "usr") are
-// grafted from the parked body into the fresh one — stale inventory fields are
-// never resurrected — the trash links are removed and the normal type links
-// are built. Deleting an already-parked object is the physical deletion.
+// it: the PROTECTED body fields (as the graph declares them, see
+// protected_fields.go) are grafted from the parked body into the fresh one —
+// stale inventory fields are never resurrected — the trash links are removed
+// and the normal type links are built. Deleting an already-parked object is the
+// physical deletion.
 
 import (
 	"context"
@@ -169,7 +170,7 @@ func restoreObjectFromTrashCan(ctx *sfPlugins.StatefunContextProcessor, selfID, 
 	// Graft the protected slice of the parked body; stale inventory fields
 	// stay dead — inventory brings fresh truth itself.
 	parkedBody := getVertexBody(ctx, selfID)
-	for _, field := range getProtectedBodyFields() {
+	for _, field := range ctx.Domain.ProtectedBodyFields() {
 		if incomingBody.PathExists(field) {
 			continue
 		}

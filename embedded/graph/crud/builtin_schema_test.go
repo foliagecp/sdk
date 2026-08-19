@@ -8,6 +8,7 @@ package crud_test
 // EnsureBuiltInSchema repairs each of those leftovers.
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/clients/go/db"
 	"github.com/foliagecp/sdk/embedded/graph/crud"
+	"github.com/foliagecp/sdk/statefun"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/test"
 	"github.com/stretchr/testify/suite"
@@ -29,13 +31,21 @@ func TestBuiltInSchemaTestSuite(t *testing.T) { suite.Run(t, new(BuiltInSchemaTe
 
 func (s *BuiltInSchemaTestSuite) boot() {
 	crud.RegisterAllFunctionTypes(s.Runtime())
+	// The built-in schema is prepared by an after-start hook. Hooks run in
+	// registration order, so a hook registered AFTER crud's fires once that one
+	// is done — a deterministic signal, unlike polling for one of the vertices
+	// the hook creates half-way through its work (which under -race let the
+	// assertions run against a schema that was still being built).
+	schemaReady := make(chan struct{})
+	s.Runtime().RegisterOnAfterStartFunction(func(context.Context, *statefun.Runtime) error {
+		close(schemaReady)
+		return nil
+	}, false)
 	s.NoError(s.StartRuntime())
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := s.CacheValue(crud.BUILT_IN_TRASH_CAN); err == nil {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
+	select {
+	case <-schemaReady:
+	case <-time.After(20 * time.Second):
+		s.T().Fatal("built-in schema was not prepared in time")
 	}
 	dbc, err := db.NewDBSyncClientFromRequestFunction(s.Runtime().Request)
 	s.NoError(err)

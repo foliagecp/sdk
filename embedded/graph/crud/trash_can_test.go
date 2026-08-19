@@ -4,10 +4,11 @@ package crud_test
 // deleting an object keeps its body, cascades its links away and re-links it
 // under the built-in trash-can type (original type + deletion moment on the
 // edge); a true re-creation of the id restores it, grafting the protected
-// body fields (PROTECTED_BODY_FIELDS, default "usr"); the bin is capped by
+// body fields declared by the graph; the bin is capped by
 // object count with oldest-first eviction.
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/clients/go/db"
 	"github.com/foliagecp/sdk/embedded/graph/crud"
+	"github.com/foliagecp/sdk/statefun"
 	"github.com/foliagecp/sdk/statefun/test"
 	"github.com/stretchr/testify/suite"
 )
@@ -27,14 +29,21 @@ type TrashCanTestSuite struct {
 func TestTrashCanTestSuite(t *testing.T) { suite.Run(t, new(TrashCanTestSuite)) }
 
 func (s *TrashCanTestSuite) boot() {
-	crud.RegisterAllFunctionTypes(s.Runtime())
+	crud.RegisterAllFunctionTypes(s.Runtime(), "usr")
+	// The built-in schema (and with it the protected-field list) is prepared by
+	// an after-start hook. Hooks run in registration order, so a hook registered
+	// AFTER crud's fires once that one is done — a deterministic signal, unlike
+	// polling for a vertex the hook creates half-way through its work.
+	schemaReady := make(chan struct{})
+	s.Runtime().RegisterOnAfterStartFunction(func(context.Context, *statefun.Runtime) error {
+		close(schemaReady)
+		return nil
+	}, false)
 	s.NoError(s.StartRuntime())
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := s.CacheValue(crud.BUILT_IN_TRASH_CAN); err == nil {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
+	select {
+	case <-schemaReady:
+	case <-time.After(20 * time.Second):
+		s.T().Fatal("built-in schema was not prepared in time")
 	}
 	dbc, err := db.NewDBSyncClientFromRequestFunction(s.Runtime().Request)
 	s.NoError(err)

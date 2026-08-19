@@ -6,13 +6,17 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
 
+	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/embedded/nats/kv"
 	"github.com/foliagecp/sdk/statefun/cache"
 	lg "github.com/foliagecp/sdk/statefun/logger"
+	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
+	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 )
 
@@ -40,6 +44,29 @@ const (
 	domainTraceStreamName     = "domain_trace"
 	domainTraceSubjectsTmpl   = "trace.%s.events.>"
 
+	// protectedBodyFieldsVertexID is the built-in vertex whose body carries the
+	// protected-field policy, and ProtectedBodyFieldsBodyPath the key inside it.
+	// The policy holds for EVERY vertex — it is enforced on the single vertex
+	// body write path, not on objects alone — so it is declared on the root of
+	// the graph rather than in one of its branches.
+	//
+	// Declared here — not in the CRUD package — because the runtime itself reads
+	// them, so an application that never registers CRUD still learns the policy.
+	protectedBodyFieldsVertexID = "root"
+	// ProtectedBodyFieldsBodyPath is the body key holding the policy.
+	ProtectedBodyFieldsBodyPath = "protected_body_fields"
+	// protectedBodyFieldsReadAPI is the CRUD vertex read the runtime falls back
+	// to when the graph is not in its own store. A name, not an import: the
+	// runtime must not depend on the CRUD package that answers it.
+	protectedBodyFieldsReadAPI = "functions.graph.api.vertex.read"
+	// protectedBodyFieldsPullTimeout bounds that read. Nobody serving the graph
+	// is a normal state (a plain statefun application in a domain without a CRUD
+	// provider), so this must not hold a startup hostage.
+	protectedBodyFieldsPullTimeout = 5 * time.Second
+	// protectedBodyFieldsPullRetryInterval spaces the attempts out until the
+	// graph answers for the first time.
+	protectedBodyFieldsPullRetryInterval = 5 * time.Second
+
 	routerConsumerMaxAckWaitMs           = 2000
 	lostConnectionSingleMsgProcessTimeMs = 700
 	maxPendingMessages                   = routerConsumerMaxAckWaitMs / lostConnectionSingleMsgProcessTimeMs
@@ -59,6 +86,16 @@ type Domain struct {
 
 	kv    nats.KeyValue
 	cache *cache.Store
+
+	// protectedBodyFields is the effective list of protected top-level body
+	// keys, as published in the graph itself (the built-in `root` vertex).
+	//
+	// Several applications share one graph: one of them provides the CRUD layer,
+	// creates the schema and declares which body fields are protected; the others
+	// merely attach to that graph. None of them can know the policy from its own
+	// configuration — so every runtime reads it off the graph and caches it here,
+	// serving it to stateful functions through ctx.Domain.ProtectedBodyFields().
+	protectedBodyFields atomic.Pointer[[]string]
 
 	shutdown        chan struct{}
 	exportCommitter *ExportCommitter
@@ -128,6 +165,97 @@ func (dm *Domain) Name() string {
 
 func (dm *Domain) Cache() *cache.Store {
 	return dm.cache
+}
+
+// ProtectedBodyFields returns the protected top-level body keys in force on
+// this graph — the list the graph itself carries in the built-in `root` vertex,
+// as this runtime pulled it (see PullProtectedBodyFields). Empty when the graph
+// declares none. They hold for every vertex, not for objects alone.
+//
+// A plain read of a cached value: it is consulted on the vertex write path, so
+// it must cost nothing and must never reach out to anybody.
+func (dm *Domain) ProtectedBodyFields() []string {
+	if p := dm.protectedBodyFields.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// adoptProtectedBodyFieldsFromStore takes the policy from this domain's own
+// store, if the store holds the graph at all. Called at startup, before
+// anything else could have set a value: a runtime that carries the graph
+// enforces the policy from its very first write rather than from the pull that
+// follows startup. A store without the vertex changes nothing.
+func (dm *Domain) adoptProtectedBodyFieldsFromStore() {
+	if fields, ok := dm.protectedBodyFieldsFromStore(); ok {
+		dm.protectedBodyFields.Store(&fields)
+	}
+}
+
+// protectedBodyFieldsFromStore returns the declared list as this domain's store
+// has it, and whether the store holds the vertex at all.
+func (dm *Domain) protectedBodyFieldsFromStore() (fields []string, ok bool) {
+	if dm.cache == nil {
+		return nil, false
+	}
+	body, err := dm.cache.GetValueJSON(dm.CreateObjectIDWithHubDomain(protectedBodyFieldsVertexID, false))
+	if err != nil {
+		return nil, false
+	}
+	fields = []string{}
+	if list, listOk := body.GetByPath(ProtectedBodyFieldsBodyPath).AsArrayString(); listOk {
+		fields = list
+	}
+	return fields, true
+}
+
+// PullProtectedBodyFields makes this runtime hold what the graph declares
+// protected. It returns the list and whether the graph actually answered — a
+// runtime that got no answer knows only that nobody has told it anything yet.
+//
+// The runtime calls it while starting, so an application begins enforcing the
+// graph's policy rather than its own idea of one — whether it declared that
+// policy itself, only attached to a graph another application had set up, or
+// lives in a satellite domain.
+//
+// The list is read over the CRUD API, which lands on whichever runtime in the
+// weak cluster provides it — that is the only way to see what the application
+// OWNING the graph has: runtimes sharing a domain each keep their own in-memory
+// store and only converge through KV, so a peer's store snapshot would be as
+// old as its startup.
+//
+// A read that fails never costs what is already known: the local store is
+// consulted only while this runtime holds no list at all, so a provider that is
+// momentarily down cannot turn protection off.
+func (dm *Domain) PullProtectedBodyFields(request sfPlugins.SFRequestFunc, timeout ...time.Duration) (list []string, answered bool) {
+	if request != nil {
+		objectsID := dm.CreateObjectIDWithHubDomain(protectedBodyFieldsVertexID, false)
+		om := sfMediators.OpMsgFromSfReply(request(sfPlugins.AutoRequestSelect, protectedBodyFieldsReadAPI, objectsID, easyjson.NewJSONObject().GetPtr(), nil, timeout...))
+		if om.Status == sfMediators.SYNC_OP_STATUS_OK {
+			fields := []string{}
+			if published, ok := om.Data.GetByPath("body." + ProtectedBodyFieldsBodyPath).AsArrayString(); ok {
+				fields = published
+			}
+			dm.SetProtectedBodyFields(fields)
+			return fields, true
+		}
+		lg.Logf(lg.DebugLevel, "Protected body fields are not served by the graph: %s", om.Details)
+	}
+	if dm.protectedBodyFields.Load() == nil {
+		if fields, ok := dm.protectedBodyFieldsFromStore(); ok {
+			dm.SetProtectedBodyFields(fields)
+			return fields, true
+		}
+	}
+	return dm.ProtectedBodyFields(), false
+}
+
+// SetProtectedBodyFields caches the list without going to the graph. Used by
+// the component that has just published it (embedded/graph/crud), so the
+// publisher does not have to wait for its own write to come back; not a
+// configuration knob — the graph, not the process, decides.
+func (dm *Domain) SetProtectedBodyFields(fields []string) {
+	dm.protectedBodyFields.Store(&fields)
 }
 
 // Get all domains in weak cluster including this one
@@ -403,6 +531,11 @@ func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDo
 			lg.Logf(lg.WarnLevel, "Export startup snapshot failed (non-fatal): %s", err)
 		}
 	}
+
+	// The store is up: if it carries the graph, take the protected-field policy
+	// off it at once — this runtime then enforces what the graph declares from
+	// its very first write, not only from the pull that follows startup.
+	dm.adoptProtectedBodyFieldsFromStore()
 
 	le.Trace(ctx, "Cache store inited!")
 

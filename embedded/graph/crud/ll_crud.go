@@ -453,13 +453,14 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		newBody.DeepMerge(body)
 		body = *newBody
 	} else {
-		// Protected body fields (PROTECTED_BODY_FIELDS, e.g. "usr") survive a
+		// Protected body fields (declared by the graph, e.g. "usr") survive a
 		// destructive replace-write: a field the request does not carry is
-		// grafted from the current body, a field it does carry is merged into
-		// the current value ("brought wins, omitted survives"). Done BEFORE the
-		// no-op check below so an inventory rebuild re-sending unchanged
-		// discovery fields stays idle instead of producing a fake write.
-		body = applyProtectedFieldsOnReplace(oldBody, body)
+		// grafted from the current body, while a field it DOES carry is stored
+		// as sent, like any other — that is what keeps the field writable, and
+		// removals expressible. Done BEFORE the no-op check below so an
+		// inventory rebuild re-sending unchanged discovery fields stays idle
+		// instead of producing a fake write.
+		body = applyProtectedFieldsOnReplace(ctx.Domain.ProtectedBodyFields(), oldBody, body)
 	}
 
 	// No-op short-circuit: if the resulting body is structurally identical

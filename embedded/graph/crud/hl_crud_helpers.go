@@ -576,10 +576,14 @@ func getObjectsLinkTypeFromTypesLink(ctx *sfPlugins.StatefunContextProcessor, fr
 	return linkType, nil
 }
 
-func cmdbSchemaPrepare(ctx context.Context, runtime *statefun.Runtime) error {
-	// Same repair-capable routine the import path uses: a runtime starting on a
-	// graph that was imported (or otherwise mangled) heals the skeleton instead
-	// of leaving half of it broken.
-	EnsureBuiltInSchema(runtime.Request, runtime.Domain)
-	return nil
+// cmdbSchemaPrepare builds the after-start hook that prepares the built-in
+// schema, publishing protectedBodyFields as the list in force when the caller
+// supplied one. Same repair-capable routine the import path uses: a runtime
+// starting on a graph that was imported (or otherwise mangled) heals the
+// skeleton instead of leaving half of it broken.
+func cmdbSchemaPrepare(protectedBodyFields []string) statefun.OnAfterStartFunction {
+	return func(ctx context.Context, runtime *statefun.Runtime) error {
+		EnsureBuiltInSchema(runtime.Request, runtime.Domain, protectedBodyFields...)
+		return nil
+	}
 }

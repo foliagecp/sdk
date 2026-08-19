@@ -6,12 +6,14 @@ package crud_test
 // brings — additively, so omitted keys survive.
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/clients/go/db"
 	"github.com/foliagecp/sdk/embedded/graph/crud"
+	"github.com/foliagecp/sdk/statefun"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/test"
 	"github.com/stretchr/testify/suite"
@@ -19,24 +21,32 @@ import (
 
 type ProtectedFieldsTestSuite struct {
 	test.StatefunTestSuite
-	cmdb db.CMDBSyncClient
+	cmdb  db.CMDBSyncClient
+	graph db.GraphSyncClient
 }
 
 func TestProtectedFieldsTestSuite(t *testing.T) { suite.Run(t, new(ProtectedFieldsTestSuite)) }
 
 func (s *ProtectedFieldsTestSuite) boot() {
-	crud.RegisterAllFunctionTypes(s.Runtime())
+	crud.RegisterAllFunctionTypes(s.Runtime(), "usr")
+	// The built-in schema (and with it the protected-field list) is prepared by
+	// an after-start hook. Hooks run in registration order, so a hook registered
+	// AFTER crud's fires once that one is done — a deterministic signal, unlike
+	// polling for a vertex the hook creates half-way through its work.
+	schemaReady := make(chan struct{})
+	s.Runtime().RegisterOnAfterStartFunction(func(context.Context, *statefun.Runtime) error {
+		close(schemaReady)
+		return nil
+	}, false)
 	s.NoError(s.StartRuntime())
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := s.CacheValue(crud.BUILT_IN_OBJECTS); err == nil {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
+	select {
+	case <-schemaReady:
+	case <-time.After(20 * time.Second):
+		s.T().Fatal("built-in schema was not prepared in time")
 	}
 	dbc, err := db.NewDBSyncClientFromRequestFunction(s.Runtime().Request)
 	s.NoError(err)
-	s.cmdb = dbc.CMDB
+	s.cmdb, s.graph = dbc.CMDB, dbc.Graph
 }
 
 func (s *ProtectedFieldsTestSuite) body(id string) easyjson.JSON {
@@ -185,12 +195,45 @@ func (s *ProtectedFieldsTestSuite) Test_FirstWriteOfProtectedField() {
 	s.Equal("erin", s.body("pf5").GetByPath("usr.attrs.responsible").AsStringDefault(""))
 }
 
+// Protection is a property of the vertex-body write path, not of objects: a
+// type vertex and a plain vertex keep their protected fields through a
+// destructive rewrite exactly like an object does. That is precisely why the
+// list is declared on the graph root and not in one of its branches.
+func (s *ProtectedFieldsTestSuite) Test_ProtectionAppliesToAnyVertex() {
+	s.boot()
+
+	// A type vertex, written through the CMDB type API.
+	typeBody := easyjson.NewJSONObjectWithKeyValue("descr", easyjson.NewJSON("kept by the model"))
+	typeBody.SetByPath("usr", usr("alice", "prod"))
+	s.NoError(s.cmdb.TypeCreate("pf_any_t", typeBody))
+	s.NoError(s.cmdb.TypeUpdate("pf_any_t", easyjson.NewJSONObjectWithKeyValue("descr", easyjson.NewJSON("rewritten")), true))
+
+	typeRead, err := s.cmdb.TypeRead("pf_any_t")
+	s.Require().NoError(err)
+	s.Equal("rewritten", typeRead.GetByPath("body.descr").AsStringDefault(""), "the writer owns its own fields")
+	s.Equal("alice", typeRead.GetByPath("body.usr.attrs.responsible").AsStringDefault(""),
+		"a type vertex must keep its protected field through replace=true")
+
+	// A plain vertex, outside the CMDB model entirely.
+	plainBody := easyjson.NewJSONObjectWithKeyValue("hostname", easyjson.NewJSON("srv"))
+	plainBody.SetByPath("usr", usr("bob", "dc1"))
+	s.NoError(s.graph.VertexCreate("pf_any_v", plainBody))
+	s.NoError(s.graph.VertexUpdate("pf_any_v", easyjson.NewJSONObjectWithKeyValue("hostname", easyjson.NewJSON("srv-2")), true))
+
+	plainRead, err := s.graph.VertexRead("pf_any_v")
+	s.Require().NoError(err)
+	s.Equal("srv-2", plainRead.GetByPath("body.hostname").AsStringDefault(""))
+	s.Equal("bob", plainRead.GetByPath("body.usr.attrs.responsible").AsStringDefault(""),
+		"a plain vertex must keep its protected field through replace=true")
+}
+
 // The protected list is generic and configurable: every configured field is
 // protected, and a field NOT on the list is replaced as usual.
 func (s *ProtectedFieldsTestSuite) Test_ConfiguredFieldsOnly() {
 	s.boot()
-	crud.SetProtectedBodyFieldsForTest([]string{"usr", "ops"})
-	defer crud.SetProtectedBodyFieldsForTest([]string{"usr"})
+	// Publish a wider list: that is how the owner of the data declares policy.
+	crud.EnsureBuiltInSchema(s.Runtime().Request, s.Runtime().Domain, "usr", "ops")
+	defer crud.EnsureBuiltInSchema(s.Runtime().Request, s.Runtime().Domain, "usr")
 
 	s.NoError(s.cmdb.TypeCreate("pf_t"))
 	initial := bodyWithUsr("srv", "frank", "prod")

@@ -864,6 +864,51 @@ func (r *Runtime) runAfterStartFunctions(ctx context.Context) {
 			}
 		}
 	}
+
+	// Whatever this application does, it now learns what the GRAPH declares
+	// protected and holds it for its stateful functions. Not a CRUD concern:
+	// several applications share one graph — one of them provides the CRUD layer
+	// and declares the policy, the others only attach — and an application that
+	// never registers CRUD must not be the one that quietly clobbers protected
+	// data. Launched last, so a runtime that declares the policy itself (its
+	// afterStart hook publishes it) reads back what it has just put there.
+	//
+	// In its own goroutine, always: in HA mode this function runs inside the
+	// runtimeLifecycleUpdater tick that has to keep refreshing the KV runtime
+	// lock, and a request waiting on a graph nobody serves yet would hold that
+	// tick for the whole timeout — long enough to lose the lock and flip the
+	// instance to passive.
+	r.afterStartFunctionsWaitGroup.Add(1)
+	go func() {
+		defer r.afterStartFunctionsWaitGroup.Done()
+		system.GlobalPrometrics.GetRoutinesCounter().Started("runtime_pullProtectedBodyFields")
+		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("runtime_pullProtectedBodyFields")
+		r.pullProtectedBodyFields(ctx)
+	}()
+}
+
+// pullProtectedBodyFields reads the graph's protected-field policy once, at
+// startup — the policy is part of the schema, so changing it means restarting
+// the application that declares it, and every other application takes the new
+// list when it starts in turn.
+//
+// The retry is not a poll for changes: it repeats only while nobody has
+// ANSWERED yet. Applications come up in whatever order the deployment starts
+// them, so the one that owns the graph may well be seconds behind the ones that
+// must obey it, and an application must not spend its life unprotected just for
+// having started first. The first answer ends it — including an answer that
+// declares nothing.
+func (r *Runtime) pullProtectedBodyFields(ctx context.Context) {
+	for {
+		if _, answered := r.Domain.PullProtectedBodyFields(r.Request, protectedBodyFieldsPullTimeout); answered {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(protectedBodyFieldsPullRetryInterval):
+		}
+	}
 }
 
 // runGarbageCollector periodically cleans up expired function instances.

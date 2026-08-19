@@ -106,6 +106,14 @@ func (env *statefunTestEnvironment) Runtime() *statefun.Runtime {
 	return env.runtime
 }
 
+// NatsURL is the address of the embedded broker. Several applications sharing
+// one domain is the normal shape of a Foliage deployment — one provides the
+// CRUD layer, the others attach to the same graph — so a test must be able to
+// start a SECOND runtime next to this environment's own.
+func (env *statefunTestEnvironment) NatsURL() string {
+	return env.srv.ClientURL()
+}
+
 func (env *statefunTestEnvironment) RegisterFunction(name string, handler statefun.FunctionLogicHandler, cfg statefun.FunctionTypeConfig) {
 	statefun.NewFunctionType(env.runtime, name, handler, cfg)
 }

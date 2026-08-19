@@ -107,7 +107,16 @@ func IsBuiltInSchemaID(domain sfPlugins.Domain, id string) bool {
 // All ids are hub-qualified — the schema lives in the hub domain, so the call
 // works from any domain, and from a plain after-start hook as much as from a
 // statefun handler (both provide a request function and a domain).
-func EnsureBuiltInSchema(request sfPlugins.SFRequestFunc, domain sfPlugins.Domain) {
+//
+// protectedBodyFields, when given, is PUBLISHED into the graph as the list in
+// force for every application on it (see protected_fields.go). Passing it is
+// how the owner of the data declares that policy — the caller is free to read
+// its own environment to obtain the list. Passing nothing publishes nothing:
+// the graph keeps whatever it already declares, so a satellite application
+// cannot overwrite the authority with its own view. Either way the current
+// list is loaded into the domain before returning, so this runtime enforces
+// exactly what the graph says.
+func EnsureBuiltInSchema(request sfPlugins.SFRequestFunc, domain sfPlugins.Domain, protectedBodyFields ...string) {
 	// Whatever produced the state we are repairing (an import, a restore, a
 	// half-finished startup) may have bypassed CRUD, leaving the schema caches
 	// describing the previous graph. Decide on facts, not on that memory.
@@ -117,8 +126,10 @@ func EnsureBuiltInSchema(request sfPlugins.SFRequestFunc, domain sfPlugins.Domai
 
 	// An existing vertex answers "already exists" — expected, not an error: all
 	// that matters is that it is there afterwards.
-	ensureVertex := func(id string) {
-		_, _ = request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", hub(id), easyjson.NewJSONObject().GetPtr(), nil)
+	ensureVertex := func(id string, body easyjson.JSON) {
+		payload := easyjson.NewJSONObject()
+		payload.SetByPath("body", body)
+		_, _ = request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", hub(id), &payload, nil)
 	}
 	// force=true makes the write a genuine repair: a missing link is created, an
 	// existing one is rewritten instead of failing the uniqueness checks.
@@ -132,7 +143,15 @@ func EnsureBuiltInSchema(request sfPlugins.SFRequestFunc, domain sfPlugins.Domai
 	}
 
 	for _, v := range builtInSchema.vertices {
-		ensureVertex(v)
+		body := easyjson.NewJSONObject()
+		if v == BUILT_IN_ROOT && len(protectedBodyFields) > 0 {
+			// Born with the policy already in it. Applications read the list off
+			// this vertex and stop asking once it answers, so `root` must never
+			// be readable in a state where it exists but declares nothing the
+			// caller meant to declare.
+			body.SetByPath(ProtectedBodyFieldsBodyPath, easyjson.NewJSON(protectedBodyFields))
+		}
+		ensureVertex(v, body)
 	}
 	for _, l := range builtInSchema.links {
 		ensureLink(l)
@@ -143,7 +162,7 @@ func EnsureBuiltInSchema(request sfPlugins.SFRequestFunc, domain sfPlugins.Domai
 	// vertex, so the link is restored explicitly.
 	for _, t := range builtInSchema.types {
 		_, _ = request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.create", hub(t), nil, nil)
-		ensureVertex(t)
+		ensureVertex(t, easyjson.NewJSONObject())
 		ensureLink(builtInLink{from: BUILT_IN_TYPES, to: t, name: t, linkType: TO_TYPELINK})
 	}
 
@@ -161,12 +180,17 @@ func EnsureBuiltInSchema(request sfPlugins.SFRequestFunc, domain sfPlugins.Domai
 	// describes the PREVIOUS graph, so a missing object would look healthy and
 	// never be restored.
 	for _, o := range builtInSchema.objects {
-		ensureVertex(o.id)
+		ensureVertex(o.id, easyjson.NewJSONObject())
 		ensureLink(builtInLink{from: BUILT_IN_OBJECTS, to: o.id, name: o.id, linkType: OBJECT_TYPELINK})
 		ensureLink(builtInLink{from: o.id, to: o.objectType, name: "type", linkType: TO_TYPELINK})
 		ensureLink(builtInLink{from: o.objectType, to: o.id, name: o.id, linkType: OBJECT_TYPELINK})
 		cacheSetObjectType(hub(o.id), hub(o.objectType))
 	}
+
+	if len(protectedBodyFields) > 0 {
+		publishProtectedBodyFields(request, domain, protectedBodyFields)
+	}
+	LoadProtectedBodyFieldsFromGraph(request, domain)
 }
 
 // PurgeSchemaCaches drops every in-process cache derived from the graph's
@@ -196,7 +220,12 @@ importer — including ones living outside this process (snapshot restore in
 pregel-backend, operator tooling) — can repair the skeleton after a bulk load
 without linking this package.
 
-Request: no payload.
+Request:
+
+	payload: json - optional
+		protected_body_fields: []string - optional // publish this list as the one
+		                                           // in force on the graph; absent
+		                                           // means "only ensure and load"
 
 Reply:
 
@@ -206,6 +235,7 @@ Reply:
 */
 func EnsureBuiltInSchemaFunction(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	om := sfMediators.NewOpMediator(ctx)
-	EnsureBuiltInSchema(ctx.Request, ctx.Domain)
+	protectedBodyFields, _ := ctx.Payload.GetByPath(ProtectedBodyFieldsBodyPath).AsArrayString()
+	EnsureBuiltInSchema(ctx.Request, ctx.Domain, protectedBodyFields...)
 	om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONNull())).Reply()
 }
