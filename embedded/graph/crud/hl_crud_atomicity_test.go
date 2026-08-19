@@ -19,6 +19,7 @@
 package crud
 
 import (
+	"context"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -52,6 +53,27 @@ func (s *CrudAtomicityTestSuite) bootstrap() {
 	// Give cmdbSchemaPrepare a moment to seed built-in vertices.
 	s.waitForVertex(BUILT_IN_TYPES, 15*time.Second)
 	s.waitForVertex(BUILT_IN_OBJECTS, 15*time.Second)
+}
+
+// startAndWaitForSchema starts the runtime and returns only once the built-in
+// schema hook is DONE. After-start hooks run in registration order, so a hook
+// registered after crud's fires when that one has finished — unlike polling for
+// a vertex it creates half-way through, which lets the schema's remaining link
+// writes race whatever the test does next. Tests that count low-level calls
+// need that: a schema write landing after their counter is armed is
+// indistinguishable from their own traffic.
+func (s *CrudAtomicityTestSuite) startAndWaitForSchema() {
+	schemaReady := make(chan struct{})
+	s.Runtime().RegisterOnAfterStartFunction(func(context.Context, *statefun.Runtime) error {
+		close(schemaReady)
+		return nil
+	}, false)
+	s.NoError(s.StartRuntime())
+	select {
+	case <-schemaReady:
+	case <-time.After(20 * time.Second):
+		s.T().Fatal("built-in schema was not prepared in time")
+	}
 }
 
 // waitForVertex polls the cache until the given vertex appears or timeout.
@@ -196,9 +218,7 @@ func (s *CrudAtomicityTestSuite) Test_D1_CreateObject_LeavesOrphanVertex_OnLinkC
 	cfg := *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1)
 	statefun.NewFunctionType(s.Runtime(), "functions.graph.api.link.create", failingLinkCreate, cfg)
 
-	s.NoError(s.StartRuntime())
-	s.waitForVertex(BUILT_IN_TYPES, 15*time.Second)
-	s.waitForVertex(BUILT_IN_OBJECTS, 15*time.Second)
+	s.startAndWaitForSchema()
 
 	s.cmdbTypeCreate("TypeD1")
 
@@ -645,50 +665,33 @@ func (s *CrudAtomicityTestSuite) Test_D4_DeleteObject_IsIdempotentOnOrphanVertex
 		"D4/1B: vertex body must be removed after delete on orphan; got body still present")
 }
 
-// Test_D4_PartialDelete_RecoverableViaSubsequentDelete describes the
-// canonical production failure mode and the recovery path that 1A+1B
-// provide. We provoke an orphan by failing the first object.delete
-// (via a broken link.delete), then verify that:
+// Test_D4_PartialDelete_RecoverableViaSubsequentDelete describes the canonical
+// production failure mode and the recovery path that 1A+1B provide: a delete
+// that died half-way leaves a typeless vertex behind, and
 //
-//  1. ObjectRead on the orphan returns IDLE (1A);
-//  2. A subsequent ObjectDelete (with link.delete healed) cleans it up (1B).
+//  1. ObjectRead on that debris returns IDLE (1A);
+//  2. the next ordinary ObjectDelete cleans it up (1B) — recovery is bounded
+//     and happens in the next normal CMDB operation, not via a KV reset.
 //
-// The test acknowledges that without an LL atomicity fix the body may
-// remain after the first delete attempt — but recovery is bounded and
-// happens in the next normal CMDB operation, not via KV reset.
+// The debris is synthesised directly (drop the __type link via LL) rather than
+// provoked with a failing link.delete: a vertex delete now removes LOCAL links
+// in-process instead of issuing nested link.delete requests, so overriding that
+// function type intercepts nothing in a single-domain test — the delete simply
+// succeeded and parked the object, and the test only ever passed because a
+// second object.delete used to erase a parked object.
 func (s *CrudAtomicityTestSuite) Test_D4_PartialDelete_RecoverableViaSubsequentDelete() {
-	RegisterAllFunctionTypes(s.Runtime())
-
-	// Fail link.delete only while a flag is armed — lets us drive the
-	// failure during the delete-under-test and then heal for recovery.
-	var failNow atomic.Bool
-	failingLinkDelete := func(exec sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
-		if failNow.Load() {
-			om := sfMediators.NewOpMediator(ctx)
-			om.AggregateOpMsg(sfMediators.OpMsgFailed("synthetic D4 failure on link.delete")).Reply()
-			return
-		}
-		LLAPILinkDelete(exec, ctx)
-	}
-	cfg := *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect).SetMaxIdHandlers(-1)
-	statefun.NewFunctionType(s.Runtime(), "functions.graph.api.link.delete", failingLinkDelete, cfg)
-
-	s.NoError(s.StartRuntime())
-	s.waitForVertex(BUILT_IN_TYPES, 15*time.Second)
-	s.waitForVertex(BUILT_IN_OBJECTS, 15*time.Second)
-
+	s.bootstrap()
 	s.cmdbTypeCreate("TypeD4p")
 	s.Equal("ok", s.cmdbObjectCreate("obj-d4p", "TypeD4p").GetByPath("status").AsStringDefault(""))
 	s.True(s.vertexExists("obj-d4p"), "sanity: vertex must exist before delete")
 
-	// 1) Provoke partial failure → body may remain as orphan.
-	failNow.Store(true)
-	delPayload := easyjson.NewJSONObject()
-	delRes, err := s.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.delete", "obj-d4p", &delPayload, nil)
+	// 1) The debris a half-finished delete leaves: body present, no __type.
+	delTypeLink := easyjson.NewJSONObjectWithKeyValue("name", easyjson.NewJSON("type"))
+	tl, err := s.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", "obj-d4p", &delTypeLink, nil)
 	s.NoError(err)
-	s.T().Logf("first object.delete (broken link.delete) → status=%q details=%q",
-		delRes.GetByPath("status").AsStringDefault(""),
-		delRes.GetByPath("details").AsStringDefault(""))
+	s.Equal("ok", tl.GetByPath("status").AsStringDefault(""))
+	s.True(s.vertexExists("obj-d4p"))
+	s.False(s.hasOutLinkOfType("obj-d4p", TO_TYPELINK))
 
 	// 2) Whatever state the graph is in, ObjectRead must report IDLE
 	//    ("not found") and NOT raise "has no type".
@@ -700,9 +703,10 @@ func (s *CrudAtomicityTestSuite) Test_D4_PartialDelete_RecoverableViaSubsequentD
 	s.Containsf([]string{"idle", "ok"}, readStatus,
 		"D4 recovery: post-failure ObjectRead must not surface 'has no type'; got %q", readStatus)
 
-	// 3) Heal link.delete and recover via a normal ObjectDelete. After
-	//    this, the body must be gone — orphan cleaned up.
-	failNow.Store(false)
+	// 3) Recovery via a normal ObjectDelete. Debris is erased, not parked:
+	//    there is no type to restore it under, so keeping it would preserve
+	//    garbage and break this very recovery contract.
+	delPayload := easyjson.NewJSONObject()
 	del2, err := s.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.delete", "obj-d4p", &delPayload, nil)
 	s.NoError(err)
 	del2Status := del2.GetByPath("status").AsStringDefault("")

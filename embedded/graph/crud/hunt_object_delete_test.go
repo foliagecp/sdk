@@ -39,12 +39,25 @@ func (s *CMDBClientContractTestSuite) Test_Hunt_ObjectDelete_RemovedFromTypeEnum
 		s.Falsef(strings.HasSuffix(id, "/do-1") || id == "do-1", "do-1 still enumerated after delete: %v", ids2)
 	}
 
-	// Vertex body and out-link keys must be gone.
+	// Trash-can contract: after the first delete the object is PARKED — body
+	// kept, only the trash-can __type link remains (no links into the model).
 	_, cacheErr := s.CacheValue("do-1")
-	s.Errorf(cacheErr, "deleted object vertex body must be gone from cache")
+	s.NoErrorf(cacheErr, "parked object vertex body must still be in cache")
 	aID := s.SetThisDomainPreffix("do-1")
+	outLinks := s.Runtime().Domain.Cache().GetKeysByPattern(fmt.Sprintf(crud.OutLinkTargetKeyPrefPattern+">", aID))
+	s.Lenf(outLinks, 1, "parked object must keep exactly its trash-can __type out-link; got %v", outLinks)
+
+	// A parked object no longer exists for the object API: deleting it again is
+	// a no-op, and erasing it is the low-level vertex delete.
+	s.NoError(s.dbc.CMDB.ObjectDelete("do-1"))
+	_, cacheErr = s.CacheValue("do-1")
+	s.NoErrorf(cacheErr, "a second object.delete must not erase the parked object")
+
+	s.NoError(s.dbc.Graph.VertexDelete("do-1"))
+	_, cacheErr = s.CacheValue("do-1")
+	s.Errorf(cacheErr, "physically deleted object vertex body must be gone from cache")
 	s.Emptyf(s.Runtime().Domain.Cache().GetKeysByPattern(fmt.Sprintf(crud.OutLinkTargetKeyPrefPattern+">", aID)),
-		"deleted object must have no dangling out-links")
+		"physically deleted object must have no dangling out-links")
 }
 
 // A create→delete→recreate cycle must not leak state from the first incarnation.

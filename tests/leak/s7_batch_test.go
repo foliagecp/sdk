@@ -62,18 +62,23 @@ func (s *S7Suite) Test_BatchChurn() {
 			}
 		}
 
-		// Parallel batch with sub-batch splitting: delete everything.
-		b2 := s.dbc.BatchCreate(fmt.Sprintf("s7b2-%d", c)).Parallel().SubBatchSize(16)
-		for i := 0; i < n; i++ {
-			b2.Operation("functions.cmdb.api.object.delete", id(i), opTimePayload())
-		}
-		results, err = b2.Commit()
-		if err != nil {
-			return fmt.Errorf("parallel batch: %w", err)
-		}
-		for _, r := range results {
-			if !r.OK() {
-				return fmt.Errorf("parallel delete op %d (%s): status %s", r.Index, r.ID, r.Status)
+		// Parallel batch with sub-batch splitting: delete everything. Two passes
+		// — object.delete parks the object in the trash can, and the low-level
+		// vertex.delete erases the parked one, which is what returns the graph
+		// to its baseline.
+		for pass, typename := range []string{"functions.cmdb.api.object.delete", "functions.graph.api.vertex.delete"} {
+			b2 := s.dbc.BatchCreate(fmt.Sprintf("s7b2-%d-%d", c, pass)).Parallel().SubBatchSize(16)
+			for i := 0; i < n; i++ {
+				b2.Operation(typename, id(i), opTimePayload())
+			}
+			results, err = b2.Commit()
+			if err != nil {
+				return fmt.Errorf("parallel batch %s: %w", typename, err)
+			}
+			for _, r := range results {
+				if !r.OK() {
+					return fmt.Errorf("parallel %s op %d (%s): status %s", typename, r.Index, r.ID, r.Status)
+				}
 			}
 		}
 		return nil

@@ -598,7 +598,26 @@ var gracefulShutdownDrainTimeout = time.Duration(system.GetEnvMustProceed[int]("
 // OnBecamePassive callbacks. A callback that ignores its context past this
 // deadline is abandoned (its goroutine runs on until it returns) rather than
 // wedging the HA lifecycle loop. Tunable via PASSIVE_TEARDOWN_TIMEOUT_SEC.
-var passiveTeardownTimeout = time.Duration(system.GetEnvMustProceed[int]("PASSIVE_TEARDOWN_TIMEOUT_SEC", 10)) * time.Second
+// Atomic, and read through passiveTeardownTimeout(): every runtime in the
+// process reads it from its own lifecycle goroutine, and a test that shortens
+// it (or any future reconfiguration) would otherwise race a runtime that is
+// demoting right then — which is exactly what the race detector caught between
+// Test_OnBecamePassive_BoundedByTimeout and a runtime still alive from an
+// earlier HA failover test.
+var passiveTeardownTimeoutNs atomic.Int64
+
+func init() {
+	passiveTeardownTimeoutNs.Store(int64(time.Duration(system.GetEnvMustProceed[int]("PASSIVE_TEARDOWN_TIMEOUT_SEC", 10)) * time.Second))
+}
+
+func passiveTeardownTimeout() time.Duration {
+	return time.Duration(passiveTeardownTimeoutNs.Load())
+}
+
+// swapPassiveTeardownTimeout replaces the bound and returns the previous one.
+func swapPassiveTeardownTimeout(d time.Duration) time.Duration {
+	return time.Duration(passiveTeardownTimeoutNs.Swap(int64(d)))
+}
 
 // runOnBecamePassiveFunctions invokes the registered passive-teardown callbacks.
 // They run on their own goroutine; the call returns once they all finish OR the
@@ -609,7 +628,8 @@ func (r *Runtime) runOnBecamePassiveFunctions(parentCtx context.Context) {
 	if len(r.onBecamePassiveFunctions) == 0 {
 		return
 	}
-	tctx, cancel := context.WithTimeout(parentCtx, passiveTeardownTimeout)
+	timeout := passiveTeardownTimeout()
+	tctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
 
 	done := make(chan struct{})
@@ -630,7 +650,7 @@ func (r *Runtime) runOnBecamePassiveFunctions(parentCtx context.Context) {
 	select {
 	case <-done:
 	case <-tctx.Done():
-		lg.Logf(lg.WarnLevel, "OnBecamePassive callbacks exceeded %s; proceeding without waiting (a callback may be ignoring its context)", passiveTeardownTimeout)
+		lg.Logf(lg.WarnLevel, "OnBecamePassive callbacks exceeded %s; proceeding without waiting (a callback may be ignoring its context)", timeout)
 	}
 }
 
@@ -862,6 +882,51 @@ func (r *Runtime) runAfterStartFunctions(ctx context.Context) {
 			if err := fnWithMode.f(ctx, r); err != nil {
 				lg.Logf(lg.ErrorLevel, "OnAfterStartFunction error: %v", err)
 			}
+		}
+	}
+
+	// Whatever this application does, it now learns what the GRAPH declares
+	// protected and holds it for its stateful functions. Not a CRUD concern:
+	// several applications share one graph — one of them provides the CRUD layer
+	// and declares the policy, the others only attach — and an application that
+	// never registers CRUD must not be the one that quietly clobbers protected
+	// data. Launched last, so a runtime that declares the policy itself (its
+	// afterStart hook publishes it) reads back what it has just put there.
+	//
+	// In its own goroutine, always: in HA mode this function runs inside the
+	// runtimeLifecycleUpdater tick that has to keep refreshing the KV runtime
+	// lock, and a request waiting on a graph nobody serves yet would hold that
+	// tick for the whole timeout — long enough to lose the lock and flip the
+	// instance to passive.
+	r.afterStartFunctionsWaitGroup.Add(1)
+	go func() {
+		defer r.afterStartFunctionsWaitGroup.Done()
+		system.GlobalPrometrics.GetRoutinesCounter().Started("runtime_pullProtectedBodyFields")
+		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("runtime_pullProtectedBodyFields")
+		r.pullProtectedBodyFields(ctx)
+	}()
+}
+
+// pullProtectedBodyFields reads the graph's protected-field policy once, at
+// startup — the policy is part of the schema, so changing it means restarting
+// the application that declares it, and every other application takes the new
+// list when it starts in turn.
+//
+// The retry is not a poll for changes: it repeats only while nobody has
+// ANSWERED yet. Applications come up in whatever order the deployment starts
+// them, so the one that owns the graph may well be seconds behind the ones that
+// must obey it, and an application must not spend its life unprotected just for
+// having started first. The first answer ends it — including an answer that
+// declares nothing.
+func (r *Runtime) pullProtectedBodyFields(ctx context.Context) {
+	for {
+		if _, answered := r.Domain.PullProtectedBodyFields(r.Request, protectedBodyFieldsPullTimeout); answered {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(protectedBodyFieldsPullRetryInterval):
 		}
 	}
 }

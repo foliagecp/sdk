@@ -33,12 +33,38 @@ Every sample is taken after a full **quiesce**: WAL drained
 (`HasPendingWrites`), ≥2 cache maintenance sweeps strictly after the drain
 (tombstone cascades collapsed), double `runtime.GC()`.
 
-**SDK vs embedded NATS heap.** The embedded `nats-server` shares the test
-process, and JetStream/KV churn grows *its* state by design (per-subject
-tree nodes, file-store buffers, retained KV DEL tombstones). The harness
-splits the in-use heap by allocation stack: the SDK share is **asserted**,
-the server share and raw process totals are **REPORT-only**. In production
-the server is a separate process; its by-design growth is quantified by S12.
+**SDK vs NATS heap.** Two NATS pieces share the test process: the embedded
+`nats-server`, whose state JetStream/KV churn grows by design (per-subject tree
+nodes, file-store buffers, retained KV DEL tombstones), and the `nats.go`
+CLIENT, which keeps buffers of its own — parsed messages, header maps, pending
+queues — whose depth follows how fast the process happens to drain them. The
+harness splits the in-use heap by allocation stack three ways: the SDK share is
+**asserted**, `nats_server_*`, `nats_client_*` and the raw process totals are
+**REPORT-only**. In production the server is a separate process (its by-design
+growth is quantified by S12) and the client's buffering is bounded by its own
+configuration, so neither is what this suite hunts.
+
+Charging the client to the SDK is what made `--race` runs report megabyte-per-
+cycle "SDK leaks" in s2 and s7: everything runs several times slower under the
+race detector, the client's queues sit deeper for longer, and the whole mass of
+the reported growth was in nats.go's `(*Conn).processMsg` and `readMIMEHeader`
+while every SDK frame moved by tens of kilobytes, mostly downwards. An SDK leak
+that hides inside the client — a subscription never unsubscribed, a message
+never acked — still surfaces as goroutines that do not settle and counters that
+do not return to baseline, both asserted exactly.
+
+**Profile resolution.** That split comes from the heap profile, whose values are
+ESTIMATES: the runtime samples one allocation per `MemProfileRate` bytes and
+scales the result back up. At Go's 512KiB default the split can only move in
+half-megabyte steps — eight times coarser than the 64KiB floor these checks
+assert against — so a couple of sampled allocations landing inside one window
+draw a straight, "3-sigma significant" line through a scenario that leaks
+nothing (the series is a staircase of 524432-byte steps, and the same scenario
+run alone reports slope=0 because no sampled allocation happened to land in the
+window). The suite therefore samples finely: `LEAK_MEMPROFILE_RATE`, 4096 bytes
+by default, set in the package's `init` because the profile writer scales every
+record by the CURRENT rate and so it must be set once, before anything
+allocates.
 
 **Process isolation.** `run-leak-tests.sh` runs every scenario in its OWN
 `go test` process. Scenarios sharing one process share heap, timers and
@@ -66,7 +92,8 @@ heap FAIL, goroutine stacks on a settle FAIL. Every check prints a
 machine-readable `LEAKCHECK|...` line; the script aggregates them.
 
 Env knobs: `LEAK_WARMUP`, `LEAK_CYCLES`, `LEAK_SCALE`,
-`LEAK_FLOOR_HEAP_BYTES`, `LEAK_FLOOR_HEAP_OBJECTS`, `LEAK_RESULTS_DIR`.
+`LEAK_FLOOR_HEAP_BYTES`, `LEAK_FLOOR_HEAP_OBJECTS`, `LEAK_RESULTS_DIR`,
+`LEAK_MEMPROFILE_RATE`.
 
 ## Scenarios
 
@@ -113,7 +140,18 @@ One file `sNN_<name>_test.go` (`//go:build leak`), one suite type embedding
 `leakSuite`, one `TestSNN...` entry function (the script's `-run` filter is
 exact). Boot with `bootCRUD(...)`, express the workload as ONE cycle function
 that returns the world to its logical baseline, and build the runner with
-`s.newRunner(scenario, cycle, collect)`. Keep the whole warmup+measure loop
+`s.newRunner(scenario, cycle, collect)`.
+
+**Deleting an object leaves it in the trash can.** `object.delete` PARKS it —
+the body is kept and the object is re-linked under the built-in trash-can type
+so it can be restored — and from then on it does not exist for the object API
+at all. What erases it is the low-level `vertex.delete` (the same way retention
+evicts). Parking is by design and bounded by retention, so it is not a leak, but
+a cycle that stops after the object delete leaves the object (and its function
+contexts) behind and ends up measuring the bin filling up. Use
+`s.purgeObject(id)`, or issue the vertex delete explicitly where the calls are
+batched or salted. A cascade (`type.delete`) parks the type's objects the same
+way. Keep the whole warmup+measure loop
 inside a single `Test` method — the harness rebuilds the runtime per method.
 Assert with `rep.AssertClean` (heap+goroutines), `s.assertCoreStable(rep)`
 and `rep.AssertStable(t, metric)` for scenario counters;

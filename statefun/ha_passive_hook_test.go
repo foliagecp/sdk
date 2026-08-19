@@ -86,9 +86,8 @@ func Test_HA_OnBecamePassive_FiresOnDemotion(t *testing.T) {
 }
 
 func Test_OnBecamePassive_BoundedByTimeout(t *testing.T) {
-	saved := passiveTeardownTimeout
-	passiveTeardownTimeout = 300 * time.Millisecond
-	defer func() { passiveTeardownTimeout = saved }()
+	saved := swapPassiveTeardownTimeout(300 * time.Millisecond)
+	defer swapPassiveTeardownTimeout(saved)
 
 	rt := &Runtime{} // runOnBecamePassiveFunctions only needs the registered callbacks
 	entered := make(chan struct{})

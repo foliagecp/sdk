@@ -91,6 +91,12 @@ type Domain interface {
 	GetObjectIDByShadowObjectID(id string) string
 
 	CreateCustomShadowId(storeDomain, targetDomain, uuid string) string
+
+	// ProtectedBodyFields returns the protected top-level body keys in force on
+	// this graph, as published in the built-in `objects` vertex. Stateful
+	// functions consult it instead of any local configuration: the graph is the
+	// authority, so every application working on it sees the same answer.
+	ProtectedBodyFields() []string
 }
 
 type StatefunContextProcessor struct {

@@ -28,7 +28,16 @@ const (
 	InLinkKeyPrefPattern = "%s.in."
 )
 
-func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
+// RegisterAllFunctionTypes registers the CRUD API on the runtime.
+//
+// protectedBodyFields, when given, declares the protected top-level body keys
+// for the whole graph: they are published into the built-in `objects` vertex at
+// startup, and every application working on that graph — including ones
+// configured differently — reads them from there. The caller decides where the
+// list comes from (its own environment, a config file, a constant). Passing
+// nothing keeps this runtime a follower: it publishes no policy and enforces
+// whatever the graph already declares.
+func RegisterAllFunctionTypes(runtime *statefun.Runtime, protectedBodyFields ...string) {
 	RegisterPolyTypeFunctions(runtime)
 
 	// High-Level API Helpers
@@ -55,6 +64,8 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 	statefun.NewFunctionType(runtime, "functions.cmdb.api.objects.link.delete", DeleteObjectsLink, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
 	statefun.NewFunctionType(runtime, "functions.cmdb.api.objects.link.read", ReadObjectsLink, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
 
+	statefun.NewFunctionType(runtime, "functions.cmdb.api.schema.ensure", EnsureBuiltInSchemaFunction, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
+
 	// Low-Level API Registration
 	statefun.NewFunctionType(runtime, "functions.graph.api.vertex.create", LLAPIVertexCreate, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
 	statefun.NewFunctionType(runtime, "functions.graph.api.vertex.update", LLAPIVertexUpdate, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
@@ -66,7 +77,20 @@ func RegisterAllFunctionTypes(runtime *statefun.Runtime) {
 	statefun.NewFunctionType(runtime, "functions.graph.api.link.delete", LLAPILinkDelete, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
 	statefun.NewFunctionType(runtime, "functions.graph.api.link.read", LLAPILinkRead, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
 
+	// The graph belongs to the hub domain, so that is where the built-in schema
+	// is created and repaired — and where a declared protection policy is
+	// published.
 	if runtime.Domain.Name() == runtime.Domain.HubDomainName() {
-		runtime.RegisterOnAfterStartFunction(cmdbSchemaPrepare, false)
+		runtime.RegisterOnAfterStartFunction(cmdbSchemaPrepare(protectedBodyFields), false)
 	}
+	// Nothing to register for READING the policy back: the runtime itself pulls
+	// what the graph declares protected once its afterStart functions are done
+	// (statefun.Domain.PullProtectedBodyFields). Several applications routinely
+	// share one graph — and one domain: one provides the CRUD layer, creates the
+	// schema and declares what is protected, the others merely attach. Making
+	// that pull a property of the runtime rather than of this package is what
+	// lets an application which never registers CRUD still enforce the policy.
+	// Trash can retention sweep — in EVERY domain: a domain's parked objects
+	// live in its own cache, so each domain sweeps its own bin.
+	runtime.RegisterOnAfterStartFunction(trashCanRetentionSweep, false)
 }

@@ -113,7 +113,7 @@ func (s *S5Suite) Test_JPGQLPressure() {
 			}
 		}
 
-		if err := s.dbc.CMDB.ObjectDelete(tmp); err != nil {
+		if err := s.purgeObject(tmp); err != nil {
 			return err
 		}
 		// Idle: the query function's per-id machinery must be reclaimed.

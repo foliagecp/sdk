@@ -26,6 +26,9 @@ const (
 	BUILT_IN_ROOT       = "root"
 	BUILT_IN_TYPE_GROUP = "group"
 	BUILT_IN_OBJECT_NAV = "nav"
+	// BUILT_IN_TRASH_CAN is the built-in type deleted objects are re-linked to
+	// ("nothing dies instantly"); see trash_can.go.
+	BUILT_IN_TRASH_CAN = "trash-can"
 )
 
 // ----------------------------
@@ -573,34 +576,14 @@ func getObjectsLinkTypeFromTypesLink(ctx *sfPlugins.StatefunContextProcessor, fr
 	return linkType, nil
 }
 
-func cmdbSchemaPrepare(ctx context.Context, runtime *statefun.Runtime) error {
-	// ----------------------------------------------------
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", BUILT_IN_ROOT, easyjson.NewJSONObject().GetPtr(), nil))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", BUILT_IN_TYPES, easyjson.NewJSONObject().GetPtr(), nil))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.create", BUILT_IN_OBJECTS, easyjson.NewJSONObject().GetPtr(), nil))
-
-	v := easyjson.NewJSONObject()
-	v.SetByPath("to", easyjson.NewJSON(BUILT_IN_TYPES))
-	v.SetByPath("type", easyjson.NewJSON(TYPES_TYPELINK))
-	v.SetByPath("name", easyjson.NewJSON(runtime.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false)))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", BUILT_IN_ROOT, &v, nil))
-
-	v = easyjson.NewJSONObject()
-	v.SetByPath("to", easyjson.NewJSON(BUILT_IN_OBJECTS))
-	v.SetByPath("type", easyjson.NewJSON(OBJECTS_TYPELINK))
-	v.SetByPath("name", easyjson.NewJSON(runtime.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false)))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create", BUILT_IN_ROOT, &v, nil))
-	// ----------------------------------------------------
-
-	// ----------------------------------------------------
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.create", BUILT_IN_TYPE_GROUP, nil, nil))
-
-	v = easyjson.NewJSONObjectWithKeyValue("to", easyjson.NewJSON(BUILT_IN_TYPE_GROUP))
-	v.SetByPath("object_type", easyjson.NewJSON(GROUP_TYPELINK))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.types.link.create", BUILT_IN_TYPE_GROUP, &v, nil))
-
-	v = easyjson.NewJSONObjectWithKeyValue("origin_type", easyjson.NewJSON(BUILT_IN_TYPE_GROUP))
-	system.MsgOnErrorReturn(runtime.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.create", BUILT_IN_OBJECT_NAV, &v, nil))
-	// ----------------------------------------------------
-	return nil
+// cmdbSchemaPrepare builds the after-start hook that prepares the built-in
+// schema, publishing protectedBodyFields as the list in force when the caller
+// supplied one. Same repair-capable routine the import path uses: a runtime
+// starting on a graph that was imported (or otherwise mangled) heals the
+// skeleton instead of leaving half of it broken.
+func cmdbSchemaPrepare(protectedBodyFields []string) statefun.OnAfterStartFunction {
+	return func(ctx context.Context, runtime *statefun.Runtime) error {
+		EnsureBuiltInSchema(runtime.Request, runtime.Domain, protectedBodyFields...)
+		return nil
+	}
 }

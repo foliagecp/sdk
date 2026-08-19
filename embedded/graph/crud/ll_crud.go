@@ -452,6 +452,15 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		newBody := oldBody.Clone().GetPtr()
 		newBody.DeepMerge(body)
 		body = *newBody
+	} else {
+		// Protected body fields (declared by the graph, e.g. "usr") survive a
+		// destructive replace-write: a field the request does not carry is
+		// grafted from the current body, while a field it DOES carry is stored
+		// as sent, like any other — that is what keeps the field writable, and
+		// removals expressible. Done BEFORE the no-op check below so an
+		// inventory rebuild re-sending unchanged discovery fields stays idle
+		// instead of producing a fake write.
+		body = applyProtectedFieldsOnReplace(ctx.Domain.ProtectedBodyFields(), oldBody, body)
 	}
 
 	// No-op short-circuit: if the resulting body is structurally identical
@@ -503,15 +512,22 @@ Reply:
 // the out.to key is missing or corrupt, falls back to the ltype scan so a
 // partially written link stays deletable.
 func resolveOutLinkByName(ctx *sfPlugins.StatefunContextProcessor, ownerID, linkName string) (linkType, toId string, ok bool) {
-	b, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, ownerID, linkName))
+	return resolveOutLinkByNameInDomain(ctx.Domain, ownerID, linkName)
+}
+
+// resolveOutLinkByNameInDomain is resolveOutLinkByName without a statefun
+// context — usable from plain goroutines (e.g. the trash-can retention sweep),
+// which have a Domain but no in-flight message.
+func resolveOutLinkByNameInDomain(dm sfPlugins.Domain, ownerID, linkName string) (linkType, toId string, ok bool) {
+	b, err := dm.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, ownerID, linkName))
 	if err != nil {
-		return resolveOutLinkByLtypeScan(ctx, ownerID, linkName)
+		return resolveOutLinkByLtypeScanInDomain(dm, ownerID, linkName)
 	}
 	tokens := strings.Split(string(b), ".")
 	if len(tokens) < 2 {
-		return resolveOutLinkByLtypeScan(ctx, ownerID, linkName)
+		return resolveOutLinkByLtypeScanInDomain(dm, ownerID, linkName)
 	}
-	return ctx.Domain.GetObjectIDWithoutDomain(tokens[0]), tokens[1], true
+	return dm.GetObjectIDWithoutDomain(tokens[0]), tokens[1], true
 }
 
 // resolveOutLinkByLtypeScan recovers the (linkType, toId) of the out-link
@@ -523,9 +539,17 @@ func resolveOutLinkByName(ctx *sfPlugins.StatefunContextProcessor, ownerID, link
 // permanently undeletable: every delete path resolved the target via out.to,
 // gave up with IDLE and left the remaining key families behind forever.
 func resolveOutLinkByLtypeScan(ctx *sfPlugins.StatefunContextProcessor, ownerID, linkName string) (linkType, toId string, ok bool) {
+	return resolveOutLinkByLtypeScanInDomain(ctx.Domain, ownerID, linkName)
+}
+
+// resolveOutLinkByLtypeScanInDomain is resolveOutLinkByLtypeScan without a
+// statefun context — the same domain-only form as resolveOutLinkByNameInDomain,
+// so plain goroutines (e.g. the trash-can retention sweep) get the recovery
+// fallback too.
+func resolveOutLinkByLtypeScanInDomain(dm sfPlugins.Domain, ownerID, linkName string) (linkType, toId string, ok bool) {
 	prefix := fmt.Sprintf(OutLinkTypeKeyPrefPattern, ownerID)
-	for _, key := range ctx.Domain.Cache().GetKeysByPattern(prefix + ">") {
-		nameBytes, err := ctx.Domain.Cache().GetValue(key)
+	for _, key := range dm.Cache().GetKeysByPattern(prefix + ">") {
+		nameBytes, err := dm.Cache().GetValue(key)
 		if err != nil || string(nameBytes) != linkName {
 			continue
 		}
@@ -533,7 +557,7 @@ func resolveOutLinkByLtypeScan(ctx *sfPlugins.StatefunContextProcessor, ownerID,
 		if len(tokens) < 2 {
 			continue
 		}
-		return ctx.Domain.GetObjectIDWithoutDomain(tokens[0]), tokens[1], true
+		return dm.GetObjectIDWithoutDomain(tokens[0]), tokens[1], true
 	}
 	return "", "", false
 }
@@ -653,6 +677,14 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		}
 	}
 	// ----------------------------------------------------
+
+	// links_only=true: run ONLY the link cascade above and keep the vertex body.
+	// Used by the trash can (hl_crud DeleteObject): a "deleted" object keeps its
+	// body and gets re-linked under the trash-can type instead of being erased.
+	if ctx.Payload.GetByPath("links_only").AsBoolDefault(false) {
+		om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
+		return
+	}
 
 	operationKeysMutexLock(ctx, []string{selfID}, true, opTime)
 

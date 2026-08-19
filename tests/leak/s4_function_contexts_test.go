@@ -168,7 +168,7 @@ func (s *S4Suite) Test_NamegenBuildErrorLeaksContext() {
 			}
 		}
 		for _, id := range ids {
-			if err := s.dbc.CMDB.ObjectDelete(id); err != nil {
+			if err := s.purgeObject(id); err != nil {
 				return fmt.Errorf("object.delete %s: %w", id, err)
 			}
 		}
@@ -218,7 +218,7 @@ func (s *S4Suite) Test_SaltedContextsDieWithVertex() {
 			}
 		}
 		for _, id := range ids {
-			if err := s.dbc.CMDB.ObjectDelete(id); err != nil {
+			if err := s.purgeObject(id); err != nil {
 				return fmt.Errorf("object.delete %s: %w", id, err)
 			}
 		}
@@ -280,12 +280,17 @@ func (s *S4Suite) Test_BatchChurnLeavesNoTriggerContexts() {
 			time.Sleep(100 * time.Millisecond)
 		}
 
-		d := s.dbc.BatchCreate(fmt.Sprintf("s4e-delete-%d", c))
-		for _, id := range ids {
-			d.Operation("functions.cmdb.api.object.delete", id, opTimePayload())
-		}
-		if _, err := d.Commit(); err != nil {
-			return fmt.Errorf("batch delete: %w", err)
+		// Two passes: object.delete parks the object in the trash can, and the
+		// low-level vertex.delete erases the parked one — a parked object keeps
+		// its contexts, and only its erasure drops them.
+		for pass, typename := range []string{"functions.cmdb.api.object.delete", "functions.graph.api.vertex.delete"} {
+			d := s.dbc.BatchCreate(fmt.Sprintf("s4e-delete-%d-%d", c, pass))
+			for _, id := range ids {
+				d.Operation(typename, id, opTimePayload())
+			}
+			if _, err := d.Commit(); err != nil {
+				return fmt.Errorf("batch %s: %w", typename, err)
+			}
 		}
 		return nil
 	}
@@ -325,7 +330,7 @@ func (s *S4Suite) Test_ContextOfDeletedObjectSurvives() {
 			}
 		}
 		for _, id := range ids {
-			if err := s.dbc.CMDB.ObjectDelete(id); err != nil {
+			if err := s.purgeObject(id); err != nil {
 				return fmt.Errorf("object.delete %s: %w", id, err)
 			}
 		}

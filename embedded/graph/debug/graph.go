@@ -12,6 +12,7 @@ import (
 
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/clients/go/db"
+	"github.com/foliagecp/sdk/embedded/graph/crud"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
@@ -376,13 +377,26 @@ func LLAPIImportGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statef
 					n := graph.Nodes[i]
 					uuid := ctx.Domain.CreateObjectIDWithHubDomain(n.Id, true)
 
+					body, _ := ExtractBodyAsJSON(n.Attributes)
+
+					// Built-in skeleton (root/types/objects/nav and the built-in
+					// types): replace the body but KEEP the vertex and its links.
+					// Deleting it would cascade away registrations the dump cannot
+					// restore — a dump taken before a built-in type existed carries
+					// no edge for it, so wiping `types` would silently unregister
+					// it and CRUD would stop recognizing the type.
+					if crud.IsBuiltInSchemaID(ctx.Domain, uuid) {
+						if err := dbc.Graph.VertexUpdate(uuid, body, true, true); err != nil {
+							system.MsgOnErrorReturn(err)
+						}
+						continue
+					}
+
 					if err := dbc.Graph.VertexDelete(uuid); err != nil {
 						system.MsgOnErrorReturn(err)
 					}
-					if body, _ := ExtractBodyAsJSON(n.Attributes); true {
-						if err := dbc.Graph.VertexCreate(uuid, body); err != nil {
-							system.MsgOnErrorReturn(err)
-						}
+					if err := dbc.Graph.VertexCreate(uuid, body); err != nil {
+						system.MsgOnErrorReturn(err)
 					}
 				}
 			}()
@@ -424,6 +438,14 @@ func LLAPIImportGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statef
 		}
 		close(edgeIdx)
 		wgE.Wait()
+
+		// The import rebuilt the graph from the file, so the built-in CMDB
+		// skeleton is only as complete as the file was: pieces it never carried
+		// are absent, and pieces it DID carry were deleted and recreated —
+		// which cascaded away the links of anything the dump predates (a
+		// pre-trash-can dump leaves `trash-can` unregistered under `types`).
+		// Repair whatever is missing; correct pieces stay untouched.
+		crud.EnsureBuiltInSchema(ctx.Request, ctx.Domain)
 
 		lg.Logln(lg.InfoLevel, fmt.Sprintf("Import is done within %.2f sec", time.Since(t0).Seconds()))
 		om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONObject())).Reply()

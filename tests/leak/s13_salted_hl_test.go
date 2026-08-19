@@ -70,7 +70,13 @@ func (s *S13Suite) Test_SaltedHLChurn() {
 			if err := s.saltedRequest("functions.cmdb.api.object.read", id, salt(2*k+i), easyjson.NewJSONObject()); err != nil {
 				return err
 			}
+			// object.delete parks the object in the trash can; the low-level
+			// vertex.delete erases the parked one — still salted, which is the
+			// point here.
 			if err := s.saltedRequest("functions.cmdb.api.object.delete", id, salt(3*k+i), opTimePayload()); err != nil {
+				return err
+			}
+			if err := s.saltedRequest("functions.graph.api.vertex.delete", id, salt(4*k+i), opTimePayload()); err != nil {
 				return err
 			}
 		}
