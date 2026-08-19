@@ -159,15 +159,16 @@ func (s *CacheExistsTestSuite) Test_ExistsJson_FalseAfterDelete() {
 	prefixed := s.SetThisDomainPreffix("obj-xd")
 	s.True(s.Runtime().Domain.Cache().ExistsJson(prefixed), "sanity: must exist before delete")
 
-	// Trash-can contract: the FIRST delete of a live object PARKS it (body
-	// kept), the SECOND delete of the parked object erases it physically.
+	// Trash-can contract: deleting a live object PARKS it (body kept). From
+	// then on the object does not exist for the object API — erasing what is in
+	// the bin is the low-level vertex delete.
 	_, err = s.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.delete", "obj-xd", easyjson.NewJSONObject().GetPtr(), nil)
 	s.NoError(err)
 	s.Truef(s.Runtime().Domain.Cache().ExistsJson(prefixed),
-		"ExistsJson must still be true after the first delete — the object is parked in the trash can (key=%s)", prefixed)
+		"ExistsJson must still be true after the delete — the object is parked in the trash can (key=%s)", prefixed)
 
-	_, err = s.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.delete", "obj-xd", easyjson.NewJSONObject().GetPtr(), nil)
+	_, err = s.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.delete", "obj-xd", easyjson.NewJSONObject().GetPtr(), nil)
 	s.NoError(err)
 	s.Falsef(s.Runtime().Domain.Cache().ExistsJson(prefixed),
-		"ExistsJson must return false after the parked object is deleted physically (key=%s)", prefixed)
+		"ExistsJson must return false after the parked object is erased (key=%s)", prefixed)
 }

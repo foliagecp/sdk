@@ -47,8 +47,13 @@ func (s *CMDBClientContractTestSuite) Test_Hunt_ObjectDelete_RemovedFromTypeEnum
 	outLinks := s.Runtime().Domain.Cache().GetKeysByPattern(fmt.Sprintf(crud.OutLinkTargetKeyPrefPattern+">", aID))
 	s.Lenf(outLinks, 1, "parked object must keep exactly its trash-can __type out-link; got %v", outLinks)
 
-	// The second delete erases the parked object physically.
+	// A parked object no longer exists for the object API: deleting it again is
+	// a no-op, and erasing it is the low-level vertex delete.
 	s.NoError(s.dbc.CMDB.ObjectDelete("do-1"))
+	_, cacheErr = s.CacheValue("do-1")
+	s.NoErrorf(cacheErr, "a second object.delete must not erase the parked object")
+
+	s.NoError(s.dbc.Graph.VertexDelete("do-1"))
 	_, cacheErr = s.CacheValue("do-1")
 	s.Errorf(cacheErr, "physically deleted object vertex body must be gone from cache")
 	s.Emptyf(s.Runtime().Domain.Cache().GetKeysByPattern(fmt.Sprintf(crud.OutLinkTargetKeyPrefPattern+">", aID)),

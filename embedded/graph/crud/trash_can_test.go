@@ -17,13 +17,15 @@ import (
 	"github.com/foliagecp/sdk/clients/go/db"
 	"github.com/foliagecp/sdk/embedded/graph/crud"
 	"github.com/foliagecp/sdk/statefun"
+	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/test"
 	"github.com/stretchr/testify/suite"
 )
 
 type TrashCanTestSuite struct {
 	test.StatefunTestSuite
-	cmdb db.CMDBSyncClient
+	cmdb  db.CMDBSyncClient
+	graph db.GraphSyncClient
 }
 
 func TestTrashCanTestSuite(t *testing.T) { suite.Run(t, new(TrashCanTestSuite)) }
@@ -47,7 +49,7 @@ func (s *TrashCanTestSuite) boot() {
 	}
 	dbc, err := db.NewDBSyncClientFromRequestFunction(s.Runtime().Request)
 	s.NoError(err)
-	s.cmdb = dbc.CMDB
+	s.cmdb, s.graph = dbc.CMDB, dbc.Graph
 }
 
 func usrBody(hostname, responsible string, tags ...string) easyjson.JSON {
@@ -82,6 +84,29 @@ func (s *TrashCanTestSuite) trashEdgeBody(id string) *easyjson.JSON {
 
 func (s *TrashCanTestSuite) readBody(id string) easyjson.JSON {
 	res, err := s.cmdb.ObjectRead(id)
+	s.Require().NoError(err)
+	return res.GetByPath("body")
+}
+
+// objectOp issues one functions.cmdb.api.<op> and returns its raw status, so a
+// test can tell "idle" (nothing there to act on) from "ok" — a distinction the
+// client hides behind a nil error on write paths.
+func (s *TrashCanTestSuite) objectOp(op, id string, payload easyjson.JSON) string {
+	res, err := s.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api."+op, id, &payload, nil)
+	s.Require().NoError(err)
+	return res.GetByPath("status").AsStringDefault("")
+}
+
+func updatePayload(body easyjson.JSON) easyjson.JSON {
+	p := easyjson.NewJSONObjectWithKeyValue("replace", easyjson.NewJSON(true))
+	p.SetByPath("body", body)
+	return p
+}
+
+// parkedBody reads the body of a PARKED object — through the vertex API, the
+// only one that still sees it.
+func (s *TrashCanTestSuite) parkedBody(id string) easyjson.JSON {
+	res, err := s.graph.VertexRead(id)
 	s.Require().NoError(err)
 	return res.GetByPath("body")
 }
@@ -161,17 +186,47 @@ func (s *TrashCanTestSuite) Test_IncomingProtectedFieldWins() {
 	s.Equal("new-owner", s.readBody("tc5").GetByPath("usr.attrs.responsible").AsStringDefault(""))
 }
 
-// Deleting an already-parked object is the PHYSICAL deletion.
-func (s *TrashCanTestSuite) Test_DeleteParked_ErasesPhysically() {
+// A parked object DOES NOT EXIST for the object API: it was deleted, and the
+// bin is outside the observable model. Read, update and delete all answer the
+// same way they answer for an id that was never there — nothing about the
+// parked state leaks out, and nothing can be done to it through this API.
+func (s *TrashCanTestSuite) Test_ParkedObjectDoesNotExistForTheObjectAPI() {
 	s.boot()
 	s.NoError(s.cmdb.TypeCreate("tc_t"))
 	s.NoError(s.cmdb.ObjectCreate("tc6", "tc_t", usrBody("h", "x")))
 	s.NoError(s.cmdb.ObjectDelete("tc6")) // park
-	s.True(s.vertexExists("tc6"))
+	s.True(s.vertexExists("tc6"), "the body is kept — that is what makes a restore possible")
 
-	s.NoError(s.cmdb.ObjectDelete("tc6")) // erase
-	s.False(s.vertexExists("tc6"), "second delete must physically erase the parked object")
-	s.False(s.typeHoldsObject(crud.BUILT_IN_TRASH_CAN, "tc6"))
+	_, err := s.cmdb.ObjectRead("tc6")
+	s.ErrorIs(err, db.ErrNotFound, "read of a parked object must look like reading a missing one")
+
+	// Write ops answer "idle" — the status the API uses for "there is nothing
+	// there to act on"; the client turns that into a plain no-op, as it does
+	// for any id that does not exist.
+	s.Equal("idle", s.objectOp("object.update", "tc6", updatePayload(usrBody("h2", "y"))),
+		"a parked object cannot be modified")
+	s.NoError(s.cmdb.ObjectUpdate("tc6", usrBody("h2", "y"), true))
+	s.Equal("x", s.parkedBody("tc6").GetByPath("usr.attrs.responsible").AsStringDefault(""),
+		"and the parked body must be untouched by the attempt")
+
+	s.Equal("idle", s.objectOp("object.delete", "tc6", easyjson.NewJSONObject()),
+		"deleting what is already deleted is a no-op, not a second, physical deletion")
+	s.NoError(s.cmdb.ObjectDelete("tc6"))
+	s.True(s.vertexExists("tc6"), "the parked object must survive it")
+	s.True(s.typeHoldsObject(crud.BUILT_IN_TRASH_CAN, "tc6"))
+}
+
+// Erasing what sits in the bin is the low-level vertex API — the only one that
+// still sees it. (Retention does exactly this on its own schedule.)
+func (s *TrashCanTestSuite) Test_ParkedObject_ErasedThroughTheVertexAPI() {
+	s.boot()
+	s.NoError(s.cmdb.TypeCreate("tc_t"))
+	s.NoError(s.cmdb.ObjectCreate("tc6b", "tc_t", usrBody("h", "x")))
+	s.NoError(s.cmdb.ObjectDelete("tc6b")) // park
+
+	s.NoError(s.graph.VertexDelete("tc6b"))
+	s.False(s.vertexExists("tc6b"), "the vertex API erases the parked object")
+	s.False(s.typeHoldsObject(crud.BUILT_IN_TRASH_CAN, "tc6b"), "and its trash link goes with it")
 }
 
 // Restore under a DIFFERENT type succeeds (warned in logs) — the object comes

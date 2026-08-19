@@ -427,6 +427,17 @@ func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 
 	operationKeysMutexLock(ctx, []string{selfID}, true, opTime)
 
+	// A parked object is not there to be updated: for everything but the
+	// upsert above — which is a RESTORE, the object's return — the trash can is
+	// outside the observable model, exactly as it is for a read.
+	if !upsert {
+		if resolvedType, rerr := findObjectType(ctx, selfID); rerr == nil && isTrashCanType(ctx, resolvedType) {
+			operationKeysMutexUnlock(ctx)
+			om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("object with id=%s does not exist", selfID))).Reply()
+			return
+		}
+	}
+
 	if upsert {
 		ctx.Payload.RemoveByPath("upsert")
 		if resolvedType, rerr := findObjectType(ctx, selfID); rerr == nil && isTrashCanType(ctx, resolvedType) {
@@ -602,14 +613,25 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	options := ctx.Options.Clone()
 	options.SetByPath("op_stack", easyjson.NewJSON(true))
 
+	// A PARKED object does not exist for this API. It was deleted already, and
+	// the bin is outside the observable model — ReadObject answers IDLE for it,
+	// UpdateObject too — so deleting it "again" is the same no-op as deleting
+	// anything else that is not there. Erasing what sits in the bin is
+	// retention's business, and a caller who really wants the vertex gone talks
+	// to the low-level vertex API, which is the only API that still sees it.
+	if isTrashCanType(ctx, objectType) {
+		operationKeysMutexUnlock(ctx)
+		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("object with id=%s does not exist", selfID))).Reply()
+		return
+	}
+
 	// Trash can: a LIVE typed object is not erased — it loses all its links
 	// (the usual cascade, links_only) but keeps its body and is re-linked under
-	// the trash-can type, original type + deletion moment on the edge. Deleting
-	// an already-parked object is the physical erase below; a type-less ORPHAN
-	// (partial-failure debris) is also erased physically — parking it would
-	// preserve garbage that cannot be meaningfully restored, and would break
-	// the "a subsequent delete cleans up" recovery contract.
-	if objectType != "" && !isTrashCanType(ctx, objectType) {
+	// the trash-can type, original type + deletion moment on the edge. A
+	// type-less ORPHAN (partial-failure debris) is erased physically instead —
+	// parking it would preserve garbage that cannot be meaningfully restored,
+	// and would break the "a subsequent delete cleans up" recovery contract.
+	if objectType != "" {
 		oldBody := getVertexBody(ctx, selfID) // for the delete CDC event
 
 		linksPayload := ctx.Payload.Clone()

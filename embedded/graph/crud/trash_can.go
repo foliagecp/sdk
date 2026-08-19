@@ -293,8 +293,12 @@ func enforceTrashCanRetention(dm sfPlugins.Domain, request sfPlugins.SFRequestFu
 			"trash can: permanently deleting parked object %s (%s; parked=%d, max_objects=%d, max_age=%s)",
 			v.entry.objectID, v.reason, len(entries), maxObjects, maxAge)
 
+		// Low-level: the object API cannot touch what is in the bin (a parked
+		// object does not exist for it), and there is nothing left for it to do
+		// anyway — the links are gone and the delete event was dispatched when
+		// the object was parked. What remains is the vertex.
 		payload := easyjson.NewJSONObjectWithKeyValue("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
-		if _, err := request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.delete", evictID(v.entry.objectID), &payload, nil); err != nil {
+		if _, err := request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.delete", evictID(v.entry.objectID), &payload, nil); err != nil {
 			lg.Logf(lg.WarnLevel, "trash can eviction of %s failed: %v; retrying on the next sweep", v.entry.objectID, err)
 			return
 		}
