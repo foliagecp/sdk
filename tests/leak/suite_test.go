@@ -42,6 +42,22 @@ func (s *leakSuite) bootCRUD(register ...func(*statefun.Runtime)) {
 	s.dbc = dbc
 }
 
+// purgeObject removes an object PHYSICALLY, which takes two deletes: the first
+// PARKS it in the trash can — the object keeps its body and is re-linked under
+// the built-in trash-can type so it can be restored — and a delete of an
+// already-parked object is the erase.
+//
+// Parking is by design and bounded by retention, so it is not a leak; but it
+// does leave the graph above its baseline, and a cycle that does not return the
+// world to its logical baseline measures the trash can filling up instead of
+// what the scenario is about.
+func (s *leakSuite) purgeObject(id string) error {
+	if err := s.dbc.CMDB.ObjectDelete(id); err != nil {
+		return err
+	}
+	return s.dbc.CMDB.ObjectDelete(id)
+}
+
 func (s *leakSuite) waitForVertex(id string) {
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {

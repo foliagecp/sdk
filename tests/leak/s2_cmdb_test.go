@@ -49,7 +49,7 @@ func (s *S2Suite) Test_CMDBObjectChurn() {
 			}
 		}
 		for i := 0; i < n; i++ {
-			if err := s.dbc.CMDB.ObjectDelete(id(i)); err != nil {
+			if err := s.purgeObject(id(i)); err != nil {
 				return fmt.Errorf("object.delete %s: %w", id(i), err)
 			}
 		}

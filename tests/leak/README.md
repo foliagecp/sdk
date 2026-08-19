@@ -113,7 +113,16 @@ One file `sNN_<name>_test.go` (`//go:build leak`), one suite type embedding
 `leakSuite`, one `TestSNN...` entry function (the script's `-run` filter is
 exact). Boot with `bootCRUD(...)`, express the workload as ONE cycle function
 that returns the world to its logical baseline, and build the runner with
-`s.newRunner(scenario, cycle, collect)`. Keep the whole warmup+measure loop
+`s.newRunner(scenario, cycle, collect)`.
+
+**Deleting an object takes two deletes.** The first PARKS it in the trash can —
+it keeps its body and is re-linked under the built-in trash-can type so it can
+be restored — and only a delete of an already-parked object erases it. Parking
+is by design and bounded by retention, so it is not a leak, but a cycle that
+stops after one delete leaves the object (and its function contexts) behind and
+ends up measuring the bin filling up. Use `s.purgeObject(id)`, or issue the
+second delete explicitly where the calls are batched or salted. A cascade
+(`type.delete`) parks the type's objects the same way. Keep the whole warmup+measure loop
 inside a single `Test` method — the harness rebuilds the runtime per method.
 Assert with `rep.AssertClean` (heap+goroutines), `s.assertCoreStable(rep)`
 and `rep.AssertStable(t, metric)` for scenario counters;

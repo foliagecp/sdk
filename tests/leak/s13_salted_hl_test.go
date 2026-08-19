@@ -70,7 +70,12 @@ func (s *S13Suite) Test_SaltedHLChurn() {
 			if err := s.saltedRequest("functions.cmdb.api.object.read", id, salt(2*k+i), easyjson.NewJSONObject()); err != nil {
 				return err
 			}
+			// Twice: the first delete parks the object in the trash can, the
+			// second erases it — still salted, which is the point here.
 			if err := s.saltedRequest("functions.cmdb.api.object.delete", id, salt(3*k+i), opTimePayload()); err != nil {
+				return err
+			}
+			if err := s.saltedRequest("functions.cmdb.api.object.delete", id, salt(4*k+i), opTimePayload()); err != nil {
 				return err
 			}
 		}
