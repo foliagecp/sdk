@@ -33,12 +33,25 @@ Every sample is taken after a full **quiesce**: WAL drained
 (`HasPendingWrites`), ≥2 cache maintenance sweeps strictly after the drain
 (tombstone cascades collapsed), double `runtime.GC()`.
 
-**SDK vs embedded NATS heap.** The embedded `nats-server` shares the test
-process, and JetStream/KV churn grows *its* state by design (per-subject
-tree nodes, file-store buffers, retained KV DEL tombstones). The harness
-splits the in-use heap by allocation stack: the SDK share is **asserted**,
-the server share and raw process totals are **REPORT-only**. In production
-the server is a separate process; its by-design growth is quantified by S12.
+**SDK vs NATS heap.** Two NATS pieces share the test process: the embedded
+`nats-server`, whose state JetStream/KV churn grows by design (per-subject tree
+nodes, file-store buffers, retained KV DEL tombstones), and the `nats.go`
+CLIENT, which keeps buffers of its own — parsed messages, header maps, pending
+queues — whose depth follows how fast the process happens to drain them. The
+harness splits the in-use heap by allocation stack three ways: the SDK share is
+**asserted**, `nats_server_*`, `nats_client_*` and the raw process totals are
+**REPORT-only**. In production the server is a separate process (its by-design
+growth is quantified by S12) and the client's buffering is bounded by its own
+configuration, so neither is what this suite hunts.
+
+Charging the client to the SDK is what made `--race` runs report megabyte-per-
+cycle "SDK leaks" in s2 and s7: everything runs several times slower under the
+race detector, the client's queues sit deeper for longer, and the whole mass of
+the reported growth was in nats.go's `(*Conn).processMsg` and `readMIMEHeader`
+while every SDK frame moved by tens of kilobytes, mostly downwards. An SDK leak
+that hides inside the client — a subscription never unsubscribed, a message
+never acked — still surfaces as goroutines that do not settle and counters that
+do not return to baseline, both asserted exactly.
 
 **Profile resolution.** That split comes from the heap profile, whose values are
 ESTIMATES: the runtime samples one allocation per `MemProfileRate` bytes and

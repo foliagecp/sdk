@@ -333,8 +333,10 @@ func (r *CycleRunner) Run(t *testing.T) *Report {
 	if r.SplitNatsHeap {
 		addVerdict("sdk_inuse_bytes", bytesFloor, false)
 		addVerdict("sdk_inuse_objects", objectsFloor, false)
-		addVerdict("nats_inuse_bytes", 0, true)
-		addVerdict("nats_inuse_objects", 0, true)
+		addVerdict("nats_server_inuse_bytes", 0, true)
+		addVerdict("nats_server_inuse_objects", 0, true)
+		addVerdict("nats_client_inuse_bytes", 0, true)
+		addVerdict("nats_client_inuse_objects", 0, true)
 		addVerdict("heap_alloc", bytesFloor, true)
 		addVerdict("heap_objects", objectsFloor, true)
 	} else {
@@ -406,11 +408,13 @@ func (r *CycleRunner) sample(cycle int) Sample {
 		Custom:      map[string]float64{},
 	}
 	if r.SplitNatsHeap {
-		sdkB, sdkO, natsB, natsO := heapSplitByOwner()
-		s.Custom["sdk_inuse_bytes"] = float64(sdkB)
-		s.Custom["sdk_inuse_objects"] = float64(sdkO)
-		s.Custom["nats_inuse_bytes"] = float64(natsB)
-		s.Custom["nats_inuse_objects"] = float64(natsO)
+		h := heapSplitByOwner()
+		s.Custom["sdk_inuse_bytes"] = float64(h.sdkBytes)
+		s.Custom["sdk_inuse_objects"] = float64(h.sdkObjects)
+		s.Custom["nats_server_inuse_bytes"] = float64(h.serverBytes)
+		s.Custom["nats_server_inuse_objects"] = float64(h.serverObjects)
+		s.Custom["nats_client_inuse_bytes"] = float64(h.clientBytes)
+		s.Custom["nats_client_inuse_objects"] = float64(h.clientObjects)
 	}
 	if r.Collect != nil {
 		r.Collect(&s)
@@ -418,18 +422,41 @@ func (r *CycleRunner) sample(cycle int) Sample {
 	return s
 }
 
+// heapShares is the in-use heap split three ways by allocation stack.
+type heapShares struct {
+	sdkBytes, sdkObjects       int64
+	serverBytes, serverObjects int64
+	clientBytes, clientObjects int64
+}
+
 // heapSplitByOwner snapshots the in-use heap (as of the GC that just ran) and
-// splits it by allocation stack: a sample whose stack contains any
-// nats-io/nats-server frame is the embedded server's, everything else is the
-// SDK's (tests, sdk packages, stdlib on their behalf).
-func heapSplitByOwner() (sdkBytes, sdkObjects, natsBytes, natsObjects int64) {
+// splits it by allocation stack, into what the SDK owns and what the NATS
+// libraries in this process own.
+//
+// The NATS CLIENT is not the SDK's share, even though the SDK is what makes it
+// work: nats.go keeps its own buffers — parsed messages, header maps, pending
+// queues — whose depth follows how fast the process happens to drain them, not
+// how much the SDK retains. Under -race, where everything runs several times
+// slower, that depth grows across a measurement window and used to be charged
+// to the SDK: s2 and s7 reported megabyte-per-cycle "SDK leaks" whose entire
+// mass sat in nats.go's (*Conn).processMsg and readMIMEHeader while every SDK
+// frame moved by tens of kilobytes, mostly downwards.
+//
+// In production both NATS shares live in a separate process (the server) or are
+// bounded by the client's own configuration, so neither is what this suite is
+// hunting; both are reported, and only the SDK share is asserted. A leak that
+// really is the SDK's — a subscription never unsubscribed, a message never
+// acked — still shows up as goroutines that do not settle and as counters that
+// do not return to baseline, which this suite asserts exactly.
+func heapSplitByOwner() heapShares {
+	var h heapShares
 	var buf bytes.Buffer
 	if err := pprof.WriteHeapProfile(&buf); err != nil {
-		return 0, 0, 0, 0
+		return h
 	}
 	prof, err := profile.Parse(&buf)
 	if err != nil {
-		return 0, 0, 0, 0
+		return h
 	}
 	bytesIdx, objectsIdx := -1, -1
 	for i, st := range prof.SampleType {
@@ -441,28 +468,54 @@ func heapSplitByOwner() (sdkBytes, sdkObjects, natsBytes, natsObjects int64) {
 		}
 	}
 	if bytesIdx == -1 || objectsIdx == -1 {
-		return 0, 0, 0, 0
+		return h
 	}
-	for _, s := range prof.Sample {
-		nats := false
-	frames:
-		for _, loc := range s.Location {
-			for _, line := range loc.Line {
-				if line.Function != nil && strings.HasPrefix(line.Function.Name, "github.com/nats-io/nats-server") {
-					nats = true
-					break frames
-				}
+	for _, smp := range prof.Sample {
+		bytes, objects := smp.Value[bytesIdx], smp.Value[objectsIdx]
+		switch stackOwner(smp) {
+		case ownerNatsServer:
+			h.serverBytes += bytes
+			h.serverObjects += objects
+		case ownerNatsClient:
+			h.clientBytes += bytes
+			h.clientObjects += objects
+		default:
+			h.sdkBytes += bytes
+			h.sdkObjects += objects
+		}
+	}
+	return h
+}
+
+type heapOwner int
+
+const (
+	ownerSDK heapOwner = iota
+	ownerNatsServer
+	ownerNatsClient
+)
+
+// stackOwner attributes one profile sample. A stack that reaches the embedded
+// server is the server's wherever it started; any other stack through a
+// nats-io package (nats.go and its friends — the function names come
+// URL-escaped, "nats%2ego") is the client's; everything else — SDK code, the
+// tests, and the standard library on their behalf — is ours.
+func stackOwner(smp *profile.Sample) heapOwner {
+	owner := ownerSDK
+	for _, loc := range smp.Location {
+		for _, line := range loc.Line {
+			if line.Function == nil {
+				continue
+			}
+			switch {
+			case strings.HasPrefix(line.Function.Name, "github.com/nats-io/nats-server"):
+				return ownerNatsServer
+			case strings.HasPrefix(line.Function.Name, "github.com/nats-io/"):
+				owner = ownerNatsClient
 			}
 		}
-		if nats {
-			natsBytes += s.Value[bytesIdx]
-			natsObjects += s.Value[objectsIdx]
-		} else {
-			sdkBytes += s.Value[bytesIdx]
-			sdkObjects += s.Value[objectsIdx]
-		}
 	}
-	return sdkBytes, sdkObjects, natsBytes, natsObjects
+	return owner
 }
 
 // ---------------------------------------------------------------------------
