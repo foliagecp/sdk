@@ -598,7 +598,26 @@ var gracefulShutdownDrainTimeout = time.Duration(system.GetEnvMustProceed[int]("
 // OnBecamePassive callbacks. A callback that ignores its context past this
 // deadline is abandoned (its goroutine runs on until it returns) rather than
 // wedging the HA lifecycle loop. Tunable via PASSIVE_TEARDOWN_TIMEOUT_SEC.
-var passiveTeardownTimeout = time.Duration(system.GetEnvMustProceed[int]("PASSIVE_TEARDOWN_TIMEOUT_SEC", 10)) * time.Second
+// Atomic, and read through passiveTeardownTimeout(): every runtime in the
+// process reads it from its own lifecycle goroutine, and a test that shortens
+// it (or any future reconfiguration) would otherwise race a runtime that is
+// demoting right then — which is exactly what the race detector caught between
+// Test_OnBecamePassive_BoundedByTimeout and a runtime still alive from an
+// earlier HA failover test.
+var passiveTeardownTimeoutNs atomic.Int64
+
+func init() {
+	passiveTeardownTimeoutNs.Store(int64(time.Duration(system.GetEnvMustProceed[int]("PASSIVE_TEARDOWN_TIMEOUT_SEC", 10)) * time.Second))
+}
+
+func passiveTeardownTimeout() time.Duration {
+	return time.Duration(passiveTeardownTimeoutNs.Load())
+}
+
+// swapPassiveTeardownTimeout replaces the bound and returns the previous one.
+func swapPassiveTeardownTimeout(d time.Duration) time.Duration {
+	return time.Duration(passiveTeardownTimeoutNs.Swap(int64(d)))
+}
 
 // runOnBecamePassiveFunctions invokes the registered passive-teardown callbacks.
 // They run on their own goroutine; the call returns once they all finish OR the
@@ -609,7 +628,8 @@ func (r *Runtime) runOnBecamePassiveFunctions(parentCtx context.Context) {
 	if len(r.onBecamePassiveFunctions) == 0 {
 		return
 	}
-	tctx, cancel := context.WithTimeout(parentCtx, passiveTeardownTimeout)
+	timeout := passiveTeardownTimeout()
+	tctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
 
 	done := make(chan struct{})
@@ -630,7 +650,7 @@ func (r *Runtime) runOnBecamePassiveFunctions(parentCtx context.Context) {
 	select {
 	case <-done:
 	case <-tctx.Done():
-		lg.Logf(lg.WarnLevel, "OnBecamePassive callbacks exceeded %s; proceeding without waiting (a callback may be ignoring its context)", passiveTeardownTimeout)
+		lg.Logf(lg.WarnLevel, "OnBecamePassive callbacks exceeded %s; proceeding without waiting (a callback may be ignoring its context)", timeout)
 	}
 }
 
