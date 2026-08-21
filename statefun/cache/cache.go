@@ -553,6 +553,10 @@ type Store struct {
 	totalSweepRuns    int64
 	totalSweepRemoved int64
 
+	// WAL publish outcomes; successes + errors is the number of attempts.
+	totalWALPublishes     int64
+	totalWALPublishErrors int64
+
 	// Periodic KV delete-marker purge state (see PurgeKVDeleteMarkers):
 	// last trigger time (touched only by the kvLazyWriter goroutine) and a
 	// guard against overlapping purge goroutines.
@@ -890,7 +894,16 @@ type StoreStatsForTest struct {
 	SweepRuns    int64 // lifetime maintenance passes (mirrors cache_sweep_runs_total)
 	SweepRemoved int64 // lifetime nodes physically removed by the sweep
 	PendingTxs   int   // WAL transactions buffered and not yet published
-	ActiveOps    int   // in-flight write operations tracked by opTime
+	ActiveOps    int   // distinct opTime keys tracked in activeOps
+
+	// Ages in NANOSECONDS (the gauges export seconds) so tests can assert
+	// exactly. 0 when the corresponding map is empty. OldestActiveOpAgeNs is
+	// the age of the entry currently pinning the WAL barrier.
+	OldestPendingAgeNs  int64
+	OldestActiveOpAgeNs int64
+
+	WALPublishes     int64 // lifetime successful PublishTransaction calls
+	WALPublishErrors int64 // lifetime failed PublishTransaction calls
 }
 
 // StatsForTest walks the tree read-only and returns a StoreStatsForTest.
@@ -900,12 +913,22 @@ type StoreStatsForTest struct {
 // snapshot (the transient 1->2 child migration may double-count a node).
 func (cs *Store) StatsForTest() StoreStatsForTest {
 	st := StoreStatsForTest{
-		SweepRuns:    atomic.LoadInt64(&cs.totalSweepRuns),
-		SweepRemoved: atomic.LoadInt64(&cs.totalSweepRemoved),
+		SweepRuns:        atomic.LoadInt64(&cs.totalSweepRuns),
+		SweepRemoved:     atomic.LoadInt64(&cs.totalSweepRemoved),
+		WALPublishes:     atomic.LoadInt64(&cs.totalWALPublishes),
+		WALPublishErrors: atomic.LoadInt64(&cs.totalWALPublishErrors),
 	}
 	cs.countSubtreeForTest(cs.rootValue, &st)
-	cs.pendingTxs.Range(func(_, _ interface{}) bool { st.PendingTxs++; return true })
-	cs.activeOps.Range(func(_, _ interface{}) bool { st.ActiveOps++; return true })
+
+	// One implementation of the backlog walk, shared with the Prometheus
+	// gauges, so the numbers a test asserts are the numbers production reports.
+	now := system.GetCurrentTimeNs()
+	pendingCount, oldestPending := cs.pendingTxsSnapshot()
+	activeDistinct, _, oldestActive := cs.activeOpsSnapshot()
+	st.PendingTxs = pendingCount
+	st.ActiveOps = activeDistinct
+	st.OldestPendingAgeNs = ageNsSince(now, oldestPending)
+	st.OldestActiveOpAgeNs = ageNsSince(now, oldestActive)
 	return st
 }
 
@@ -1072,9 +1095,11 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 							txID := strconv.FormatInt(txTime, 10)
 							le.Tracef(ctx, "Publishing batched tx=%s with %d ops (%d txs merged)", txID, len(batchOps), len(batchTimes))
 							if err := cs.getTransactionGenerator().PublishTransaction(txID, batchOps); err != nil {
+								atomic.AddInt64(&cs.totalWALPublishErrors, 1)
 								le.Errorf(ctx, "kvLazyWriter: cannot publish tx=%s: %s", txID, err)
 								break // retry next iteration
 							}
+							atomic.AddInt64(&cs.totalWALPublishes, 1)
 							for _, t := range batchTimes {
 								cs.pendingTxs.Delete(t)
 							}
@@ -1088,8 +1113,10 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 						txID := strconv.FormatInt(batchTimes[len(batchTimes)-1], 10)
 						le.Tracef(ctx, "Publishing batched tx=%s with %d ops (%d txs merged)", txID, len(batchOps), len(batchTimes))
 						if err := cs.getTransactionGenerator().PublishTransaction(txID, batchOps); err != nil {
+							atomic.AddInt64(&cs.totalWALPublishErrors, 1)
 							le.Errorf(ctx, "kvLazyWriter: cannot publish tx=%s: %s", txID, err)
 						} else {
+							atomic.AddInt64(&cs.totalWALPublishes, 1)
 							for _, t := range batchTimes {
 								cs.pendingTxs.Delete(t)
 							}
@@ -1147,6 +1174,11 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 					if gv, err := system.GlobalPrometrics.EnsureGaugeVecSimple("cache_sweep_removed_total", "", []string{"id"}); err == nil {
 						gv.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(atomic.LoadInt64(&cs.totalSweepRemoved)))
 					}
+
+					// WAL write-barrier state: backlog depth, backlog AGE and
+					// publish progress. Off the hot path, on the same cadence
+					// as the sweep gauges above.
+					cs.publishWALGauges(system.GetCurrentTimeNs())
 				}
 
 				time.Sleep(time.Duration(cacheConfig.lazyWriterRepeatDelayMkS) * time.Microsecond)
@@ -1171,7 +1203,10 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 						txID := strconv.FormatInt(txTime, 10)
 						le.Debugf(ctx, "Shutdown: publishing tx=%s with %d ops", txID, len(ops))
 						if err := cs.getTransactionGenerator().PublishTransaction(txID, ops); err != nil {
+							atomic.AddInt64(&cs.totalWALPublishErrors, 1)
 							le.Errorf(ctx, "Shutdown: cannot publish tx=%s: %s", txID, err)
+						} else {
+							atomic.AddInt64(&cs.totalWALPublishes, 1)
 						}
 						cs.pendingTxs.Delete(txTime)
 					}
@@ -1672,6 +1707,79 @@ func (cs *Store) MarkOperationDone(opTime int64) {
 			cs.activeOps.Delete(opTime)
 		}
 	}
+}
+
+// publishWALGauges exposes backlog depth, age and publish progress. It runs in
+// maintenance even when the publish loop is barrier-blocked. Like cache_values,
+// these gauges are stale while WAL writes are disabled on a passive instance.
+func (cs *Store) publishWALGauges(now int64) {
+	pendingCount, oldestPending := cs.pendingTxsSnapshot()
+	_, activeTotal, oldestActive := cs.activeOpsSnapshot()
+
+	labels := prometheus.Labels{"id": cs.cacheConfig.id}
+	setGauge := func(name, help string, value float64) {
+		if gv, err := system.GlobalPrometrics.EnsureGaugeVecSimple(name, help, []string{"id"}); err == nil {
+			gv.With(labels).Set(value)
+		}
+	}
+
+	setGauge("cache_pending_transactions",
+		"WAL transactions buffered in the cache and not yet published (transactions)",
+		float64(pendingCount))
+	setGauge("cache_active_operations",
+		"In-flight write operations holding the WAL barrier, summed over opTimes (operations)",
+		float64(activeTotal))
+	setGauge("cache_oldest_pending_age_seconds",
+		"Age of the oldest buffered WAL transaction (seconds); 0 when the backlog is empty",
+		float64(ageNsSince(now, oldestPending))/float64(time.Second))
+	setGauge("cache_oldest_active_operation_age_seconds",
+		"Age of the oldest in-flight write operation, the one pinning the WAL barrier (seconds); 0 when none",
+		float64(ageNsSince(now, oldestActive))/float64(time.Second))
+	setGauge("cache_wal_publish_total",
+		"Successful WAL PublishTransaction calls since start (count)",
+		float64(atomic.LoadInt64(&cs.totalWALPublishes)))
+	setGauge("cache_wal_publish_errors_total",
+		"Failed WAL PublishTransaction calls since start (count)",
+		float64(atomic.LoadInt64(&cs.totalWALPublishErrors)))
+}
+
+// pendingTxsSnapshot returns backlog size and its oldest txTime (0 if empty).
+func (cs *Store) pendingTxsSnapshot() (count int, oldest int64) {
+	cs.pendingTxs.Range(func(k, _ any) bool {
+		txTime := k.(int64)
+		if count == 0 || txTime < oldest {
+			oldest = txTime
+		}
+		count++
+		return true
+	})
+	return count, oldest
+}
+
+// activeOpsSnapshot returns distinct opTime keys, positive refcount total and
+// the oldest opTime. StoreStatsForTest retains the historical distinct count;
+// cache_active_operations reports the refcount total.
+func (cs *Store) activeOpsSnapshot() (distinct, total int, oldest int64) {
+	cs.activeOps.Range(func(k, v any) bool {
+		opTime := k.(int64)
+		if distinct == 0 || opTime < oldest {
+			oldest = opTime
+		}
+		distinct++
+		if n := v.(*atomic.Int32).Load(); n > 0 {
+			total += int(n)
+		}
+		return true
+	})
+	return distinct, total, oldest
+}
+
+// ageNsSince returns a non-negative age; zero/absent timestamps have no age.
+func ageNsSince(now, ts int64) int64 {
+	if ts <= 0 || ts >= now {
+		return 0
+	}
+	return now - ts
 }
 
 // hasActiveOperationsUpTo returns true if there is at least one in-flight
