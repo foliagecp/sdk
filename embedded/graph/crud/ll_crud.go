@@ -82,7 +82,11 @@ func injectParentHoldsLocks(ctx *sfPlugins.StatefunContextProcessor, downstreamP
 		newDownstreamPayload.SetByPath("__parent_holds_locks", parentHoldLocks)
 	}
 
+	// Lock bookkeeping belongs to this handler invocation. The held locks are
+	// promoted above; the mark must not travel, or the child unlock would consume
+	// the parent's WAL-barrier mark while the parent is still writing.
 	newDownstreamPayload.RemoveByPath("__key_locks")
+	newDownstreamPayload.RemoveByPath("__key_lock_time")
 	return &newDownstreamPayload
 }
 
@@ -119,6 +123,37 @@ func recordHeldLock(ctx *sfPlugins.StatefunContextProcessor, key, mode string) {
 	seg := lockRecSeg(key)
 	ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.%s.m", seg), easyjson.NewJSON(mode))
 	ctx.Payload.SetByPath(fmt.Sprintf("__key_locks.%s.k", seg), easyjson.NewJSON(key))
+}
+
+// operationActiveMarkState returns the mark held by the current lock span.
+func operationActiveMarkState(payload *easyjson.JSON) (opTime int64, held bool) {
+	if payload == nil {
+		return 0, false
+	}
+	return payload.GetByPath("__key_lock_time").AsInt64()
+}
+
+// markOperationActiveOnce balances several lock passes followed by one unlock
+// with a single activeOps mark. If a later pass carries an older opTime, move
+// the mark down without leaving a momentarily empty barrier.
+func markOperationActiveOnce(ctx *sfPlugins.StatefunContextProcessor, opTime int64) {
+	prev, held := operationActiveMarkState(ctx.Payload)
+	switch {
+	case !held:
+		// The common path: first write-lock pass of this invocation.
+	case opTime >= prev:
+		// The older mark already covers this pass.
+		return
+	default:
+		// Unexpected today; activate the older mark before releasing the newer.
+		lg.Logf(lg.WarnLevel, "markOperationActiveOnce: nested lock pass uses opTime=%d, earlier than the held mark %d; migrating the barrier down", opTime, prev)
+		ctx.Domain.Cache().MarkOperationActive(opTime)
+		ctx.Domain.Cache().MarkOperationDone(prev)
+		ctx.Payload.SetByPath("__key_lock_time", easyjson.NewJSON(opTime))
+		return
+	}
+	ctx.Payload.SetByPath("__key_lock_time", easyjson.NewJSON(opTime))
+	ctx.Domain.Cache().MarkOperationActive(opTime)
 }
 
 func parentHoldsWriteLock(ctx *sfPlugins.StatefunContextProcessor, key string) bool {
@@ -188,8 +223,7 @@ func operationKeysMutexLock(ctx *sfPlugins.StatefunContextProcessor, keys []stri
 		}
 	}
 	if lockedWriteAny {
-		ctx.Payload.SetByPath("__key_lock_time", easyjson.NewJSON(opTime))
-		ctx.Domain.Cache().MarkOperationActive(opTime)
+		markOperationActiveOnce(ctx, opTime)
 	}
 }
 
@@ -244,8 +278,7 @@ func operationKeysMutexLockMixed(ctx *sfPlugins.StatefunContextProcessor, writeK
 		}
 	}
 	if lockedWriteAny {
-		ctx.Payload.SetByPath("__key_lock_time", easyjson.NewJSON(opTime))
-		ctx.Domain.Cache().MarkOperationActive(opTime)
+		markOperationActiveOnce(ctx, opTime)
 	}
 }
 
@@ -266,13 +299,8 @@ func operationKeysMutexUnlock(ctx *sfPlugins.StatefunContextProcessor) {
 		}
 		ctx.Payload.RemoveByPath("__key_locks")
 	}
-	// Completion marking is deliberately DECOUPLED from the lock records:
-	// __key_lock_time is a flat field that always parses, and it is set exactly
-	// when MarkOperationActive was called — so even a bookkeeping bug that
-	// loses a lock record can orphan at most that one lock, never the
-	// activeOps entry (an orphaned entry wedges the WAL publisher forever).
-	// The field is consumed so repeated lock/unlock pairs within one handler
-	// stay symmetric.
+	// Completion is independent of lock-record parsing. The flat field is
+	// consumed once; child forwarding strips it and repeated lock passes reuse it.
 	if opTime, ok := ctx.Payload.GetByPath("__key_lock_time").AsInt64(); ok {
 		ctx.Domain.Cache().MarkOperationDone(opTime)
 		ctx.Payload.RemoveByPath("__key_lock_time")

@@ -7,7 +7,7 @@
 #   --mode quick     W=2 M=8 cycles, small workloads (default; smoke, ~15-20 min for 'all')
 #   --mode full      W=5 M=20 cycles, 3x workloads, tighter floors — the "3-sigma claim" run
 #   --mode soak      dispatch to scripts/run-soak-tests.sh --scenario leak-hunt (docker)
-#   --scenario NAME  s0..s12, 'core' (s0 s1 s2 s5 s9), or 'all' (default)
+#   --scenario NAME  s0..s14, 'core' (s0 s1 s2 s5 s9), or 'all' (default)
 #   --results DIR    artifacts root (default tests/leak/_results/leak-<UTC>/)
 #   --race           run the Go suite under the race detector
 #
@@ -87,6 +87,7 @@ rx_for() {
     s11) echo '^TestS11ExportSessions$' ;;
     s12) echo '^TestS12KVGrowthReport$' ;;
     s13) echo '^TestS13SaltedHLChurn$' ;;
+    s14) echo '^TestS14TrashCanRestore$' ;;
     core) echo '^(TestS0PlantedLeakIsFlagged|TestS0ControlIsClean|TestS1LLCrudChurn|TestS2CMDBObjectChurn|TestS5JPGQL|TestS9CacheStore)$' ;;
     all) echo '^TestS[0-9]' ;;
     *) return 1 ;;
@@ -99,9 +100,9 @@ rx_for() {
 # process per scenario = clean baselines, zero cross-contamination. The test
 # binary is compiled once and reused by go test's build cache.
 case "$SCENARIO" in
-  all)  SCEN_LIST="s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11 s12 s13" ;;
+  all)  SCEN_LIST="s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11 s12 s13 s14" ;;
   core) SCEN_LIST="s0 s1 s2 s5 s9" ;;
-  *)    rx_for "$SCENARIO" >/dev/null || { echo "unknown scenario: $SCENARIO (s0..s12|core|all)"; exit 2; }
+  *)    rx_for "$SCENARIO" >/dev/null || { echo "unknown scenario: $SCENARIO (s0..s14|core|all)"; exit 2; }
         SCEN_LIST="$SCENARIO" ;;
 esac
 
