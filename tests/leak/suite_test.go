@@ -151,6 +151,15 @@ func (s *leakSuite) collectCore(smp *Sample) {
 	smp.Custom["cache_tombstones"] = float64(st.Tombstones)
 	smp.Custom["cache_pending_txs"] = float64(st.PendingTxs)
 	smp.Custom["cache_active_ops"] = float64(st.ActiveOps)
+	// CSV-only diagnostics (deliberately NOT in coreMetrics). The two ages are
+	// time-dependent, and AssertStable demands an exact zero delta; they are
+	// here so a failing run's samples.csv says whether the WAL was merely busy
+	// (backlog deep but young) or wedged (backlog old and getting older).
+	// cache_wal_publish_errors is a genuine signal and a candidate for
+	// promotion to coreMetrics once a full run confirms it sits at 0.
+	smp.Custom["cache_oldest_pending_age_ns"] = float64(st.OldestPendingAgeNs)
+	smp.Custom["cache_oldest_active_op_age_ns"] = float64(st.OldestActiveOpAgeNs)
+	smp.Custom["cache_wal_publish_errors"] = float64(st.WALPublishErrors)
 	smp.Custom["graph_keymutex_entries"] = float64(crud.GraphKeyMutexEntriesForTest())
 	// EVERY process-global crud cache is under an invariant. Lesson learned
 	// the hard way: a per-entry structural leak (one sync.Map record per

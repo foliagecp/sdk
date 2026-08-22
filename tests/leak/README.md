@@ -113,10 +113,11 @@ Env knobs: `LEAK_WARMUP`, `LEAK_CYCLES`, `LEAK_SCALE`,
 | S11 | `TestS11ExportSessions` | chunked exports: completed + abandoned, TTL drain | PASS |
 | S12 | `TestS12KVGrowthReport` | NATS-side KV/stream growth under fresh-id churn + delete-marker purge check | REPORT + PASS |
 | S13 | `TestS13SaltedHLChurn` | HL CRUD (object create/read/delete, types.link upsert-update) driven entirely through salted ids with fresh salts per call; born from the salted type-edge cache leak | PASS |
+| S14 | `TestS14TrashCanRestore` | trash-can RESTORE churn: create → park (`object.delete`) → re-create, through BOTH restore entry points (plain create and the upsert diversion), then purge | PASS |
 
 ## Fixed findings (probes are green regression guards)
 
-Six leaks were found by this suite and fixed; each probe asserts the DESIRED
+Seven leaks were found by this suite and fixed; each probe asserts the DESIRED
 behavior, so a regression turns exactly one known check red again. **Any red
 check is a leak** — either a regression of the findings below or a new one.
 
@@ -129,6 +130,7 @@ check is a leak** — either a regression of the findings below or a new one.
 | **L4** | `s9_force_retarget / cache tree` | `force=true` retarget stranded the old target's `ltype`/`in` keys; force is now an atomic replace (old link's keys dropped first) |
 | **L5** | `s9_orphan_outto / cache tree` | a link missing `out.to` was permanently undeletable; delete paths now recover the target from the ltype family (key encodes type+target) |
 | **L6** | `s8_dotted_id / keymutex, active_ops, pending_txs` | a dotted id leaked a permanently write-locked KeyMutex entry AND orphaned an activeOps entry, wedging the WAL publisher for good; ids are validated on create, lock records are hash-keyed (parse-proof), completion marking is decoupled from lock records |
+| **L7** | `s14_trashcan_restore / active_ops, pending_txs` | restoring a parked object marked the same operation active twice but unlocked once, orphaning `activeOps` and wedging WAL publishing. Per-handler marking is now at-most-once, and lock-time bookkeeping is stripped from child payloads so a child cannot complete its parent's mark |
 
 NATS-side tombstone growth (S12) is also reclaimed: the active instance's
 maintenance loop purges KV delete markers periodically
@@ -150,8 +152,15 @@ evicts). Parking is by design and bounded by retention, so it is not a leak, but
 a cycle that stops after the object delete leaves the object (and its function
 contexts) behind and ends up measuring the bin filling up. Use
 `s.purgeObject(id)`, or issue the vertex delete explicitly where the calls are
-batched or salted. A cascade (`type.delete`) parks the type's objects the same
-way. Keep the whole warmup+measure loop
+batched or salted.
+
+That convention is also why the trash-can RESTORE path shipped unguarded: purging
+straight after the delete means no scenario ever re-creates a PARKED id, so
+`restoreObjectFromTrashCan` ran in none of them (finding **L7**). **S14** is the
+deliberate exception — it inserts the restore BETWEEN the park and the purge, so
+the cycle still ends at baseline while covering the path. If you add a scenario
+touching parked objects, consider whether it should re-create one. A cascade
+(`type.delete`) parks the type's objects the same way. Keep the whole warmup+measure loop
 inside a single `Test` method — the harness rebuilds the runtime per method.
 Assert with `rep.AssertClean` (heap+goroutines), `s.assertCoreStable(rep)`
 and `rep.AssertStable(t, metric)` for scenario counters;

@@ -153,10 +153,18 @@ func trashCanEdgeInfo(ctx *sfPlugins.StatefunContextProcessor, selfID string) (o
 // is flagged with a WARNING — an object's identity carries its type, so this
 // usually means the id got reused or the model changed underneath the user.
 //
-// Caller (createObjectInline) holds the object's write lock; the trash links
-// are removed under additional per-edge write locks accumulated into the same
-// lock set (released by the caller's operationKeysMutexUnlock).
+// createObjectInline (from CreateObject or the UpdateObject upsert path) already
+// holds the object's write lock and activeOps mark. Extra edge locks join that
+// lock set and are released by the caller's single operationKeysMutexUnlock;
+// markOperationActiveOnce prevents this second pass from adding another mark.
 func restoreObjectFromTrashCan(ctx *sfPlugins.StatefunContextProcessor, selfID, requestedType string, incomingBody *easyjson.JSON, opTime int64) {
+	// Without the caller's mark, the edge locks below belong to no unlock.
+	if _, held := operationActiveMarkState(ctx.Payload); !held {
+		lg.Logf(lg.WarnLevel,
+			"trash can restore: object %s restored without the caller's write lock and operation mark; the edge locks taken here will be released by nobody",
+			selfID)
+	}
+
 	trashType := trashCanTypeID(ctx)
 	linkName := ctx.Domain.GetObjectIDWithoutDomain(selfID)
 
