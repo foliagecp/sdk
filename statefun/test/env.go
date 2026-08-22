@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"testing"
 	"time"
 
 	"github.com/foliagecp/easyjson"
@@ -30,6 +31,8 @@ var (
 var RuntimeConfigMutatorForTest func(*statefun.RuntimeConfig)
 
 type statefunTestEnvironment struct {
+	skipQuiesceCheck bool
+
 	srv         *server.Server
 	runtime     *statefun.Runtime
 	runtimeCfg  *statefun.RuntimeConfig
@@ -104,6 +107,58 @@ func (env *statefunTestEnvironment) StartRuntime() error {
 
 func (env *statefunTestEnvironment) Runtime() *statefun.Runtime {
 	return env.runtime
+}
+
+// quiesceCheckTimeout bounds the wait for the last operation to let go of the
+// barrier. A handler releases its mark before it answers, so a healthy test is
+// quiesced the moment its last call returns; the wait exists for the triggers
+// and signals a call dispatches on its way out.
+const quiesceCheckTimeout = 5 * time.Second
+
+// AllowInFlightOpsOnTeardown switches the WAL-barrier invariant off for a test
+// that deliberately leaves an operation unfinished — fault injection, a handler
+// aborted mid-write, a runtime killed while it works. Call it inside the test.
+func (env *statefunTestEnvironment) AllowInFlightOpsOnTeardown() {
+	env.skipQuiesceCheck = true
+}
+
+// requireCacheQuiesced asserts what every write path owes the cache: once the
+// last operation has answered, no activeOps mark is left behind.
+//
+// A mark is what holds the WAL write barrier — the publisher refuses to write
+// any transaction not older than the oldest in-flight operation, so ONE leaked
+// mark stops it for good: the graph keeps serving reads from memory while
+// nothing reaches the KV any more, and everything since the leak dies with the
+// process. A trash-can restore leaked exactly one such mark (two lock passes,
+// one unlock) and no test noticed, because each of them asked whether the graph
+// looked right, not whether the barrier was released.
+//
+// Living in the shared teardown is the point: a write path added tomorrow
+// cannot forget to be checked.
+func (env *statefunTestEnvironment) requireCacheQuiesced(t *testing.T) {
+	if env.skipQuiesceCheck || env.runtimeDone == nil || env.runtime == nil {
+		return // never started, or a test that owns the exception
+	}
+	cache := env.runtime.Domain.Cache()
+	if cache == nil {
+		return
+	}
+
+	deadline := time.Now().Add(quiesceCheckTimeout)
+	for {
+		st := cache.StatsForTest()
+		if st.ActiveOps == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Errorf("WAL barrier still held after the test: %d in-flight operation(s), oldest %s old — "+
+				"an operation took its lock and never released the mark, so the WAL publisher is wedged "+
+				"(call AllowInFlightOpsOnTeardown if this test aborts an operation on purpose)",
+				st.ActiveOps, time.Duration(st.OldestActiveOpAgeNs))
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // NatsURL is the address of the embedded broker. Several applications sharing

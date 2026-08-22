@@ -12,5 +12,7 @@ func (s *StatefunTestSuite) SetupTest() {
 }
 
 func (s *StatefunTestSuite) AfterTest(suiteName, testName string) {
+	// Before the runtime goes down: every mark that was opened must be closed.
+	s.requireCacheQuiesced(s.T())
 	s.Stop()
 }
