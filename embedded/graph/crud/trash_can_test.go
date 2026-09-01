@@ -249,6 +249,8 @@ func (s *TrashCanTestSuite) Test_RestoreUnderDifferentType_WarnsButRestores() {
 // physically evicted, while a freshly parked one survives — the count cap is
 // left wide open so only the age dimension can be responsible.
 func (s *TrashCanTestSuite) Test_RetentionAge_EvictsExpired() {
+	crud.SetTrashCanWakeDebounceForTest(10 * time.Millisecond) // before StartRuntime
+	defer crud.SetTrashCanWakeDebounceForTest(time.Second)
 	s.boot()
 	crud.SetTrashCanMaxAgeForTest(150 * time.Millisecond)
 	defer crud.SetTrashCanMaxAgeForTest(7 * 24 * time.Hour)
@@ -262,10 +264,12 @@ func (s *TrashCanTestSuite) Test_RetentionAge_EvictsExpired() {
 	time.Sleep(250 * time.Millisecond)
 	s.NoError(s.cmdb.ObjectDelete("tage_new")) // fresh
 
-	// Any parking runs the retention pass; tage_old is now over the age.
+	// Any parking WAKES the retention pass (it does not run it inline — that is
+	// what made a mass cleanup quadratic), so the eviction lands shortly after.
 	s.NoError(s.cmdb.ObjectDelete("tage_trigger"))
 
-	s.False(s.vertexExists("tage_old"), "a parked object past the retention age must be evicted")
+	s.Eventuallyf(func() bool { return !s.vertexExists("tage_old") }, 20*time.Second, 20*time.Millisecond,
+		"a parked object past the retention age must be evicted")
 	s.False(s.typeHoldsObject(crud.BUILT_IN_TRASH_CAN, "tage_old"))
 	s.True(s.vertexExists("tage_new"), "a freshly parked object must survive the age pass")
 	s.True(s.typeHoldsObject(crud.BUILT_IN_TRASH_CAN, "tage_new"))
@@ -297,6 +301,12 @@ func (s *TrashCanTestSuite) Test_RetentionAge_PeriodicSweepWithoutTraffic() {
 // retention pass: with 3 expired objects and a batch of 1, a single pass evicts
 // exactly one, and the remainder is picked up by subsequent passes.
 func (s *TrashCanTestSuite) Test_EvictBatchSize_BoundsOneRunAndDefersRest() {
+	// Only wake-driven passes: the periodic one is parked an hour away, so each
+	// parking below accounts for exactly one retention pass.
+	crud.SetTrashCanSweepIntervalForTest(time.Hour)
+	defer crud.SetTrashCanSweepIntervalForTest(300 * time.Second)
+	crud.SetTrashCanWakeDebounceForTest(10 * time.Millisecond)
+	defer crud.SetTrashCanWakeDebounceForTest(time.Second)
 	s.boot()
 	crud.SetTrashCanMaxAgeForTest(100 * time.Millisecond)
 	defer crud.SetTrashCanMaxAgeForTest(7 * 24 * time.Hour)
@@ -324,19 +334,27 @@ func (s *TrashCanTestSuite) Test_EvictBatchSize_BoundsOneRunAndDefersRest() {
 		return n
 	}
 
-	// Each parking runs exactly one retention pass → at most one eviction.
+	// Each parking wakes exactly one retention pass → at most one eviction per
+	// parking, and the remainder waits for the next pass rather than turning one
+	// run into an eviction storm.
+	waitAlive := func(n int, what string) {
+		s.Eventuallyf(func() bool { return alive() == n }, 20*time.Second, 20*time.Millisecond, what)
+		s.Equalf(n, alive(), "%s (and no pass may run ahead of its wake-up)", what)
+	}
 	s.NoError(s.cmdb.ObjectDelete("tbat_trig1"))
-	s.Equal(2, alive(), "a single pass with batch=1 must evict exactly one expired object")
+	waitAlive(2, "a single pass with batch=1 must evict exactly one expired object")
 	s.NoError(s.cmdb.ObjectDelete("tbat_trig2"))
-	s.Equal(1, alive(), "the second pass evicts the next one")
+	waitAlive(1, "the second pass evicts the next one")
 	s.NoError(s.cmdb.ObjectDelete("tbat_trig3"))
-	s.Equal(0, alive(), "the deferred remainder is picked up by later passes")
+	waitAlive(0, "the deferred remainder is picked up by later passes")
 }
 
 // Capacity: parking beyond OBJECT_TRASH_CAN_MAX_OBJECTS evicts the OLDEST
 // parked object (physically) and logs it. The age dimension is disabled so only
 // the count cap can be responsible.
 func (s *TrashCanTestSuite) Test_Capacity_EvictsOldest() {
+	crud.SetTrashCanWakeDebounceForTest(10 * time.Millisecond) // before StartRuntime
+	defer crud.SetTrashCanWakeDebounceForTest(time.Second)
 	s.boot()
 	crud.SetTrashCanMaxObjectsForTest(2)
 	defer crud.SetTrashCanMaxObjectsForTest(10000)
@@ -356,10 +374,54 @@ func (s *TrashCanTestSuite) Test_Capacity_EvictsOldest() {
 	time.Sleep(5 * time.Millisecond)
 	s.NoError(s.cmdb.ObjectDelete("tcap3")) // pushes the bin to 3 > cap 2 → evict tcap1
 
-	s.False(s.vertexExists("tcap1"), "the oldest parked object must be physically evicted")
+	s.Eventuallyf(func() bool { return !s.vertexExists("tcap1") }, 20*time.Second, 20*time.Millisecond,
+		"the oldest parked object must be physically evicted")
 	s.True(s.vertexExists("tcap2"), "newer parked objects survive")
 	s.True(s.vertexExists("tcap3"))
 	s.False(s.typeHoldsObject(crud.BUILT_IN_TRASH_CAN, "tcap1"))
 	s.True(s.typeHoldsObject(crud.BUILT_IN_TRASH_CAN, "tcap2"))
 	s.True(s.typeHoldsObject(crud.BUILT_IN_TRASH_CAN, "tcap3"))
+}
+
+// Neither parking nor restoring may READ the bin.
+//
+// Retention starts by listing every parked object, and a list is O(parked) —
+// so a delete that enforces retention makes each delete pay for all the
+// deletions before it: a cleanup of N objects costs O(N²), and parking measured
+// 165µs on an empty bin against 5.9ms with 2500 objects in it. The listing
+// belongs to the sweep, off the request path.
+//
+// Counted, not timed: a timing assertion on a loaded machine proves nothing,
+// while the number of parked entries the listing walked is exact.
+func (s *TrashCanTestSuite) Test_ParkAndRestoreNeverReadTheBin() {
+	// Keep every scheduled pass out of the measurement window: an hour to the
+	// periodic sweep, an hour before a woken one may start.
+	crud.SetTrashCanSweepIntervalForTest(time.Hour)
+	defer crud.SetTrashCanSweepIntervalForTest(300 * time.Second)
+	crud.SetTrashCanWakeDebounceForTest(time.Hour)
+	defer crud.SetTrashCanWakeDebounceForTest(time.Second)
+	s.boot()
+	s.NoError(s.cmdb.TypeCreate("tc_scan_t"))
+
+	// A bin with something in it, so a scan would have something to walk.
+	const parked = 25
+	for i := 0; i < parked; i++ {
+		id := fmt.Sprintf("tcscan_bg%d", i)
+		s.NoError(s.cmdb.ObjectCreate(id, "tc_scan_t", usrBody("h", "x")))
+		s.NoError(s.cmdb.ObjectDelete(id))
+	}
+
+	scannedBefore := crud.TrashCanEntriesScannedForTest()
+
+	const measured = 10
+	for i := 0; i < measured; i++ {
+		id := fmt.Sprintf("tcscan_m%d", i)
+		s.NoError(s.cmdb.ObjectCreate(id, "tc_scan_t", usrBody("h", "y")))
+		s.NoError(s.cmdb.ObjectDelete(id))                                  // park
+		s.NoError(s.cmdb.ObjectCreate(id, "tc_scan_t", usrBody("h2", "y"))) // restore
+		s.NoError(s.cmdb.ObjectDelete(id))                                  // park again
+	}
+
+	s.Equalf(scannedBefore, crud.TrashCanEntriesScannedForTest(),
+		"%d parkings and %d restores walked the bin — the request path must never list it", measured*2, measured)
 }

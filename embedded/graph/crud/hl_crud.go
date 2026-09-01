@@ -674,7 +674,7 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 			executeMetaTriggersFromLLOpStack(ctx, &triggerStack, selfID, objectType)
 		}
 
-		enforceTrashCanRetentionFromStatefun(ctx)
+		signalTrashCanRetention(ctx.Domain)
 		replyWithoutOpStack(om, ctx)
 		return
 	}

@@ -39,6 +39,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -72,19 +73,41 @@ var (
 	// so a lowered cap or a long outage cannot turn a single run into a storm;
 	// the remainder is logged and picked up by the next sweep.
 	trashCanEvictBatchSizeV atomic.Int64
+	// trashCanWakeDebounceNs is how closely two sweeps woken by parking may
+	// follow each other (env OBJECT_TRASH_CAN_WAKE_DEBOUNCE_MS, default 1s).
+	// A parking only WAKES the sweep, so a mass cleanup of N objects costs N
+	// wake-ups and a handful of sweeps instead of N scans of a growing bin.
+	trashCanWakeDebounceNs atomic.Int64
 )
+
+// trashCanEntriesScanned counts the parked entries the retention listing has
+// walked, process-wide. It is what lets a test pin WHERE that walk is allowed
+// to happen — on the sweep, never on the delete or the restore path — without
+// measuring time, which on a loaded machine says nothing.
+var trashCanEntriesScanned atomic.Int64
+
+// TrashCanEntriesScannedForTest reports that counter.
+func TrashCanEntriesScannedForTest() int64 { return trashCanEntriesScanned.Load() }
+
+// trashCanWakeChans holds the wake channel of each domain's retention sweep,
+// keyed by domain name. A parking signals into it; the sweep owns it for as
+// long as it runs. Absent means nobody is sweeping this domain (both retention
+// dimensions disabled), and then parking signals nothing at all.
+var trashCanWakeChans sync.Map
 
 func init() {
 	trashCanMaxAgeNs.Store(int64(time.Duration(system.GetEnvMustProceed[int]("OBJECT_TRASH_CAN_MAX_AGE_SEC", 7*24*3600)) * time.Second))
 	trashCanMaxObjectsV.Store(int64(system.GetEnvMustProceed[int]("OBJECT_TRASH_CAN_MAX_OBJECTS", 10000)))
 	trashCanSweepIntervalNs.Store(int64(time.Duration(system.GetEnvMustProceed[int]("OBJECT_TRASH_CAN_SWEEP_INTERVAL_SEC", 300)) * time.Second))
 	trashCanEvictBatchSizeV.Store(int64(system.GetEnvMustProceed[int]("OBJECT_TRASH_CAN_EVICT_BATCH_SIZE", 64)))
+	trashCanWakeDebounceNs.Store(int64(time.Duration(system.GetEnvMustProceed[int]("OBJECT_TRASH_CAN_WAKE_DEBOUNCE_MS", 1000)) * time.Millisecond))
 }
 
 func trashCanMaxAge() time.Duration        { return time.Duration(trashCanMaxAgeNs.Load()) }
 func trashCanMaxObjects() int              { return int(trashCanMaxObjectsV.Load()) }
 func trashCanSweepInterval() time.Duration { return time.Duration(trashCanSweepIntervalNs.Load()) }
 func trashCanEvictBatchSize() int          { return int(trashCanEvictBatchSizeV.Load()) }
+func trashCanWakeDebounce() time.Duration  { return time.Duration(trashCanWakeDebounceNs.Load()) }
 
 // SetTrashCanMaxObjectsForTest overrides the trash can capacity for tests.
 func SetTrashCanMaxObjectsForTest(n int) { trashCanMaxObjectsV.Store(int64(n)) }
@@ -99,6 +122,10 @@ func SetTrashCanSweepIntervalForTest(d time.Duration) { trashCanSweepIntervalNs.
 // SetTrashCanEvictBatchSizeForTest overrides the per-run eviction cap for tests
 // (<= 0 means unbounded).
 func SetTrashCanEvictBatchSizeForTest(n int) { trashCanEvictBatchSizeV.Store(int64(n)) }
+
+// SetTrashCanWakeDebounceForTest overrides how quickly a parking-woken sweep may
+// follow the previous one.
+func SetTrashCanWakeDebounceForTest(d time.Duration) { trashCanWakeDebounceNs.Store(int64(d)) }
 
 func trashCanTypeID(ctx *sfPlugins.StatefunContextProcessor) string {
 	return ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TRASH_CAN, false)
@@ -220,6 +247,8 @@ func listTrashCanEntries(dm sfPlugins.Domain) []trashCanEntry {
 	trashType := dm.CreateObjectIDWithHubDomain(BUILT_IN_TRASH_CAN, false)
 	keys := dm.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, trashType, ">"))
 
+	trashCanEntriesScanned.Add(int64(len(keys)))
+
 	entries := make([]trashCanEntry, 0, len(keys))
 	for _, key := range keys {
 		toks := strings.Split(key, ".")
@@ -316,14 +345,29 @@ func enforceTrashCanRetention(dm sfPlugins.Domain, request sfPlugins.SFRequestFu
 	}
 }
 
-// enforceTrashCanRetentionFromStatefun runs the retention from inside a CRUD
-// handler (the parking path). Eviction targets a DIFFERENT object than the one
-// being handled, so its id is made sequence-free the usual way to keep the
-// nested delete off this handler's per-id worker.
-func enforceTrashCanRetentionFromStatefun(ctx *sfPlugins.StatefunContextProcessor) {
-	enforceTrashCanRetention(ctx.Domain, ctx.Request,
-		func(objectID string) string { return makeSequenceFreeParentBasedID(ctx, objectID, "trashevict") },
-		system.GetCurrentTimeNs())
+// signalTrashCanRetention tells this domain's sweep that the bin just grew.
+//
+// A parking must NOT enforce retention itself. Enforcement starts by listing
+// the bin, and a list is O(parked) — so a delete that enforces makes every
+// delete pay for all the deletions before it, and a cleanup of N objects costs
+// O(N²): parking measured 165µs on an empty bin and 5.9ms with 2500 objects in
+// it, on the very same operation. The bin is read by the sweep, off the request
+// path; a parking only wakes it (a non-blocking send, no allocation, no lock),
+// and the sweep coalesces a burst of wake-ups into one pass.
+//
+// Cost of the delay: the count dimension is enforced within a debounce window
+// instead of instantly, so a burst can overshoot the cap for about a second.
+// The cap bounds unbounded GROWTH; it was never a hard invariant, and paying
+// for it per delete is what made mass cleanups quadratic.
+func signalTrashCanRetention(dm sfPlugins.Domain) {
+	v, ok := trashCanWakeChans.Load(dm.Name())
+	if !ok {
+		return // nobody sweeps this domain — both dimensions are disabled
+	}
+	select {
+	case v.(chan struct{}) <- struct{}{}:
+	default: // a wake-up is already pending; one is enough
+	}
 }
 
 // trashCanRetentionSweep starts the periodic retention sweep of this domain's
@@ -339,23 +383,58 @@ func trashCanRetentionSweep(ctx context.Context, runtime *statefun.Runtime) erro
 	if trashCanMaxAge() <= 0 && trashCanMaxObjects() <= 0 {
 		return nil // both dimensions disabled — nothing to sweep
 	}
+	wake := make(chan struct{}, 1)
+	domainName := runtime.Domain.Name()
+	trashCanWakeChans.Store(domainName, wake)
+
 	go func() {
 		system.GlobalPrometrics.GetRoutinesCounter().Started("crud_trash_can_sweep")
 		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("crud_trash_can_sweep")
+		// Delete only OUR channel: several runtimes of one domain can share a
+		// process (a second application attaching to the same graph), and the
+		// later sweep's registration must not be dropped by the earlier one.
+		defer trashCanWakeChans.CompareAndDelete(domainName, wake)
 
 		ticker := time.NewTicker(trashCanSweepInterval())
 		defer ticker.Stop()
+
+		var lastRun time.Time
+		run := func() {
+			if ctx.Err() != nil || !runtime.IsActiveInstance() {
+				return
+			}
+			enforceTrashCanRetention(runtime.Domain, runtime.Request,
+				func(objectID string) string { return objectID },
+				system.GetCurrentTimeNs())
+			lastRun = time.Now()
+		}
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if ctx.Err() != nil || !runtime.IsActiveInstance() {
-					continue
+				run()
+			case <-wake:
+				// A parking woke us. Wait out the debounce window first: a mass
+				// cleanup signals once per deleted object, and scanning the bin
+				// after each of them is the quadratic behaviour this wake-up
+				// replaced. Whatever else arrives meanwhile is coalesced into
+				// this one pass.
+				if d := trashCanWakeDebounce() - time.Since(lastRun); d > 0 {
+					timer := time.NewTimer(d)
+					select {
+					case <-ctx.Done():
+						timer.Stop()
+						return
+					case <-timer.C:
+					}
 				}
-				enforceTrashCanRetention(runtime.Domain, runtime.Request,
-					func(objectID string) string { return objectID },
-					system.GetCurrentTimeNs())
+				select { // drain a signal that arrived during the wait
+				case <-wake:
+				default:
+				}
+				run()
 			}
 		}
 	}()
