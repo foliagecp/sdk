@@ -169,6 +169,64 @@ func KeyMutexLockUpdate(ctx context.Context, runtime *Runtime, key string, lockR
 	return revId, nil
 }
 
+// lockRefreshAttemptTimeout bounds ONE attempt to refresh the runtime lock
+// (env RUNTIME_LOCK_ATTEMPT_TIMEOUT_SEC, default 1s).
+//
+// The refresh is two KV calls, and each waits on the JetStream API — whose
+// timeout is sized for data operations under saturation, several seconds. One
+// slow call then consumed the whole tolerance window and the instance stepped
+// down while it still held the lock. An attempt that takes longer than this is
+// not worth waiting for: there is time for another before the window closes.
+func lockRefreshAttemptTimeout() time.Duration {
+	return time.Duration(system.GetEnvMustProceed("RUNTIME_LOCK_ATTEMPT_TIMEOUT_SEC", 1)) * time.Second
+}
+
+// lockRefreshAttemptTimeoutFor bounds one attempt so that at least two fit in a
+// tick. A configured timeout longer than half the tick would make "retry within
+// the tick" a promise the arithmetic cannot keep — on a short lock lifetime the
+// tick itself is short.
+func lockRefreshAttemptTimeoutFor(tick time.Duration) time.Duration {
+	timeout := lockRefreshAttemptTimeout()
+	if half := tick / 2; half > 0 && timeout > half {
+		return half
+	}
+	return timeout
+}
+
+// KeyMutexLockUpdateWithRetries refreshes the lock, retrying short attempts
+// until the deadline. It returns as soon as the answer is meaningful:
+//
+//	success            — the lock is ours for another TTL;
+//	genuine loss       — someone else holds it, or it was released: the caller
+//	                     must step down at once, and no retry can change that;
+//	deadline exhausted — the last transient error, for the caller to weigh
+//	                     against its tolerance window.
+//
+// Retrying inside the tick is what makes a slow KV survivable: a refresh that
+// used to be one attempt against a saturated JetStream is now several.
+func KeyMutexLockUpdateWithRetries(ctx context.Context, runtime *Runtime, key string, lockRevisionID uint64, attemptTimeout time.Duration, deadline time.Time) (uint64, int, error) {
+	var lastErr error
+	for attempt := 1; ; attempt++ {
+		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
+		started := time.Now()
+		revID, err := KeyMutexLockUpdate(attemptCtx, runtime, key, lockRevisionID)
+		cancel()
+		runtime.recordLockRefreshLatency(time.Since(started), err == nil)
+
+		if err == nil {
+			return revID, attempt, nil
+		}
+		lastErr = err
+		// Someone else's revision, or an unlocked mutex: the answer is final.
+		if errors.Is(err, ErrMutexRevisionViolated) || strings.Contains(err.Error(), "already unlocked") {
+			return 0, attempt, err
+		}
+		if ctx.Err() != nil || !time.Now().Before(deadline) {
+			return 0, attempt, lastErr
+		}
+	}
+}
+
 func KeyMutexUnlock(ctx context.Context, runtime *Runtime, key string, lockRevisionID uint64) error {
 	le := lg.GetLogger()
 	kv := runtime.Domain.kv

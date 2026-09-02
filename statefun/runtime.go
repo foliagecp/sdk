@@ -71,6 +71,11 @@ type Runtime struct {
 	functionsStopCh              chan struct{}
 	wg                           sync.WaitGroup
 	afterStartFunctionsWaitGroup sync.WaitGroup
+
+	// Runtime-lock refresh observability: the latency of the last successful
+	// attempt and how many attempts have failed. See recordLockRefreshLatency.
+	lockRefreshLatencyNs atomic.Int64
+	lockRefreshFailures  atomic.Int64
 	afterStartRunning            atomic.Bool
 	activeInstanceMu             sync.RWMutex
 
@@ -1026,10 +1031,50 @@ func (r *Runtime) reportPerformanceMetrics() {
 	}
 }
 
+// recordLockRefreshLatency exports how long one attempt to refresh the runtime
+// lock took, and whether it succeeded.
+//
+// This is the measurement the decision about a separate control plane rests on:
+// if refresh latency tracks the write rate of DATA, the lock is queued behind
+// data operations in the same bucket and on the same connection, and no amount
+// of retrying fixes that. Without the number, that decision is a guess.
+func (r *Runtime) recordLockRefreshLatency(d time.Duration, ok bool) {
+	seconds := d.Seconds()
+	if gv, err := system.GlobalPrometrics.EnsureGaugeVecSimple(
+		"runtime_lock_refresh_seconds",
+		"Duration of the last attempt to refresh the runtime lock (seconds)",
+		[]string{"id", "result"}); err == nil {
+		result := "ok"
+		if !ok {
+			result = "error"
+		}
+		gv.With(prometheus.Labels{"id": r.config.name, "result": result}).Set(seconds)
+	}
+	if !ok {
+		r.lockRefreshFailures.Add(1)
+	} else {
+		r.lockRefreshLatencyNs.Store(d.Nanoseconds())
+	}
+}
+
+// LockRefreshStatsForTest reports the last successful refresh latency and the
+// number of failed attempts, for tests and diagnostics.
+func (r *Runtime) LockRefreshStatsForTest() (lastLatency time.Duration, failures int64) {
+	return time.Duration(r.lockRefreshLatencyNs.Load()), r.lockRefreshFailures.Load()
+}
+
 // runtimeLifecycleUpdater periodically updates runtime/function locks and lifecycle hooks
 func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[string]uint64) {
 	defer r.wg.Done()
-	ticker := time.NewTicker(time.Duration(r.config.kvMutexLifeTimeSec) / 2 * time.Second)
+	// Tick at a QUARTER of the lock's lifetime: the refresh then has three
+	// chances inside one lifetime instead of one, and a single slow KV call
+	// stops being the difference between holding the lock and stepping down.
+	lockTTL := time.Duration(r.config.kvMutexLifeTimeSec) * time.Second
+	tick := lockTTL / 4
+	if tick <= 0 {
+		tick = time.Second
+	}
+	ticker := time.NewTicker(tick)
 	defer ticker.Stop()
 
 	//release all functions
@@ -1055,7 +1100,12 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 	// (see KeyMutexLock: a lock is stealable once lockTime+kvMutexLifeTimeSec<now),
 	// so that is exactly when we MUST step down to avoid split-brain.
 	lastRuntimeLockRefresh := time.Now()
-	lockSoftTTL := time.Duration(r.config.kvMutexLifeTimeSec) * time.Second
+	// Step down BEFORE the lock becomes stealable, not at the moment it does.
+	// KeyMutexLock lets another instance seize a lock once lockTime+TTL < now;
+	// tolerating right up to TTL meant the decision to demote was taken exactly
+	// when someone else could already be active — a window in which both
+	// believe they are. Three quarters leaves the last quarter as the margin.
+	lockSoftTTL := lockTTL * 3 / 4
 
 	becomePassive := func(cause string) {
 		lg.Logf(lg.WarnLevel, "%s, becoming passive", cause)
@@ -1102,7 +1152,14 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 			if r.config.activePassiveMode {
 				// Refresh runtime lock if held (active or activating)
 				if rev := r.getActiveRevID(); rev != 0 {
-					newRevID, err := KeyMutexLockUpdate(ctx, r, system.GetHashStr(RuntimeName), rev)
+					// Short attempts, repeated until the next tick is due: a
+					// saturated JetStream costs attempts, not the lock.
+					newRevID, attempts, err := KeyMutexLockUpdateWithRetries(
+						ctx, r, system.GetHashStr(RuntimeName), rev,
+						lockRefreshAttemptTimeoutFor(tick), time.Now().Add(tick))
+					if attempts > 1 {
+						lg.Logf(lg.DebugLevel, "runtime lock refresh took %d attempts", attempts)
+					}
 					if err != nil {
 						// Three classes of error, ranked safety-critical first:
 						//
