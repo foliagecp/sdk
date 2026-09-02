@@ -963,7 +963,59 @@ func (cs *Store) PurgeKVDeleteMarkers(olderThan time.Duration) error {
 	return cs.kv.PurgeDeletes(nats.DeleteMarkersOlderThan(olderThan))
 }
 
-func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamContext, kv nats.KeyValue) *Store {
+// initialLoadBudget bounds how long the store keeps retrying its first load
+// from KV before giving up (env CACHE_INITIAL_LOAD_BUDGET_SEC, default 300s).
+// A JetStream that is briefly unavailable at startup — a broker still forming
+// its cluster, a KV whose stream is being created — is normal and worth waiting
+// out; one that stays unavailable is a reason to fail, not to hang.
+func initialLoadBudget() time.Duration {
+	return time.Duration(system.GetEnvMustProceed[int]("CACHE_INITIAL_LOAD_BUDGET_SEC", 300)) * time.Second
+}
+
+// loadWithRetries runs attempt() until it succeeds or the budget runs out,
+// backing off 1, 2, 4 … capped at 30 seconds. It returns the LAST error, so the
+// caller reports why the store never came up rather than "timed out".
+func loadWithRetries(ctx context.Context, budget time.Duration, attempt func() error) error {
+	const (
+		firstBackoff = time.Second
+		maxBackoff   = 30 * time.Second
+	)
+	deadline := time.Now().Add(budget)
+	backoff := firstBackoff
+	for i := 1; ; i++ {
+		err := attempt()
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return fmt.Errorf("initial load from KV aborted after %d attempt(s): %w", i, err)
+		}
+		if !time.Now().Add(backoff).Before(deadline) {
+			return fmt.Errorf("initial load from KV failed after %d attempt(s) within %s: %w", i, budget, err)
+		}
+		lg.Logf(lg.WarnLevel, "initial load from KV failed (attempt %d): %s; retrying in %s", i, err, backoff)
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("initial load from KV aborted after %d attempt(s): %w", i, err)
+		case <-timer.C:
+		}
+		if backoff *= 2; backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
+}
+
+// NewCacheStore builds the store and loads it from KV before returning.
+//
+// It returns an ERROR when that load cannot be completed within the budget.
+// It used to return a Store regardless: a failed load left the init channel
+// open and the constructor blocked forever, so the process stayed alive,
+// answered nothing, and no orchestrator restarted it because nothing had
+// exited. Reporting the failure lets the application decide — and an
+// application that decides to exit gets restarted like any other crash.
+func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamContext, kv nats.KeyValue) (*Store, error) {
 	le := lg.GetLogger()
 	var inited atomic.Bool
 	initChan := make(chan bool)
@@ -995,16 +1047,26 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 	// default - can not publish to WAL
 	cs.walWriteEnabled.Store(false)
 
+	initErrChan := make(chan error, 1)
 	initialLoader := func(cs *Store) {
 		system.GlobalPrometrics.GetRoutinesCounter().Started("cache.initialLoader")
 		defer system.GlobalPrometrics.GetRoutinesCounter().Stopped("cache.initialLoader")
-		if err := cs.loadFromKV(cs.ctx); err != nil {
+		err := loadWithRetries(cs.ctx, initialLoadBudget(), func() error {
+			// Every attempt starts from an empty tree: a previous attempt may
+			// have replayed part of the history before failing, and the replay
+			// is only meaningful whole.
+			cs.rootValue.initRootSharded()
+			return cs.loadFromKV(cs.ctx)
+		})
+		if err != nil {
 			le.Errorf(ctx, "initial load from KV failed: %s", err)
-			return // initChan stays open → NewCacheStore blocks → caller must abort
+			initErrChan <- err
+			return
 		}
 		if inited.CompareAndSwap(false, true) {
 			close(initChan)
 		}
+		initErrChan <- nil
 	}
 	kvLazyWriterWithWAL := func(cs *Store) {
 		system.GlobalPrometrics.GetRoutinesCounter().Started("cache.kvLazyWriter")
@@ -1218,8 +1280,11 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 	}
 	go initialLoader(&cs)
 	go kvLazyWriterWithWAL(&cs)
-	<-initChan
-	return &cs
+	if err := <-initErrChan; err != nil {
+		cs.cancel() // stop the lazy writer this constructor just started
+		return nil, err
+	}
+	return &cs, nil
 }
 
 func (cs *Store) GetValueUpdateTime(key string) int64 {

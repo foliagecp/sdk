@@ -513,7 +513,11 @@ func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDo
 	le := lg.GetLogger()
 
 	le.Trace(ctx, "Initializing the cache store...")
-	dm.cache = cache.NewCacheStore(ctx, cacheConfig, dm.js, dm.kv)
+	store, err := cache.NewCacheStore(ctx, cacheConfig, dm.js, dm.kv)
+	if err != nil {
+		return fmt.Errorf("cache store: %w", err)
+	}
+	dm.cache = store
 	dm.cache.SetTransactionGenerator(dm)
 
 	if err := dm.TransactionCommitter(ctx); err != nil {
