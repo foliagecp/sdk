@@ -236,6 +236,22 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 		statsArray.AddToArray(entry)
 	}
 
+	// Was the answer assembled from everything it was supposed to be assembled
+	// from? A sub-query that was truncated (partial) or did not succeed at all
+	// leaves the intersection narrower than the caller asked for — and only the
+	// OK ones are merged into it at all (see the merge above), so a failed
+	// sub-query used to disappear into stats while the answer came back OK.
+	partial := false
+	for _, s := range allJpgqlCalls {
+		if s.status != sfMediators.OpStatusNames[sfMediators.SYNC_OP_STATUS_OK] ||
+			s.stats.GetByPath("paths_skipped.timeout").AsNumericDefault(0) > 0 ||
+			s.stats.GetByPath("paths_skipped.backpressure").AsNumericDefault(0) > 0 {
+			partial = true
+			break
+		}
+	}
+	strict := ctx.Payload.GetByPath("strict").AsBoolDefault(false) || ctx.Options.GetByPath("strict").AsBoolDefault(false)
+
 	// Running post processing function
 	postProcessorFunc := ctx.Payload.GetByPath("post_processor_func.name").AsStringDefault("")
 	if len(postProcessorFunc) > 0 {
@@ -252,6 +268,13 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 		// whether a post-processor was configured.
 		if ppReply.Status == sfMediators.SYNC_OP_STATUS_OK {
 			ppReply.Data.SetByPath("stats.jpgql_calls", statsArray)
+			// The post-processor works on what the sub-queries produced, so a
+			// narrowed input makes its output narrowed too.
+			ppReply.Data.SetByPath("partial", easyjson.NewJSON(partial))
+			if partial && strict {
+				ppReply = sfMediators.MakeOpMsg(sfMediators.SYNC_OP_STATUS_INCOMPLETE,
+					"query result is partial: a sub-query was truncated or did not succeed", "", ppReply.Data)
+			}
 		}
 		om.AggregateOpMsg(ppReply).Reply()
 		return
@@ -259,6 +282,26 @@ func FoliageProcessingLanguage(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.Stat
 
 	resultJson := easyjson.NewJSONObjectWithKeyValue("uuids", easyjson.NewJSON(resultUUID))
 	resultJson.SetByPath("stats.jpgql_calls", statsArray)
+	resultJson.SetByPath("partial", easyjson.NewJSON(partial))
+
+	if partial && strict {
+		// Strict mode reports incompleteness as a status. Everything failing is
+		// not a partial answer, it is no answer.
+		allFailed := len(allJpgqlCalls) > 0
+		for _, s := range allJpgqlCalls {
+			if s.status == sfMediators.OpStatusNames[sfMediators.SYNC_OP_STATUS_OK] {
+				allFailed = false
+				break
+			}
+		}
+		if allFailed {
+			om.AggregateOpMsg(sfMediators.OpMsgFailed("every sub-query failed")).Reply()
+			return
+		}
+		om.AggregateOpMsg(sfMediators.MakeOpMsg(sfMediators.SYNC_OP_STATUS_INCOMPLETE,
+			"query result is partial: a sub-query was truncated or did not succeed", "", resultJson)).Reply()
+		return
+	}
 	om.AggregateOpMsg(sfMediators.OpMsgOk(resultJson)).Reply()
 }
 

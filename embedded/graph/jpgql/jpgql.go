@@ -132,6 +132,7 @@ Request:
 		newReturnData.SetByPath("stats.times.query_start_nano", easyjson.NewJSON(aggQSTN))
 		newReturnData.SetByPath("stats.times.query_end_nano", easyjson.NewJSON(callTimeNano))
 		newReturnData.SetByPath("stats.duration.max_backpressure_nano", easyjson.NewJSON(retMBPDN))
+		markPartial(&newReturnData)
 
 		newReturnData.SetByPath("stats.duration.query_nano", easyjson.NewJSON(callTimeNano-int64(aggQSTN)))
 		newReturnData.SetByPath("stats.duration.qds_nano", easyjson.NewJSON(retQETN-aggQSTN))
@@ -502,5 +503,40 @@ func JPGQLCallTreeResultAggregation(_ sfPlugins.StatefunExecutor, ctx *sfPlugins
 	result.SetByPath("stats.duration.query_nano", easyjson.NewJSON(qdsEndNano-queryStartedNano))
 	result.SetByPath("stats.duration.qds_nano", easyjson.NewJSON(qdsEndNano-queryStartedNano))
 
+	replyPossiblyPartial(om, ctx, result)
+}
+// markPartial states, at the top level of a result, whether the traversal was
+// cut short — by the query-depth-spreading timeout or by backpressure.
+//
+// Both are already counted in stats.paths_skipped, and both used to be reported
+// as a plain OK: a consumer that did not dig into stats took a truncated answer
+// for the whole truth. The flag is additive and always present, so "absent"
+// never has to be interpreted; the status is unchanged unless the caller asked
+// for strict mode.
+func markPartial(result *easyjson.JSON) {
+	truncated := result.GetByPath("stats.paths_skipped.timeout").AsNumericDefault(0) > 0 ||
+		result.GetByPath("stats.paths_skipped.backpressure").AsNumericDefault(0) > 0
+	result.SetByPath("partial", easyjson.NewJSON(truncated))
+}
+
+// strictRequested reports whether the caller asked for an incomplete result to
+// be reported as a status rather than a flag.
+func strictRequested(ctx *sfPlugins.StatefunContextProcessor) bool {
+	return ctx.Payload.GetByPath("strict").AsBoolDefault(false) ||
+		ctx.Options.GetByPath("strict").AsBoolDefault(false)
+}
+
+// replyPossiblyPartial answers with the result, degrading OK to INCOMPLETE when
+// the traversal was truncated AND the caller asked for strict mode.
+func replyPossiblyPartial(om *sfMediators.OpMediator, ctx *sfPlugins.StatefunContextProcessor, result easyjson.JSON) {
+	markPartial(&result)
+	if result.GetByPath("partial").AsBoolDefault(false) && strictRequested(ctx) {
+		// The existing INCOMPLETE status carries details, not data, so the
+		// result travels as data alongside it.
+		om.AggregateOpMsg(sfMediators.MakeOpMsg(sfMediators.SYNC_OP_STATUS_INCOMPLETE,
+			"query result is partial: the traversal was truncated", "", result)).Reply()
+		return
+	}
 	om.AggregateOpMsg(sfMediators.OpMsgOk(result)).Reply()
 }
+
