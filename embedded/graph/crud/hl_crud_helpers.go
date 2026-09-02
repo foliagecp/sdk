@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/statefun"
@@ -529,10 +530,81 @@ func resolveLinkBetweenTwoObjects(ctx *sfPlugins.StatefunContextProcessor, fromO
 // Picking the "first" key and then checking the claim post-hoc is a
 // non-deterministic bug: the targeted edge can stay in the graph while
 // the call returns idle.
+// linkResolveScannedKeys counts the ltype keys the SCANNING resolver has walked,
+// process-wide. It exists so a test can pin that the ordinary link paths do not
+// scan at all — exactly, and without measuring time.
+var linkResolveScannedKeys atomic.Int64
+
+// LinkResolveScannedKeysForTest reports that counter.
+func LinkResolveScannedKeysForTest() int64 { return linkResolveScannedKeys.Load() }
+
+// resolveLinkBetweenTwoObjectsByName resolves an edge the cheap way: by its
+// NAME, which the caller either supplied or which defaults to the target id
+// (the convention CreateObjectsLink writes with). One key read instead of a
+// walk over every out-link of the from-vertex.
+//
+// The target is VERIFIED: a name is just a name, and a caller may hand one that
+// belongs to an edge pointing somewhere else entirely. A mismatch is a miss, and
+// the caller falls back to the scan, which searches by (from, to) and cannot be
+// fooled that way.
+func resolveLinkBetweenTwoObjectsByName(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId, linkName string) (string, bool) {
+	if linkName == "" {
+		return "", false
+	}
+	linkType, toId, ok := resolveOutLinkByName(ctx, fromObjectId, linkName)
+	if !ok || toId != toObjectId || linkType == "" {
+		return "", false
+	}
+	// A compound type ("<fromClaim>#<toClaim>#<rel>") belongs to the supertype
+	// API, and the supertype create names its edge after the target just like the
+	// base one does — so the default name can land on a claim edge. The base API
+	// must not take it: same rule as the scanning resolver applies here, or the
+	// fast path would reintroduce exactly the wrong-edge defect it was written
+	// alongside.
+	if strings.Contains(linkType, "#") {
+		return "", false
+	}
+	return linkType, true
+}
+
+// resolveObjectsLinkForUpdate finds the base object-link (from → to) the way
+// the update and delete paths need it: by name if the name is known — the
+// caller's, or the default one the create path writes — and only then by the
+// scanning search over the from-vertex's out-links.
+//
+// Both steps answer the same question; they differ in cost. The name is a
+// single key read; the search is O(out-degree of `from`), which on a hub vertex
+// dominates the whole operation.
+func resolveObjectsLinkForUpdate(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId string) (linkName, linkType string, ok bool) {
+	// Candidates, cheapest first, each a single key read whose target is verified:
+	//   1. the name the caller passed;
+	//   2. the target id as the caller writes it (what a client naming its links
+	//      after the target produces — the common convention);
+	//   3. the domain-qualified target id (the default CreateObjectsLink applies
+	//      when the caller names nothing at all).
+	// A wrong guess costs one miss, never a wrong edge.
+	tried := map[string]struct{}{"": {}}
+	for _, name := range []string{
+		ctx.Payload.GetByPath("name").AsStringDefault(""),
+		ctx.Domain.GetObjectIDWithoutDomain(toObjectId),
+		toObjectId,
+	} {
+		if _, seen := tried[name]; seen {
+			continue
+		}
+		tried[name] = struct{}{}
+		if lt, found := resolveLinkBetweenTwoObjectsByName(ctx, fromObjectId, toObjectId, name); found {
+			return name, lt, true
+		}
+	}
+	return resolveLinkBetweenTwoObjects(ctx, fromObjectId, toObjectId)
+}
+
 func resolveLinkBetweenTwoObjectsByTypePrefix(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId, linkTypePrefix string) (string, string, bool) {
 	prefix := fmt.Sprintf(OutLinkTypeKeyPrefPattern, fromObjectId) // "<from>.ltype."
 	suffix := "." + toObjectId
 	keys := ctx.Domain.Cache().GetKeysByPattern(prefix + ">")
+	linkResolveScannedKeys.Add(int64(len(keys)))
 	for _, k := range keys {
 		if !strings.HasPrefix(k, prefix) || !strings.HasSuffix(k, suffix) {
 			continue
@@ -541,7 +613,15 @@ func resolveLinkBetweenTwoObjectsByTypePrefix(ctx *sfPlugins.StatefunContextProc
 		if linkType == "" {
 			continue
 		}
-		if linkTypePrefix != "" && !strings.HasPrefix(linkType, linkTypePrefix) {
+		if linkTypePrefix == "" {
+			// The BASE object-link API asks with no prefix, and a compound type
+			// ("<fromClaim>#<toClaim>#<rel>") belongs to the supertype API. Without
+			// this filter a base update/delete between a pair that also carries a
+			// claim edge could pick the claim one — a wrong edge, not a slow one.
+			if strings.Contains(linkType, "#") {
+				continue
+			}
+		} else if !strings.HasPrefix(linkType, linkTypePrefix) {
 			continue
 		}
 		nameBytes, err := ctx.Domain.Cache().GetValue(k)

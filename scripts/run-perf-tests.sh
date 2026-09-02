@@ -22,10 +22,11 @@
 #                             [--concurrencies "1 4 16"] [--csv PATH] [--embedded]
 #
 #   docker (default): --scenario crud|crud-delete|jpgql|fpl|all   [--scale ...]
-#   --embedded:       --scenario crud-read|crud-update|crud-delete|trashcan-scale|all
+#   --embedded:       --scenario crud-read|crud-update|crud-delete|trashcan-scale|link-resolve|all
 #                     (--scale / --warmup / --duration do not apply; sizing is
 #                      via PERF_READ_N / PERF_UPDATE_N / PERF_DELETE_N env vars,
-#                      trashcan-scale via PERF_TC_BATCH / PERF_TC_BIN_SIZES)
+#                      trashcan-scale via PERF_TC_BATCH / PERF_TC_BIN_SIZES,
+#                      link-resolve via PERF_LR_BATCH / PERF_LR_FANOUTS)
 #
 # Defaults: --scenario all  --scale 10k  --warmup 15  --duration 30
 #
@@ -79,9 +80,9 @@ SHUTDOWN_NOISE='nats: connection closed|cannot publish tx|Failed to publish WAL|
 if [ "$EMBEDDED" -eq 1 ]; then
   MODE="EMBEDDED — in-process Go suites, NO NATS round-trips (server-side cost)"
   case "$SCENARIO" in
-    all) SCENARIOS="crud-read crud-update crud-delete trashcan-scale" ;;
-    crud-read|crud-update|crud-delete|trashcan-scale) SCENARIOS="$SCENARIO" ;;
-    *) echo "unknown embedded scenario: $SCENARIO (use crud-read|crud-update|crud-delete|trashcan-scale|all)"; exit 2 ;;
+    all) SCENARIOS="crud-read crud-update crud-delete trashcan-scale link-resolve" ;;
+    crud-read|crud-update|crud-delete|trashcan-scale|link-resolve) SCENARIOS="$SCENARIO" ;;
+    *) echo "unknown embedded scenario: $SCENARIO (use crud-read|crud-update|crud-delete|trashcan-scale|link-resolve|all)"; exit 2 ;;
   esac
   SCALES="(n/a — embedded sizes via PERF_*_N)"
 else
@@ -120,6 +121,9 @@ if [ "$EMBEDDED" -eq 1 ]; then
       # Cost curve against the size of the trash can: parking and restoring must
       # not track it (they used to — retention listed the bin on every delete).
       trashcan-scale) echo "TestTrashCanScalePerfTestSuite" ;;
+      # Cost of a link update/delete against the out-degree of its from-vertex:
+      # resolution by name must keep it flat where the search made it linear.
+      link-resolve)   echo "TestLinkResolveScalePerfTestSuite" ;;
       *) echo "" ;;
     esac
   }

@@ -1215,9 +1215,14 @@ func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	// Resolve the link's identity (name) BEFORE locking so we lock the EDGE
 	// (owner+name), not the owner vertex — updates to DIFFERENT links of the same
-	// `from` then run in parallel. The resolve is a cheap KV read; the low-level
-	// link.update re-validates the edge under the same lock.
-	linkName, linkType, edgeExists := resolveLinkBetweenTwoObjects(ctx, selfID, objectToID)
+	// `from` then run in parallel. The low-level link.update re-validates the edge
+	// under the same lock.
+	//
+	// By NAME first: the caller's name, else the canonical default (the target
+	// id). That is one key read. The search by (from, to) walks every out-link of
+	// the from-vertex, which on a hub vertex is thousands of visits per call — it
+	// stays as the fallback for edges named otherwise.
+	linkName, linkType, edgeExists := resolveObjectsLinkForUpdate(ctx, selfID, objectToID)
 	if !edgeExists {
 		// Upsert / cold path: the edge does not exist yet. Its name is the one the
 		// caller supplied, else the canonical default (the target id).
@@ -1272,8 +1277,9 @@ func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	// Resolve the link's identity (name) BEFORE locking so we lock the EDGE
 	// (owner+name), not the owner vertex — deletes of DIFFERENT links of the same
-	// `from` run in parallel. Cheap KV read; idempotent if the edge is already gone.
-	linkName, linkType, edgeExists := resolveLinkBetweenTwoObjects(ctx, selfID, objectToID)
+	// `from` run in parallel. By name first (see resolveObjectsLinkForUpdate), the
+	// search by (from, to) only on a miss.
+	linkName, linkType, edgeExists := resolveObjectsLinkForUpdate(ctx, selfID, objectToID)
 	if !edgeExists {
 		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("object link from=%s to=%s does not exist", selfID, objectToID))).Reply()
 		return
