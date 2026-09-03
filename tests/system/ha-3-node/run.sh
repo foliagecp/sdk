@@ -23,7 +23,7 @@ source ../_lib/compose.sh
 PROJECT="foliage-systest-ha3"
 COMPOSE_FILE="docker-compose.yaml"
 N=200
-FAILOVER_WAIT=45   # KV lock TTL (~10s) + passive detect + subscribe + become active
+FAILOVER_WAIT=60   # KV lock TTL (~20s) + passive detect + subscribe + become active
 
 install_trap
 build_assert
@@ -43,10 +43,10 @@ assert verify -n "$N" || fail "initial verify failed"
 
 # Post-failover verifies retry for up to VERIFY_WAIT: after a hard kill the
 # new active legally cannot serve a single-instance function until the dead
-# holder's per-function lock expires (kvMutexLifeTimeSec ~10s) plus a
+# holder's per-function lock expires (kvMutexLifeTimeSec ~20s) plus a
 # lifecycle tick — and ping only proves ONE function is up. ~2×TTL keeps the
 # check honest: slower than that is a genuine wedge, not the TTL window.
-VERIFY_WAIT=20
+VERIFY_WAIT=40
 
 echo ">> kill runtime-a; system must fail over and stay consistent"
 dc kill runtime-a || fail "kill runtime-a errored"

@@ -76,8 +76,8 @@ type Runtime struct {
 	// attempt and how many attempts have failed. See recordLockRefreshLatency.
 	lockRefreshLatencyNs atomic.Int64
 	lockRefreshFailures  atomic.Int64
-	afterStartRunning            atomic.Bool
-	activeInstanceMu             sync.RWMutex
+	afterStartRunning    atomic.Bool
+	activeInstanceMu     sync.RWMutex
 
 	// cacheDirty drives the "rehydrate cache from KV before going active"
 	// decision. true means the cache snapshot may be out of date with KV.
@@ -319,7 +319,7 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 
 	// Run afterStart functions immediately now that the runtime is ready,
 	// instead of waiting for the first runtimeLifecycleUpdater tick (which is
-	// kvMutexLifeTimeSec/2 — by default 5s — away). afterStart functions need
+	// kvMutexLifeTimeSec/4 — by default 5s — away). afterStart functions need
 	// isReady because they issue requests (e.g. cmdbSchemaPrepare creates the
 	// built-in types/objects roots via runtime.Request, which is rejected
 	// before isReady), and we have just set it. Deferring them to a tick added

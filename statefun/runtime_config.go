@@ -7,9 +7,21 @@ import (
 )
 
 const (
-	RuntimeName                 = "runtime"
-	NatsURL                     = "nats://nats:foliage@nats:4222"
-	KVMutexLifetimeSec          = 10
+	RuntimeName = "runtime"
+	NatsURL     = "nats://nats:foliage@nats:4222"
+	// KVMutexLifetimeSec is the lifetime of a KV mutex lease: the holder must
+	// refresh it, and anybody else may take it once lockTime+TTL is in the past
+	// (see KeyMutexLock). It sets both the runtime's active/passive leadership
+	// and the per-function single-instance locks.
+	//
+	// It is a budget for how long a refresh may be unable to reach the KV
+	// without the holder losing what it holds: the runtime steps down at
+	// 3/4·TTL, strictly before the lease becomes stealable, so a slow or
+	// briefly unreachable KV costs retries rather than leadership. The price of
+	// a longer budget is a longer failover: after a hard kill the survivors
+	// cannot take over until the dead holder's lease expires. 20s trades a
+	// slower failover for not shedding leadership over a KV hiccup.
+	KVMutexLifetimeSec          = 20
 	KVMutexIsOldPollingInterval = 10
 	FunctionTypeIDLifetimeMs    = 5000
 	RequestTimeoutSec           = 60

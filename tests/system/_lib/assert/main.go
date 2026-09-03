@@ -177,7 +177,7 @@ func cmdSeed(args []string) {
 // -wait N retries the whole pass for up to N seconds before failing. Use it
 // right after a failover: with TTL-based leadership the new active may not
 // serve single-instance functions until the dead holder's per-function locks
-// expire (kvMutexLifeTimeSec, ~10s) plus a lifecycle tick — a legal
+// expire (kvMutexLifeTimeSec, ~20s) plus a lifecycle tick — a legal
 // availability window, not data loss. Keep the deadline moderate (~2×TTL):
 // a pass that cannot complete within it IS a real failure (wedged promotion,
 // dragging cache rehydrate). Per-object diagnostics are printed only for the
