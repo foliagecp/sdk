@@ -163,6 +163,7 @@ go get github.com/foliagecp/sdk
 - See how to visually debug your graph [here](./docs/graph_debug.md)
 - Find out how to write your own application [here](./docs/how_to_write_an_application.md)
 - Measure performance with guidance [here](./docs/performance_measures.md)
+- See how the cache stores the graph, and what it costs [here](./docs/cache_modes.md)
 
 ### Testing
 
