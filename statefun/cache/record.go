@@ -131,8 +131,9 @@ type vertexRecord struct {
 	//  12  …  body bytes
 	head atomic.Pointer[string]
 
-	out atomic.Pointer[bucketDir]
-	in  atomic.Pointer[bucketDir]
+	out   atomic.Pointer[bucketDir]
+	in    atomic.Pointer[bucketDir]
+	pairs atomic.Pointer[bucketDir]
 
 	// headMu serializes body writes; dirMu serializes structural changes to a
 	// directory (splitting a bucket, doubling the directory). Ordinary link
@@ -191,6 +192,7 @@ type bucket struct {
 	data       string
 	outs       []outLink // set instead of data while the bucket is dirty
 	ins        []inLink
+	pairs      []pairEntry
 	decoded    bool
 	localDepth uint8
 }
@@ -235,7 +237,10 @@ func (b *bucket) entryCount() int {
 		if b.outs != nil {
 			return len(b.outs)
 		}
-		return len(b.ins)
+		if b.ins != nil {
+			return len(b.ins)
+		}
+		return len(b.pairs)
 	}
 	return bucketCount(b.data)
 }
@@ -246,10 +251,14 @@ func (b *bucket) encoded() *bucket {
 	if b == nil || !b.decoded {
 		return b
 	}
-	if b.outs != nil {
+	switch {
+	case b.outs != nil:
 		return &bucket{data: encodeOutBucket(b.outs), localDepth: b.localDepth}
+	case b.ins != nil:
+		return &bucket{data: encodeInBucket(b.ins), localDepth: b.localDepth}
+	default:
+		return &bucket{data: encodePairBucket(b.pairs), localDepth: b.localDepth}
 	}
-	return &bucket{data: encodeInBucket(b.ins), localDepth: b.localDepth}
 }
 
 func makeHead(body []byte, bodyTime int64, bodyDead, bodyJSON bool) string {
@@ -653,6 +662,27 @@ func newVertexRecord(v vertexData, bucketLinks int) *vertexRecord {
 	r.head.Store(&h)
 	r.out.Store(buildDir(v.Out, func(l outLink) string { return l.Name }, outDepth,
 		encodeOutBucket, func(a, b outLink) bool { return a.Name < b.Name }))
+	// One entry per (type, target): the key belongs to the pair, and two links
+	// sharing it wrote it one after the other, so the later one is what the
+	// tree holds. Without write order to go by, the newest time wins, with the
+	// name as a deterministic tie-break.
+	byPair := make(map[string]pairEntry, len(v.Out))
+	for _, l := range v.Out {
+		k := makePairKey(l.Type, l.Target)
+		cur, seen := byPair[k]
+		if !seen || l.UpdateTime > cur.UpdateTime ||
+			(l.UpdateTime == cur.UpdateTime && l.Name > cur.Name) {
+			byPair[k] = pairEntry{Type: l.Type, Target: l.Target, Name: l.Name, UpdateTime: l.UpdateTime}
+		}
+	}
+	pairs := make([]pairEntry, 0, len(byPair))
+	for _, p := range byPair {
+		pairs = append(pairs, p)
+	}
+	r.pairs.Store(buildDir(pairs, func(p pairEntry) string { return makePairKey(p.Type, p.Target) },
+		depthFor(len(pairs), bucketLinks), encodePairBucket, func(a, b pairEntry) bool {
+			return makePairKey(a.Type, a.Target) < makePairKey(b.Type, b.Target)
+		}))
 	r.in.Store(buildDir(v.In, func(l inLink) string { return l.From }, inDepth,
 		encodeInBucket, func(a, b inLink) bool {
 			if a.From != b.From {
@@ -813,33 +843,6 @@ func (r *vertexRecord) rangeInLinks(fn func(inLink) bool) {
 	})
 }
 
-// lookupOutLinkByTypeTarget answers the `V.ltype.<type>.<target>` key shape,
-// which CRUD uses to find a link's name from its endpoints.
-//
-// That key is NOT a property of one link: it is keyed by the pair, so two links
-// of the same type to the same target — legal, since a link is identified by
-// its name — share it, and the tree holds whichever was written last. A record
-// has no write order, so it resolves the pair by the newest update time, with
-// the name as a deterministic tie-break. Exactness for simultaneous writes to a
-// colliding pair would need the mapping stored in its own right; the shapes
-// CRUD produces carry increasing operation times, so the newest link is the one
-// that wrote the key.
-func (r *vertexRecord) lookupOutLinkByTypeTarget(linkType, target string) (outLink, bool) {
-	var found outLink
-	var ok bool
-	r.rangeOutLinks(func(l outLink) bool {
-		if l.Type != linkType || l.Target != target {
-			return true
-		}
-		if !ok || l.UpdateTime > found.UpdateTime ||
-			(l.UpdateTime == found.UpdateTime && l.Name > found.Name) {
-			found, ok = l, true
-		}
-		return true
-	})
-	return found, ok
-}
-
 // ---------------------------------------------------------------------------
 // small helpers
 // ---------------------------------------------------------------------------
@@ -896,10 +899,14 @@ func (r *vertexRecord) approxBytes() int {
 			for _, l := range b.ins {
 				n += inLinkBytes + len(l.From) + len(l.Name) + len(l.Type)
 			}
+			for _, p := range b.pairs {
+				n += outLinkBytes + len(p.Type) + len(p.Target) + len(p.Name)
+			}
 		}
 	}
 	add(r.out.Load())
 	add(r.in.Load())
+	add(r.pairs.Load())
 	return n
 }
 
@@ -910,3 +917,7 @@ const (
 	outLinkBytes = 3*16 + 24 + 24 + 8 + 8
 	inLinkBytes  = 3*16 + 8 + 8
 )
+
+// Small endian writers used by the encoders.
+func putUint32(dst []byte, v uint32) { binary.LittleEndian.PutUint32(dst, v) }
+func putUint64(dst []byte, v uint64) { binary.LittleEndian.PutUint64(dst, v) }

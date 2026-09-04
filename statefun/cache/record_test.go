@@ -99,11 +99,11 @@ func Test_Record_RoundTrip(t *testing.T) {
 func Test_Record_LookupByTypeTarget(t *testing.T) {
 	r := buildRecord(t, 100)
 	want := mkOut(42)
-	got, ok := r.lookupOutLinkByTypeTarget(want.Type, want.Target)
+	got, ok := r.lookupPair(want.Type, want.Target)
 	require.True(t, ok)
 	require.Equal(t, want.Name, got.Name)
 
-	_, ok = r.lookupOutLinkByTypeTarget(want.Type, "dom/нет")
+	_, ok = r.lookupPair(want.Type, "dom/нет")
 	require.False(t, ok)
 }
 
@@ -418,3 +418,48 @@ func Test_Record_CompactionReturnsMemory(t *testing.T) {
 func runtimeGC()             { runtime.GC(); runtime.GC() }
 func runtimeKeepAlive(v any) { runtime.KeepAlive(v) }
 func heapAllocNow() uint64   { var ms runtime.MemStats; runtime.ReadMemStats(&ms); return ms.HeapAlloc }
+
+// Test_Record_PairKeyIsIndependent — ключ (тип, цель) → имя живёт своей жизнью.
+//
+// Ради этого он и хранится отдельной таблицей: CRUD удаляет его сам, когда у
+// связи меняется тип или цель, и вывести такое состояние из таблицы связей
+// нельзя — вывод нашёл бы живую связь и вернул её имя.
+func Test_Record_PairKeyIsIndependent(t *testing.T) {
+	r := newVertexRecord(vertexData{BodyTime: 1}, defaultBucketLinks)
+
+	l := outLink{Name: "l1", Type: "t1", Target: "dom/a", UpdateTime: 10}
+	require.True(t, r.putOutLink(l))
+	require.True(t, r.putPair(pairEntry{Type: "t1", Target: "dom/a", Name: "l1", UpdateTime: 10}))
+
+	p, ok := r.lookupPair("t1", "dom/a")
+	require.True(t, ok)
+	require.Equal(t, "l1", p.Name)
+
+	// удалить пару, оставив связь живой
+	require.True(t, r.deletePair("t1", "dom/a", 20))
+	_, ok = r.lookupPair("t1", "dom/a")
+	require.False(t, ok, "ключ пары обязан исчезнуть")
+	_, ok = r.lookupOutLink("l1")
+	require.True(t, ok, "связь удалять никто не просил")
+
+	// страж действует и здесь
+	require.False(t, r.putPair(pairEntry{Type: "t1", Target: "dom/a", Name: "l1", UpdateTime: 19}),
+		"запоздавшая запись воскресила ключ пары")
+	require.True(t, r.putPair(pairEntry{Type: "t1", Target: "dom/a", Name: "l2", UpdateTime: 21}))
+	p, ok = r.lookupPair("t1", "dom/a")
+	require.True(t, ok)
+	require.Equal(t, "l2", p.Name, "победить обязана последняя запись")
+
+	// две связи на одну пару: в дереве остаётся имя последней
+	require.True(t, r.putOutLink(outLink{Name: "a", Type: "t2", Target: "dom/b", UpdateTime: 30}))
+	require.True(t, r.putPair(pairEntry{Type: "t2", Target: "dom/b", Name: "a", UpdateTime: 30}))
+	require.True(t, r.putOutLink(outLink{Name: "b", Type: "t2", Target: "dom/b", UpdateTime: 31}))
+	require.True(t, r.putPair(pairEntry{Type: "t2", Target: "dom/b", Name: "b", UpdateTime: 31}))
+	p, _ = r.lookupPair("t2", "dom/b")
+	require.Equal(t, "b", p.Name)
+	// обе связи при этом на месте
+	_, ok = r.lookupOutLink("a")
+	require.True(t, ok)
+	_, ok = r.lookupOutLink("b")
+	require.True(t, ok)
+}

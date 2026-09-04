@@ -392,6 +392,7 @@ func (r *vertexRecord) compactBuckets() int {
 	n := 0
 	n += compactDir(r.out.Load())
 	n += compactDir(r.in.Load())
+	n += compactDir(r.pairs.Load())
 	return n
 }
 
@@ -444,5 +445,6 @@ func (r *vertexRecord) dirtyBuckets() int {
 	}
 	count(r.out.Load())
 	count(r.in.Load())
+	count(r.pairs.Load())
 	return n
 }

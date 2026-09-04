@@ -123,11 +123,11 @@ func (r *vertexRecord) get(tail string) ([]byte, bool) {
 		return l.Body, true
 
 	case tailLinkType:
-		l, ok := r.lookupOutLinkByTypeTarget(a, b)
+		p, ok := r.lookupPair(a, b)
 		if !ok {
 			return nil, false
 		}
-		return []byte(l.Name), true
+		return []byte(p.Name), true
 
 	case tailIndexType:
 		l, ok := r.lookupOutLink(a)
@@ -182,8 +182,8 @@ func (r *vertexRecord) updateTime(tail string) int64 {
 			return l.UpdateTime
 		}
 	case tailLinkType:
-		if l, ok := r.lookupOutLinkByTypeTarget(a, b); ok {
-			return l.UpdateTime
+		if p, ok := r.lookupPair(a, b); ok {
+			return p.UpdateTime
 		}
 	case tailIn:
 		if l, ok := r.lookupInLink(a, b); ok {
@@ -226,7 +226,7 @@ func (r *vertexRecord) eachTail(want string, fn func(tail string) bool) {
 		}
 	}
 
-	if mayMatch("out.") || mayMatch("ltype.") {
+	if mayMatch("out.") {
 		stop := false
 		r.rangeOutLinks(func(l outLink) bool {
 			emit := func(t string) bool {
@@ -247,9 +247,6 @@ func (r *vertexRecord) eachTail(want string, fn func(tail string) bool) {
 					return false
 				}
 			}
-			if !emit("ltype." + l.Type + "." + l.Target) {
-				return false
-			}
 			if !emit("out.index." + l.Name + ".type." + l.Type) {
 				return false
 			}
@@ -257,6 +254,24 @@ func (r *vertexRecord) eachTail(want string, fn func(tail string) bool) {
 				if !emit("out.index." + l.Name + ".tag." + tag) {
 					return false
 				}
+			}
+			return true
+		})
+		if stop {
+			return
+		}
+	}
+
+	if mayMatch("ltype.") {
+		stop := false
+		r.rangePairs(func(p pairEntry) bool {
+			t := "ltype." + p.Type + "." + p.Target
+			if !strings.HasPrefix(t, want) {
+				return true
+			}
+			if !fn(t) {
+				stop = true
+				return false
 			}
 			return true
 		})
