@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
@@ -491,4 +492,98 @@ func Test_Record_PairKeyIsIndependent(t *testing.T) {
 	require.True(t, ok)
 	_, ok = r.lookupOutLink("b")
 	require.True(t, ok)
+}
+
+// parseTailBySplit — прежняя реализация через strings.Split, оставленная как
+// эталон: новая обязана отвечать ровно то же на любом хвосте.
+func parseTailBySplit(tail string) (tailKind, string, string) {
+	if tail == "" {
+		return tailBody, "", ""
+	}
+	t := strings.Split(tail, ".")
+	switch t[0] {
+	case "out":
+		if len(t) < 3 {
+			return tailUnknown, "", ""
+		}
+		switch t[1] {
+		case "to":
+			if len(t) == 3 {
+				return tailOutTo, t[2], ""
+			}
+		case "body":
+			if len(t) == 3 {
+				return tailOutBody, t[2], ""
+			}
+		case "index":
+			if len(t) == 5 {
+				switch t[3] {
+				case "type":
+					return tailIndexType, t[2], t[4]
+				case "tag":
+					return tailIndexTag, t[2], t[4]
+				}
+			}
+		}
+	case "ltype":
+		if len(t) == 3 {
+			return tailLinkType, t[1], t[2]
+		}
+	case "in":
+		if len(t) == 3 {
+			return tailIn, t[1], t[2]
+		}
+	}
+	return tailUnknown, "", ""
+}
+
+func Test_ParseTail_MatchesSplit(t *testing.T) {
+	tokens := []string{"", "out", "in", "to", "body", "index", "type", "tag", "ltype",
+		"l001", "dom/v-1", "__object", "имя", "a.b", "."}
+	var tails []string
+	// все хвосты длиной до четырёх токенов плюс настоящие формы
+	var build func(prefix string, depth int)
+	build = func(prefix string, depth int) {
+		if depth == 0 {
+			tails = append(tails, prefix)
+			return
+		}
+		for _, tk := range tokens[:9] {
+			next := tk
+			if prefix != "" {
+				next = prefix + "." + tk
+			}
+			build(next, depth-1)
+		}
+	}
+	build("", 3)
+	for _, a := range tokens {
+		for _, b := range tokens {
+			tails = append(tails,
+				"out.to."+a, "out.body."+a, "ltype."+a+"."+b, "in."+a+"."+b,
+				"out.index."+a+".type."+b, "out.index."+a+".tag."+b,
+				"out.index."+a+"."+b, "out."+a+"."+b, a+"."+b)
+		}
+	}
+	for _, tail := range tails {
+		wk, wa, wb := parseTailBySplit(tail)
+		gk, ga, gb := parseTail(tail)
+		require.Equalf(t, wk, gk, "вид хвоста %q", tail)
+		require.Equalf(t, wa, ga, "первый токен %q", tail)
+		require.Equalf(t, wb, gb, "второй токен %q", tail)
+	}
+	t.Logf("сверено хвостов: %d", len(tails))
+}
+
+func Benchmark_ParseTail(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		parseTail("out.index.l00042.type.__object")
+	}
+}
+func Benchmark_ParseTailBySplit(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		parseTailBySplit("out.index.l00042.type.__object")
+	}
 }

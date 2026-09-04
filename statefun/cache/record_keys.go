@@ -56,45 +56,86 @@ const (
 
 // parseTail recognises a tail and returns its parts. a and b are the shape's
 // variable tokens in the order they appear.
+//
+// The tail is cut by scanning and not with strings.Split: a Split allocates a
+// slice on every single operation a record answers — every read, every
+// existence probe, every write — and there are at most five tokens here with
+// fixed meanings. On a load of 130 000 keys that Split alone was 16 MB.
+//
+// No variable token may contain a dot: link names are checked against a
+// regexp that excludes it, and vertex ids separate their domain with a slash.
+// A tail that has one anyway is not a shape a record knows, exactly as before.
 func parseTail(tail string) (k tailKind, a, b string) {
 	if tail == "" {
 		return tailBody, "", ""
 	}
-	t := strings.Split(tail, ".")
-	switch t[0] {
+	head, rest, ok := cutDot(tail)
+	if !ok {
+		return tailUnknown, "", ""
+	}
+	switch head {
 	case "out":
-		if len(t) < 3 {
+		what, arg, ok := cutDot(rest)
+		if !ok {
 			return tailUnknown, "", ""
 		}
-		switch t[1] {
+		switch what {
 		case "to":
-			if len(t) == 3 {
-				return tailOutTo, t[2], ""
+			if !hasDot(arg) {
+				return tailOutTo, arg, ""
 			}
 		case "body":
-			if len(t) == 3 {
-				return tailOutBody, t[2], ""
+			if !hasDot(arg) {
+				return tailOutBody, arg, ""
 			}
 		case "index":
-			if len(t) == 5 {
-				switch t[3] {
-				case "type":
-					return tailIndexType, t[2], t[4]
-				case "tag":
-					return tailIndexTag, t[2], t[4]
-				}
+			name, kindAndValue, ok := cutDot(arg)
+			if !ok || hasDot(name) {
+				return tailUnknown, "", ""
+			}
+			idx, value, ok := cutDot(kindAndValue)
+			if !ok || hasDot(value) {
+				return tailUnknown, "", ""
+			}
+			switch idx {
+			case "type":
+				return tailIndexType, name, value
+			case "tag":
+				return tailIndexTag, name, value
 			}
 		}
 	case "ltype":
-		if len(t) == 3 {
-			return tailLinkType, t[1], t[2]
+		linkType, target, ok := cutDot(rest)
+		if ok && !hasDot(linkType) && !hasDot(target) {
+			return tailLinkType, linkType, target
 		}
 	case "in":
-		if len(t) == 3 {
-			return tailIn, t[1], t[2]
+		from, name, ok := cutDot(rest)
+		if ok && !hasDot(from) && !hasDot(name) {
+			return tailIn, from, name
 		}
 	}
 	return tailUnknown, "", ""
+}
+
+// cutDot splits at the first dot. Both halves share the original string's
+// bytes, so nothing is copied.
+func cutDot(s string) (before, after string, found bool) {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '.' {
+			return s[:i], s[i+1:], true
+		}
+	}
+	return s, "", false
+}
+
+func hasDot(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '.' {
+			return true
+		}
+	}
+	return false
 }
 
 // get answers GetValue for a tail. The second result says whether the key
