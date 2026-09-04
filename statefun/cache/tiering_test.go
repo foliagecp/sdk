@@ -294,6 +294,31 @@ func Test_Tiering_TreeStaysEmpty(t *testing.T) {
 	require.Greater(t, st.TotalNodes, 1, "мьютекс объекта обязан лежать в дереве")
 }
 
+// Test_Rehydrate_ClearsRecords — повышение из пассивного в активные заменяет
+// мир целиком: то, что было удалено, пока узел молчал, не должно ожить.
+func Test_Rehydrate_ClearsRecords(t *testing.T) {
+	restore := SetCacheModeForTest("records")
+	defer restore()
+
+	cs := NewStoreForTest("rehydrate")
+	cs.SetValue("dom/v.out.to.l1", []byte("t.dom/x"), false, 10)
+	body, _ := easyjson.JSONFromString(`{"n":1}`)
+	cs.SetValueJSON("dom/v", &body, false, 10)
+	require.True(t, cs.Exists("dom/v.out.to.l1"))
+	require.Equal(t, 1, cs.RecordCountForTest())
+
+	cs.records.reset()
+
+	require.Zero(t, cs.RecordCountForTest(), "записи обязаны были опустеть")
+	require.False(t, cs.Exists("dom/v.out.to.l1"), "связь пережила сброс")
+	require.False(t, cs.Exists("dom/v"), "тело пережило сброс")
+
+	// и мир после сброса собирается заново
+	cs.SetValue("dom/v.out.to.l2", []byte("t.dom/y"), false, 20)
+	require.True(t, cs.Exists("dom/v.out.to.l2"))
+	require.False(t, cs.Exists("dom/v.out.to.l1"))
+}
+
 // Test_GetValueJSON_DistinguishesAbsentFromInvalid — «нет ключа» и «есть, но не
 // JSON» это разные ответы, и запись обязана различать их так же, как дерево.
 func Test_GetValueJSON_DistinguishesAbsentFromInvalid(t *testing.T) {

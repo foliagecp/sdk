@@ -781,6 +781,11 @@ func (cs *Store) RehydrateFromKV(ctx context.Context) error {
 	// somehow still hold a child reference see a consistent old subtree
 	// (released to GC after they drop it). The root identity is kept.
 	cs.rootValue.initRootSharded()
+	// Records are a second home for the same keys and must be emptied with the
+	// tree, or a promotion would merge the reloaded world onto a stale one.
+	if cs.records != nil {
+		cs.records.reset()
+	}
 	// Reset committed-tx watermark too — the new world starts from the
 	// state we are about to load, and any old in-process backup-barrier
 	// state is meaningless across a role transition.

@@ -271,6 +271,16 @@ func (ri *recordIndex) getOrCreate(id string) *vertexRecord {
 	return r
 }
 
+// reset empties the index. A rehydration replaces the whole world, so what the
+// records held before it is not a starting point to merge onto but state that
+// no longer exists: without this a vertex deleted while this node was passive
+// would come back to life on promotion.
+func (ri *recordIndex) reset() {
+	ri.mu.Lock()
+	ri.m = map[string]*vertexRecord{}
+	ri.mu.Unlock()
+}
+
 func (ri *recordIndex) len() int {
 	ri.mu.RLock()
 	defer ri.mu.RUnlock()
