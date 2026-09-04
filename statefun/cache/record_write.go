@@ -100,23 +100,44 @@ func (r *vertexRecord) withInSlot(key string, fn func(b *bucket) (*bucket, bucke
 // each key keeps its own time and its own live flag.
 func (r *vertexRecord) mutateOutLink(name string, apply func(*outLink) bool) bool {
 	d, res := r.withOutSlot(name, func(b *bucket) (*bucket, bucketWriteResult) {
-		links := copyOutEntries(b)
-		i := sort.Search(len(links), func(i int) bool { return links[i].Name >= name })
+		cur := b.outEntries()
+		i := sort.Search(len(cur), func(i int) bool { return cur[i].Name >= name })
+		exists := i < len(cur) && cur[i].Name == name
 
 		l := outLink{Name: name}
-		exists := i < len(links) && links[i].Name == name
 		if exists {
-			l = links[i]
+			l = *cur[i]
 		}
 		if !apply(&l) {
 			return nil, bucketWriteResult{applied: false}
 		}
-		if exists {
-			links[i] = l
-		} else {
-			links = append(links, outLink{})
-			copy(links[i+1:], links[i:])
-			links[i] = l
+
+		// An entry is never edited where it lies: a reader walks this slice
+		// without a lock and must keep seeing what it started with. So the
+		// changed entry becomes a new object and only the slice of pointers is
+		// rebuilt — 8 bytes an entry instead of 128, which is the difference
+		// between a bulk load allocating twice the graph and twenty times it.
+		var links []*outLink
+		switch {
+		case exists:
+			links = make([]*outLink, len(cur), spareFor(len(cur)))
+			copy(links, cur)
+			links[i] = &l
+
+		case b != nil && b.decoded && i == len(cur) && cap(cur) > len(cur):
+			// Writing past the end of the published slice leaves everything a
+			// reader can reach exactly as it was, so the spare room left by
+			// the last copy is used instead of making another one. Links
+			// arriving in name order — which is how a load and a rebuild both
+			// deliver them — take this path every time.
+			links = cur[:len(cur)+1]
+			links[len(cur)] = &l
+
+		default:
+			links = make([]*outLink, len(cur)+1, spareFor(len(cur)+1))
+			copy(links, cur[:i])
+			links[i] = &l
+			copy(links[i+1:], cur[i:])
 		}
 		return &bucket{outs: links, decoded: true, localDepth: b.localDepth},
 			bucketWriteResult{applied: true, count: len(links)}
@@ -200,7 +221,7 @@ func (r *vertexRecord) setOutTag(name, tag string, t int64, live bool) bool {
 
 func (r *vertexRecord) putInLink(l inLink) bool {
 	d, res := r.withInSlot(l.From, func(b *bucket) (*bucket, bucketWriteResult) {
-		links, ok := applyInLink(copyInEntries(b), l)
+		links, ok := applyInLinkTo(b.inEntries(), b != nil && b.decoded, l)
 		if !ok {
 			return nil, bucketWriteResult{applied: false}
 		}
@@ -215,7 +236,8 @@ func (r *vertexRecord) putInLink(l inLink) bool {
 
 func (r *vertexRecord) deleteInLink(from, name string, t int64) bool {
 	_, res := r.withInSlot(from, func(b *bucket) (*bucket, bucketWriteResult) {
-		links, ok := applyInLink(copyInEntries(b), inLink{From: from, Name: name, UpdateTime: t, Tombstone: true})
+		links, ok := applyInLinkTo(b.inEntries(), b != nil && b.decoded,
+			inLink{From: from, Name: name, UpdateTime: t, Tombstone: true})
 		if !ok {
 			return nil, bucketWriteResult{applied: false}
 		}
@@ -225,58 +247,67 @@ func (r *vertexRecord) deleteInLink(from, name string, t int64) bool {
 	return res.applied
 }
 
-func applyInLink(links []inLink, l inLink) ([]inLink, bool) {
+// applyInLinkTo builds the bucket's new entry slice with l in it, or reports
+// that the guard refused the write. Like the outgoing side, no entry is edited
+// where it lies.
+func applyInLinkTo(cur []*inLink, decoded bool, l inLink) ([]*inLink, bool) {
 	key := makeInLinkKey(l.From, l.Name)
-	i := sort.Search(len(links), func(i int) bool {
-		return makeInLinkKey(links[i].From, links[i].Name) >= key
+	i := sort.Search(len(cur), func(i int) bool {
+		return makeInLinkKey(cur[i].From, cur[i].Name) >= key
 	})
-	if i < len(links) && links[i].From == l.From && links[i].Name == l.Name {
-		if l.UpdateTime < links[i].UpdateTime {
+	if i < len(cur) && cur[i].From == l.From && cur[i].Name == l.Name {
+		if l.UpdateTime < cur[i].UpdateTime {
 			return nil, false
 		}
-		links[i] = l
-		return links, true
+		out := make([]*inLink, len(cur), spareFor(len(cur)))
+		copy(out, cur)
+		out[i] = &l
+		return out, true
 	}
-	links = append(links, inLink{})
-	copy(links[i+1:], links[i:])
-	links[i] = l
-	return links, true
+	if decoded && i == len(cur) && cap(cur) > len(cur) {
+		out := cur[: len(cur)+1 : cap(cur)]
+		out[len(cur)] = &l
+		return out, true
+	}
+	out := make([]*inLink, len(cur)+1, spareFor(len(cur)+1))
+	copy(out, cur[:i])
+	out[i] = &l
+	copy(out[i+1:], cur[i:])
+	return out, true
 }
 
 // copyOutEntries returns the bucket's entries in a slice the caller may mutate.
 // Copying is what keeps published buckets immutable: a reader that loaded this
 // bucket must keep seeing what it loaded, so the writer works on its own slice
 // and publishes a new bucket around it.
-func copyOutEntries(b *bucket) []outLink {
+// spareFor is how much room a fresh copy of a bucket keeps beyond what it
+// holds. A bucket is copied to be written to, and the write that follows is
+// often an append; leaving room means the appends after it cost nothing at
+// all. The ceiling is the split threshold, so the spare is never large.
+func spareFor(n int) int {
+	room := n + n/2 + 1
+	if room > 2*defaultBucketLinks {
+		room = 2*defaultBucketLinks + 1
+	}
+	return room
+}
+
+func copyOutEntries(b *bucket) []*outLink {
 	if b == nil {
 		return nil
 	}
 	if b.decoded {
-		out := make([]outLink, len(b.outs), len(b.outs)+1)
+		// Room to spare, so a later insert at the end can use it instead of
+		// copying again — see mutateOutLink.
+		out := make([]*outLink, len(b.outs), spareFor(len(b.outs)))
 		copy(out, b.outs)
 		return out
 	}
 	n := bucketCount(b.data)
-	links := make([]outLink, 0, n+1)
+	links := make([]*outLink, 0, spareFor(n))
 	for i := 0; i < n; i++ {
-		links = append(links, decodeOutLink(bucketEntry(b.data, i)))
-	}
-	return links
-}
-
-func copyInEntries(b *bucket) []inLink {
-	if b == nil {
-		return nil
-	}
-	if b.decoded {
-		out := make([]inLink, len(b.ins), len(b.ins)+1)
-		copy(out, b.ins)
-		return out
-	}
-	n := bucketCount(b.data)
-	links := make([]inLink, 0, n+1)
-	for i := 0; i < n; i++ {
-		links = append(links, decodeInLink(bucketEntry(b.data, i)))
+		l := decodeOutLink(bucketEntry(b.data, i))
+		links = append(links, &l)
 	}
 	return links
 }
@@ -349,7 +380,7 @@ func (r *vertexRecord) splitOut(seen *bucketDir, key string) {
 	links := b.outEntries()
 	nd := growDirIfNeeded(d, b)
 	splitSlots(nd, old, b.localDepth, func(bit int) *bucket {
-		var g []outLink
+		var g []*outLink
 		for _, l := range links {
 			if int((hashToken(l.Name)>>b.localDepth)&1) == bit {
 				g = append(g, l)
@@ -381,7 +412,7 @@ func (r *vertexRecord) splitIn(seen *bucketDir, key string) {
 	links := b.inEntries()
 	nd := growDirIfNeeded(d, b)
 	splitSlots(nd, old, b.localDepth, func(bit int) *bucket {
-		var g []inLink
+		var g []*inLink
 		for _, l := range links {
 			if int((hashToken(l.From)>>b.localDepth)&1) == bit {
 				g = append(g, l)

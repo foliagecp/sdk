@@ -302,16 +302,16 @@ func newBucketSlot(b *bucket) *bucketSlot {
 // so a reader that loaded the old one keeps reading a value nobody mutates.
 type bucket struct {
 	data       string
-	outs       []outLink // set instead of data while the bucket is dirty
-	ins        []inLink
-	pairs      []pairEntry
+	outs       []*outLink // set instead of data while the bucket is dirty
+	ins        []*inLink
+	pairs      []*pairEntry
 	decoded    bool
 	compressed bool // data holds a zstd frame (see record_compress.go)
 	localDepth uint8
 }
 
 // outEntries returns the bucket's outgoing links, decoding only if needed.
-func (b *bucket) outEntries() []outLink {
+func (b *bucket) outEntries() []*outLink {
 	if b == nil {
 		return nil
 	}
@@ -319,14 +319,15 @@ func (b *bucket) outEntries() []outLink {
 		return b.outs
 	}
 	n := bucketCount(b.data)
-	out := make([]outLink, n)
+	out := make([]*outLink, n)
 	for i := 0; i < n; i++ {
-		out[i] = decodeOutLink(bucketEntry(b.data, i))
+		l := decodeOutLink(bucketEntry(b.data, i))
+		out[i] = &l
 	}
 	return out
 }
 
-func (b *bucket) inEntries() []inLink {
+func (b *bucket) inEntries() []*inLink {
 	if b == nil {
 		return nil
 	}
@@ -334,9 +335,10 @@ func (b *bucket) inEntries() []inLink {
 		return b.ins
 	}
 	n := bucketCount(b.data)
-	out := make([]inLink, n)
+	out := make([]*inLink, n)
 	for i := 0; i < n; i++ {
-		out[i] = decodeInLink(bucketEntry(b.data, i))
+		l := decodeInLink(bucketEntry(b.data, i))
+		out[i] = &l
 	}
 	return out
 }
@@ -856,8 +858,13 @@ func newVertexRecord(v vertexData, bucketLinks int) *vertexRecord {
 	r := &vertexRecord{}
 	h := makeHead(v.Body, v.BodyTime, v.BodyDead, v.BodyJSON)
 	r.head.Store(&h)
-	r.out.Store(buildDir(v.Out, func(l outLink) string { return l.Name }, outDepth,
-		encodeOutBucket, func(a, b outLink) bool { return a.Name < b.Name }))
+	outs := make([]*outLink, len(v.Out))
+	for i := range v.Out {
+		l := v.Out[i]
+		outs[i] = &l
+	}
+	r.out.Store(buildDir(outs, func(l *outLink) string { return l.Name }, outDepth,
+		encodeOutBucket, func(a, b *outLink) bool { return a.Name < b.Name }))
 	// One entry per (type, target): the key belongs to the pair, and two links
 	// sharing it wrote it one after the other, so the later one is what the
 	// tree holds. Without write order to go by, the newest time wins, with the
@@ -875,16 +882,22 @@ func newVertexRecord(v vertexData, bucketLinks int) *vertexRecord {
 			byPair[k] = pairEntry{Type: lt, Target: tgt, Name: l.Name, UpdateTime: l.To.Time}
 		}
 	}
-	pairs := make([]pairEntry, 0, len(byPair))
+	pairs := make([]*pairEntry, 0, len(byPair))
 	for _, p := range byPair {
-		pairs = append(pairs, p)
+		p := p
+		pairs = append(pairs, &p)
 	}
-	r.pairs.Store(buildDir(pairs, func(p pairEntry) string { return makePairKey(p.Type, p.Target) },
-		depthFor(len(pairs), bucketLinks), encodePairBucket, func(a, b pairEntry) bool {
+	r.pairs.Store(buildDir(pairs, func(p *pairEntry) string { return makePairKey(p.Type, p.Target) },
+		depthFor(len(pairs), bucketLinks), encodePairBucket, func(a, b *pairEntry) bool {
 			return makePairKey(a.Type, a.Target) < makePairKey(b.Type, b.Target)
 		}))
-	r.in.Store(buildDir(v.In, func(l inLink) string { return l.From }, inDepth,
-		encodeInBucket, func(a, b inLink) bool {
+	ins := make([]*inLink, len(v.In))
+	for i := range v.In {
+		l := v.In[i]
+		ins[i] = &l
+	}
+	r.in.Store(buildDir(ins, func(l *inLink) string { return l.From }, inDepth,
+		encodeInBucket, func(a, b *inLink) bool {
 			if a.From != b.From {
 				return a.From < b.From
 			}
@@ -893,24 +906,24 @@ func newVertexRecord(v vertexData, bucketLinks int) *vertexRecord {
 	return r
 }
 
-func encodeOutBucket(links []outLink) string {
+func encodeOutBucket(links []*outLink) string {
 	head := make([]byte, 4+len(links)*4)
 	binary.LittleEndian.PutUint32(head[0:], uint32(len(links)))
 	body := head
 	for i, l := range links {
 		binary.LittleEndian.PutUint32(body[4+i*4:], uint32(len(body)))
-		body = encodeOutLink(body, l)
+		body = encodeOutLink(body, *l)
 	}
 	return string(body)
 }
 
-func encodeInBucket(links []inLink) string {
+func encodeInBucket(links []*inLink) string {
 	head := make([]byte, 4+len(links)*4)
 	binary.LittleEndian.PutUint32(head[0:], uint32(len(links)))
 	body := head
 	for i, l := range links {
 		binary.LittleEndian.PutUint32(body[4+i*4:], uint32(len(body)))
-		body = encodeInLink(body, l)
+		body = encodeInLink(body, *l)
 	}
 	return string(body)
 }
@@ -969,16 +982,18 @@ func (r *vertexRecord) lookupOutTo(name string) (subValue, bool) {
 	return outLinkTo(e)
 }
 
-// searchOutSlice is the decoded-form counterpart of bucketSearch.
-func searchOutSlice(links []outLink, name string) (outLink, bool) {
+// searchOutSlice is the decoded-form counterpart of bucketSearch. It hands back
+// the entry itself, not a copy: entries are immutable once published, and a
+// copy of one is 128 bytes on a path a traversal walks constantly.
+func searchOutSlice(links []*outLink, name string) (*outLink, bool) {
 	i := sort.Search(len(links), func(i int) bool { return links[i].Name >= name })
 	if i < len(links) && links[i].Name == name {
 		return links[i], true
 	}
-	return outLink{}, false
+	return nil, false
 }
 
-func searchInSlice(links []inLink, from, name string) (inLink, bool) {
+func searchInSlice(links []*inLink, from, name string) (*inLink, bool) {
 	key := makeInLinkKey(from, name)
 	i := sort.Search(len(links), func(i int) bool {
 		return makeInLinkKey(links[i].From, links[i].Name) >= key
@@ -986,7 +1001,7 @@ func searchInSlice(links []inLink, from, name string) (inLink, bool) {
 	if i < len(links) && links[i].From == from && links[i].Name == name {
 		return links[i], true
 	}
-	return inLink{}, false
+	return nil, false
 }
 
 // lookupOutLink returns the link if any of its keys is still live.
@@ -1006,7 +1021,11 @@ func (r *vertexRecord) lookupOutLinkGuard(name string) (outLink, bool) {
 		return outLink{}, false
 	}
 	if b.decoded {
-		return searchOutSlice(b.outs, name)
+		l, found := searchOutSlice(b.outs, name)
+		if !found {
+			return outLink{}, false
+		}
+		return *l, true
 	}
 	e, found := bucketSearch(b.data, name, outLinkName)
 	if !found {
@@ -1029,7 +1048,11 @@ func (r *vertexRecord) lookupInLinkGuard(from, name string) (inLink, bool) {
 		return inLink{}, false
 	}
 	if b.decoded {
-		return searchInSlice(b.ins, from, name)
+		l, found := searchInSlice(b.ins, from, name)
+		if !found {
+			return inLink{}, false
+		}
+		return *l, true
 	}
 	e, found := bucketSearch(b.data, makeInLinkKey(from, name), inLinkKey)
 	if !found {
@@ -1046,7 +1069,7 @@ func (r *vertexRecord) rangeOutLinks(fn func(outLink) bool) {
 			if !l.alive() {
 				continue
 			}
-			if !fn(l) {
+			if !fn(*l) {
 				return false
 			}
 		}
@@ -1060,7 +1083,7 @@ func (r *vertexRecord) rangeInLinks(fn func(inLink) bool) {
 			if l.Tombstone {
 				continue
 			}
-			if !fn(l) {
+			if !fn(*l) {
 				return false
 			}
 		}

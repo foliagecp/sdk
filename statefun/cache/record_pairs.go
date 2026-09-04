@@ -66,18 +66,18 @@ func pairEntryKey(entry string) string {
 	return makePairKey(t, tgt)
 }
 
-func encodePairBucket(pairs []pairEntry) string {
+func encodePairBucket(pairs []*pairEntry) string {
 	head := make([]byte, 4+len(pairs)*4)
 	putUint32(head[0:], uint32(len(pairs)))
 	body := head
 	for i, p := range pairs {
 		putUint32(body[4+i*4:], uint32(len(body)))
-		body = encodePairEntry(body, p)
+		body = encodePairEntry(body, *p)
 	}
 	return string(body)
 }
 
-func (b *bucket) pairEntries() []pairEntry {
+func (b *bucket) pairEntries() []*pairEntry {
 	if b == nil {
 		return nil
 	}
@@ -85,26 +85,46 @@ func (b *bucket) pairEntries() []pairEntry {
 		return b.pairs
 	}
 	n := bucketCount(b.data)
-	out := make([]pairEntry, n)
+	out := make([]*pairEntry, n)
 	for i := 0; i < n; i++ {
-		out[i] = decodePairEntry(bucketEntry(b.data, i))
+		p := decodePairEntry(bucketEntry(b.data, i))
+		out[i] = &p
 	}
 	return out
 }
 
-func copyPairEntries(b *bucket) []pairEntry {
-	if b == nil {
-		return nil
+// applyPairTo builds the bucket's new entry slice with p in it, or reports
+// that the guard refused the write. No entry is edited where it lies: a reader
+// walks this slice without a lock, so the changed entry becomes a new object
+// and only the pointers are rebuilt.
+func applyPairTo(cur []*pairEntry, decoded bool, p pairEntry) ([]*pairEntry, bool) {
+	key := makePairKey(p.Type, p.Target)
+	i := sort.Search(len(cur), func(i int) bool {
+		return makePairKey(cur[i].Type, cur[i].Target) >= key
+	})
+	if i < len(cur) && cur[i].Type == p.Type && cur[i].Target == p.Target {
+		if p.UpdateTime < cur[i].UpdateTime {
+			return nil, false
+		}
+		out := make([]*pairEntry, len(cur), spareFor(len(cur)))
+		copy(out, cur)
+		out[i] = &p
+		return out, true
 	}
-	if b.decoded {
-		out := make([]pairEntry, len(b.pairs), len(b.pairs)+1)
-		copy(out, b.pairs)
-		return out
+	if decoded && i == len(cur) && cap(cur) > len(cur) {
+		// Past the end of what any reader can see — the spare room is free.
+		out := cur[: len(cur)+1 : cap(cur)]
+		out[len(cur)] = &p
+		return out, true
 	}
-	return b.pairEntries()
+	out := make([]*pairEntry, len(cur)+1, spareFor(len(cur)+1))
+	copy(out, cur[:i])
+	out[i] = &p
+	copy(out[i+1:], cur[i:])
+	return out, true
 }
 
-func searchPairSlice(pairs []pairEntry, linkType, target string) (pairEntry, bool) {
+func searchPairSlice(pairs []*pairEntry, linkType, target string) (*pairEntry, bool) {
 	key := makePairKey(linkType, target)
 	i := sort.Search(len(pairs), func(i int) bool {
 		return makePairKey(pairs[i].Type, pairs[i].Target) >= key
@@ -112,7 +132,7 @@ func searchPairSlice(pairs []pairEntry, linkType, target string) (pairEntry, boo
 	if i < len(pairs) && pairs[i].Type == linkType && pairs[i].Target == target {
 		return pairs[i], true
 	}
-	return pairEntry{}, false
+	return nil, false
 }
 
 // lookupPair answers `V.ltype.<type>.<target>`.
@@ -130,7 +150,11 @@ func (r *vertexRecord) lookupPairGuard(linkType, target string) (pairEntry, bool
 		return pairEntry{}, false
 	}
 	if b.decoded {
-		return searchPairSlice(b.pairs, linkType, target)
+		p, found := searchPairSlice(b.pairs, linkType, target)
+		if !found {
+			return pairEntry{}, false
+		}
+		return *p, true
 	}
 	e, found := bucketSearch(b.data, makePairKey(linkType, target), pairEntryKey)
 	if !found {
@@ -145,7 +169,7 @@ func (r *vertexRecord) rangePairs(fn func(pairEntry) bool) {
 			if p.Tombstone {
 				continue
 			}
-			if !fn(p) {
+			if !fn(*p) {
 				return false
 			}
 		}
@@ -157,7 +181,7 @@ func (r *vertexRecord) rangePairs(fn func(pairEntry) bool) {
 func (r *vertexRecord) putPair(p pairEntry) bool {
 	key := makePairKey(p.Type, p.Target)
 	d, res := r.withPairSlot(key, func(b *bucket) (*bucket, bucketWriteResult) {
-		pairs, ok := applyPair(copyPairEntries(b), p)
+		pairs, ok := applyPairTo(b.pairEntries(), b != nil && b.decoded, p)
 		if !ok {
 			return nil, bucketWriteResult{applied: false}
 		}
@@ -172,7 +196,7 @@ func (r *vertexRecord) putPair(p pairEntry) bool {
 
 func (r *vertexRecord) deletePair(linkType, target string, t int64) bool {
 	_, res := r.withPairSlot(makePairKey(linkType, target), func(b *bucket) (*bucket, bucketWriteResult) {
-		pairs, ok := applyPair(copyPairEntries(b),
+		pairs, ok := applyPairTo(b.pairEntries(), b != nil && b.decoded,
 			pairEntry{Type: linkType, Target: target, UpdateTime: t, Tombstone: true})
 		if !ok {
 			return nil, bucketWriteResult{applied: false}
@@ -238,7 +262,7 @@ func (r *vertexRecord) splitPairs(seen *bucketDir, key string) {
 	entries := b.pairEntries()
 	nd := growDirIfNeeded(d, b)
 	splitSlots(nd, old, b.localDepth, func(bit int) *bucket {
-		var g []pairEntry
+		var g []*pairEntry
 		for _, p := range entries {
 			if int((hashToken(makePairKey(p.Type, p.Target))>>b.localDepth)&1) == bit {
 				g = append(g, p)
