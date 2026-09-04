@@ -543,6 +543,21 @@ func (cs *Store) RecordsBytesForTest() int {
 	return n
 }
 
+// RunMaintenanceForTest performs one maintenance pass: it compacts what writes
+// left decoded, compresses what has gone cold, and releases body parses nobody
+// asked for. Exported so a test outside this package can cool the cache
+// deliberately instead of sleeping until the background pass happens.
+func (cs *Store) RunMaintenanceForTest() {
+	cs.traverseCacheForMaintenance()
+}
+
+// RecordStatsForTest reports what the records hold — the same numbers the
+// cache_record_* gauges publish.
+func (cs *Store) RecordStatsForTest() (vertices, bytes, buckets, compressed, decoded, parsedBodies int) {
+	st := cs.recordStats()
+	return st.vertices, st.bytes, st.buckets, st.compressed, st.decoded, st.parsedBodies
+}
+
 // RecordCountForTest is how many vertices are kept as records.
 func (cs *Store) RecordCountForTest() int {
 	if cs.records == nil {
