@@ -37,11 +37,14 @@ type cacheMode uint8
 
 const (
 	// modeTree is the representation this cache has always had: every key its
-	// own node in a tree. The default, and unchanged in every respect.
+	// own node in a tree. No longer the default, and unchanged in every
+	// respect — CACHE_MODE=tree brings it back exactly as it was.
 	modeTree cacheMode = iota
 
 	// modeRecords keeps a graph vertex as one compact record instead of a
-	// subtree.
+	// subtree. The default since it beat the tree on both counts on the
+	// reference dump: 3.5x less memory, and reads 34% (a link) and 13% (a body
+	// read again) faster.
 	modeRecords
 
 	// modeZstd additionally compresses records that have gone cold.
@@ -58,6 +61,9 @@ const (
 // present in the environment still wins. So a deployment already passing
 // CACHE_TIERING keeps behaving exactly as it did, and one that wants to say the
 // whole thing in a word can.
+// defaultCacheMode is what the cache does when nothing says otherwise.
+const defaultCacheMode = "records"
+
 const (
 	cacheModeEnv   = "CACHE_MODE"
 	tieringEnv     = "CACHE_TIERING"
@@ -65,8 +71,12 @@ const (
 )
 
 var (
-	modeGiven   = envNamed(cacheModeEnv)
-	currentMode = parseCacheMode(system.GetEnvMustProceed[string](cacheModeEnv, "tree"))
+	modeGiven = envNamed(cacheModeEnv)
+
+	// Records are the default. The tree is one setting away — CACHE_MODE=tree,
+	// or CACHE_TIERING=off — and is unchanged, so a deployment that hits
+	// something can go back without a build.
+	currentMode = parseCacheMode(system.GetEnvMustProceed[string](cacheModeEnv, defaultCacheMode))
 
 	// Resolved once at start: the preset, then whatever the environment states
 	// outright.
@@ -98,7 +108,11 @@ func resolveBool(key, onValue string, preset bool) bool {
 
 func parseCacheMode(name string) cacheMode {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "", "tree":
+	case "":
+		// Set but empty is not a choice of the tree — it is nothing said, the
+		// same as unset, which is how envNamed reads it too.
+		return parseCacheMode(defaultCacheMode)
+	case "tree":
 		return modeTree
 	case "records":
 		return modeRecords
@@ -502,6 +516,22 @@ func (cs *Store) RecordCountForTest() int {
 		return 0
 	}
 	return cs.records.len()
+}
+
+// ParsedBodyCountForTest is how many records are currently holding a body as a
+// parsed tree — the only part of a record that grows with reading.
+func (cs *Store) ParsedBodyCountForTest() int {
+	if !tieringEnabled() || cs.records == nil {
+		return 0
+	}
+	n := 0
+	cs.records.each(func(_ string, r *vertexRecord) bool {
+		if r.parsedBody.Load() != nil {
+			n++
+		}
+		return true
+	})
+	return n
 }
 
 // StoresAsRecord reports whether the value at key is held as a record, and so

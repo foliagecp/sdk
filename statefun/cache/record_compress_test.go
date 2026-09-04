@@ -377,3 +377,54 @@ func Test_ParsedBody_InvalidatedByWrite(t *testing.T) {
 	_, err := cs.GetValueJSON("dom/v")
 	require.Error(t, err, "после удаления тело не должно читаться")
 }
+
+// Test_FullScan_DoesNotGrowTheCache — что делает с памятью тот, кто пришёл и
+// прочитал весь граф.
+//
+// Один обход не оставляет после себя ничего: разбор тела запоминается только
+// со второго чтения, а обход читает каждое тело единожды и не возвращается.
+// Повторные обходы упираются в потолок — по одному разбору на вершину — и выше
+// не идут; потолок этот ниже того, что дерево занимает всегда. Когда чтения
+// прекращаются, всё возвращается.
+func Test_FullScan_DoesNotGrowTheCache(t *testing.T) {
+	restore := SetCacheModeForTest("records")
+	defer restore()
+
+	const vertices = 500
+	cs := NewStoreForTest("fullscan")
+	body, _ := easyjson.JSONFromString(`{"name":"узел","cpu":8,"tags":["a","b"]}`)
+	for i := 0; i < vertices; i++ {
+		require.True(t, cs.SetValueJSON(fmt.Sprintf("dom/v-%04d", i), &body, false, 1))
+	}
+	scan := func() {
+		for i := 0; i < vertices; i++ {
+			j, err := cs.GetValueJSON(fmt.Sprintf("dom/v-%04d", i))
+			require.NoError(t, err)
+			require.Equal(t, float64(8), j.GetByPath("cpu").AsNumericDefault(-1))
+		}
+	}
+
+	require.Zero(t, cs.ParsedBodyCountForTest(), "до чтений разборов быть не должно")
+
+	scan()
+	require.Zerof(t, cs.ParsedBodyCountForTest(),
+		"один обход графа обязан не оставить после себя ни одного разбора")
+
+	scan()
+	require.Equal(t, vertices, cs.ParsedBodyCountForTest(),
+		"второй обход обязан разобрать всё — это и есть потолок")
+
+	scan()
+	scan()
+	require.Equal(t, vertices, cs.ParsedBodyCountForTest(),
+		"дальнейшие обходы обязаны упереться в тот же потолок, а не расти")
+
+	// чтения прекратились — обслуживание забирает память обратно
+	cs.ageParsedBodies()
+	cs.ageParsedBodies()
+	require.Zerof(t, cs.ParsedBodyCountForTest(),
+		"после того как чтения прекратились, разборы обязаны быть отпущены")
+
+	// и граф по-прежнему читается
+	scan()
+}

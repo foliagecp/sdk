@@ -18,7 +18,9 @@ func Test_CacheMode_Presets(t *testing.T) {
 		name              string
 	}{
 		{"tree", false, false, false, "tree"},
-		{"", false, false, false, "tree"},
+		// Пусто — это не выбор дерева, а отсутствие выбора: то же, что не
+		// задавать переменную вовсе, а умолчание — записи.
+		{"", true, false, false, "records"},
 		{"records", true, false, false, "records"},
 		{"zstd", true, true, false, "zstd"},
 		{"zstd-dict", true, true, true, "zstd-dict"},
@@ -83,4 +85,25 @@ func Test_CacheMode_ZeroSamplesMeansNoDictionary(t *testing.T) {
 
 	require.False(t, dictionaryEnabled(), "учиться не на чем — словаря быть не должно")
 	require.Equal(t, "zstd", CacheMode(), "отчёт о режиме обязан согласоваться с настройками")
+}
+
+// Test_CacheMode_DefaultIsRecords — умолчание закреплено тестом: сменить его
+// молча нельзя, а именно им определяется, что получит развёртывание, которое
+// ничего не настраивало.
+func Test_CacheMode_DefaultIsRecords(t *testing.T) {
+	require.Equal(t, modeRecords, parseCacheMode(defaultCacheMode),
+		"умолчание обязано быть режимом записей")
+	require.Equal(t, modeRecords, parseCacheMode(""),
+		"незаданная переменная обязана давать то же, что умолчание")
+
+	restore := SetCacheModeForTest(defaultCacheMode)
+	defer restore()
+	require.True(t, tieringEnabled(), "по умолчанию вершины обязаны храниться записями")
+	require.False(t, compressionEnabled(), "сжатие по умолчанию не включается: оно вдвое дороже на наполнении")
+	require.Equal(t, "records", CacheMode())
+
+	// И дерево обязано оставаться в одном движении отсюда.
+	back := SetCacheModeForTest("tree")
+	require.False(t, tieringEnabled(), "CACHE_MODE=tree обязан возвращать прежнее поведение")
+	back()
 }
