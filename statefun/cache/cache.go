@@ -1792,9 +1792,16 @@ func (cs *Store) getLastKeyTokenAndItsParentCacheStoreValue(key string, createIf
 			currentStoreLevel = csv
 		} else {
 			if createIfNotexists {
+				// An intermediate node carries no value: it exists only so the
+				// path can continue. Stamping it with the current clock made
+				// Put's last-writer-wins guard reject any later write to that
+				// key carrying an explicit earlier time — so a vertex body
+				// could be lost, silently, whenever another operation created
+				// the vertex's node in between. -1 is what the root uses for
+				// the same reason: there is nothing here yet to guard.
 				csv := StoreValue{
 					value:           nil,
-					valueUpdateTime: system.GetCurrentTimeNs(),
+					valueUpdateTime: -1,
 				}
 				actual, _ := currentStoreLevel.StoreChild(tokens[currentTokenID], &csv)
 				currentStoreLevel = actual

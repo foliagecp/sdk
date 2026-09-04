@@ -10,10 +10,8 @@ import (
 	"sort"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/foliagecp/easyjson"
-	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,18 +29,7 @@ func randomOps(rng *rand.Rand, vertices, links, steps int) ([]storeOp, []storeQu
 	tgt := func(i int) string { return fmt.Sprintf("dom/tgt-%03d", i%17) }
 
 	var ops []storeOp
-	// Времена — в шкале системных часов, как их выдаёт CRUD. С малыми
-	// синтетическими значениями сравнение вырождается: промежуточный узел
-	// дерева создаётся со штампом system.GetCurrentTimeNs()
-	// (getLastKeyTokenAndItsParentCacheStoreValue), поэтому запись тела
-	// вершины с явным малым временем после появления её связей молча
-	// отбрасывается стражем last-writer-wins. В проде этого не бывает —
-	// там все времена из тех же часов и растут.
-	// Заведомо впереди системных часов: промежуточный узел дерева получает
-	// штамп в момент своего создания, и операция со временем позади этого
-	// штампа была бы отброшена — сравнение выродилось бы в сравнение с
-	// «ничего не записалось».
-	now := system.GetCurrentTimeNs() + int64(time.Hour)
+	now := int64(1_000_000)
 	for step := 0; step < steps; step++ {
 		now++
 		t := now
@@ -282,7 +269,7 @@ func Test_Tiering_TreeStaysEmpty(t *testing.T) {
 	defer restore()
 
 	cs := NewStoreForTest("empty")
-	now := system.GetCurrentTimeNs() + int64(time.Hour)
+	now := int64(1_000_000)
 	for i := 0; i < 200; i++ {
 		v := fmt.Sprintf("dom/v-%03d", i)
 		body := easyjson.NewJSONObjectWithKeyValue("n", easyjson.NewJSON(i))
