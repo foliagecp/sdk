@@ -117,10 +117,10 @@ func (r *vertexRecord) get(tail string) ([]byte, bool) {
 
 	case tailOutBody:
 		l, ok := r.lookupOutLink(a)
-		if !ok {
+		if !ok || !l.Body.Live {
 			return nil, false
 		}
-		return l.Body, true
+		return []byte(l.Body.Value), true
 
 	case tailLinkType:
 		p, ok := r.lookupPair(a, b)
@@ -131,20 +131,21 @@ func (r *vertexRecord) get(tail string) ([]byte, bool) {
 
 	case tailIndexType:
 		l, ok := r.lookupOutLink(a)
-		if !ok || l.Type != b {
+		if !ok {
 			return nil, false
 		}
-		return nil, true // marker: exists, empty value
+		if v, found := findSub(l.IdxTypes, b); found && v.Live {
+			return nil, true // marker: exists, empty value
+		}
+		return nil, false
 
 	case tailIndexTag:
 		l, ok := r.lookupOutLink(a)
 		if !ok {
 			return nil, false
 		}
-		for _, tag := range l.Tags {
-			if tag == b {
-				return nil, true
-			}
+		if v, found := findSub(l.Tags, b); found && v.Live {
+			return nil, true
 		}
 		return nil, false
 
@@ -163,23 +164,35 @@ func (r *vertexRecord) exists(tail string) bool {
 	return ok
 }
 
-// updateTime mirrors Store.GetValueUpdateTime: the time for a live key, -1 for
-// one that is absent — deleted included.
+// updateTime mirrors Store.GetValueUpdateTime: the time of a live key, -1 for
+// one that is absent — deleted included. Each key of a link carries its own
+// time, because in the tree each is its own node and CRUD does write them
+// apart.
 func (r *vertexRecord) updateTime(tail string) int64 {
 	switch k, a, b := parseTail(tail); k {
 	case tailBody:
 		if _, t, ok := r.bodyBytes(); ok {
 			return t
 		}
-	case tailOutTo, tailOutBody, tailIndexType, tailIndexTag:
+	case tailOutTo:
+		if l, ok := r.lookupOutLink(a); ok && l.To.Live {
+			return l.To.Time
+		}
+	case tailOutBody:
+		if l, ok := r.lookupOutLink(a); ok && l.Body.Live {
+			return l.Body.Time
+		}
+	case tailIndexType:
 		if l, ok := r.lookupOutLink(a); ok {
-			if k == tailIndexType && l.Type != b {
-				return -1
+			if v, found := findSub(l.IdxTypes, b); found && v.Live {
+				return v.Time
 			}
-			if k == tailIndexTag && !containsString(l.Tags, b) {
-				return -1
+		}
+	case tailIndexTag:
+		if l, ok := r.lookupOutLink(a); ok {
+			if v, found := findSub(l.Tags, b); found && v.Live {
+				return v.Time
 			}
-			return l.UpdateTime
 		}
 	case tailLinkType:
 		if p, ok := r.lookupPair(a, b); ok {
@@ -239,19 +252,19 @@ func (r *vertexRecord) eachTail(want string, fn func(tail string) bool) {
 				}
 				return true
 			}
-			if !emit("out.to." + l.Name) {
+			if l.To.Live && !emit("out.to."+l.Name) {
 				return false
 			}
-			if l.Body != nil {
-				if !emit("out.body." + l.Name) {
+			if l.Body.Live && !emit("out.body."+l.Name) {
+				return false
+			}
+			for _, v := range l.IdxTypes {
+				if v.Live && !emit("out.index."+l.Name+".type."+v.Value) {
 					return false
 				}
 			}
-			if !emit("out.index." + l.Name + ".type." + l.Type) {
-				return false
-			}
-			for _, tag := range l.Tags {
-				if !emit("out.index." + l.Name + ".tag." + tag) {
+			for _, v := range l.Tags {
+				if v.Live && !emit("out.index."+l.Name+".tag."+v.Value) {
 					return false
 				}
 			}

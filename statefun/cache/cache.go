@@ -517,6 +517,11 @@ type Store struct {
 	rootValue     *StoreValue
 	valuesInCache int
 
+	// records holds graph vertices kept as compact records instead of
+	// subtrees. Populated only when CACHE_TIERING is on; the tree keeps
+	// everything else (see tiering.go).
+	records *recordIndex
+
 	// walWriteEnabled - true for active instance
 	// only active instances can write to WAL streams
 	walWriteEnabled      atomic.Bool
@@ -1028,6 +1033,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 			value:           nil,
 			valueUpdateTime: -1,
 		},
+		records:       newRecordIndex(),
 		valuesInCache: 0,
 
 		//barrier init
@@ -1288,6 +1294,9 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 }
 
 func (cs *Store) GetValueUpdateTime(key string) int64 {
+	if t, handled := cs.tieredUpdateTime(key); handled {
+		return t
+	}
 	var result int64 = -1
 
 	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, false); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
@@ -1303,6 +1312,12 @@ func (cs *Store) GetValueUpdateTime(key string) int64 {
 }
 
 func (cs *Store) GetValue(key string) ([]byte, error) {
+	if v, exists, handled := cs.tieredGet(key); handled {
+		if !exists {
+			return nil, fmt.Errorf("value for key=%s does not exist", key)
+		}
+		return v, nil
+	}
 	var result []byte = nil
 	var resultError error = nil
 
@@ -1344,6 +1359,9 @@ func (cs *Store) GetValue(key string) ([]byte, error) {
 // the avoided []byte allocation / JSON serialization that GetValue would
 // otherwise perform on the value just to throw it away.
 func (cs *Store) Exists(key string) bool {
+	if exists, handled := cs.tieredExists(key); handled {
+		return exists
+	}
 	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, false); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
 		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
 			csv.RLock("Exists")
@@ -1372,6 +1390,20 @@ func (cs *Store) Exists(key string) bool {
 // vertex.update / vertex.delete / orphan probes call this exact pattern
 // in hl_crud.go and ll_crud.go).
 func (cs *Store) ExistsJson(key string) bool {
+	if id, tail, ok := tieredVertex(key); ok {
+		if r, found := cs.records.get(id); found {
+			// Existence is reported honestly whatever the value's type — the
+			// tree does the same and only logs a nudge towards the other
+			// method, so a record must not be stricter.
+			if !r.exists(tail) {
+				return false
+			}
+			if tail != "" || !r.bodyIsJSON() {
+				lg.Logf(lg.WarnLevel, "Value for key=%s is []byte, use Exists method", key)
+			}
+			return true
+		}
+	}
 	if keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, false); len(keyLastToken) > 0 && parentCacheStoreValue != nil {
 		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
 			csv.RLock("ExistsJson")
@@ -1389,6 +1421,16 @@ func (cs *Store) ExistsJson(key string) bool {
 }
 
 func (cs *Store) GetValueJSON(key string) (*easyjson.JSON, error) {
+	if v, exists, handled := cs.tieredGet(key); handled {
+		if !exists {
+			return nil, fmt.Errorf("value for key=%s does not exist", key)
+		}
+		j, ok := easyjson.JSONFromBytes(v)
+		if !ok {
+			return nil, fmt.Errorf("value for key=%s is not valid JSON", key)
+		}
+		return &j, nil
+	}
 	var result *easyjson.JSON
 	var resultError error
 
@@ -1435,6 +1477,17 @@ func (cs *Store) GetValueJSON(key string) (*easyjson.JSON, error) {
 // full object body. Returns a JSON{nil} (with no error) when the path is
 // absent, so callers can treat "field missing" via the usual Is*/As* checks.
 func (cs *Store) GetValueJSONByPath(key string, path string) (*easyjson.JSON, error) {
+	if v, exists, handled := cs.tieredGet(key); handled {
+		if !exists {
+			return nil, fmt.Errorf("value for key=%s does not exist", key)
+		}
+		j, ok := easyjson.JSONFromBytes(v)
+		if !ok {
+			return nil, fmt.Errorf("value for key=%s is not valid JSON", key)
+		}
+		sub := j.GetByPath(path).Clone()
+		return &sub, nil
+	}
 	var result *easyjson.JSON
 	var resultError error
 
@@ -1472,6 +1525,20 @@ func (cs *Store) GetValueJSONByPath(key string, path string) (*easyjson.JSON, er
 }
 
 func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV bool, customSetTime int64) bool {
+	if _, _, ok := tieredVertex(key); ok {
+		if exists, handled := cs.tieredExists(key); handled && exists {
+			return false
+		}
+		if customSetTime < 0 {
+			customSetTime = system.GetCurrentTimeNs()
+		}
+		if handled := cs.tieredSet(key, newValue, false, customSetTime); handled {
+			if updateInKV {
+				cs.publishDirtyOp(customSetTime, key, OpTypePUT, newValue)
+			}
+			return true
+		}
+	}
 	if keyLastToken, parent := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true); len(keyLastToken) > 0 && parent != nil {
 		candidate := &StoreValue{
 			value:           newValue,
@@ -1510,6 +1577,14 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 	if customSetTime < 0 {
 		customSetTime = system.GetCurrentTimeNs()
 	}
+	// Decided before the tree is touched, for the same reason as in
+	// SetValueJSON: a record-backed vertex must not also grow a subtree.
+	if handled := cs.tieredSet(key, value, false, customSetTime); handled {
+		if updateInKV {
+			cs.publishDirtyOp(customSetTime, key, OpTypePUT, value)
+		}
+		return true
+	}
 	keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true)
 	if len(keyLastToken) == 0 || parentCacheStoreValue == nil {
 		return true
@@ -1542,16 +1617,25 @@ func (cs *Store) SetValueJSON(key string, originValue *easyjson.JSON, updateInKV
 	if customSetTime < 0 {
 		customSetTime = system.GetCurrentTimeNs()
 	}
+	// Pre-serialize before any locks — reuse for WAL publish. KV stores
+	// the raw JSON payload (no header) now.
+	walBytes := originValue.ToBytes()
+	// Decided BEFORE the tree is touched: navigating with createIfNotexists
+	// would build nodes for a vertex that lives in a record, and the tree would
+	// grow alongside the records instead of being replaced by them.
+	if handled := cs.tieredSet(key, walBytes, true, customSetTime); handled {
+		if updateInKV {
+			cs.publishDirtyOp(customSetTime, key, OpTypePUT, walBytes)
+		}
+		return true
+	}
 	keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true)
 	if len(keyLastToken) == 0 || parentCacheStoreValue == nil {
 		return true
 	}
 	value := originValue.Clone().GetPtr()
-	// Pre-serialize before any locks — reuse for WAL publish. KV stores
-	// the raw JSON payload (no header) now.
-	var walBytes []byte
-	if updateInKV {
-		walBytes = originValue.ToBytes()
+	if !updateInKV {
+		walBytes = nil
 	}
 	if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
 		csv.SetValueType(typeJson)
@@ -1582,6 +1666,15 @@ func (cs *Store) DeleteValue(key string, updateInKV bool, customDeleteTime int64
 	if customDeleteTime < 0 {
 		customDeleteTime = system.GetCurrentTimeNs()
 	}
+	if handled := cs.tieredDelete(key, customDeleteTime); handled {
+		if updateInKV {
+			cs.publishDirtyOp(customDeleteTime, key, OpTypeDelete, nil)
+		}
+		return
+	}
+	if customDeleteTime < 0 {
+		customDeleteTime = system.GetCurrentTimeNs()
+	}
 	keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, false)
 	if len(keyLastToken) == 0 || parentCacheStoreValue == nil {
 		return
@@ -1605,6 +1698,9 @@ func (cs *Store) DeleteValue(key string, updateInKV bool, customDeleteTime int64
 }
 
 func (cs *Store) GetKeysByPattern(pattern string) []string {
+	if keys, handled := cs.tieredKeys(pattern); handled {
+		return keys
+	}
 	start := time.Now()
 
 	keys := map[string]bool{}
@@ -1872,6 +1968,7 @@ func NewStoreForTest(id string) *Store {
 	cs := &Store{
 		cacheConfig: NewCacheConfig(id),
 		rootValue:   &StoreValue{valueUpdateTime: -1},
+		records:     newRecordIndex(),
 	}
 	cs.rootValue.initRootSharded()
 	return cs

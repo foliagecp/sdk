@@ -12,12 +12,42 @@ import (
 )
 
 func mkOut(i int) outLink {
+	t := int64(i + 1)
+	lt := fmt.Sprintf("type-%d", i%7)
+	tgt := fmt.Sprintf("dom/obj-%05d", i)
 	return outLink{
-		Name:       fmt.Sprintf("link-%05d", i),
-		Type:       fmt.Sprintf("type-%d", i%7),
-		Target:     fmt.Sprintf("dom/obj-%05d", i),
-		UpdateTime: int64(i + 1),
+		Name:     fmt.Sprintf("link-%05d", i),
+		To:       subValue{Value: lt + "." + tgt, Time: t, Live: true},
+		IdxTypes: []subValue{{Value: lt, Time: t, Live: true}},
 	}
+}
+
+// putOutLinkForTest writes every key of a link, the way CRUD does.
+func putOutLinkForTest(r *vertexRecord, l outLink) bool {
+	ok := r.setOutTo(l.Name, l.To.Value, l.To.Time)
+	for _, it := range l.IdxTypes {
+		r.setOutIndexType(l.Name, it.Value, it.Time, it.Live)
+	}
+	if l.Body.Live {
+		r.setOutBody(l.Name, []byte(l.Body.Value), l.Body.Time)
+	}
+	for _, tg := range l.Tags {
+		r.setOutTag(l.Name, tg.Value, tg.Time, tg.Live)
+	}
+	lt, tgt := splitTypeTarget(l.To.Value)
+	r.putPair(pairEntry{Type: lt, Target: tgt, Name: l.Name, UpdateTime: l.To.Time})
+	return ok
+}
+
+// deleteOutLinkForTest removes every key of a link.
+func deleteOutLinkForTest(r *vertexRecord, l outLink, t int64) bool {
+	lt, tgt := splitTypeTarget(l.To.Value)
+	r.deletePair(lt, tgt, t)
+	for _, it := range l.IdxTypes {
+		r.setOutIndexType(l.Name, it.Value, t, false)
+	}
+	r.deleteOutBody(l.Name, t)
+	return r.deleteOutTo(l.Name, t)
 }
 
 func mkIn(i int) inLink {
@@ -57,14 +87,14 @@ func Test_Record_RoundTrip(t *testing.T) {
 				want := mkOut(i)
 				got, ok := r.lookupOutLink(want.Name)
 				require.True(t, ok, "исходящая %s", want.Name)
-				require.Equal(t, want.Type, got.Type)
-				require.Equal(t, want.Target, got.Target)
-				require.Equal(t, want.UpdateTime, got.UpdateTime)
+				require.Equal(t, want.To.Value, got.To.Value)
+				require.Equal(t, want.To.Time, got.To.Time)
 
 				lt, tgt, ok := r.lookupOutTarget(want.Name)
 				require.True(t, ok)
-				require.Equal(t, want.Type, lt)
-				require.Equal(t, want.Target, tgt)
+				wlt, wtgt := splitTypeTarget(want.To.Value)
+				require.Equal(t, wlt, lt)
+				require.Equal(t, wtgt, tgt)
 
 				wi := mkIn(i)
 				gi, ok := r.lookupInLink(wi.From, wi.Name)
@@ -99,11 +129,12 @@ func Test_Record_RoundTrip(t *testing.T) {
 func Test_Record_LookupByTypeTarget(t *testing.T) {
 	r := buildRecord(t, 100)
 	want := mkOut(42)
-	got, ok := r.lookupPair(want.Type, want.Target)
+	wlt, wtgt := splitTypeTarget(want.To.Value)
+	got, ok := r.lookupPair(wlt, wtgt)
 	require.True(t, ok)
 	require.Equal(t, want.Name, got.Name)
 
-	_, ok = r.lookupPair(want.Type, "dom/нет")
+	_, ok = r.lookupPair(wlt, "dom/нет")
 	require.False(t, ok)
 }
 
@@ -115,22 +146,21 @@ func Test_Record_WriteThrough(t *testing.T) {
 	r := buildRecord(t, 10)
 
 	// новая связь
-	nl := outLink{Name: "link-new", Type: "t", Target: "dom/x", UpdateTime: 100}
-	require.True(t, r.putOutLink(nl))
+	nl := outLink{Name: "link-new", To: subValue{Value: "t.dom/x", Time: 100, Live: true}}
+	require.True(t, putOutLinkForTest(r, nl))
 	got, ok := r.lookupOutLink("link-new")
 	require.True(t, ok)
-	require.Equal(t, "dom/x", got.Target)
+	require.Equal(t, "dom/x", got.target())
 
 	// замена существующей
 	upd := mkOut(3)
-	upd.Target = "dom/moved"
-	upd.UpdateTime = 1000
-	require.True(t, r.putOutLink(upd))
+	upd.To = subValue{Value: "type-3.dom/moved", Time: 1000, Live: true}
+	require.True(t, putOutLinkForTest(r, upd))
 	got, _ = r.lookupOutLink(upd.Name)
-	require.Equal(t, "dom/moved", got.Target)
+	require.Equal(t, "dom/moved", got.target())
 
 	// удаление
-	require.True(t, r.deleteOutLink(upd.Name, 2000))
+	require.True(t, deleteOutLinkForTest(r, upd, 2000))
 	_, ok = r.lookupOutLink(upd.Name)
 	require.False(t, ok, "удалённая связь не должна читаться")
 
@@ -151,24 +181,23 @@ func Test_Record_LastWriterWins(t *testing.T) {
 
 	// запись со временем старше текущего игнорируется
 	old := mkOut(1)
-	old.Target = "dom/stale"
-	old.UpdateTime = 0
-	require.False(t, r.putOutLink(old), "старая запись не должна применяться")
+	old.To = subValue{Value: "type-1.dom/stale", Time: 0, Live: true}
+	require.False(t, putOutLinkForTest(r, old), "старая запись не должна применяться")
 	got, _ := r.lookupOutLink(name)
-	require.Equal(t, mkOut(1).Target, got.Target)
+	require.Equal(t, mkOut(1).target(), got.target())
 
 	// после удаления запоздавшая запись не воскрешает связь
-	require.True(t, r.deleteOutLink(name, 500))
+	require.True(t, deleteOutLinkForTest(r, mkOut(1), 500))
 	late := mkOut(1)
-	late.UpdateTime = 499
-	require.False(t, r.putOutLink(late), "запоздавшая запись воскресила удалённую связь")
+	late.To.Time = 499
+	require.False(t, putOutLinkForTest(r, late), "запоздавшая запись воскресила удалённую связь")
 	_, ok := r.lookupOutLink(name)
 	require.False(t, ok)
 
 	// а более новая — воскрешает, это законно
 	fresh := mkOut(1)
-	fresh.UpdateTime = 501
-	require.True(t, r.putOutLink(fresh))
+	fresh.To.Time = 501
+	require.True(t, putOutLinkForTest(r, fresh))
 	_, ok = r.lookupOutLink(name)
 	require.True(t, ok)
 
@@ -191,7 +220,7 @@ func Test_Record_SplitKeepsEverything(t *testing.T) {
 
 	const n = 5000
 	for i := 0; i < n; i++ {
-		require.True(t, r.putOutLink(mkOut(i)), "исходящая %d", i)
+		require.True(t, putOutLinkForTest(r, mkOut(i)), "исходящая %d", i)
 		require.True(t, r.putInLink(mkIn(i)), "входящая %d", i)
 	}
 	require.Greater(t, int(r.out.Load().depth), 0, "справочник обязан был вырасти")
@@ -199,7 +228,7 @@ func Test_Record_SplitKeepsEverything(t *testing.T) {
 	for i := 0; i < n; i++ {
 		got, ok := r.lookupOutLink(mkOut(i).Name)
 		require.True(t, ok, "после расщепления потерялась исходящая %d", i)
-		require.Equal(t, mkOut(i).Target, got.Target)
+		require.Equal(t, mkOut(i).target(), got.target())
 
 		wi := mkIn(i)
 		_, ok = r.lookupInLink(wi.From, wi.Name)
@@ -239,7 +268,7 @@ func Test_Record_ConcurrentWritesLoseNothing(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < perGoroutine; i++ {
 				id := g*perGoroutine + i
-				if !r.putOutLink(mkOut(id)) {
+				if !putOutLinkForTest(r, mkOut(id)) {
 					t.Errorf("исходящая %d отвергнута", id)
 					return
 				}
@@ -256,7 +285,7 @@ func Test_Record_ConcurrentWritesLoseNothing(t *testing.T) {
 	for i := 0; i < total; i++ {
 		got, ok := r.lookupOutLink(mkOut(i).Name)
 		require.True(t, ok, "потеряна исходящая %d", i)
-		require.Equal(t, mkOut(i).Target, got.Target)
+		require.Equal(t, mkOut(i).target(), got.target())
 
 		wi := mkIn(i)
 		_, ok = r.lookupInLink(wi.From, wi.Name)
@@ -296,7 +325,7 @@ func Test_Record_ConcurrentReadWrite(t *testing.T) {
 	}
 
 	for i := 200; i < 2000; i++ {
-		require.True(t, r.putOutLink(mkOut(i)))
+		require.True(t, putOutLinkForTest(r, mkOut(i)))
 	}
 	close(stop)
 	wg.Wait()
@@ -320,8 +349,8 @@ func Benchmark_Record_Write(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				l := mkOut(i % n)
-				l.UpdateTime = int64(1_000_000 + i)
-				if !r.putOutLink(l) {
+				l.To.Time = int64(1_000_000 + i)
+				if !putOutLinkForTest(r, l) {
 					b.Fatal("отвергнуто")
 				}
 			}
@@ -354,7 +383,7 @@ func Test_Record_CompactBuckets(t *testing.T) {
 	r := newVertexRecord(vertexData{BodyTime: 1}, defaultBucketLinks)
 	const n = 2000
 	for i := 0; i < n; i++ {
-		require.True(t, r.putOutLink(mkOut(i)))
+		require.True(t, putOutLinkForTest(r, mkOut(i)))
 		require.True(t, r.putInLink(mkIn(i)))
 	}
 	require.Greater(t, r.dirtyBuckets(), 0, "записи обязаны были оставить корзины разобранными")
@@ -372,8 +401,8 @@ func Test_Record_CompactBuckets(t *testing.T) {
 	for name, l := range before {
 		got, ok := after[name]
 		require.True(t, ok, "%s пропала при уплотнении", name)
-		require.Equal(t, l.Target, got.Target)
-		require.Equal(t, l.UpdateTime, got.UpdateTime)
+		require.Equal(t, l.To.Value, got.To.Value)
+		require.Equal(t, l.To.Time, got.To.Time)
 	}
 	for i := 0; i < n; i++ {
 		_, ok := r.lookupOutLink(mkOut(i).Name)
@@ -398,7 +427,7 @@ func Test_Record_CompactionReturnsMemory(t *testing.T) {
 		t.Run(fmt.Sprintf("links=%d", links), func(t *testing.T) {
 			r := newVertexRecord(vertexData{Body: []byte(`{"n":1}`), BodyTime: 1}, defaultBucketLinks)
 			for i := 0; i < links; i++ {
-				require.True(t, r.putOutLink(mkOut(i)))
+				require.True(t, putOutLinkForTest(r, mkOut(i)))
 			}
 			dirty := r.approxBytes()
 			require.Greater(t, r.dirtyBuckets(), 0)
@@ -427,8 +456,8 @@ func heapAllocNow() uint64   { var ms runtime.MemStats; runtime.ReadMemStats(&ms
 func Test_Record_PairKeyIsIndependent(t *testing.T) {
 	r := newVertexRecord(vertexData{BodyTime: 1}, defaultBucketLinks)
 
-	l := outLink{Name: "l1", Type: "t1", Target: "dom/a", UpdateTime: 10}
-	require.True(t, r.putOutLink(l))
+	l := outLink{Name: "l1", To: subValue{Value: "t1.dom/a", Time: 10, Live: true}}
+	require.True(t, putOutLinkForTest(r, l))
 	require.True(t, r.putPair(pairEntry{Type: "t1", Target: "dom/a", Name: "l1", UpdateTime: 10}))
 
 	p, ok := r.lookupPair("t1", "dom/a")
@@ -451,9 +480,9 @@ func Test_Record_PairKeyIsIndependent(t *testing.T) {
 	require.Equal(t, "l2", p.Name, "победить обязана последняя запись")
 
 	// две связи на одну пару: в дереве остаётся имя последней
-	require.True(t, r.putOutLink(outLink{Name: "a", Type: "t2", Target: "dom/b", UpdateTime: 30}))
+	require.True(t, r.setOutTo("a", "t2.dom/b", 30))
 	require.True(t, r.putPair(pairEntry{Type: "t2", Target: "dom/b", Name: "a", UpdateTime: 30}))
-	require.True(t, r.putOutLink(outLink{Name: "b", Type: "t2", Target: "dom/b", UpdateTime: 31}))
+	require.True(t, r.setOutTo("b", "t2.dom/b", 31))
 	require.True(t, r.putPair(pairEntry{Type: "t2", Target: "dom/b", Name: "b", UpdateTime: 31}))
 	p, _ = r.lookupPair("t2", "dom/b")
 	require.Equal(t, "b", p.Name)

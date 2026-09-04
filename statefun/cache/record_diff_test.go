@@ -40,17 +40,19 @@ func randomDiffVertex(rng *rand.Rand, id string, maxLinks int) diffVertex {
 	}
 	n := rng.Intn(maxLinks + 1)
 	for i := 0; i < n; i++ {
+		t := int64(100 + i)
+		lt := fmt.Sprintf("t%d", rng.Intn(4))
+		tgt := fmt.Sprintf("dom/tgt-%03d", rng.Intn(50))
 		l := outLink{
-			Name:       fmt.Sprintf("l%03d", i),
-			Type:       fmt.Sprintf("t%d", rng.Intn(4)),
-			Target:     fmt.Sprintf("dom/tgt-%03d", rng.Intn(50)),
-			UpdateTime: int64(100 + i),
+			Name:     fmt.Sprintf("l%03d", i),
+			To:       subValue{Value: lt + "." + tgt, Time: t, Live: true},
+			IdxTypes: []subValue{{Value: lt, Time: t, Live: true}},
 		}
 		if rng.Intn(3) == 0 {
-			l.Body = []byte(fmt.Sprintf(`{"w":%d}`, i))
+			l.Body = subValue{Value: fmt.Sprintf(`{"w":%d}`, i), Time: t, Live: true}
 		}
 		for k := 0; k < rng.Intn(3); k++ {
-			l.Tags = append(l.Tags, fmt.Sprintf("tag%d", k))
+			l.Tags = append(l.Tags, subValue{Value: fmt.Sprintf("tag%d", k), Time: t, Live: true})
 		}
 		v.out = append(v.out, l)
 	}
@@ -72,14 +74,17 @@ func writeToTree(cs *Store, v diffVertex) {
 		cs.SetValue(v.id, v.body, false, 1)
 	}
 	for _, l := range v.out {
-		cs.SetValue(fmt.Sprintf(kOutTo, v.id, l.Name), []byte(l.Type+"."+l.Target), false, l.UpdateTime)
-		if l.Body != nil {
-			cs.SetValue(fmt.Sprintf(kOutBody, v.id, l.Name), l.Body, false, l.UpdateTime)
+		lt, tgt := splitTypeTarget(l.To.Value)
+		cs.SetValue(fmt.Sprintf(kOutTo, v.id, l.Name), []byte(l.To.Value), false, l.To.Time)
+		if l.Body.Live {
+			cs.SetValue(fmt.Sprintf(kOutBody, v.id, l.Name), []byte(l.Body.Value), false, l.Body.Time)
 		}
-		cs.SetValue(fmt.Sprintf(kLinkType, v.id, l.Type, l.Target), []byte(l.Name), false, l.UpdateTime)
-		cs.SetValue(fmt.Sprintf(kIndexType, v.id, l.Name, l.Type), nil, false, l.UpdateTime)
+		cs.SetValue(fmt.Sprintf(kLinkType, v.id, lt, tgt), []byte(l.Name), false, l.To.Time)
+		for _, it := range l.IdxTypes {
+			cs.SetValue(fmt.Sprintf(kIndexType, v.id, l.Name, it.Value), nil, false, it.Time)
+		}
 		for _, tag := range l.Tags {
-			cs.SetValue(fmt.Sprintf(kIndexTag, v.id, l.Name, tag), nil, false, l.UpdateTime)
+			cs.SetValue(fmt.Sprintf(kIndexTag, v.id, l.Name, tag.Value), nil, false, tag.Time)
 		}
 	}
 	for _, l := range v.in {
@@ -100,14 +105,17 @@ func allKeysOf(v diffVertex) []string {
 		keys = append(keys, v.id)
 	}
 	for _, l := range v.out {
+		lt, tgt := splitTypeTarget(l.To.Value)
 		keys = append(keys, fmt.Sprintf(kOutTo, v.id, l.Name))
-		if l.Body != nil {
+		if l.Body.Live {
 			keys = append(keys, fmt.Sprintf(kOutBody, v.id, l.Name))
 		}
-		keys = append(keys, fmt.Sprintf(kLinkType, v.id, l.Type, l.Target))
-		keys = append(keys, fmt.Sprintf(kIndexType, v.id, l.Name, l.Type))
+		keys = append(keys, fmt.Sprintf(kLinkType, v.id, lt, tgt))
+		for _, it := range l.IdxTypes {
+			keys = append(keys, fmt.Sprintf(kIndexType, v.id, l.Name, it.Value))
+		}
 		for _, tag := range l.Tags {
-			keys = append(keys, fmt.Sprintf(kIndexTag, v.id, l.Name, tag))
+			keys = append(keys, fmt.Sprintf(kIndexTag, v.id, l.Name, tag.Value))
 		}
 	}
 	for _, l := range v.in {
@@ -208,30 +216,35 @@ func Test_Record_MatchesTree_AfterMutations(t *testing.T) {
 
 		switch rng.Intn(4) {
 		case 0, 1: // записать связь
-			l := outLink{
-				Name: name, Type: fmt.Sprintf("t%d", rng.Intn(3)),
-				Target: fmt.Sprintf("dom/tgt-%02d", rng.Intn(20)), UpdateTime: now,
-			}
+			lt := fmt.Sprintf("t%d", rng.Intn(3))
+			tgt := fmt.Sprintf("dom/tgt-%02d", rng.Intn(20))
 			if prev, ok := live[name]; ok {
-				// у старой связи ключи по типу/цели надо снять, как это делает CRUD
-				cs.DeleteValue(fmt.Sprintf(kLinkType, id, prev.Type, prev.Target), false, now)
-				cs.DeleteValue(fmt.Sprintf(kIndexType, id, prev.Name, prev.Type), false, now)
+				plt, ptgt := splitTypeTarget(prev.To.Value)
+				cs.DeleteValue(fmt.Sprintf(kLinkType, id, plt, ptgt), false, now)
+				cs.DeleteValue(fmt.Sprintf(kIndexType, id, prev.Name, plt), false, now)
+				r.deletePair(plt, ptgt, now)
+				r.setOutIndexType(prev.Name, plt, now, false)
 			}
-			cs.SetValue(fmt.Sprintf(kOutTo, id, l.Name), []byte(l.Type+"."+l.Target), false, now)
-			cs.SetValue(fmt.Sprintf(kLinkType, id, l.Type, l.Target), []byte(l.Name), false, now)
-			cs.SetValue(fmt.Sprintf(kIndexType, id, l.Name, l.Type), nil, false, now)
-			require.True(t, r.putOutLink(l))
-			live[name] = l
+			cs.SetValue(fmt.Sprintf(kOutTo, id, name), []byte(lt+"."+tgt), false, now)
+			cs.SetValue(fmt.Sprintf(kLinkType, id, lt, tgt), []byte(name), false, now)
+			cs.SetValue(fmt.Sprintf(kIndexType, id, name, lt), nil, false, now)
+			require.True(t, r.setOutTo(name, lt+"."+tgt, now))
+			require.True(t, r.putPair(pairEntry{Type: lt, Target: tgt, Name: name, UpdateTime: now}))
+			require.True(t, r.setOutIndexType(name, lt, now, true))
+			live[name] = outLink{Name: name, To: subValue{Value: lt + "." + tgt, Time: now, Live: true}}
 
 		case 2: // удалить связь
 			prev, ok := live[name]
 			if !ok {
 				continue
 			}
+			plt, ptgt := splitTypeTarget(prev.To.Value)
 			cs.DeleteValue(fmt.Sprintf(kOutTo, id, prev.Name), false, now)
-			cs.DeleteValue(fmt.Sprintf(kLinkType, id, prev.Type, prev.Target), false, now)
-			cs.DeleteValue(fmt.Sprintf(kIndexType, id, prev.Name, prev.Type), false, now)
-			require.True(t, r.deleteOutLink(prev.Name, now))
+			cs.DeleteValue(fmt.Sprintf(kLinkType, id, plt, ptgt), false, now)
+			cs.DeleteValue(fmt.Sprintf(kIndexType, id, prev.Name, plt), false, now)
+			require.True(t, r.deleteOutTo(prev.Name, now))
+			require.True(t, r.deletePair(plt, ptgt, now))
+			require.True(t, r.setOutIndexType(prev.Name, plt, now, false))
 			delete(live, name)
 
 		case 3: // запоздавшая запись — обязана быть отвергнута обоими
@@ -239,10 +252,8 @@ func Test_Record_MatchesTree_AfterMutations(t *testing.T) {
 			if !ok {
 				continue
 			}
-			stale := prev
-			stale.Target = "dom/stale"
-			stale.UpdateTime = prev.UpdateTime - 1
-			require.False(t, r.putOutLink(stale), "шаг %d: запись сквозь приняла старое время", step)
+			require.False(t, r.setOutTo(prev.Name, "stale.dom/stale", prev.To.Time-1),
+				"шаг %d: запись сквозь приняла старое время", step)
 		}
 
 		if step%97 != 0 {

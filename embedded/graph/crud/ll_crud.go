@@ -3,6 +3,7 @@
 package crud
 
 import (
+	"bytes"
 	"fmt"
 	"regexp"
 	"sort"
@@ -50,6 +51,22 @@ var (
 // runtime shutdown) fast instead of waiting the production default. Call it before
 // issuing operations (e.g. from a test init); not for non-test use.
 func SetGraphKeyLockTimeoutForTest(d time.Duration) { graphKeyLockTimeout = d }
+
+// sameBody reports whether two bodies denote the same value.
+//
+// Serialized, not structural: easyjson.Equals is reflect.DeepEqual over the
+// parsed tree, and that treats int(8) and float64(8) as different values. Which
+// of the two a number arrives as depends on whether it came from the wire or
+// was built in Go — so a body that had not changed could still be seen as
+// changed, producing a write, WAL traffic and a trigger fan-out on every
+// idempotent rewrite. json.Marshal sorts object keys, so ordering stays
+// irrelevant.
+func sameBody(a, b *easyjson.JSON) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return bytes.Equal(a.ToBytes(), b.ToBytes())
+}
 
 func getVertexBody(ctx *sfPlugins.StatefunContextProcessor, keyValueID string) *easyjson.JSON {
 	if j, err := ctx.Domain.Cache().GetValueJSON(keyValueID); err == nil {
@@ -499,11 +516,13 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	// WAL, suppresses dirty publish + trigger fan-out, and keeps connected
 	// graphs quiet under idempotent upsert pressure.
 	//
-	// Equality uses easyjson.JSON.Equals → reflect.DeepEqual on the parsed
-	// tree, so object-key ordering does not matter. Both sides came from
-	// json.Unmarshal (float64 numbers), so type-coercion mismatches are not
-	// expected on the steady-state update path.
-	if oldBody != nil && body.Equals(*oldBody) {
+	// Equality compares the SERIALIZED bodies, not the parsed trees.
+	// reflect.DeepEqual — what easyjson.Equals uses — distinguishes int from
+	// float64, so whether an idempotent rewrite is recognised as one depended
+	// on which Go type a number happened to arrive as. Marshalling both sides
+	// removes that: object-key ordering still does not matter (Go sorts map
+	// keys), and 8 compares equal to 8 whichever type carried it.
+	if oldBody != nil && sameBody(&body, oldBody) {
 		operationKeysMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("vertex with id=%s body unchanged", selfID))).Reply()
 		return
@@ -1203,9 +1222,9 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	//     against the existing one; if they match AND body is equal,
 	//     short-circuit.
 	//
-	// Equality on body uses easyjson.JSON.Equals (reflect.DeepEqual on
-	// the parsed tree, key-order independent).
-	if oldLinkBody != nil && linkBody.Equals(*oldLinkBody) {
+	// Equality on body compares the serialized forms — see the vertex path for
+	// why the parsed-tree comparison was not enough.
+	if oldLinkBody != nil && sameBody(&linkBody, oldLinkBody) {
 		if !replace {
 			// Merge mode: no-op iff caller did not ask to touch tags.
 			if !payload.GetByPath("tags").IsNonEmptyArray() {

@@ -85,73 +85,107 @@ func (r *vertexRecord) withInSlot(key string, fn func(b *bucket) (*bucket, bucke
 // outgoing links
 // ---------------------------------------------------------------------------
 
-// putOutLink inserts or replaces an outgoing link. Returns false when an older
-// timestamp lost to what is already stored.
-func (r *vertexRecord) putOutLink(l outLink) bool {
-	d, res := r.withOutSlot(l.Name, func(b *bucket) (*bucket, bucketWriteResult) {
-		links, ok := applyOutLink(copyOutEntries(b), l)
-		if !ok {
+// mutateOutLink applies a change to one key of a link, creating the entry if it
+// is not there yet, and publishes the bucket.
+//
+// CRUD writes a link as several separate keys, in no guaranteed order and each
+// through its own cache call, and later rewrites or deletes them one at a time.
+// A write of one key therefore merges into whatever the others left behind, and
+// each key keeps its own time and its own live flag.
+func (r *vertexRecord) mutateOutLink(name string, apply func(*outLink) bool) bool {
+	d, res := r.withOutSlot(name, func(b *bucket) (*bucket, bucketWriteResult) {
+		links := copyOutEntries(b)
+		i := sort.Search(len(links), func(i int) bool { return links[i].Name >= name })
+
+		l := outLink{Name: name}
+		exists := i < len(links) && links[i].Name == name
+		if exists {
+			l = links[i]
+		}
+		if !apply(&l) {
 			return nil, bucketWriteResult{applied: false}
+		}
+		if exists {
+			links[i] = l
+		} else {
+			links = append(links, outLink{})
+			copy(links[i+1:], links[i:])
+			links[i] = l
 		}
 		return &bucket{outs: links, decoded: true, localDepth: b.localDepth},
 			bucketWriteResult{applied: true, count: len(links)}
 	})
 	if res.applied && res.count > r.bucketLimit() {
-		r.splitOut(d, l.Name)
+		r.splitOut(d, name)
 	}
 	return res.applied
 }
 
-// deleteOutLink replaces the link with a tombstone, so a later write carrying
-// an older time cannot bring it back.
-func (r *vertexRecord) deleteOutLink(name string, t int64) bool {
-	_, res := r.withOutSlot(name, func(b *bucket) (*bucket, bucketWriteResult) {
-		links, ok := applyOutLink(copyOutEntries(b), outLink{Name: name, UpdateTime: t, Tombstone: true})
-		if !ok {
-			return nil, bucketWriteResult{applied: false}
+// setOutTo writes `out.to.<name>` = "<type>.<target>".
+func (r *vertexRecord) setOutTo(name, value string, t int64) bool {
+	return r.mutateOutLink(name, func(l *outLink) bool {
+		if t < l.To.Time {
+			return false
 		}
-		return &bucket{outs: links, decoded: true, localDepth: b.localDepth},
-			bucketWriteResult{applied: true, count: len(links)}
+		l.To = subValue{Value: value, Time: t, Live: true}
+		return true
 	})
-	return res.applied
 }
 
-// applyOutLink merges one link into a decoded bucket, honouring the guard.
-func applyOutLink(links []outLink, l outLink) ([]outLink, bool) {
-	i := sort.Search(len(links), func(i int) bool { return links[i].Name >= l.Name })
-	if i < len(links) && links[i].Name == l.Name {
-		if l.UpdateTime < links[i].UpdateTime {
-			return nil, false // an older write loses, tombstone or not
+func (r *vertexRecord) deleteOutTo(name string, t int64) bool {
+	return r.mutateOutLink(name, func(l *outLink) bool {
+		if t < l.To.Time {
+			return false
 		}
-		links[i] = l
-		return links, true
-	}
-	links = append(links, outLink{})
-	copy(links[i+1:], links[i:])
-	links[i] = l
-	return links, true
+		l.To = subValue{Time: t}
+		return true
+	})
 }
 
-// copyOutEntries returns the bucket's entries in a slice the caller may mutate.
-// Copying is what keeps published buckets immutable: a reader that loaded this
-// bucket must keep seeing what it loaded, so the writer works on its own slice
-// and publishes a new bucket around it. A decoded bucket copies; an encoded one
-// decodes, which is the same cost it always was.
-func copyOutEntries(b *bucket) []outLink {
-	if b == nil {
-		return nil
-	}
-	if b.decoded {
-		out := make([]outLink, len(b.outs), len(b.outs)+1)
-		copy(out, b.outs)
-		return out
-	}
-	n := bucketCount(b.data)
-	links := make([]outLink, 0, n+1)
-	for i := 0; i < n; i++ {
-		links = append(links, decodeOutLink(bucketEntry(b.data, i)))
-	}
-	return links
+// setOutBody writes `out.body.<name>`.
+func (r *vertexRecord) setOutBody(name string, body []byte, t int64) bool {
+	return r.mutateOutLink(name, func(l *outLink) bool {
+		if t < l.Body.Time {
+			return false
+		}
+		l.Body = subValue{Value: string(body), Time: t, Live: true}
+		return true
+	})
+}
+
+func (r *vertexRecord) deleteOutBody(name string, t int64) bool {
+	return r.mutateOutLink(name, func(l *outLink) bool {
+		if t < l.Body.Time {
+			return false
+		}
+		l.Body = subValue{Time: t}
+		return true
+	})
+}
+
+// setOutIndexType writes `out.index.<name>.type.<type>`; the type is part of
+// the key, so several may coexist, and each has its own time.
+func (r *vertexRecord) setOutIndexType(name, linkType string, t int64, live bool) bool {
+	return r.mutateOutLink(name, func(l *outLink) bool {
+		subs, ok := putSub(l.IdxTypes, linkType, t, live)
+		if !ok {
+			return false
+		}
+		l.IdxTypes = subs
+		return true
+	})
+}
+
+// setOutTag writes `out.index.<name>.tag.<tag>`.
+func (r *vertexRecord) setOutTag(name, tag string, t int64, live bool) bool {
+	return r.mutateOutLink(name, func(l *outLink) bool {
+		subs, ok := putSub(l.Tags, tag, t, live)
+		if !ok {
+			return false
+		}
+		l.Tags = subs
+		return true
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -201,6 +235,27 @@ func applyInLink(links []inLink, l inLink) ([]inLink, bool) {
 	copy(links[i+1:], links[i:])
 	links[i] = l
 	return links, true
+}
+
+// copyOutEntries returns the bucket's entries in a slice the caller may mutate.
+// Copying is what keeps published buckets immutable: a reader that loaded this
+// bucket must keep seeing what it loaded, so the writer works on its own slice
+// and publishes a new bucket around it.
+func copyOutEntries(b *bucket) []outLink {
+	if b == nil {
+		return nil
+	}
+	if b.decoded {
+		out := make([]outLink, len(b.outs), len(b.outs)+1)
+		copy(out, b.outs)
+		return out
+	}
+	n := bucketCount(b.data)
+	links := make([]outLink, 0, n+1)
+	for i := 0; i < n; i++ {
+		links = append(links, decodeOutLink(bucketEntry(b.data, i)))
+	}
+	return links
 }
 
 func copyInEntries(b *bucket) []inLink {

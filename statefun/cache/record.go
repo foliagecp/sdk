@@ -75,15 +75,93 @@ var defaultBucketLinks = system.GetEnvMustProceed[int]("CACHE_BUCKET_LINKS", 32)
 // without locks: a write publishes a new block, it never edits one in place.
 type record string
 
-// outLink is the decoded form of one outgoing link.
+// subValue is one cache key of a link: what it holds, when it was written and
+// whether it is live. A key that was deleted keeps its time and loses Live —
+// that is the last-writer-wins guard, and it reads as absent.
+type subValue struct {
+	Value string
+	Time  int64
+	Live  bool
+}
+
+func (s subValue) written() bool { return s.Time != 0 || s.Live }
+
+// outLink is the decoded form of one outgoing link — which in the tree is not
+// one key but several, written and deleted independently:
+//
+//	out.to.<name>                   To
+//	out.body.<name>                 Body
+//	out.index.<name>.type.<type>    IdxTypes
+//	out.index.<name>.tag.<tag>      Tags
+//
+// Each carries its own time because the tree gives each its own node, and CRUD
+// does write them apart: a link update writes the body and the type index
+// without touching the target, and drops the index of the old type while the
+// link lives on. Holding one type and one time per link answered those keys
+// wrongly — which is what the differential test against the tree caught.
 type outLink struct {
-	Name       string
-	Type       string
-	Target     string
-	Body       []byte // raw JSON, nil when the link has no body
-	Tags       []string
-	UpdateTime int64
-	Tombstone  bool
+	Name     string
+	To       subValue // "<type>.<target>"
+	Body     subValue // raw JSON
+	IdxTypes []subValue
+	Tags     []subValue
+}
+
+// alive reports whether any key of the link is still live.
+func (l outLink) alive() bool {
+	if l.To.Live || l.Body.Live {
+		return true
+	}
+	for _, v := range l.IdxTypes {
+		if v.Live {
+			return true
+		}
+	}
+	for _, v := range l.Tags {
+		if v.Live {
+			return true
+		}
+	}
+	return false
+}
+
+// linkType and target split the To key, which CRUD writes as "<type>.<target>".
+// Neither part can contain a dot: both are cache key tokens.
+func (l outLink) linkType() string {
+	t, _ := splitTypeTarget(l.To.Value)
+	return t
+}
+
+func (l outLink) target() string {
+	_, t := splitTypeTarget(l.To.Value)
+	return t
+}
+
+// findSub locates a named sub-key (a type index or a tag).
+func findSub(subs []subValue, value string) (subValue, bool) {
+	for _, s := range subs {
+		if s.Value == value {
+			return s, true
+		}
+	}
+	return subValue{}, false
+}
+
+// putSub sets a named sub-key, honouring the guard; returns the new slice and
+// whether the write applied.
+func putSub(subs []subValue, value string, t int64, live bool) ([]subValue, bool) {
+	for i, s := range subs {
+		if s.Value == value {
+			if t < s.Time {
+				return subs, false
+			}
+			out := append([]subValue(nil), subs...)
+			out[i] = subValue{Value: value, Time: t, Live: live}
+			return out, true
+		}
+	}
+	out := append([]subValue(nil), subs...)
+	return append(out, subValue{Value: value, Time: t, Live: live}), true
 }
 
 // inLink is the decoded form of one incoming link.
@@ -472,26 +550,49 @@ func readInt64(s string, i int) (int64, int) {
 	return int64(le64(s, i)), i + 8
 }
 
-// out-link entry: name, flags, time, type, target, body, tags
-func encodeOutLink(dst []byte, l outLink) []byte {
-	dst = putString(dst, l.Name)
+// An out-link entry: the name, then each of its cache keys with its own time
+// and its own live flag.
+//
+//	name
+//	To    : time, live, value
+//	Body  : time, live, value
+//	count of type indexes, each: time, live, type
+//	count of tags,         each: time, live, tag
+func encodeSubValue(dst []byte, s subValue) []byte {
+	var t [8]byte
+	putUint64(t[:], uint64(s.Time))
+	dst = append(dst, t[:]...)
 	var f byte
-	if l.Tombstone {
-		f |= entryTombstoned
+	if s.Live {
+		f = 1
 	}
 	dst = append(dst, f)
-	var t [8]byte
-	binary.LittleEndian.PutUint64(t[:], uint64(l.UpdateTime))
-	dst = append(dst, t[:]...)
-	if l.Tombstone {
-		return dst // a guard carries nothing else
+	return putString(dst, s.Value)
+}
+
+func readSubValue(entry string, i int) (subValue, int) {
+	var s subValue
+	s.Time, i = readInt64(entry, i)
+	if i >= len(entry) {
+		return s, len(entry)
 	}
-	dst = putString(dst, l.Type)
-	dst = putString(dst, l.Target)
-	dst = putBytes(dst, l.Body)
+	s.Live = entry[i] == 1
+	i++
+	s.Value, i = readStr(entry, i)
+	return s, i
+}
+
+func encodeOutLink(dst []byte, l outLink) []byte {
+	dst = putString(dst, l.Name)
+	dst = encodeSubValue(dst, l.To)
+	dst = encodeSubValue(dst, l.Body)
+	dst = putUvarint(dst, uint64(len(l.IdxTypes)))
+	for _, v := range l.IdxTypes {
+		dst = encodeSubValue(dst, v)
+	}
 	dst = putUvarint(dst, uint64(len(l.Tags)))
-	for _, tag := range l.Tags {
-		dst = putString(dst, tag)
+	for _, v := range l.Tags {
+		dst = encodeSubValue(dst, v)
 	}
 	return dst
 }
@@ -500,57 +601,40 @@ func decodeOutLink(entry string) outLink {
 	var l outLink
 	i := 0
 	l.Name, i = readStr(entry, i)
-	if i >= len(entry) {
-		return l
-	}
-	l.Tombstone = entry[i]&entryTombstoned != 0
-	i++
-	l.UpdateTime, i = readInt64(entry, i)
-	if l.Tombstone {
-		return l
-	}
-	l.Type, i = readStr(entry, i)
-	l.Target, i = readStr(entry, i)
-	var body string
-	body, i = readStr(entry, i)
-	if len(body) > 0 {
-		l.Body = []byte(body)
-	}
+	l.To, i = readSubValue(entry, i)
+	l.Body, i = readSubValue(entry, i)
 	var n uint64
 	n, i = readUvarint(entry, i)
 	if n > 0 {
-		l.Tags = make([]string, n)
+		l.IdxTypes = make([]subValue, n)
+		for k := range l.IdxTypes {
+			l.IdxTypes[k], i = readSubValue(entry, i)
+		}
+	}
+	n, i = readUvarint(entry, i)
+	if n > 0 {
+		l.Tags = make([]subValue, n)
 		for k := range l.Tags {
-			l.Tags[k], i = readStr(entry, i)
+			l.Tags[k], i = readSubValue(entry, i)
 		}
 	}
 	return l
 }
 
-// outLinkName reads only the name — the key a bucket is sorted by. Used by the
-// binary search, so it must not decode anything else.
 func outLinkName(entry string) string {
 	n, _ := readStr(entry, 0)
 	return n
 }
 
-// outLinkTarget decodes only what the `V.out.to.<name>` key needs — type and
-// target — skipping body and tags, which a reader of that key never looks at.
-func outLinkTarget(entry string) (linkType, target string, tombstoned bool, ok bool) {
+// outLinkTo decodes only the To key — the hottest read of a traversal.
+func outLinkTo(entry string) (subValue, bool) {
 	i := 0
 	_, i = readStr(entry, i)
 	if i >= len(entry) {
-		return "", "", false, false
+		return subValue{}, false
 	}
-	tombstoned = entry[i]&entryTombstoned != 0
-	i++
-	_, i = readInt64(entry, i)
-	if tombstoned {
-		return "", "", true, true
-	}
-	linkType, i = readStr(entry, i)
-	target, _ = readStr(entry, i)
-	return linkType, target, false, true
+	v, _ := readSubValue(entry, i)
+	return v, true
 }
 
 // in-link entry: from, name, flags, time, type
@@ -668,11 +752,15 @@ func newVertexRecord(v vertexData, bucketLinks int) *vertexRecord {
 	// name as a deterministic tie-break.
 	byPair := make(map[string]pairEntry, len(v.Out))
 	for _, l := range v.Out {
-		k := makePairKey(l.Type, l.Target)
+		if !l.To.Live {
+			continue
+		}
+		lt, tgt := splitTypeTarget(l.To.Value)
+		k := makePairKey(lt, tgt)
 		cur, seen := byPair[k]
-		if !seen || l.UpdateTime > cur.UpdateTime ||
-			(l.UpdateTime == cur.UpdateTime && l.Name > cur.Name) {
-			byPair[k] = pairEntry{Type: l.Type, Target: l.Target, Name: l.Name, UpdateTime: l.UpdateTime}
+		if !seen || l.To.Time > cur.UpdateTime ||
+			(l.To.Time == cur.UpdateTime && l.Name > cur.Name) {
+			byPair[k] = pairEntry{Type: lt, Target: tgt, Name: l.Name, UpdateTime: l.To.Time}
 		}
 	}
 	pairs := make([]pairEntry, 0, len(byPair))
@@ -729,19 +817,21 @@ func (r *vertexRecord) lookupOutTarget(name string) (linkType, target string, ok
 	}
 	if b.decoded {
 		l, found := searchOutSlice(b.outs, name)
-		if !found || l.Tombstone {
+		if !found || !l.To.Live {
 			return "", "", false
 		}
-		return l.Type, l.Target, true
+		lt, tgt := splitTypeTarget(l.To.Value)
+		return lt, tgt, true
 	}
 	e, found := bucketSearch(b.data, name, outLinkName)
 	if !found {
 		return "", "", false
 	}
-	lt, tgt, tomb, valid := outLinkTarget(e)
-	if !valid || tomb {
+	to, ok := outLinkTo(e)
+	if !ok || !to.Live {
 		return "", "", false
 	}
+	lt, tgt := splitTypeTarget(to.Value)
 	return lt, tgt, true
 }
 
@@ -765,9 +855,10 @@ func searchInSlice(links []inLink, from, name string) (inLink, bool) {
 	return inLink{}, false
 }
 
+// lookupOutLink returns the link if any of its keys is still live.
 func (r *vertexRecord) lookupOutLink(name string) (outLink, bool) {
 	l, ok := r.lookupOutLinkGuard(name)
-	if !ok || l.Tombstone {
+	if !ok || !l.alive() {
 		return outLink{}, false
 	}
 	return l, true
@@ -818,7 +909,7 @@ func (r *vertexRecord) lookupInLinkGuard(from, name string) (inLink, bool) {
 func (r *vertexRecord) rangeOutLinks(fn func(outLink) bool) {
 	r.out.Load().each(func(b *bucket) bool {
 		for _, l := range b.outEntries() {
-			if l.Tombstone {
+			if !l.alive() {
 				continue
 			}
 			if !fn(l) {
@@ -891,9 +982,12 @@ func (r *vertexRecord) approxBytes() int {
 				continue
 			}
 			for _, l := range b.outs {
-				n += outLinkBytes + len(l.Name) + len(l.Type) + len(l.Target) + len(l.Body)
-				for _, t := range l.Tags {
-					n += len(t) + 16
+				n += outLinkBytes + len(l.Name) + len(l.To.Value) + len(l.Body.Value)
+				for _, v := range l.IdxTypes {
+					n += subValueBytes + len(v.Value)
+				}
+				for _, v := range l.Tags {
+					n += subValueBytes + len(v.Value)
 				}
 			}
 			for _, l := range b.ins {
@@ -914,8 +1008,9 @@ func (r *vertexRecord) approxBytes() int {
 // string slice, an int64 and a bool for an out-link; three string headers, an
 // int64 and a bool for an in-link.
 const (
-	outLinkBytes = 3*16 + 24 + 24 + 8 + 8
-	inLinkBytes  = 3*16 + 8 + 8
+	subValueBytes = 16 + 8 + 8
+	outLinkBytes  = 16 + 2*subValueBytes + 2*24
+	inLinkBytes   = 3*16 + 8 + 8
 )
 
 // Small endian writers used by the encoders.
