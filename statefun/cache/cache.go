@@ -825,6 +825,60 @@ func (cs *Store) RehydrateFromKV(ctx context.Context) error {
 	return cs.loadFromKV(ctx)
 }
 
+// publishRecordGauges exports what the cache holds as records.
+//
+// There are no histograms of reading a key here, and deliberately so: reading a
+// link from a record takes 217 ns, and observing a Prometheus histogram costs a
+// large fraction of that, so the measurement would be a third of what it
+// measures. What the operator needs is visible from state anyway — the split
+// rate is the derivative of the bucket count, since buckets appear no other
+// way, and reads decompressing buckets show as the compressed count falling
+// between passes.
+//
+// Reported whatever the mode, so a graph that is NOT held as records reads as
+// zero rather than as a gap in the dashboard, and cache_mode says which it is.
+func (cs *Store) publishRecordGauges() {
+	set := func(name, help string, value float64) {
+		gv, err := system.GlobalPrometrics.EnsureGaugeVecSimple(name, help, []string{"id"})
+		if err != nil {
+			return
+		}
+		gv.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(value)
+	}
+
+	st := cs.recordStats()
+	set("cache_record_vertices", "vertices kept as records", float64(st.vertices))
+	set("cache_record_bytes", "bytes held by those records", float64(st.bytes))
+	set("cache_record_buckets", "buckets across all record directories", float64(st.buckets))
+	set("cache_record_buckets_compressed", "of those, held compressed", float64(st.compressed))
+	set("cache_record_buckets_decoded", "of those, left decoded by a write and awaiting compaction",
+		float64(st.decoded))
+	set("cache_record_parsed_bodies", "vertex bodies held parsed for readers", float64(st.parsedBodies))
+
+	trainedAt, lastRatio, retrains := DictionaryStats()
+	set("cache_record_dictionary_version", "how many dictionaries have been installed",
+		float64(recordCodec.dictVersion()))
+	set("cache_record_dictionary_ratio_trained", "compression ratio measured when the dictionary was trained",
+		trainedAt)
+	set("cache_record_dictionary_ratio_now", "compression ratio on the most recent sample", lastRatio)
+	set("cache_record_dictionary_retrains", "how many times the dictionary has been rebuilt",
+		float64(retrains))
+
+	// One series per mode, so a dashboard can tell what the cache is actually
+	// doing without inferring it from the other numbers.
+	if gv, err := system.GlobalPrometrics.EnsureGaugeVecSimple(
+		"cache_mode", "which representation the cache is using", []string{"id", "mode"}); err == nil {
+		current := CacheMode()
+		for _, m := range []string{"tree", "records", "zstd", "zstd-dict"} {
+			v := 0.0
+			if m == current {
+				v = 1
+			}
+			gv.With(prometheus.Labels{"id": cs.cacheConfig.id, "mode": m}).Set(v)
+		}
+	}
+}
+
 // traverseCacheForMaintenance performs a post-order DFS that counts nodes
 // (for the cache_values metric) AND collapses tombstone cascades.
 //
@@ -1292,6 +1346,11 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 					if gv, err := system.GlobalPrometrics.EnsureGaugeVecSimple("cache_sweep_removed_total", "", []string{"id"}); err == nil {
 						gv.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(float64(atomic.LoadInt64(&cs.totalSweepRemoved)))
 					}
+
+					// What the records hold, on the same cadence. Nothing here
+					// is measured on the read or write path — the shape of the
+					// graph is a thing to look at once a second.
+					cs.publishRecordGauges()
 
 					// WAL write-barrier state: backlog depth, backlog AGE and
 					// publish progress. Off the hot path, on the same cadence

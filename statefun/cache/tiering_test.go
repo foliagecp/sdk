@@ -12,6 +12,9 @@ import (
 	"testing"
 
 	"github.com/foliagecp/easyjson"
+	"github.com/foliagecp/sdk/statefun/system"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -337,4 +340,116 @@ func Test_GetValueJSON_DistinguishesAbsentFromInvalid(t *testing.T) {
 			require.ErrorContains(t, err, "does not exist")
 		})
 	}
+}
+
+// Test_RecordGauges_ReportWhatIsHeld — метрики обязаны показывать то, что
+// действительно лежит в кэше, и меняться вместе с ним. Без этого переключённое
+// умолчание невидимо в бою.
+func Test_RecordGauges_ReportWhatIsHeld(t *testing.T) {
+	restore := SetCacheModeForTest("records")
+	defer restore()
+
+	cs := NewStoreForTest("gauges")
+	require.Equal(t, recordStats{}, cs.recordStats(), "пустой кэш обязан показывать нули")
+
+	body, _ := easyjson.JSONFromString(`{"name":"узел","cpu":8}`)
+	const vertices = 40
+	for i := 0; i < vertices; i++ {
+		id := fmt.Sprintf("dom/v-%03d", i)
+		require.True(t, cs.SetValueJSON(id, &body, false, 1))
+		for l := 0; l < 3; l++ {
+			cs.SetValue(fmt.Sprintf("%s.out.to.l%d", id, l), []byte("t.dom/x"), false, 1)
+		}
+	}
+
+	st := cs.recordStats()
+	require.Equal(t, vertices, st.vertices, "вершины")
+	require.Positive(t, st.bytes, "байты записей")
+	require.Positive(t, st.buckets, "корзины")
+	require.Positive(t, st.decoded, "запись обязана оставить корзину разобранной")
+	require.Zero(t, st.compressed, "без сжатия сжатых корзин быть не может")
+	require.Zero(t, st.parsedBodies, "до чтений разборов быть не должно")
+
+	// обслуживание кодирует то, что оставила запись
+	cs.compactRecords()
+	require.Zero(t, cs.recordStats().decoded, "после уплотнения разобранных корзин быть не должно")
+
+	// два чтения тела оставляют разбор, и метрика это видит
+	for round := 0; round < 2; round++ {
+		for i := 0; i < vertices; i++ {
+			cs.GetValueJSON(fmt.Sprintf("dom/v-%03d", i)) //nolint:errcheck
+		}
+	}
+	require.Equal(t, vertices, cs.recordStats().parsedBodies, "разобранные тела")
+	cs.ageParsedBodies()
+	cs.ageParsedBodies()
+	require.Zero(t, cs.recordStats().parsedBodies, "остывшие тела обязаны исчезнуть из метрики")
+
+	// расщепления видны как рост числа корзин — отдельного счётчика не нужно
+	before := cs.recordStats().buckets
+	for l := 0; l < 200; l++ {
+		cs.SetValue(fmt.Sprintf("dom/v-000.out.to.big%03d", l), []byte("t.dom/y"), false, 2)
+	}
+	require.Greater(t, cs.recordStats().buckets, before,
+		"корзины обязаны прибавиться — иначе по метрике не увидеть расщеплений")
+}
+
+// Test_RecordGauges_TreeReportsZero — в режиме дерева метрики записей обязаны
+// быть нулями, а не отсутствовать: провал в графике неотличим от поломки сбора.
+func Test_RecordGauges_TreeReportsZero(t *testing.T) {
+	restore := SetCacheModeForTest("tree")
+	defer restore()
+
+	cs := NewStoreForTest("gauges_tree")
+	body, _ := easyjson.JSONFromString(`{"n":1}`)
+	cs.SetValueJSON("dom/v", &body, false, 1)
+	require.True(t, cs.Exists("dom/v"))
+	require.Equal(t, recordStats{}, cs.recordStats())
+	require.Equal(t, "tree", CacheMode())
+}
+
+// Test_RecordGauges_Published — метрики обязаны действительно доезжать до
+// Prometheus под теми именами, под которыми их ищут в дашборде. Опечатка в
+// имени иначе замечается только тогда, когда график понадобился.
+func Test_RecordGauges_Published(t *testing.T) {
+	if system.GlobalPrometrics == nil {
+		system.GlobalPrometrics = system.NewPrometrics("", "")
+	}
+	restore := SetCacheModeForTest("records")
+	defer restore()
+
+	cs := NewStoreForTest("published")
+	body, _ := easyjson.JSONFromString(`{"n":1}`)
+	for i := 0; i < 5; i++ {
+		cs.SetValueJSON(fmt.Sprintf("dom/v-%d", i), &body, false, 1)
+	}
+	cs.publishRecordGauges()
+
+	value := func(name string, labels prometheus.Labels) float64 {
+		gv, err := system.GlobalPrometrics.EnsureGaugeVecSimple(name, "", labelNamesOf(labels))
+		require.NoErrorf(t, err, "метрика %s", name)
+		var m dto.Metric
+		require.NoErrorf(t, gv.With(labels).Write(&m), "метрика %s", name)
+		return m.GetGauge().GetValue()
+	}
+	id := prometheus.Labels{"id": cs.cacheConfig.id}
+
+	require.Equal(t, float64(5), value("cache_record_vertices", id))
+	require.Positive(t, value("cache_record_bytes", id))
+	require.Positive(t, value("cache_record_buckets", id))
+	require.Equal(t, float64(0), value("cache_record_parsed_bodies", id))
+	require.Equal(t, float64(1),
+		value("cache_mode", prometheus.Labels{"id": cs.cacheConfig.id, "mode": "records"}),
+		"режим обязан быть виден в метрике")
+	require.Equal(t, float64(0),
+		value("cache_mode", prometheus.Labels{"id": cs.cacheConfig.id, "mode": "tree"}))
+}
+
+func labelNamesOf(l prometheus.Labels) []string {
+	names := make([]string, 0, len(l))
+	for k := range l {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
 }

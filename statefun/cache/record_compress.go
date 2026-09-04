@@ -300,6 +300,52 @@ func compressDir(d *bucketDir) int {
 }
 
 // compressedBuckets counts buckets currently held compressed.
+// bucketCounts is how many buckets the record holds, and in which of the three
+// forms. Counted in one walk because the maintenance pass asks all three
+// questions at once, and shared holders are counted once — a bucket referenced
+// from eight directory slots is still one bucket.
+func (r *vertexRecord) bucketCounts() (total, compressed, decoded int) {
+	count := func(d *bucketDir) {
+		if d == nil {
+			return
+		}
+		seen := make(map[*bucketSlot]struct{}, len(d.slots))
+		for _, s := range d.slots {
+			if s == nil {
+				continue
+			}
+			if _, dup := seen[s]; dup {
+				continue
+			}
+			seen[s] = struct{}{}
+			b := s.ptr.Load()
+			if b == nil {
+				continue
+			}
+			total++
+			switch {
+			case b.compressed:
+				compressed++
+			case b.decoded:
+				decoded++
+			}
+		}
+	}
+	count(r.out.Load())
+	count(r.in.Load())
+	count(r.pairs.Load())
+	return total, compressed, decoded
+}
+
+// DictionaryStats reports the compression ratio measured when the dictionary
+// was trained, the ratio on the most recent sample, and how many times it has
+// been rebuilt. Process-wide, like the codec itself.
+func DictionaryStats() (trainedAt, lastRatio float64, retrains int) {
+	dictTracker.mu.Lock()
+	defer dictTracker.mu.Unlock()
+	return dictTracker.trainedAt, dictTracker.lastRatio, dictTracker.retrains
+}
+
 func (r *vertexRecord) compressedBuckets() int {
 	n := 0
 	count := func(d *bucketDir) {
@@ -506,9 +552,7 @@ func (cs *Store) maybeTrainDictionary(sampleLimit int) bool {
 // DictionaryStatsForTest reports the ratio measured at training time, the ratio
 // on the latest sample, and how many times the dictionary has been rebuilt.
 func DictionaryStatsForTest() (trainedAt, lastRatio float64, retrains int) {
-	dictTracker.mu.Lock()
-	defer dictTracker.mu.Unlock()
-	return dictTracker.trainedAt, dictTracker.lastRatio, dictTracker.retrains
+	return DictionaryStats()
 }
 
 // ResetCompressionForTest puts the codec back to having no dictionary, so one

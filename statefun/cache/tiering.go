@@ -497,6 +497,39 @@ func (cs *Store) compactRecords() int {
 	return n
 }
 
+// recordStats is what one walk over the records sees: the shape of the graph as
+// it is actually held. Collected in the maintenance pass and nowhere else —
+// what the cache looks like is a thing to measure once a second, not something
+// to pay for on every read.
+type recordStats struct {
+	vertices     int // vertices kept as records
+	bytes        int // what those records hold, counted deterministically
+	buckets      int // buckets across all three directories
+	compressed   int // of those, held as a compressed frame
+	decoded      int // of those, left as Go objects by a write, awaiting compaction
+	parsedBodies int // bodies held as a parsed tree — the part that grows with reading
+}
+
+func (cs *Store) recordStats() recordStats {
+	var st recordStats
+	if !tieringEnabled() || cs.records == nil {
+		return st
+	}
+	cs.records.each(func(_ string, r *vertexRecord) bool {
+		st.vertices++
+		st.bytes += r.approxBytes()
+		total, compressed, decoded := r.bucketCounts()
+		st.buckets += total
+		st.compressed += compressed
+		st.decoded += decoded
+		if r.parsedBody.Load() != nil {
+			st.parsedBodies++
+		}
+		return true
+	})
+	return st
+}
+
 // RecordsBytesForTest is the deterministic size of everything held as records.
 func (cs *Store) RecordsBytesForTest() int {
 	if cs.records == nil {
