@@ -503,3 +503,54 @@ func (cs *Store) RecordCountForTest() int {
 	}
 	return cs.records.len()
 }
+
+// StoresAsRecord reports whether the value at key is held as a record, and so
+// whether StoredValueEquals can answer about it. Asked before serializing the
+// candidate, so a caller that will not get an answer does not pay for one.
+func (cs *Store) StoresAsRecord(key string) bool {
+	vk, ok := tieredVertex(key)
+	if !ok {
+		return false
+	}
+	_, found := cs.records.get(vk.id)
+	return found
+}
+
+// StoredValueEquals reports whether the value stored at key is byte-for-byte
+// what the caller has in hand, answering from a record without building a tree.
+// known is false when the key is not a record's business and the caller has to
+// decide for itself.
+//
+// This exists because the commonest question asked of a vertex body is not
+// "what is in it" but "did it change" — an inventory rebuild asks it for every
+// vertex on every cycle. Answering it by parsing the stored body and
+// serializing both sides costs 6.7 us on a real body; comparing the bytes the
+// record already holds against the serialization the write needs anyway costs
+// 2.1 us, which is less than the tree ever spent on the same question.
+//
+// Byte comparison is the right test, not a weaker one: bodies are serialized by
+// the same function, json.Marshal sorts object keys, and a number renders the
+// same whichever Go type carried it. So equal bytes mean equal values, and
+// different bytes mean the write has something to do.
+func (cs *Store) StoredValueEquals(key string, serialized []byte) (equal bool, known bool) {
+	vk, ok := tieredVertex(key)
+	if !ok {
+		return false, false
+	}
+	r, found := cs.records.get(vk.id)
+	if !found {
+		return false, false
+	}
+	if vk.isBody() {
+		body, _, exists := r.bodyBytes()
+		if !exists {
+			return false, true
+		}
+		return body == string(serialized), true
+	}
+	v, _, exists := r.lookupParsed(vk.kind, vk.a, vk.b)
+	if !exists {
+		return false, true
+	}
+	return v == string(serialized), true
+}

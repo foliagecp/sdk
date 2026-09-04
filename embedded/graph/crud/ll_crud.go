@@ -65,6 +65,16 @@ func sameBody(a, b *easyjson.JSON) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
+	// The structural comparison answers first because it is the cheaper one and
+	// because when it says "equal" it is right: same shape and same types means
+	// the same value. It is only its NEGATIVE answer that cannot be trusted —
+	// reflect.DeepEqual calls int(8) and float64(8) different, and which of the
+	// two carries a number depends on whether it came off the wire or was built
+	// in Go. So a "different" verdict is checked against the serialized forms,
+	// where a number renders the same either way.
+	if a.Equals(*b) {
+		return true
+	}
 	return bytes.Equal(a.ToBytes(), b.ToBytes())
 }
 
@@ -482,8 +492,6 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	opStack := getOpStackFromOptions(ctx.Options)
 
-	oldBody := getVertexBody(ctx, selfID)
-
 	var replace bool = payload.GetByPath("replace").AsBoolDefault(false)
 
 	var body easyjson.JSON
@@ -491,6 +499,17 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		body = payload.GetByPath("body")
 	} else {
 		body = easyjson.NewJSONObject()
+	}
+
+	// The current body is needed to merge into, to graft protected fields onto,
+	// and to report in the op stack — but NOT to answer "did anything change",
+	// which the cache can now answer from the bytes it already holds. Reading it
+	// unconditionally therefore parsed a body on every update that turned out to
+	// be a no-op, which is what an inventory rebuild does for most of the graph.
+	protectedFields := ctx.Domain.ProtectedBodyFields()
+	var oldBody *easyjson.JSON
+	if !replace || len(protectedFields) > 0 || opStack != nil {
+		oldBody = getVertexBody(ctx, selfID)
 	}
 
 	if !replace { // merge
@@ -505,7 +524,7 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		// removals expressible. Done BEFORE the no-op check below so an
 		// inventory rebuild re-sending unchanged discovery fields stays idle
 		// instead of producing a fake write.
-		body = applyProtectedFieldsOnReplace(ctx.Domain.ProtectedBodyFields(), oldBody, body)
+		body = applyProtectedFieldsOnReplace(protectedFields, oldBody, body)
 	}
 
 	// No-op short-circuit: if the resulting body is structurally identical
@@ -522,7 +541,19 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	// on which Go type a number happened to arrive as. Marshalling both sides
 	// removes that: object-key ordering still does not matter (Go sorts map
 	// keys), and 8 compares equal to 8 whichever type carried it.
-	if oldBody != nil && sameBody(&body, oldBody) {
+	unchanged := false
+	if ctx.Domain.Cache().StoresAsRecord(selfID) {
+		// The cache holds the body as bytes and can answer without building a
+		// tree; the serialization handed to it is the one a real write needs
+		// anyway, so on a no-op it is the only cost paid.
+		unchanged, _ = ctx.Domain.Cache().StoredValueEquals(selfID, body.ToBytes())
+	} else {
+		if oldBody == nil {
+			oldBody = getVertexBody(ctx, selfID)
+		}
+		unchanged = sameBody(&body, oldBody)
+	}
+	if unchanged {
 		operationKeysMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("vertex with id=%s body unchanged", selfID))).Reply()
 		return
