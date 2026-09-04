@@ -20,24 +20,168 @@ package cache
 // which is what the differential tests exist to hold in place.
 
 import (
+	"os"
 	"strings"
 	"sync"
+
+	lg "github.com/foliagecp/sdk/statefun/logger"
 
 	"github.com/foliagecp/sdk/statefun/system"
 )
 
-// tieringEnabled is the CACHE_TIERING switch, read once at start.
-var tieringEnabled = strings.EqualFold(
-	system.GetEnvMustProceed[string]("CACHE_TIERING", "off"), "on")
+// cacheMode is how the cache stores the graph. One setting, four values, in
+// increasing order of compactness — each does what the previous one does and
+// more, so a single ordered value says everything there is to say and no two
+// switches can contradict each other.
+type cacheMode uint8
 
-// TieringEnabled reports whether vertices are kept as records.
-func TieringEnabled() bool { return tieringEnabled }
+const (
+	// modeTree is the representation this cache has always had: every key its
+	// own node in a tree. The default, and unchanged in every respect.
+	modeTree cacheMode = iota
 
-// SetTieringForTest flips the switch and returns a function restoring it.
+	// modeRecords keeps a graph vertex as one compact record instead of a
+	// subtree.
+	modeRecords
+
+	// modeZstd additionally compresses records that have gone cold.
+	modeZstd
+
+	// modeZstdDict compresses them against a dictionary trained on the graph's
+	// own data, which is worth substantially more than plain compression
+	// because buckets repeat each other across the whole graph.
+	modeZstdDict
+)
+
+// CACHE_MODE names the mode in one setting. It is a PRESET: it decides what the
+// individual settings default to, and an individual setting that is actually
+// present in the environment still wins. So a deployment already passing
+// CACHE_TIERING keeps behaving exactly as it did, and one that wants to say the
+// whole thing in a word can.
+const (
+	cacheModeEnv   = "CACHE_MODE"
+	tieringEnv     = "CACHE_TIERING"
+	compressionEnv = "CACHE_RECORD_COMPRESSION"
+)
+
+var (
+	modeGiven   = envNamed(cacheModeEnv)
+	currentMode = parseCacheMode(system.GetEnvMustProceed[string](cacheModeEnv, "tree"))
+
+	// Resolved once at start: the preset, then whatever the environment states
+	// outright.
+	tieringOn     = resolveBool(tieringEnv, "on", currentMode >= modeRecords)
+	compressionOn = resolveBool(compressionEnv, "zstd", currentMode >= modeZstd)
+
+	// The dictionary follows the preset when there is one. Without a preset it
+	// stays on wherever compression is — which is what the individual settings
+	// did before CACHE_MODE existed, and changing that would have made adding a
+	// convenience alter the behaviour of deployments that never asked for it.
+	dictionaryOn = !modeGiven || currentMode >= modeZstdDict
+)
+
+// envNamed reports whether the environment states a setting at all.
+func envNamed(key string) bool {
+	v, present := os.LookupEnv(key)
+	return present && strings.TrimSpace(v) != ""
+}
+
+// resolveBool takes the preset unless the environment names the setting, in
+// which case what it names is what happens.
+func resolveBool(key, onValue string, preset bool) bool {
+	v, present := os.LookupEnv(key)
+	if !present || strings.TrimSpace(v) == "" {
+		return preset
+	}
+	return strings.EqualFold(strings.TrimSpace(v), onValue)
+}
+
+func parseCacheMode(name string) cacheMode {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "", "tree":
+		return modeTree
+	case "records":
+		return modeRecords
+	case "zstd":
+		return modeZstd
+	case "zstd-dict", "zstd+dict":
+		return modeZstdDict
+	default:
+		lg.Logf(lg.ErrorLevel,
+			"cache: unknown %s=%q, keeping the tree; expected tree, records, zstd or zstd-dict",
+			cacheModeEnv, name)
+		return modeTree
+	}
+}
+
+func (m cacheMode) String() string {
+	switch m {
+	case modeRecords:
+		return "records"
+	case modeZstd:
+		return "zstd"
+	case modeZstdDict:
+		return "zstd-dict"
+	default:
+		return "tree"
+	}
+}
+
+// tieringEnabled reports whether graph vertices are kept as records.
+func tieringEnabled() bool { return tieringOn }
+
+// compressionEnabled reports whether cold buckets are compressed.
+func compressionEnabled() bool { return tieringOn && compressionOn }
+
+// dictionaryEnabled reports whether compression uses a trained dictionary.
+//
+// A sample count of zero is also a way to say no: there is nothing to learn
+// from an empty sample, so asking for it is asking for compression without a
+// dictionary, and what the mode reports has to agree with that.
+func dictionaryEnabled() bool {
+	return compressionEnabled() && dictionaryOn && dictSampleLimit > 0
+}
+
+// CacheMode reports what the cache is actually doing, resolved from the preset
+// and the individual settings together — which is what belongs in a log line,
+// since the preset alone can be overridden.
+func CacheMode() string {
+	switch {
+	case !tieringEnabled():
+		return "tree"
+	case !compressionEnabled():
+		return "records"
+	case !dictionaryEnabled():
+		return "zstd"
+	default:
+		return "zstd-dict"
+	}
+}
+
+// SetTieringForTest switches records on or off and returns a restore function.
 func SetTieringForTest(on bool) func() {
-	prev := tieringEnabled
-	tieringEnabled = on
-	return func() { tieringEnabled = prev }
+	prev := tieringOn
+	tieringOn = on
+	return func() { tieringOn = prev }
+}
+
+// SetCompressionForTest switches compression on or off.
+func SetCompressionForTest(on bool) func() {
+	prev := compressionOn
+	compressionOn = on
+	return func() { compressionOn = prev }
+}
+
+// SetCacheModeForTest switches the mode and returns a function restoring it.
+// Takes the same names as the setting.
+func SetCacheModeForTest(name string) func() {
+	pm, pt, pc, pd := currentMode, tieringOn, compressionOn, dictionaryOn
+	m := parseCacheMode(name)
+	currentMode = m
+	tieringOn = m >= modeRecords
+	compressionOn = m >= modeZstd
+	dictionaryOn = m >= modeZstdDict
+	return func() { currentMode, tieringOn, compressionOn, dictionaryOn = pm, pt, pc, pd }
 }
 
 // isRuntimeKey reports whether a top-level key belongs to the runtime rather
@@ -61,7 +205,7 @@ const (
 // tieredVertex returns the vertex id a key belongs to, and whether the key is a
 // graph vertex key at all.
 func tieredVertex(key string) (string, string, bool) {
-	if !tieringEnabled {
+	if !tieringEnabled() {
 		return "", "", false
 	}
 	id, tail := splitVertexKey(key)
@@ -182,7 +326,7 @@ func (cs *Store) tieredKeys(pattern string) ([]string, bool) {
 		// A pattern ending right after the vertex id has an empty tail, which
 		// tieredVertex accepts; anything it refuses is not a record's business.
 		id2, _ := splitVertexKey(pattern)
-		if !tieringEnabled || isRuntimeKey(id2) {
+		if !tieringEnabled() || isRuntimeKey(id2) {
 			return nil, false
 		}
 		id = id2
@@ -293,7 +437,7 @@ func splitTypeTarget(v string) (linkType, target string) {
 // many it encoded. Called from the maintenance pass: writing deliberately does
 // not encode, so this is where the memory comes back.
 func (cs *Store) compactRecords() int {
-	if !tieringEnabled || cs.records == nil {
+	if !tieringEnabled() || cs.records == nil {
 		return 0
 	}
 	n := 0

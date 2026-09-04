@@ -31,10 +31,8 @@ func seedGraph(t testing.TB, cs *Store, vertices, links int) {
 // Test_Compression_KeepsAnswers — сжатие невидимо снаружи.
 func Test_Compression_KeepsAnswers(t *testing.T) {
 	ResetCompressionForTest()
-	restoreT := SetTieringForTest(true)
-	defer restoreT()
-	restoreC := SetCompressionForTest(true)
-	defer restoreC()
+	restore := SetCacheModeForTest("zstd-dict")
+	defer restore()
 
 	cs := NewStoreForTest("zstd")
 	seedGraph(t, cs, 60, 12)
@@ -70,10 +68,8 @@ func Test_Compression_KeepsAnswers(t *testing.T) {
 // сырой вид, чтобы следующее чтение не платило распаковкой снова.
 func Test_Compression_ReadPublishesRawBack(t *testing.T) {
 	ResetCompressionForTest()
-	restoreT := SetTieringForTest(true)
-	defer restoreT()
-	restoreC := SetCompressionForTest(true)
-	defer restoreC()
+	restore := SetCacheModeForTest("zstd-dict")
+	defer restore()
 
 	cs := NewStoreForTest("republish")
 	seedGraph(t, cs, 20, 40)
@@ -101,10 +97,8 @@ func Test_Compression_ReadPublishesRawBack(t *testing.T) {
 // словари, которые процесс когда-либо использовал.
 func Test_Compression_StaleDictionaryStillReads(t *testing.T) {
 	ResetCompressionForTest()
-	restoreT := SetTieringForTest(true)
-	defer restoreT()
-	restoreC := SetCompressionForTest(true)
-	defer restoreC()
+	restore := SetCacheModeForTest("zstd-dict")
+	defer restore()
 
 	cs := NewStoreForTest("dict")
 	seedGraph(t, cs, 80, 16)
@@ -148,10 +142,8 @@ func Test_Compression_StaleDictionaryStillReads(t *testing.T) {
 // Test_Compression_Ratio — сколько сжатие даёт на данных, похожих на графовые.
 func Test_Compression_Ratio(t *testing.T) {
 	ResetCompressionForTest()
-	restoreT := SetTieringForTest(true)
-	defer restoreT()
-	restoreC := SetCompressionForTest(true)
-	defer restoreC()
+	restore := SetCacheModeForTest("zstd-dict")
+	defer restore()
 
 	cs := NewStoreForTest("ratio")
 	seedGraph(t, cs, 400, 20)
@@ -182,10 +174,8 @@ func Test_Compression_Ratio(t *testing.T) {
 // Test_Compression_Off — при выключенном флаге ничего не сжимается.
 func Test_Compression_Off(t *testing.T) {
 	ResetCompressionForTest()
-	restoreT := SetTieringForTest(true)
-	defer restoreT()
-	restoreC := SetCompressionForTest(false)
-	defer restoreC()
+	restore := SetCacheModeForTest("records")
+	defer restore()
 
 	cs := NewStoreForTest("off")
 	seedGraph(t, cs, 20, 20)
@@ -198,10 +188,8 @@ func Test_Compression_Off(t *testing.T) {
 // Test_Compression_RetrainsOnDecay — словарь переобучается по деградации
 // ратио, а не по расписанию.
 func Test_Compression_RetrainsOnDecay(t *testing.T) {
-	restoreT := SetTieringForTest(true)
-	defer restoreT()
-	restoreC := SetCompressionForTest(true)
-	defer restoreC()
+	restore := SetCacheModeForTest("zstd-dict")
+	defer restore()
 	ResetCompressionForTest()
 
 	cs := NewStoreForTest("decay")
@@ -255,10 +243,8 @@ func Test_Compression_RetrainsOnDecay(t *testing.T) {
 // обходе обслуживания не стоит, они всё равно зелёные, а в бою не срабатывает
 // ничего.
 func Test_Maintenance_CompactsAndCompresses(t *testing.T) {
-	restoreT := SetTieringForTest(true)
-	defer restoreT()
-	restoreC := SetCompressionForTest(true)
-	defer restoreC()
+	restore := SetCacheModeForTest("zstd-dict")
+	defer restore()
 	ResetCompressionForTest()
 
 	cs := NewStoreForTest("maintenance")

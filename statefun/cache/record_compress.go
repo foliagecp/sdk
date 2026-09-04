@@ -23,27 +23,12 @@ package cache
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/klauspost/compress/zstd"
 )
-
-// compressionEnabled is the CACHE_RECORD_COMPRESSION switch.
-var compressionEnabled = strings.EqualFold(
-	system.GetEnvMustProceed[string]("CACHE_RECORD_COMPRESSION", "off"), "zstd")
-
-// CompressionEnabled reports whether cold buckets are compressed.
-func CompressionEnabled() bool { return compressionEnabled }
-
-// SetCompressionForTest flips the switch and returns a function restoring it.
-func SetCompressionForTest(on bool) func() {
-	prev := compressionEnabled
-	compressionEnabled = on
-	return func() { compressionEnabled = prev }
-}
 
 // minCompressBytes is the size below which compressing is not worth a frame
 // header. A bucket of a few short links is already smaller than the overhead.
@@ -69,13 +54,30 @@ type codec struct {
 // installed since.
 var recordCodec = newCodec()
 
+// Concurrency is pinned to one on purpose. A bucket is a couple of kilobytes
+// and is compressed by a single EncodeAll call, so splitting it across
+// goroutines buys nothing — while the default concurrency keeps one window
+// buffer per core alive inside the encoder, which measured 10 MB at creation
+// and grew to tens of megabytes once it had actually compressed a graph. That
+// is more memory than the compression was saving.
+func encoderOptions(extra ...zstd.EOption) []zstd.EOption {
+	return append([]zstd.EOption{
+		zstd.WithEncoderLevel(zstd.SpeedDefault),
+		zstd.WithEncoderConcurrency(1),
+	}, extra...)
+}
+
+func decoderOptions(extra ...zstd.DOption) []zstd.DOption {
+	return append([]zstd.DOption{zstd.WithDecoderConcurrency(1)}, extra...)
+}
+
 func newCodec() *codec {
 	c := &codec{}
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+	enc, err := zstd.NewWriter(nil, encoderOptions()...)
 	if err != nil {
 		return c // compression stays unavailable; buckets remain raw
 	}
-	dec, err := zstd.NewReader(nil)
+	dec, err := zstd.NewReader(nil, decoderOptions()...)
 	if err != nil {
 		return c
 	}
@@ -146,9 +148,7 @@ func (c *codec) installDict(samples [][]byte) error {
 		return fmt.Errorf("build: %w", err)
 	}
 
-	enc, err := zstd.NewWriter(nil,
-		zstd.WithEncoderLevel(zstd.SpeedDefault),
-		zstd.WithEncoderDict(dict))
+	enc, err := zstd.NewWriter(nil, encoderOptions(zstd.WithEncoderDict(dict))...)
 	if err != nil {
 		return fmt.Errorf("encoder: %w", err)
 	}
@@ -156,7 +156,7 @@ func (c *codec) installDict(samples [][]byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	all := append(append([][]byte(nil), c.dicts...), dict)
-	dec, err := zstd.NewReader(nil, zstd.WithDecoderDicts(all...))
+	dec, err := zstd.NewReader(nil, decoderOptions(zstd.WithDecoderDicts(all...))...)
 	if err != nil {
 		return fmt.Errorf("decoder: %w", err)
 	}
@@ -260,10 +260,13 @@ func (s *bucketSlot) readable() *bucket {
 // many it compressed. Decoded buckets are skipped: they were just written, and
 // compacting them into bytes comes first (compactBuckets).
 func (r *vertexRecord) compressBuckets() int {
-	if !compressionEnabled || !recordCodec.ready() {
+	if !compressionEnabled() || !recordCodec.ready() {
 		return 0
 	}
 	n := 0
+	if r.compressBody() {
+		n++
+	}
 	n += compressDir(r.out.Load())
 	n += compressDir(r.in.Load())
 	n += compressDir(r.pairs.Load())
@@ -357,7 +360,7 @@ func (r *vertexRecord) sampleBuckets(limit int, out *[][]byte) {
 // compressRecords compresses cold buckets across the store and returns how many
 // it compressed. Called from the maintenance pass, after compaction.
 func (cs *Store) compressRecords() int {
-	if !compressionEnabled || !tieringEnabled || cs.records == nil {
+	if !compressionEnabled() || !tieringEnabled() || cs.records == nil {
 		return 0
 	}
 	n := 0
@@ -375,7 +378,7 @@ func (cs *Store) compressRecords() int {
 // data rather than by a schedule: a dictionary that stopped matching the graph
 // costs ratio, and one that still matches costs nothing to keep.
 func (cs *Store) trainDictionary(sampleLimit int) bool {
-	if !compressionEnabled || !tieringEnabled || cs.records == nil {
+	if !compressionEnabled() || !tieringEnabled() || cs.records == nil {
 		return false
 	}
 	samples := make([][]byte, 0, sampleLimit)
@@ -423,6 +426,11 @@ var dictTracker dictState
 // dictDecayTolerance is how much worse than at training time the ratio may get
 // before the dictionary is rebuilt.
 // dictSampleLimit is how many buckets a training pass looks at.
+//
+// Zero turns dictionary training off while leaving compression on — there is
+// nothing to learn from an empty sample. That is the fourth configuration:
+// tiering on, zstd on, no dictionary, useful for telling how much of a
+// measured ratio the dictionary is actually responsible for.
 var dictSampleLimit = system.GetEnvMustProceed[int]("CACHE_DICT_SAMPLES", 256)
 
 var dictDecayTolerance = float64(system.GetEnvMustProceed[int]("CACHE_DICT_DECAY_PCT", 20)) / 100
@@ -458,7 +466,7 @@ func (c *codec) measureRatio(samples [][]byte) float64 {
 // every dictionary ever installed stays in the decoder, so what was compressed
 // with an older one still reads.
 func (cs *Store) maybeTrainDictionary(sampleLimit int) bool {
-	if !compressionEnabled || !tieringEnabled || cs.records == nil {
+	if !dictionaryEnabled() || cs.records == nil {
 		return false
 	}
 	samples := make([][]byte, 0, sampleLimit)
@@ -525,4 +533,28 @@ func ResetDictionaryStatsForTest() {
 	dictTracker.trainedAt = 0
 	dictTracker.lastRatio = 0
 	dictTracker.retrains = 0
+}
+
+// compressBody compresses the vertex body, which lives in the head rather than
+// in a bucket and would otherwise never be compressed at all. On a real graph
+// the bodies are about a third of everything a record holds, so leaving them
+// out left most of the win unclaimed.
+func (r *vertexRecord) compressBody() bool {
+	if !compressionEnabled() || !recordCodec.ready() {
+		return false
+	}
+	r.headMu.Lock()
+	defer r.headMu.Unlock()
+
+	h := r.headStr()
+	if len(h) <= recordHeadLen || r.flags()&(flagBodyCompressed|flagBodyTombstoned) != 0 {
+		return false
+	}
+	out, ok := recordCodec.compress(h[recordHeadLen:])
+	if !ok {
+		return false
+	}
+	nh := makeHeadFlags([]byte(out), int64(le64(h, 4)), false, r.flags()&flagBodyJSON != 0, true)
+	r.head.Store(&nh)
+	return true
 }

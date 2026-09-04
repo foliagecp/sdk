@@ -135,9 +135,9 @@ func getStr(cs *Store, key string) string {
 	return string(v)
 }
 
-func runOps(t *testing.T, tiering bool, ops []storeOp, qs []storeQuery) []string {
+func runOps(t *testing.T, mode string, ops []storeOp, qs []storeQuery) []string {
 	t.Helper()
-	restore := SetTieringForTest(tiering)
+	restore := SetCacheModeForTest(mode)
 	defer restore()
 
 	cs := NewStoreForTest("tiering")
@@ -162,8 +162,8 @@ func Test_Tiering_SameAnswers(t *testing.T) {
 			rng := rand.New(rand.NewSource(int64(cfg.steps)))
 			ops, qs := randomOps(rng, cfg.vertices, cfg.links, cfg.steps)
 
-			off := runOps(t, false, ops, qs)
-			on := runOps(t, true, ops, qs)
+			off := runOps(t, "tree", ops, qs)
+			on := runOps(t, "records", ops, qs)
 
 			require.Equal(t, len(off), len(on))
 			diffs := 0
@@ -183,7 +183,7 @@ func Test_Tiering_SameAnswers(t *testing.T) {
 // Test_Tiering_RuntimeKeysStayInTree — контексты и объектные мьютексы записями
 // не становятся: они короткоживущие и горячие, и форматом записи не описываются.
 func Test_Tiering_RuntimeKeysStayInTree(t *testing.T) {
-	restore := SetTieringForTest(true)
+	restore := SetCacheModeForTest("records")
 	defer restore()
 
 	cs := NewStoreForTest("runtime")
@@ -202,7 +202,7 @@ func Test_Tiering_RuntimeKeysStayInTree(t *testing.T) {
 // Test_Tiering_CompactionKeepsAnswers — уплотнение из обхода обслуживания
 // ничего не меняет в ответах.
 func Test_Tiering_CompactionKeepsAnswers(t *testing.T) {
-	restore := SetTieringForTest(true)
+	restore := SetCacheModeForTest("records")
 	defer restore()
 
 	rng := rand.New(rand.NewSource(77))
@@ -228,7 +228,7 @@ func Test_Tiering_CompactionKeepsAnswers(t *testing.T) {
 
 // Test_Tiering_ConcurrentWrites — параллельная запись через публичный API.
 func Test_Tiering_ConcurrentWrites(t *testing.T) {
-	restore := SetTieringForTest(true)
+	restore := SetCacheModeForTest("records")
 	defer restore()
 
 	cs := NewStoreForTest("conc")
@@ -265,7 +265,7 @@ func Test_Tiering_ConcurrentWrites(t *testing.T) {
 // Test_Tiering_TreeStaysEmpty — вершина, ушедшая в запись, не должна
 // одновременно расти поддеревом: иначе память не экономится, а тратится дважды.
 func Test_Tiering_TreeStaysEmpty(t *testing.T) {
-	restore := SetTieringForTest(true)
+	restore := SetCacheModeForTest("records")
 	defer restore()
 
 	cs := NewStoreForTest("empty")

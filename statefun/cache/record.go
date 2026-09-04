@@ -62,6 +62,12 @@ const (
 	// same answer as the tree.
 	flagBodyJSON uint8 = 1 << 1
 
+	// flagBodyCompressed marks a head whose body bytes are a zstd frame. The
+	// body is the largest single block of a record — on a real graph the bodies
+	// are a third of everything stored — so leaving it out of compression left
+	// most of the win on the table.
+	flagBodyCompressed uint8 = 1 << 2
+
 	// entryTombstoned marks a link entry that is a guard rather than a link.
 	entryTombstoned uint8 = 1 << 0
 )
@@ -341,6 +347,10 @@ func (b *bucket) encoded() *bucket {
 }
 
 func makeHead(body []byte, bodyTime int64, bodyDead, bodyJSON bool) string {
+	return makeHeadFlags(body, bodyTime, bodyDead, bodyJSON, false)
+}
+
+func makeHeadFlags(body []byte, bodyTime int64, bodyDead, bodyJSON, bodyCompressed bool) string {
 	buf := make([]byte, recordHeadLen, recordHeadLen+len(body))
 	buf[0] = recordVersion
 	if bodyDead {
@@ -348,6 +358,9 @@ func makeHead(body []byte, bodyTime int64, bodyDead, bodyJSON bool) string {
 	}
 	if bodyJSON {
 		buf[1] |= flagBodyJSON
+	}
+	if bodyCompressed {
+		buf[1] |= flagBodyCompressed
 	}
 	binary.LittleEndian.PutUint64(buf[4:], uint64(bodyTime))
 	buf = append(buf, body...)
@@ -381,7 +394,25 @@ func (r *vertexRecord) bodyBytes() (string, int64, bool) {
 	if len(h) == recordHeadLen {
 		return "", -1, false
 	}
-	return h[recordHeadLen:], int64(le64(h, 4)), true
+	body := h[recordHeadLen:]
+	if r.flags()&flagBodyCompressed != 0 {
+		raw, ok := recordCodec.decompress(body)
+		if !ok {
+			return "", -1, false
+		}
+		// Publish the decompressed head back, so a body under repeated reads
+		// stops paying for its own compression — same bargain as a bucket.
+		if r.headMu.TryLock() {
+			if cur := r.head.Load(); cur != nil && *cur == h {
+				nh := makeHeadFlags([]byte(raw), int64(le64(h, 4)),
+					false, r.flags()&flagBodyJSON != 0, false)
+				r.head.Store(&nh)
+			}
+			r.headMu.Unlock()
+		}
+		return raw, int64(le64(h, 4)), true
+	}
+	return body, int64(le64(h, 4)), true
 }
 
 // bodyIsJSON reports whether the body was stored as a JSON value.

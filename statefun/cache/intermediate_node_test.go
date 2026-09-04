@@ -17,7 +17,7 @@ import (
 // временем меньше этого штампа. Промежуточному узлу защищать нечего: значения у
 // него нет, и первая же запись по этому ключу — первая настоящая.
 func Test_IntermediateNode_DoesNotBlockLaterWrite(t *testing.T) {
-	restore := SetTieringForTest(false)
+	restore := SetCacheModeForTest("tree")
 	defer restore()
 
 	cs := NewStoreForTest("intermediate")
@@ -46,7 +46,7 @@ func Test_IntermediateNode_DoesNotBlockLaterWrite(t *testing.T) {
 // Test_IntermediateNode_GuardStillProtectsRealValues — страж обязан работать
 // там, где значение действительно было.
 func Test_IntermediateNode_GuardStillProtectsRealValues(t *testing.T) {
-	restore := SetTieringForTest(false)
+	restore := SetCacheModeForTest("tree")
 	defer restore()
 
 	cs := NewStoreForTest("guard")
@@ -68,7 +68,7 @@ func Test_IntermediateNode_GuardStillProtectsRealValues(t *testing.T) {
 // возникает в проде: одна операция пишет связь, другая — тело той же вершины,
 // и время у второй взято раньше, чем первая создала промежуточный узел.
 func Test_IntermediateNode_ConcurrentVertexWrite(t *testing.T) {
-	restore := SetTieringForTest(false)
+	restore := SetCacheModeForTest("tree")
 	defer restore()
 
 	const vertices = 200

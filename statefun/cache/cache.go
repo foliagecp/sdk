@@ -1430,15 +1430,32 @@ func (cs *Store) ExistsJson(key string) bool {
 }
 
 func (cs *Store) GetValueJSON(key string) (*easyjson.JSON, error) {
-	if v, exists, handled := cs.tieredGet(key); handled {
-		if !exists {
-			return nil, fmt.Errorf("value for key=%s does not exist", key)
+	if id, tail, ok := tieredVertex(key); ok {
+		if r, found := cs.records.get(id); found {
+			// The body is parsed straight from the record's own bytes: going
+			// through the []byte-returning path would copy the whole body
+			// first, and a vertex body is the largest thing a record holds.
+			if tail == "" {
+				body, _, exists := r.bodyBytes()
+				if !exists {
+					return nil, fmt.Errorf("value for key=%s does not exist", key)
+				}
+				j, valid := easyjson.JSONFromString(body)
+				if !valid {
+					return nil, fmt.Errorf("value for key=%s is not valid JSON", key)
+				}
+				return &j, nil
+			}
+			v, exists := r.get(tail)
+			if !exists {
+				return nil, fmt.Errorf("value for key=%s does not exist", key)
+			}
+			j, valid := easyjson.JSONFromBytes(v)
+			if !valid {
+				return nil, fmt.Errorf("value for key=%s is not valid JSON", key)
+			}
+			return &j, nil
 		}
-		j, ok := easyjson.JSONFromBytes(v)
-		if !ok {
-			return nil, fmt.Errorf("value for key=%s is not valid JSON", key)
-		}
-		return &j, nil
 	}
 	var result *easyjson.JSON
 	var resultError error
