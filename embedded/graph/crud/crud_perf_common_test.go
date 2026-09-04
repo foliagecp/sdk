@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/foliagecp/sdk/statefun"
+	"github.com/foliagecp/sdk/statefun/cache"
 )
 
 // perfResult is one measured latency distribution + throughput.
@@ -85,8 +86,8 @@ func measurePerf(t *testing.T, conc, n int, op func(i int) error) perfResult {
 
 // recordPerf logs the result and, if PERF_EMBEDDED_CSV is set, appends a row.
 func recordPerf(t *testing.T, scenario, op string, r perfResult) {
-	t.Logf("[%s] op=%s conc=%-3d n=%-6d degree=%-4d  p50=%-10v p95=%-10v p99=%-10v  throughput=%.0f ops/s  benign=%d",
-		scenario, op, r.conc, r.n, r.degree,
+	t.Logf("[%s] mode=%s op=%s conc=%-3d n=%-6d degree=%-4d  p50=%-10v p95=%-10v p99=%-10v  throughput=%.0f ops/s  benign=%d",
+		scenario, cache.CacheMode(), op, r.conc, r.n, r.degree,
 		r.p50.Round(time.Microsecond), r.p95.Round(time.Microsecond), r.p99.Round(time.Microsecond),
 		r.throughputOpsPerSec, r.benign)
 
@@ -101,10 +102,10 @@ func recordPerf(t *testing.T, scenario, op string, r perfResult) {
 	}
 	defer f.Close()
 	if st, e := f.Stat(); e == nil && st.Size() == 0 {
-		fmt.Fprintln(f, "git_sha,host,scenario,op,concurrency,n,degree,p50_us,p95_us,p99_us,throughput_ops_s,benign")
+		fmt.Fprintln(f, "git_sha,host,cache_mode,scenario,op,concurrency,n,degree,p50_us,p95_us,p99_us,throughput_ops_s,benign")
 	}
-	fmt.Fprintf(f, "%s,%s,%s,%s,%d,%d,%d,%d,%d,%d,%.1f,%d\n",
-		os.Getenv("PERF_GIT_SHA"), os.Getenv("PERF_HOST"),
+	fmt.Fprintf(f, "%s,%s,%s,%s,%s,%d,%d,%d,%d,%d,%d,%.1f,%d\n",
+		os.Getenv("PERF_GIT_SHA"), os.Getenv("PERF_HOST"), cache.CacheMode(),
 		scenario, op, r.conc, r.n, r.degree,
 		r.p50.Microseconds(), r.p95.Microseconds(), r.p99.Microseconds(),
 		r.throughputOpsPerSec, r.benign)
