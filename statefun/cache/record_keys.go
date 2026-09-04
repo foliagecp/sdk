@@ -27,7 +27,6 @@ package cache
 // record must not be more informative than the tree.
 
 import (
-	"sort"
 	"strings"
 )
 
@@ -308,9 +307,14 @@ func pinnedEntry(want string) (kind tailKind, name string, ok bool) {
 	return tailUnknown, "", false
 }
 
-func (r *vertexRecord) eachTail(want string, fn func(tail string) bool) {
+// eachKey visits every key of the vertex whose tail starts with want, handing
+// fn the WHOLE key. The key is built in one concatenation rather than a tail
+// and then a key: enumerating a vertex touches every one of its keys, and the
+// second string would double what the walk allocates.
+func (r *vertexRecord) eachKey(head, want string, fn func(key string) bool) {
+	full := head + want
 	if kind, name, ok := pinnedEntry(want); ok {
-		r.eachTailOfEntry(kind, name, want, fn)
+		r.eachKeyOfEntry(kind, name, head, full, fn)
 		return
 	}
 	mayMatch := func(prefix string) bool {
@@ -320,9 +324,9 @@ func (r *vertexRecord) eachTail(want string, fn func(tail string) bool) {
 		return strings.HasPrefix(prefix, want) || strings.HasPrefix(want, prefix)
 	}
 
-	if mayMatch("") && want == "" {
+	if want == "" {
 		if _, _, ok := r.bodyBytes(); ok {
-			if !fn("") {
+			if !fn(head[:len(head)-1]) {
 				return
 			}
 		}
@@ -330,30 +334,24 @@ func (r *vertexRecord) eachTail(want string, fn func(tail string) bool) {
 
 	if mayMatch("out.") {
 		stop := false
-		r.rangeOutLinks(func(l outLink) bool {
-			emit := func(t string) bool {
-				if !strings.HasPrefix(t, want) {
-					return true
-				}
-				if !fn(t) {
-					stop = true
-					return false
+		r.out.Load().each(func(b *bucket) bool {
+			if b.decoded {
+				for _, l := range b.outs {
+					if !eachOutKey(l, head, want, full, fn) {
+						stop = true
+						return false
+					}
 				}
 				return true
 			}
-			if l.To.Live && !emit("out.to."+l.Name) {
-				return false
-			}
-			if l.Body.Live && !emit("out.body."+l.Name) {
-				return false
-			}
-			for _, v := range l.IdxTypes {
-				if v.Live && !emit("out.index."+l.Name+".type."+v.Value) {
-					return false
-				}
-			}
-			for _, v := range l.Tags {
-				if v.Live && !emit("out.index."+l.Name+".tag."+v.Value) {
+			// Straight off the bytes, one field at a time. Materializing the
+			// link instead would allocate its index-type and tag slices for
+			// every link of the vertex, and an enumeration asking for
+			// `out.body.` wants neither.
+			n := bucketCount(b.data)
+			for i := 0; i < n; i++ {
+				if !eachEncodedOutKey(bucketEntry(b.data, i), head, want, full, fn) {
+					stop = true
 					return false
 				}
 			}
@@ -364,16 +362,36 @@ func (r *vertexRecord) eachTail(want string, fn func(tail string) bool) {
 		}
 	}
 
+	// Pairs and incoming links are walked the same way and for the same
+	// reason: taking them through their entry types would put every one of
+	// them on the heap, and an enumeration touches all of them.
 	if mayMatch("ltype.") {
 		stop := false
-		r.rangePairs(func(p pairEntry) bool {
-			t := "ltype." + p.Type + "." + p.Target
-			if !strings.HasPrefix(t, want) {
+		r.pairs.Load().each(func(b *bucket) bool {
+			if b.decoded {
+				for _, p := range b.pairs {
+					if p.Tombstone {
+						continue
+					}
+					if !emitKey(head+"ltype."+p.Type+"."+p.Target, full, fn) {
+						stop = true
+						return false
+					}
+				}
 				return true
 			}
-			if !fn(t) {
-				stop = true
-				return false
+			n := bucketCount(b.data)
+			for i := 0; i < n; i++ {
+				e := bucketEntry(b.data, i)
+				pairType, j := readStr(e, 0)
+				target, j := readStr(e, j)
+				if e[j]&entryTombstoned != 0 {
+					continue
+				}
+				if !emitKey(head+"ltype."+pairType+"."+target, full, fn) {
+					stop = true
+					return false
+				}
 			}
 			return true
 		})
@@ -383,24 +401,119 @@ func (r *vertexRecord) eachTail(want string, fn func(tail string) bool) {
 	}
 
 	if mayMatch("in.") {
-		r.rangeInLinks(func(l inLink) bool {
-			t := "in." + l.From + "." + l.Name
-			if !strings.HasPrefix(t, want) {
+		r.in.Load().each(func(b *bucket) bool {
+			if b.decoded {
+				for _, l := range b.ins {
+					if l.Tombstone {
+						continue
+					}
+					if !emitKey(head+"in."+l.From+"."+l.Name, full, fn) {
+						return false
+					}
+				}
 				return true
 			}
-			return fn(t)
+			n := bucketCount(b.data)
+			for i := 0; i < n; i++ {
+				e := bucketEntry(b.data, i)
+				from, j := readStr(e, 0)
+				name, j := readStr(e, j)
+				if e[j]&entryTombstoned != 0 {
+					continue
+				}
+				if !emitKey(head+"in."+from+"."+name, full, fn) {
+					return false
+				}
+			}
+			return true
 		})
 	}
 }
 
-// eachTailOfEntry emits the tails of the one entry a prefix pinned down.
-func (r *vertexRecord) eachTailOfEntry(kind tailKind, name, want string, fn func(tail string) bool) {
-	emit := func(t string) bool {
-		if !strings.HasPrefix(t, want) {
-			return true
-		}
-		return fn(t)
+// emitKey hands a key to fn when it matches the prefix being asked about.
+func emitKey(key, full string, fn func(key string) bool) bool {
+	if !strings.HasPrefix(key, full) {
+		return true
 	}
+	return fn(key)
+}
+
+// eachOutTail emits the tails of a decoded link that start with want, stopping
+// as soon as fn says so or the prefix can no longer match.
+func eachOutKey(l *outLink, head, want, full string, fn func(key string) bool) bool {
+	if l.To.Live && !emitKey(head+"out.to."+l.Name, full, fn) {
+		return false
+	}
+	if strings.HasPrefix(want, "out.to.") {
+		return true // nothing after the target can match this prefix
+	}
+	if l.Body.Live && !emitKey(head+"out.body."+l.Name, full, fn) {
+		return false
+	}
+	if strings.HasPrefix(want, "out.body.") {
+		return true
+	}
+	for _, v := range l.IdxTypes {
+		if v.Live && !emitKey(head+"out.index."+l.Name+".type."+v.Value, full, fn) {
+			return false
+		}
+	}
+	for _, v := range l.Tags {
+		if v.Live && !emitKey(head+"out.index."+l.Name+".tag."+v.Value, full, fn) {
+			return false
+		}
+	}
+	return true
+}
+
+// eachEncodedOutTail is the same walk over an entry still in its byte form,
+// reading the fields in order rather than building a link out of them.
+//
+// Enumerating a whole vertex is the one thing a record does more slowly than
+// the tree — the tree walks nodes it already holds, a record unpacks — so the
+// unpacking is kept to what the question needs. Decoding a link allocates two
+// slices; this allocates none.
+func eachEncodedOutKey(entry, head, want, full string, fn func(key string) bool) bool {
+	name, i := readStr(entry, 0)
+
+	var v subValue
+	v, i = readSubValue(entry, i)
+	if v.Live && !emitKey(head+"out.to."+name, full, fn) {
+		return false
+	}
+	if strings.HasPrefix(want, "out.to.") {
+		return true
+	}
+
+	v, i = readSubValue(entry, i)
+	if v.Live && !emitKey(head+"out.body."+name, full, fn) {
+		return false
+	}
+	if strings.HasPrefix(want, "out.body.") {
+		return true
+	}
+
+	var n uint64
+	n, i = readUvarint(entry, i)
+	for k := uint64(0); k < n; k++ {
+		v, i = readSubValue(entry, i)
+		if v.Live && !emitKey(head+"out.index."+name+".type."+v.Value, full, fn) {
+			return false
+		}
+	}
+	n, i = readUvarint(entry, i)
+	for k := uint64(0); k < n; k++ {
+		v, i = readSubValue(entry, i)
+		if v.Live && !emitKey(head+"out.index."+name+".tag."+v.Value, full, fn) {
+			return false
+		}
+	}
+	return true
+}
+
+// eachTailOfEntry emits the tails of the one entry a prefix pinned down.
+func (r *vertexRecord) eachKeyOfEntry(kind tailKind, name, head, full string, fn func(key string) bool) {
+	emit := func(t string) bool { return emitKey(head+t, full, fn) }
 	if kind == tailIn {
 		// The prefix names the source vertex; that source's links share one
 		// bucket, so the whole answer is there.
@@ -471,18 +584,22 @@ func (r *vertexRecord) keysByPattern(vertexID, pattern string) []string {
 	switch {
 	case strings.HasSuffix(tail, "*"):
 		prefix := strings.TrimSuffix(tail, "*")
-		r.eachTail(prefix, func(t string) bool {
+		head := vertexID + "."
+		cut := len(head) + len(prefix)
+		r.eachKey(head, prefix, func(k string) bool {
 			// exactly one token past the prefix
-			if rest := t[len(prefix):]; rest != "" && !strings.Contains(rest, ".") {
-				add(vertexID + "." + t)
+			if rest := k[cut:]; rest != "" && !strings.Contains(rest, ".") {
+				add(k)
 			}
 			return true
 		})
 	case strings.HasSuffix(tail, ">"):
 		prefix := strings.TrimSuffix(tail, ">")
-		r.eachTail(prefix, func(t string) bool {
-			if len(t) > len(prefix) {
-				add(vertexID + "." + t)
+		head := vertexID + "."
+		cut := len(head) + len(prefix)
+		r.eachKey(head, prefix, func(k string) bool {
+			if len(k) > cut {
+				add(k)
 			}
 			return true
 		})
@@ -491,6 +608,9 @@ func (r *vertexRecord) keysByPattern(vertexID, pattern string) []string {
 			add(pattern)
 		}
 	}
-	sort.Strings(out)
+	// Not sorted: the tree returns its keys in map order and callers are told
+	// not to rely on the order, so sorting here would be work nobody asked for
+	// — and on a vertex with thousands of keys it was most of what enumeration
+	// cost over the tree.
 	return out
 }

@@ -1825,10 +1825,15 @@ func (cs *Store) DeleteValue(key string, updateInKV bool, customDeleteTime int64
 }
 
 func (cs *Store) GetKeysByPattern(pattern string) []string {
+	start := time.Now()
 	if keys, handled := cs.tieredKeys(pattern); handled {
+		// Reported from here too, or the metric would quietly stop covering
+		// graph vertices the moment they moved into records.
+		if m := cs.getMetrics(); m != nil {
+			m.getKeysByPattern.Set(float64(time.Since(start).Microseconds()))
+		}
 		return keys
 	}
-	start := time.Now()
 
 	keys := map[string]bool{}
 
