@@ -42,6 +42,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/foliagecp/easyjson"
+
 	"github.com/foliagecp/sdk/statefun/system"
 )
 
@@ -218,6 +220,32 @@ type vertexRecord struct {
 	out   atomic.Pointer[bucketDir]
 	in    atomic.Pointer[bucketDir]
 	pairs atomic.Pointer[bucketDir]
+
+	// parsedBody is the body as a tree, kept after somebody asked for one.
+	//
+	// Reading a whole body is the one operation a record is worse at than the
+	// tree, and by a lot: parsing costs 2537 ns against 635 for cloning an
+	// already-parsed tree, and that ratio is the whole of the gap. Keeping the
+	// parse means the second read of a body costs what the tree costs, and the
+	// first one pays for both.
+	//
+	// It is dropped by the maintenance pass, so what it holds is bounded by
+	// what was actually read between two passes rather than by the size of the
+	// graph — the same bargain a decoded bucket makes, and the same one a
+	// decompressed one makes.
+	parsedBody atomic.Pointer[easyjson.JSON]
+
+	// parsedBodyUsed says whether the kept parse was asked for since the last
+	// maintenance pass. A pass drops the ones nobody wanted and clears the
+	// rest, so what survives is the working set rather than everything ever
+	// read — a body read every second keeps its parse, one read once does not.
+	parsedBodyUsed atomic.Bool
+
+	// parsedBodySeen says this body has been read once already. A parse is kept
+	// only from the second read on, because the commonest whole-body reader is
+	// a sweep over the graph that reads every body once and wants none of them
+	// twice — keeping those would double the memory of the graph for nobody.
+	parsedBodySeen atomic.Bool
 
 	// headMu serializes body writes; dirMu serializes structural changes to a
 	// directory (splitting a bucket, doubling the directory). Ordinary link
@@ -413,6 +441,55 @@ func (r *vertexRecord) bodyBytes() (string, int64, bool) {
 		return raw, int64(le64(h, 4)), true
 	}
 	return body, int64(le64(h, 4)), true
+}
+
+// bodyTree returns the body as a tree, parsing it once and keeping the result
+// for whoever asks next. The caller gets a clone: it may do as it likes with
+// what it is handed, exactly as with the tree.
+func (r *vertexRecord) bodyTree() (easyjson.JSON, bool) {
+	if p := r.parsedBody.Load(); p != nil {
+		r.parsedBodyUsed.Store(true)
+		return p.Clone(), true
+	}
+	body, _, ok := r.bodyBytes()
+	if !ok {
+		return easyjson.NewJSONNull(), false
+	}
+	j, valid := easyjson.JSONFromString(body)
+	if !valid {
+		return easyjson.NewJSONNull(), false
+	}
+	if !r.parsedBodySeen.Swap(true) {
+		// First read: the parse goes to the caller and nothing is kept. It also
+		// costs less than a kept one, having no copy to make.
+		return j, true
+	}
+	r.parsedBody.Store(&j)
+	r.parsedBodyUsed.Store(true)
+	return j.Clone(), true
+}
+
+// ageParsedBody is one turn of the clock: a parse that was asked for since the
+// last pass is kept and its bit cleared, one that was not is dropped. Reports
+// whether it dropped anything.
+func (r *vertexRecord) ageParsedBody() bool {
+	if r.parsedBody.Load() == nil {
+		return false
+	}
+	if r.parsedBodyUsed.Swap(false) {
+		return false // asked for since the last pass; it stays
+	}
+	// Dropped, and the body starts over as unseen: what earns a kept parse is
+	// being read twice inside one window, not once ever.
+	r.parsedBodySeen.Store(false)
+	return r.parsedBody.Swap(nil) != nil
+}
+
+// dropParsedBody releases the kept parse unconditionally.
+func (r *vertexRecord) dropParsedBody() bool {
+	r.parsedBodyUsed.Store(false)
+	r.parsedBodySeen.Store(false)
+	return r.parsedBody.Swap(nil) != nil
 }
 
 // bodyIsJSON reports whether the body was stored as a JSON value.
@@ -868,6 +945,28 @@ func (r *vertexRecord) lookupOutTarget(name string) (linkType, target string, ok
 	}
 	lt, tgt := splitTypeTarget(to.Value)
 	return lt, tgt, true
+}
+
+// lookupOutTo answers the `to` field of a link without decoding the rest of
+// it: a traversal reads this key far more often than the body or the tags, and
+// decoding those would allocate a slice per lookup.
+func (r *vertexRecord) lookupOutTo(name string) (subValue, bool) {
+	b := r.out.Load().bucketFor(hashToken(name))
+	if b == nil {
+		return subValue{}, false
+	}
+	if b.decoded {
+		l, found := searchOutSlice(b.outs, name)
+		if !found {
+			return subValue{}, false
+		}
+		return l.To, true
+	}
+	e, found := bucketSearch(b.data, name, outLinkName)
+	if !found {
+		return subValue{}, false
+	}
+	return outLinkTo(e)
 }
 
 // searchOutSlice is the decoded-form counterpart of bucketSearch.

@@ -276,3 +276,104 @@ func dirtyBucketsOf(cs *Store) int {
 	})
 	return n
 }
+
+// Test_ParsedBody_KeptFromSecondRead — разбор сохраняется со второго чтения, а
+// не с первого: обход графа читает каждое тело единожды и не должен оставлять
+// после себя разобранным весь граф. Ответ при этом одинаков в обоих случаях.
+func Test_ParsedBody_KeptFromSecondRead(t *testing.T) {
+	restore := SetCacheModeForTest("records")
+	defer restore()
+
+	cs := NewStoreForTest("parsed")
+	body, _ := easyjson.JSONFromString(`{"cpu":8,"name":"узел"}`)
+	require.True(t, cs.SetValueJSON("dom/v", &body, false, 1))
+
+	r, ok := cs.records.get("dom/v")
+	require.True(t, ok)
+	require.Nil(t, r.parsedBody.Load(), "до чтения разбора быть не должно")
+
+	first, err := cs.GetValueJSON("dom/v")
+	require.NoError(t, err)
+	require.Equal(t, float64(8), first.GetByPath("cpu").AsNumericDefault(-1))
+	require.Nil(t, r.parsedBody.Load(), "первое чтение не должно оставлять разбор")
+
+	second, err := cs.GetValueJSON("dom/v")
+	require.NoError(t, err)
+	require.Equal(t, float64(8), second.GetByPath("cpu").AsNumericDefault(-1))
+	require.NotNil(t, r.parsedBody.Load(), "второе чтение обязано сохранить разбор")
+
+	// каждому читателю — своя копия, и правка одного не видна другому
+	second.SetByPath("cpu", easyjson.NewJSON(999))
+	third, err := cs.GetValueJSON("dom/v")
+	require.NoError(t, err)
+	require.Equal(t, float64(8), third.GetByPath("cpu").AsNumericDefault(-1),
+		"правка одного читателя протекла к другому")
+}
+
+// Test_ParsedBody_AgesByUse — обслуживание сбрасывает то, к чему не обращались,
+// и оставляет то, к чему обращались.
+func Test_ParsedBody_AgesByUse(t *testing.T) {
+	restore := SetCacheModeForTest("records")
+	defer restore()
+
+	cs := NewStoreForTest("aging")
+	body, _ := easyjson.JSONFromString(`{"n":1}`)
+	for i := 0; i < 4; i++ {
+		cs.SetValueJSON(fmt.Sprintf("dom/v-%d", i), &body, false, 1)
+	}
+	// дважды: разбор сохраняется со второго чтения
+	for round := 0; round < 2; round++ {
+		for i := 0; i < 4; i++ {
+			cs.GetValueJSON(fmt.Sprintf("dom/v-%d", i)) //nolint:errcheck
+		}
+	}
+	for i := 0; i < 4; i++ {
+		r, _ := cs.records.get(fmt.Sprintf("dom/v-%d", i))
+		require.NotNil(t, r.parsedBody.Load(), "тело %d должно быть разобрано", i)
+	}
+
+	// первый проход: обращались ко всем — не сбрасывается ничего
+	require.Zero(t, cs.ageParsedBodies(), "сброшено то, к чему только что обращались")
+
+	// обращаемся лишь к части
+	cs.GetValueJSON("dom/v-0") //nolint:errcheck
+	cs.GetValueJSON("dom/v-1") //nolint:errcheck
+
+	require.Equal(t, 2, cs.ageParsedBodies(), "должны были уйти ровно те два, к которым не обращались")
+
+	r0, _ := cs.records.get("dom/v-0")
+	r2, _ := cs.records.get("dom/v-2")
+	require.NotNil(t, r0.parsedBody.Load(), "горячее тело обязано было остаться")
+	require.Nil(t, r2.parsedBody.Load(), "холодное тело обязано было уйти")
+	require.False(t, r2.parsedBodySeen.Load(), "сброшенное тело обязано начать счёт заново")
+
+	// и ответы прежние в обоих случаях
+	for i := 0; i < 4; i++ {
+		got, err := cs.GetValueJSON(fmt.Sprintf("dom/v-%d", i))
+		require.NoError(t, err)
+		require.Equal(t, float64(1), got.GetByPath("n").AsNumericDefault(-1))
+	}
+}
+
+// Test_ParsedBody_InvalidatedByWrite — запись обязана обесценить сохранённый
+// разбор, иначе читатель увидит то, чего уже нет.
+func Test_ParsedBody_InvalidatedByWrite(t *testing.T) {
+	restore := SetCacheModeForTest("records")
+	defer restore()
+
+	cs := NewStoreForTest("invalidate")
+	first, _ := easyjson.JSONFromString(`{"v":1}`)
+	cs.SetValueJSON("dom/v", &first, false, 1)
+	got, _ := cs.GetValueJSON("dom/v")
+	require.Equal(t, float64(1), got.GetByPath("v").AsNumericDefault(-1))
+
+	second, _ := easyjson.JSONFromString(`{"v":2}`)
+	cs.SetValueJSON("dom/v", &second, false, 2)
+	got, _ = cs.GetValueJSON("dom/v")
+	require.Equal(t, float64(2), got.GetByPath("v").AsNumericDefault(-1),
+		"после записи читается прежнее тело")
+
+	cs.DeleteValue("dom/v", false, 3)
+	_, err := cs.GetValueJSON("dom/v")
+	require.Error(t, err, "после удаления тело не должно читаться")
+}

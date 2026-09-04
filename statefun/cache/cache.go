@@ -838,6 +838,10 @@ func (cs *Store) traverseCacheForMaintenance() *maintenanceResult {
 	cs.compactRecords()
 	cs.maybeTrainDictionary(dictSampleLimit)
 	cs.compressRecords()
+	// Bodies kept parsed for readers are aged here: the ones nobody asked for
+	// since the last pass go, the ones somebody did stay. What is held as trees
+	// is therefore the working set rather than the graph.
+	cs.ageParsedBodies()
 	return result
 }
 
@@ -1399,15 +1403,15 @@ func (cs *Store) Exists(key string) bool {
 // vertex.update / vertex.delete / orphan probes call this exact pattern
 // in hl_crud.go and ll_crud.go).
 func (cs *Store) ExistsJson(key string) bool {
-	if id, tail, ok := tieredVertex(key); ok {
-		if r, found := cs.records.get(id); found {
+	if vk, ok := tieredVertex(key); ok {
+		if r, found := cs.records.get(vk.id); found {
 			// Existence is reported honestly whatever the value's type — the
 			// tree does the same and only logs a nudge towards the other
 			// method, so a record must not be stricter.
-			if !r.exists(tail) {
+			if !r.existsParsed(vk.kind, vk.a, vk.b) {
 				return false
 			}
-			if tail != "" || !r.bodyIsJSON() {
+			if !vk.isBody() || !r.bodyIsJSON() {
 				lg.Logf(lg.WarnLevel, "Value for key=%s is []byte, use Exists method", key)
 			}
 			return true
@@ -1430,23 +1434,24 @@ func (cs *Store) ExistsJson(key string) bool {
 }
 
 func (cs *Store) GetValueJSON(key string) (*easyjson.JSON, error) {
-	if id, tail, ok := tieredVertex(key); ok {
-		if r, found := cs.records.get(id); found {
+	if vk, ok := tieredVertex(key); ok {
+		if r, found := cs.records.get(vk.id); found {
 			// The body is parsed straight from the record's own bytes: going
 			// through the []byte-returning path would copy the whole body
 			// first, and a vertex body is the largest thing a record holds.
-			if tail == "" {
-				body, _, exists := r.bodyBytes()
-				if !exists {
+			if vk.isBody() {
+				j, ok := r.bodyTree()
+				if !ok {
+					// Absent and unparseable are different answers, and the
+					// tree tells them apart — so this must too.
+					if _, _, exists := r.bodyBytes(); exists {
+						return nil, fmt.Errorf("value for key=%s is not valid JSON", key)
+					}
 					return nil, fmt.Errorf("value for key=%s does not exist", key)
-				}
-				j, valid := easyjson.JSONFromString(body)
-				if !valid {
-					return nil, fmt.Errorf("value for key=%s is not valid JSON", key)
 				}
 				return &j, nil
 			}
-			v, exists := r.get(tail)
+			v, exists := r.getParsed(vk.kind, vk.a, vk.b)
 			if !exists {
 				return nil, fmt.Errorf("value for key=%s does not exist", key)
 			}
@@ -1551,7 +1556,7 @@ func (cs *Store) GetValueJSONByPath(key string, path string) (*easyjson.JSON, er
 }
 
 func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV bool, customSetTime int64) bool {
-	if _, _, ok := tieredVertex(key); ok {
+	if _, ok := tieredVertex(key); ok {
 		if exists, handled := cs.tieredExists(key); handled && exists {
 			return false
 		}

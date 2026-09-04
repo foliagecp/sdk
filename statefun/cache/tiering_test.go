@@ -293,3 +293,23 @@ func Test_Tiering_TreeStaysEmpty(t *testing.T) {
 	st = cs.StatsForTest()
 	require.Greater(t, st.TotalNodes, 1, "мьютекс объекта обязан лежать в дереве")
 }
+
+// Test_GetValueJSON_DistinguishesAbsentFromInvalid — «нет ключа» и «есть, но не
+// JSON» это разные ответы, и запись обязана различать их так же, как дерево.
+func Test_GetValueJSON_DistinguishesAbsentFromInvalid(t *testing.T) {
+	for _, mode := range []string{"tree", "records"} {
+		t.Run(mode, func(t *testing.T) {
+			restore := SetCacheModeForTest(mode)
+			defer restore()
+
+			cs := NewStoreForTest("jsonerr")
+			cs.SetValue("dom/v", []byte("не json"), false, 10)
+
+			_, err := cs.GetValueJSON("dom/v")
+			require.ErrorContains(t, err, "not valid JSON")
+
+			_, err = cs.GetValueJSON("dom/нет")
+			require.ErrorContains(t, err, "does not exist")
+		})
+	}
+}

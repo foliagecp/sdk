@@ -100,67 +100,34 @@ func parseTail(tail string) (k tailKind, a, b string) {
 // get answers GetValue for a tail. The second result says whether the key
 // exists at all — a key with an empty value (an index marker) exists.
 func (r *vertexRecord) get(tail string) ([]byte, bool) {
-	switch k, a, b := parseTail(tail); k {
-	case tailBody:
-		body, _, ok := r.bodyBytes()
-		if !ok {
-			return nil, false
-		}
-		return []byte(body), true
+	k, a, b := parseTail(tail)
+	return r.getParsed(k, a, b)
+}
 
-	case tailOutTo:
-		lt, target, ok := r.lookupOutTarget(a)
-		if !ok {
-			return nil, false
-		}
-		return []byte(lt + "." + target), true
-
-	case tailOutBody:
-		l, ok := r.lookupOutLink(a)
-		if !ok || !l.Body.Live {
-			return nil, false
-		}
-		return []byte(l.Body.Value), true
-
-	case tailLinkType:
-		p, ok := r.lookupPair(a, b)
-		if !ok {
-			return nil, false
-		}
-		return []byte(p.Name), true
-
-	case tailIndexType:
-		l, ok := r.lookupOutLink(a)
-		if !ok {
-			return nil, false
-		}
-		if v, found := findSub(l.IdxTypes, b); found && v.Live {
-			return nil, true // marker: exists, empty value
-		}
+// getParsed answers a key whose tail is already recognised. The dispatch parses
+// the tail to decide the key is a record's at all, so it hands the answer over
+// rather than making this parse it again.
+func (r *vertexRecord) getParsed(k tailKind, a, b string) ([]byte, bool) {
+	v, _, ok := r.lookupParsed(k, a, b)
+	if !ok {
 		return nil, false
-
-	case tailIndexTag:
-		l, ok := r.lookupOutLink(a)
-		if !ok {
-			return nil, false
-		}
-		if v, found := findSub(l.Tags, b); found && v.Live {
-			return nil, true
-		}
-		return nil, false
-
-	case tailIn:
-		l, ok := r.lookupInLink(a, b)
-		if !ok {
-			return nil, false
-		}
-		return []byte(l.Type), true
 	}
-	return nil, false
+	if v == "" {
+		// Index and tag keys exist with no value; the tree stores nothing for
+		// them either.
+		return nil, true
+	}
+	return []byte(v), true
 }
 
 func (r *vertexRecord) exists(tail string) bool {
-	_, ok := r.get(tail)
+	k, a, b := parseTail(tail)
+	return r.existsParsed(k, a, b)
+}
+
+// existsParsed answers existence without building the value.
+func (r *vertexRecord) existsParsed(k tailKind, a, b string) bool {
+	_, _, ok := r.lookupParsed(k, a, b)
 	return ok
 }
 
@@ -169,41 +136,83 @@ func (r *vertexRecord) exists(tail string) bool {
 // time, because in the tree each is its own node and CRUD does write them
 // apart.
 func (r *vertexRecord) updateTime(tail string) int64 {
-	switch k, a, b := parseTail(tail); k {
-	case tailBody:
-		if _, t, ok := r.bodyBytes(); ok {
-			return t
-		}
-	case tailOutTo:
-		if l, ok := r.lookupOutLink(a); ok && l.To.Live {
-			return l.To.Time
-		}
-	case tailOutBody:
-		if l, ok := r.lookupOutLink(a); ok && l.Body.Live {
-			return l.Body.Time
-		}
-	case tailIndexType:
-		if l, ok := r.lookupOutLink(a); ok {
-			if v, found := findSub(l.IdxTypes, b); found && v.Live {
-				return v.Time
-			}
-		}
-	case tailIndexTag:
-		if l, ok := r.lookupOutLink(a); ok {
-			if v, found := findSub(l.Tags, b); found && v.Live {
-				return v.Time
-			}
-		}
-	case tailLinkType:
-		if p, ok := r.lookupPair(a, b); ok {
-			return p.UpdateTime
-		}
-	case tailIn:
-		if l, ok := r.lookupInLink(a, b); ok {
-			return l.UpdateTime
-		}
+	k, a, b := parseTail(tail)
+	return r.updateTimeParsed(k, a, b)
+}
+
+func (r *vertexRecord) updateTimeParsed(k tailKind, a, b string) int64 {
+	_, t, ok := r.lookupParsed(k, a, b)
+	if !ok {
+		return -1
 	}
-	return -1
+	return t
+}
+
+// lookupParsed is the one read path of a record: it resolves a recognised key
+// to its value and time in a single descent. Value, existence and time are
+// three questions about the same entry, and a traversal asks all three, so they
+// share one lookup instead of repeating it — and none of them decodes more of
+// the entry than the answer needs.
+func (r *vertexRecord) lookupParsed(k tailKind, a, b string) (value string, t int64, ok bool) {
+	switch k {
+	case tailBody:
+		body, bt, found := r.bodyBytes()
+		if !found {
+			return "", -1, false
+		}
+		return body, bt, true
+
+	case tailOutTo:
+		// The stored value is already "<type>.<target>" — what the tree holds
+		// under this key — so it is handed back untouched.
+		to, found := r.lookupOutTo(a)
+		if !found || !to.Live {
+			return "", -1, false
+		}
+		return to.Value, to.Time, true
+
+	case tailOutBody:
+		l, found := r.lookupOutLink(a)
+		if !found || !l.Body.Live {
+			return "", -1, false
+		}
+		return l.Body.Value, l.Body.Time, true
+
+	case tailLinkType:
+		p, found := r.lookupPair(a, b)
+		if !found {
+			return "", -1, false
+		}
+		return p.Name, p.UpdateTime, true
+
+	case tailIndexType:
+		l, found := r.lookupOutLink(a)
+		if !found {
+			return "", -1, false
+		}
+		if v, has := findSub(l.IdxTypes, b); has && v.Live {
+			return "", v.Time, true
+		}
+		return "", -1, false
+
+	case tailIndexTag:
+		l, found := r.lookupOutLink(a)
+		if !found {
+			return "", -1, false
+		}
+		if v, has := findSub(l.Tags, b); has && v.Live {
+			return "", v.Time, true
+		}
+		return "", -1, false
+
+	case tailIn:
+		l, found := r.lookupInLink(a, b)
+		if !found {
+			return "", -1, false
+		}
+		return l.Type, l.UpdateTime, true
+	}
+	return "", -1, false
 }
 
 func containsString(ss []string, s string) bool {

@@ -293,6 +293,7 @@ func (r *vertexRecord) putBody(body []byte, t int64, asJSON bool) bool {
 	}
 	h := makeHead(body, t, false, asJSON)
 	r.head.Store(&h)
+	r.parsedBody.Store(nil) // the kept parse is of the body that just went away
 	return true
 }
 
@@ -304,6 +305,7 @@ func (r *vertexRecord) deleteBody(t int64) bool {
 	}
 	h := makeHead(nil, t, true, r.bodyIsJSON())
 	r.head.Store(&h)
+	r.parsedBody.Store(nil)
 	return true
 }
 
@@ -507,5 +509,38 @@ func (r *vertexRecord) dirtyBuckets() int {
 	count(r.out.Load())
 	count(r.in.Load())
 	count(r.pairs.Load())
+	return n
+}
+
+// ageParsedBodies drops the body parses nobody asked for since the last pass
+// and keeps the ones somebody did, reporting how many it dropped. This is what
+// bounds how much of the graph is held as trees: the working set, not the
+// graph.
+func (cs *Store) ageParsedBodies() int {
+	if !tieringEnabled() || cs.records == nil {
+		return 0
+	}
+	n := 0
+	cs.records.each(func(_ string, r *vertexRecord) bool {
+		if r.ageParsedBody() {
+			n++
+		}
+		return true
+	})
+	return n
+}
+
+// dropParsedBodies releases every kept body parse across the store.
+func (cs *Store) dropParsedBodies() int {
+	if !tieringEnabled() || cs.records == nil {
+		return 0
+	}
+	n := 0
+	cs.records.each(func(_ string, r *vertexRecord) bool {
+		if r.dropParsedBody() {
+			n++
+		}
+		return true
+	})
 	return n
 }

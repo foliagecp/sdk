@@ -202,24 +202,39 @@ const (
 	objectMutexSuffix     = "-lock"
 )
 
-// tieredVertex returns the vertex id a key belongs to, and whether the key is a
-// graph vertex key at all.
-func tieredVertex(key string) (string, string, bool) {
+// vertexKey is a cache key resolved once: the vertex it belongs to and the
+// shape of its tail. Deciding a key belongs to a record already costs a full
+// parse of the tail, so the answer is carried to whoever acts on it instead of
+// being parsed a second time — this is on every read of every traversal.
+type vertexKey struct {
+	id   string
+	kind tailKind
+	a, b string
+}
+
+// isBody says the key is the vertex body itself rather than one of its links.
+func (vk vertexKey) isBody() bool { return vk.kind == tailBody }
+
+// tieredVertex resolves a key to the vertex it belongs to, and says whether the
+// key is a graph vertex key at all.
+func tieredVertex(key string) (vertexKey, bool) {
 	if !tieringEnabled() {
-		return "", "", false
+		return vertexKey{}, false
 	}
 	id, tail := splitVertexKey(key)
 	if id == "" || isRuntimeKey(id) {
-		return "", "", false
+		return vertexKey{}, false
 	}
-	if tail != "" {
-		// Only the shapes CRUD writes live in a record; anything else stays a
-		// tree key, so an unrecognised shape can never be silently swallowed.
-		if k, _, _ := parseTail(tail); k == tailUnknown {
-			return "", "", false
-		}
+	if tail == "" {
+		return vertexKey{id: id, kind: tailBody}, true
 	}
-	return id, tail, true
+	// Only the shapes CRUD writes live in a record; anything else stays a tree
+	// key, so an unrecognised shape can never be silently swallowed.
+	k, a, b := parseTail(tail)
+	if k == tailUnknown {
+		return vertexKey{}, false
+	}
+	return vertexKey{id: id, kind: k, a: a, b: b}, true
 }
 
 // recordIndex holds the records of a store. The root index of vertices is
@@ -290,38 +305,48 @@ func (ri *recordIndex) each(fn func(id string, r *vertexRecord) bool) {
 // tieredGet answers a read from a record. handled is false when the key is not
 // a record's business, and the caller falls through to the tree.
 func (cs *Store) tieredGet(key string) (value []byte, exists bool, handled bool) {
-	id, tail, ok := tieredVertex(key)
+	vk, ok := tieredVertex(key)
 	if !ok {
 		return nil, false, false
 	}
-	r, found := cs.records.get(id)
+	r, found := cs.records.get(vk.id)
 	if !found {
 		return nil, false, false
 	}
-	v, e := r.get(tail)
+	v, e := r.getParsed(vk.kind, vk.a, vk.b)
 	return v, e, true
 }
 
+// tieredExists asks about existence without building the value: a traversal
+// checks far more keys than it reads.
 func (cs *Store) tieredExists(key string) (exists bool, handled bool) {
-	_, e, h := cs.tieredGet(key)
-	return e, h
+	vk, ok := tieredVertex(key)
+	if !ok {
+		return false, false
+	}
+	r, found := cs.records.get(vk.id)
+	if !found {
+		return false, false
+	}
+	return r.existsParsed(vk.kind, vk.a, vk.b), true
 }
 
 func (cs *Store) tieredUpdateTime(key string) (int64, bool) {
-	id, tail, ok := tieredVertex(key)
+	vk, ok := tieredVertex(key)
 	if !ok {
 		return -1, false
 	}
-	r, found := cs.records.get(id)
+	r, found := cs.records.get(vk.id)
 	if !found {
 		return -1, false
 	}
-	return r.updateTime(tail), true
+	return r.updateTimeParsed(vk.kind, vk.a, vk.b), true
 }
 
 // tieredKeys answers a pattern whose vertex is a record.
 func (cs *Store) tieredKeys(pattern string) ([]string, bool) {
-	id, _, ok := tieredVertex(strings.TrimSuffix(strings.TrimSuffix(pattern, ">"), "*"))
+	vk, ok := tieredVertex(strings.TrimSuffix(strings.TrimSuffix(pattern, ">"), "*"))
+	id := vk.id
 	if !ok {
 		// A pattern ending right after the vertex id has an empty tail, which
 		// tieredVertex accepts; anything it refuses is not a record's business.
@@ -345,13 +370,13 @@ func (cs *Store) tieredKeys(pattern string) ([]string, bool) {
 // tieredSet applies a write to a record. handled is false for keys the tree
 // still owns.
 func (cs *Store) tieredSet(key string, value []byte, asJSON bool, t int64) (handled bool) {
-	id, tail, ok := tieredVertex(key)
+	vk, ok := tieredVertex(key)
 	if !ok {
 		return false
 	}
-	r := cs.records.getOrCreate(id)
+	r := cs.records.getOrCreate(vk.id)
 
-	switch k, a, b := parseTail(tail); k {
+	switch k, a, b := vk.kind, vk.a, vk.b; k {
 	case tailBody:
 		r.putBody(value, t, asJSON)
 
@@ -381,16 +406,16 @@ func (cs *Store) tieredSet(key string, value []byte, asJSON bool, t int64) (hand
 
 // tieredDelete removes one key from a record.
 func (cs *Store) tieredDelete(key string, t int64) (handled bool) {
-	id, tail, ok := tieredVertex(key)
+	vk, ok := tieredVertex(key)
 	if !ok {
 		return false
 	}
-	r, found := cs.records.get(id)
+	r, found := cs.records.get(vk.id)
 	if !found {
 		return false
 	}
 
-	switch k, a, b := parseTail(tail); k {
+	switch k, a, b := vk.kind, vk.a, vk.b; k {
 	case tailBody:
 		r.deleteBody(t)
 

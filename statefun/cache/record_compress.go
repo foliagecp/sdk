@@ -556,5 +556,9 @@ func (r *vertexRecord) compressBody() bool {
 	}
 	nh := makeHeadFlags([]byte(out), int64(le64(h, 4)), false, r.flags()&flagBodyJSON != 0, true)
 	r.head.Store(&nh)
+	// A body cold enough to compress is cold enough to stop keeping parsed,
+	// and cold enough to have to earn it again.
+	r.parsedBody.Store(nil)
+	r.parsedBodySeen.Store(false)
 	return true
 }
