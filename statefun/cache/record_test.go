@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"time"
 )
 
 func mkOut(i int) outLink {
@@ -586,4 +587,54 @@ func Benchmark_ParseTailBySplit(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		parseTailBySplit("out.index.l00042.type.__object")
 	}
+}
+
+// Test_KeysByPattern_PinnedPrefixDoesNotScanTheVertex — вопрос про одну связь
+// не должен стоить перебора всех связей вершины.
+//
+// Движок запросов спрашивает индексы каждой связи по очереди, шаблоном
+// `<вершина>.out.index.<имя>.>`. Пока перечисление отвечало на такой вопрос
+// обходом всех связей, обход хаба стоил квадрат от их числа: на тысяче связей
+// запрос JPGQL занимал 205 мс против 2 мс у дерева. Здесь проверяется само
+// свойство: цена ответа не растёт вместе с размером вершины.
+func Test_KeysByPattern_PinnedPrefixDoesNotScanTheVertex(t *testing.T) {
+	build := func(links int) *vertexRecord {
+		r := newVertexRecord(vertexData{BodyTime: -1}, defaultBucketLinks)
+		for i := 0; i < links; i++ {
+			name := fmt.Sprintf("l%05d", i)
+			require.True(t, r.setOutTo(name, "t.dom/tgt", int64(i+1)))
+			require.True(t, r.setOutIndexType(name, "t", int64(i+1), true))
+			require.True(t, r.setOutTag(name, "важный", int64(i+1), true))
+		}
+		return r
+	}
+	ask := func(r *vertexRecord, links, rounds int) time.Duration {
+		best := time.Duration(1<<62 - 1)
+		for attempt := 0; attempt < 3; attempt++ {
+			started := time.Now()
+			for i := 0; i < rounds; i++ {
+				name := fmt.Sprintf("l%05d", i%links)
+				got := r.keysByPattern("dom/v", "dom/v.out.index."+name+".>")
+				if len(got) != 2 {
+					t.Fatalf("связь %s: ожидались индекс типа и метка, получено %v", name, got)
+				}
+			}
+			if d := time.Since(started); d < best {
+				best = d
+			}
+		}
+		return best / time.Duration(rounds)
+	}
+
+	const small, large = 100, 3000
+	perSmall := ask(build(small), small, 2000)
+	perLarge := ask(build(large), large, 2000)
+	t.Logf("вершина из %d связей: %s на вопрос", small, perSmall)
+	t.Logf("вершина из %d связей: %s на вопрос", large, perLarge)
+
+	// Вершина в 30 раз больше. Пятикратный запас — чтобы тест не сыпался от
+	// шума машины, но ловил возвращение перебора, который дал бы тридцать.
+	require.Lessf(t, perLarge, perSmall*5,
+		"ответ про одну связь подорожал с ростом вершины: %s против %s — значит вернулся перебор",
+		perLarge, perSmall)
 }

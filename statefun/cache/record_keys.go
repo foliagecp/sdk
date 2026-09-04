@@ -273,7 +273,46 @@ func containsString(ss []string, s string) bool {
 // fixed part can still match want are generated: asking for `out.body.>` on a
 // vertex with ten thousand links should not build the index and in-link keys
 // too.
+// pinnedEntry reports the single entry a tail prefix determines, if it
+// determines one: a link name for the outgoing side, a (from, name) pair for
+// the incoming one.
+//
+// This is what makes a traversal affordable. The query engine asks for the
+// indices of each link in turn — `<vertex>.out.index.<name>.>` — and answering
+// each of those by walking every link of the vertex costs N per question and
+// therefore N squared for the vertex. On a hub with a thousand links that was
+// a hundredfold on the whole query. Everything such a prefix can match lives in
+// one entry, so the enumeration goes straight to it.
+func pinnedEntry(want string) (kind tailKind, name string, ok bool) {
+	cut := func(s string) (string, bool) {
+		i := strings.IndexByte(s, '.')
+		if i < 0 {
+			return "", false // the name is not complete yet: it may still grow
+		}
+		return s[:i], true
+	}
+	switch {
+	case strings.HasPrefix(want, "out.index."):
+		n, done := cut(want[len("out.index."):])
+		return tailIndexType, n, done
+	case strings.HasPrefix(want, "out.body."):
+		n, done := cut(want[len("out.body."):])
+		return tailOutBody, n, done
+	case strings.HasPrefix(want, "out.to."):
+		n, done := cut(want[len("out.to."):])
+		return tailOutTo, n, done
+	case strings.HasPrefix(want, "in."):
+		n, done := cut(want[len("in."):])
+		return tailIn, n, done
+	}
+	return tailUnknown, "", false
+}
+
 func (r *vertexRecord) eachTail(want string, fn func(tail string) bool) {
+	if kind, name, ok := pinnedEntry(want); ok {
+		r.eachTailOfEntry(kind, name, want, fn)
+		return
+	}
 	mayMatch := func(prefix string) bool {
 		if want == "" {
 			return true
@@ -351,6 +390,54 @@ func (r *vertexRecord) eachTail(want string, fn func(tail string) bool) {
 			}
 			return fn(t)
 		})
+	}
+}
+
+// eachTailOfEntry emits the tails of the one entry a prefix pinned down.
+func (r *vertexRecord) eachTailOfEntry(kind tailKind, name, want string, fn func(tail string) bool) {
+	emit := func(t string) bool {
+		if !strings.HasPrefix(t, want) {
+			return true
+		}
+		return fn(t)
+	}
+	if kind == tailIn {
+		// The prefix names the source vertex; that source's links share one
+		// bucket, so the whole answer is there.
+		stop := false
+		r.rangeInLinks(func(l inLink) bool {
+			if l.From != name {
+				return true
+			}
+			if !emit("in." + l.From + "." + l.Name) {
+				stop = true
+				return false
+			}
+			return true
+		})
+		_ = stop
+		return
+	}
+
+	l, ok := r.lookupOutLink(name)
+	if !ok {
+		return
+	}
+	if l.To.Live && !emit("out.to."+l.Name) {
+		return
+	}
+	if l.Body.Live && !emit("out.body."+l.Name) {
+		return
+	}
+	for _, v := range l.IdxTypes {
+		if v.Live && !emit("out.index."+l.Name+".type."+v.Value) {
+			return
+		}
+	}
+	for _, v := range l.Tags {
+		if v.Live && !emit("out.index."+l.Name+".tag."+v.Value) {
+			return
+		}
 	}
 }
 
