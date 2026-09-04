@@ -638,3 +638,13 @@ func Test_KeysByPattern_PinnedPrefixDoesNotScanTheVertex(t *testing.T) {
 		"ответ про одну связь подорожал с ростом вершины: %s против %s — значит вернулся перебор",
 		perLarge, perSmall)
 }
+
+// Test_SpareFor_NeverBelowWhatIsHeld — запас ёмкости не имеет права оказаться
+// меньше того, что уже лежит в корзине: make() с такой ёмкостью паникует. А
+// перерасти потолок корзина может — расщепление идёт после записи, и на
+// предельной глубине справочника не идёт вовсе.
+func Test_SpareFor_NeverBelowWhatIsHeld(t *testing.T) {
+	for n := 0; n < 4*defaultBucketLinks+10; n++ {
+		require.GreaterOrEqualf(t, spareFor(n), n, "запас для %d записей оказался меньше их числа", n)
+	}
+}

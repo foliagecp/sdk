@@ -268,7 +268,13 @@ type bucketDir struct {
 	// directory entry instead would leave the others on the old block, and the
 	// link would be readable from both — which is exactly the bug this shape
 	// prevents.
-	slots []*bucketSlot
+	// Entries are replaceable in place, atomically. A split that does not
+	// grow the directory then touches only the entries that pointed at the
+	// bucket it split, instead of publishing a whole new directory: on a hub
+	// whose directory holds thousands of entries, copying it on every split
+	// cost more than the split, and it was done holding the lock that
+	// serializes every writer to that vertex.
+	slots []atomic.Pointer[bucketSlot]
 }
 
 // bucketSlot owns one bucket: the block itself behind an atomic pointer for
@@ -518,7 +524,7 @@ func (d *bucketDir) slotFor(h uint32) *bucketSlot {
 	if d == nil || len(d.slots) == 0 {
 		return nil
 	}
-	return d.slots[d.slotIndex(h)]
+	return d.slots[d.slotIndex(h)].Load()
 }
 
 // bucketFor returns a bucket ready to be read: readable() decompresses a
@@ -538,7 +544,8 @@ func (d *bucketDir) each(fn func(b *bucket) bool) {
 		return
 	}
 	seen := make(map[*bucketSlot]struct{}, len(d.slots))
-	for _, s := range d.slots {
+	for i := range d.slots {
+		s := d.slots[i].Load()
 		if s == nil {
 			continue
 		}
@@ -833,10 +840,10 @@ func buildDir[T any](items []T, keyOf func(T) string, depth uint8, encode func([
 		}
 		groups[idx] = append(groups[idx], it)
 	}
-	d := &bucketDir{depth: depth, slots: make([]*bucketSlot, n)}
+	d := &bucketDir{depth: depth, slots: make([]atomic.Pointer[bucketSlot], n)}
 	for i := range groups {
 		sort.Slice(groups[i], func(a, b int) bool { return sortLess(groups[i][a], groups[i][b]) })
-		d.slots[i] = newBucketSlot(&bucket{data: encode(groups[i]), localDepth: depth})
+		d.slots[i].Store(newBucketSlot(&bucket{data: encode(groups[i]), localDepth: depth}))
 	}
 	return d
 }
@@ -1122,7 +1129,8 @@ func (r *vertexRecord) approxBytes() int {
 		}
 		n += len(d.slots) * 8 // directory entries
 		seen := make(map[*bucketSlot]struct{}, len(d.slots))
-		for _, s := range d.slots {
+		for i := range d.slots {
+			s := d.slots[i].Load()
 			if s == nil {
 				continue
 			}

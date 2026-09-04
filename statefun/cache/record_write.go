@@ -32,6 +32,7 @@ package cache
 
 import (
 	"sort"
+	"sync/atomic"
 )
 
 // bucketWriteResult says what a mutation did, so the caller can decide whether
@@ -46,9 +47,14 @@ type bucketWriteResult struct {
 func (r *vertexRecord) withOutSlot(key string, fn func(b *bucket) (*bucket, bucketWriteResult)) (*bucketDir, bucketWriteResult) {
 	for {
 		d := r.out.Load()
-		s := d.slots[d.slotIndex(hashToken(key))]
+		idx := d.slotIndex(hashToken(key))
+		s := d.slots[idx].Load()
 		s.mu.Lock()
-		if r.out.Load() != d {
+		// Two ways the ground can move: the directory was replaced by a
+		// doubling, or this entry was pointed at a different slot by a split
+		// that did not need one. Either means the slot just locked may no
+		// longer serve this key.
+		if r.out.Load() != d || d.slots[idx].Load() != s {
 			// The directory changed under us; the slot we locked may no longer
 			// serve this key. Start over against the current one.
 			s.mu.Unlock()
@@ -69,9 +75,14 @@ func (r *vertexRecord) withOutSlot(key string, fn func(b *bucket) (*bucket, buck
 func (r *vertexRecord) withInSlot(key string, fn func(b *bucket) (*bucket, bucketWriteResult)) (*bucketDir, bucketWriteResult) {
 	for {
 		d := r.in.Load()
-		s := d.slots[d.slotIndex(hashToken(key))]
+		idx := d.slotIndex(hashToken(key))
+		s := d.slots[idx].Load()
 		s.mu.Lock()
-		if r.in.Load() != d {
+		// Two ways the ground can move: the directory was replaced by a
+		// doubling, or this entry was pointed at a different slot by a split
+		// that did not need one. Either means the slot just locked may no
+		// longer serve this key.
+		if r.in.Load() != d || d.slots[idx].Load() != s {
 			s.mu.Unlock()
 			continue
 		}
@@ -286,8 +297,16 @@ func applyInLinkTo(cur []*inLink, decoded bool, l inLink) ([]*inLink, bool) {
 // all. The ceiling is the split threshold, so the spare is never large.
 func spareFor(n int) int {
 	room := n + n/2 + 1
-	if room > 2*defaultBucketLinks {
-		room = 2*defaultBucketLinks + 1
+	if ceiling := 2*defaultBucketLinks + 1; room > ceiling {
+		room = ceiling
+	}
+	if room < n {
+		// The ceiling must never cut below what the caller already holds. A
+		// bucket can outgrow it: a split runs after the write that overfilled
+		// the bucket, so under concurrent writers several may land before it
+		// does, and a bucket at the maximum directory depth never splits at
+		// all. Returning less than n made make() panic outright.
+		room = n
 	}
 	return room
 }
@@ -362,7 +381,7 @@ func (r *vertexRecord) splitOut(seen *bucketDir, key string) {
 	if d != seen {
 		return // somebody already restructured; their split covers this too
 	}
-	old := d.slots[d.slotIndex(hashToken(key))]
+	old := d.slots[d.slotIndex(hashToken(key))].Load()
 
 	// The bucket is read under its own lock and the new directory is published
 	// before that lock is released. Without it a writer that passed its
@@ -379,7 +398,7 @@ func (r *vertexRecord) splitOut(seen *bucketDir, key string) {
 
 	links := b.outEntries()
 	nd := growDirIfNeeded(d, b)
-	splitSlots(nd, old, b.localDepth, func(bit int) *bucket {
+	splitSlots(nd, old, b.localDepth, hashToken(key), func(bit int) *bucket {
 		var g []*outLink
 		for _, l := range links {
 			if int((hashToken(l.Name)>>b.localDepth)&1) == bit {
@@ -400,7 +419,7 @@ func (r *vertexRecord) splitIn(seen *bucketDir, key string) {
 	if d != seen {
 		return
 	}
-	old := d.slots[d.slotIndex(hashToken(key))]
+	old := d.slots[d.slotIndex(hashToken(key))].Load()
 	old.mu.Lock()
 	defer old.mu.Unlock()
 
@@ -411,7 +430,7 @@ func (r *vertexRecord) splitIn(seen *bucketDir, key string) {
 
 	links := b.inEntries()
 	nd := growDirIfNeeded(d, b)
-	splitSlots(nd, old, b.localDepth, func(bit int) *bucket {
+	splitSlots(nd, old, b.localDepth, hashToken(key), func(bit int) *bucket {
 		var g []*inLink
 		for _, l := range links {
 			if int((hashToken(l.From)>>b.localDepth)&1) == bit {
@@ -438,15 +457,25 @@ const maxDirDepth = 16
 // the same entries (a fresh slice over the SAME slots, so sharing and locks
 // survive) when its local depth is below the global depth, or one of twice the
 // size when it is not.
+// growDirIfNeeded returns the directory the split must publish into: the same
+// one when the bucket has room below the global depth, a doubled copy when it
+// does not.
+//
+// Returning the same directory is the point. A bucket below the global depth
+// splits without the directory changing size, and that is the common case —
+// after one doubling, every bucket at the old depth can split without another.
+// Copying the directory anyway cost O(entries) per split, under the lock that
+// serializes every writer to the vertex, which on a hub of 30 000 links made
+// concurrent writes three times dearer than the tree's.
 func growDirIfNeeded(d *bucketDir, b *bucket) *bucketDir {
-	depth := d.depth
-	if b.localDepth >= d.depth {
-		depth = d.depth + 1
+	if b.localDepth < d.depth {
+		return d
 	}
+	depth := d.depth + 1
 	n := 1 << depth
-	nd := &bucketDir{depth: depth, slots: make([]*bucketSlot, n)}
+	nd := &bucketDir{depth: depth, slots: make([]atomic.Pointer[bucketSlot], n)}
 	for i := 0; i < n; i++ {
-		nd.slots[i] = d.slots[i&(len(d.slots)-1)]
+		nd.slots[i].Store(d.slots[i&(len(d.slots)-1)].Load())
 	}
 	return nd
 }
@@ -454,17 +483,28 @@ func growDirIfNeeded(d *bucketDir, b *bucket) *bucketDir {
 // splitSlots replaces every directory entry that pointed at old with one of two
 // new slots, chosen by the bit just past the bucket's local depth. Entries that
 // shared old keep sharing whichever half they now belong to.
-func splitSlots(nd *bucketDir, old *bucketSlot, localDepth uint8, make func(bit int) *bucket) {
+// splitSlots replaces every directory entry that pointed at old with one of two
+// new slots, chosen by the bit just past the bucket's local depth. Entries that
+// shared old keep sharing whichever half they now belong to.
+//
+// Which entries those are is computed, not searched for: a bucket at local
+// depth L is reachable exactly from the entries whose low L bits are its hash
+// prefix, so they are prefix, prefix+2^L, prefix+2^(L+1)... Scanning the whole
+// directory instead cost O(entries) per split while holding the lock that
+// serializes every writer to the vertex — on a hub with thousands of entries
+// that, and not the split itself, was the cost.
+func splitSlots(nd *bucketDir, old *bucketSlot, localDepth uint8, prefix uint32, make func(bit int) *bucket) {
 	zero := newBucketSlot(make(0))
 	one := newBucketSlot(make(1))
-	for i := range nd.slots {
-		if nd.slots[i] != old {
+	step := 1 << localDepth
+	for i := int(prefix) & (step - 1); i < len(nd.slots); i += step {
+		if nd.slots[i].Load() != old {
 			continue
 		}
 		if (i>>localDepth)&1 == 0 {
-			nd.slots[i] = zero
+			nd.slots[i].Store(zero)
 		} else {
-			nd.slots[i] = one
+			nd.slots[i].Store(one)
 		}
 	}
 }
@@ -496,7 +536,8 @@ func compactDir(d *bucketDir) int {
 	}
 	n := 0
 	seen := make(map[*bucketSlot]struct{}, len(d.slots))
-	for _, s := range d.slots {
+	for i := range d.slots {
+		s := d.slots[i].Load()
 		if s == nil {
 			continue
 		}
@@ -524,7 +565,8 @@ func (r *vertexRecord) dirtyBuckets() int {
 			return
 		}
 		seen := make(map[*bucketSlot]struct{}, len(d.slots))
-		for _, s := range d.slots {
+		for i := range d.slots {
+			s := d.slots[i].Load()
 			if s == nil {
 				continue
 			}

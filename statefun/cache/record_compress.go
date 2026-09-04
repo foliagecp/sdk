@@ -279,7 +279,8 @@ func compressDir(d *bucketDir) int {
 	}
 	n := 0
 	seen := make(map[*bucketSlot]struct{}, len(d.slots))
-	for _, s := range d.slots {
+	for i := range d.slots {
+		s := d.slots[i].Load()
 		if s == nil {
 			continue
 		}
@@ -310,7 +311,8 @@ func (r *vertexRecord) bucketCounts() (total, compressed, decoded int) {
 			return
 		}
 		seen := make(map[*bucketSlot]struct{}, len(d.slots))
-		for _, s := range d.slots {
+		for i := range d.slots {
+			s := d.slots[i].Load()
 			if s == nil {
 				continue
 			}
@@ -353,7 +355,8 @@ func (r *vertexRecord) compressedBuckets() int {
 			return
 		}
 		seen := make(map[*bucketSlot]struct{}, len(d.slots))
-		for _, s := range d.slots {
+		for i := range d.slots {
+			s := d.slots[i].Load()
 			if s == nil {
 				continue
 			}
@@ -379,7 +382,8 @@ func (r *vertexRecord) sampleBuckets(limit int, out *[][]byte) {
 			return
 		}
 		seen := make(map[*bucketSlot]struct{}, len(d.slots))
-		for _, s := range d.slots {
+		for i := range d.slots {
+			s := d.slots[i].Load()
 			if s == nil || len(*out) >= limit {
 				return
 			}

@@ -228,9 +228,14 @@ func applyPair(pairs []pairEntry, p pairEntry) ([]pairEntry, bool) {
 func (r *vertexRecord) withPairSlot(key string, fn func(b *bucket) (*bucket, bucketWriteResult)) (*bucketDir, bucketWriteResult) {
 	for {
 		d := r.pairs.Load()
-		s := d.slots[d.slotIndex(hashToken(key))]
+		idx := d.slotIndex(hashToken(key))
+		s := d.slots[idx].Load()
 		s.mu.Lock()
-		if r.pairs.Load() != d {
+		// Two ways the ground can move: the directory was replaced by a
+		// doubling, or this entry was pointed at a different slot by a split
+		// that did not need one. Either means the slot just locked may no
+		// longer serve this key.
+		if r.pairs.Load() != d || d.slots[idx].Load() != s {
 			s.mu.Unlock()
 			continue
 		}
@@ -251,7 +256,7 @@ func (r *vertexRecord) splitPairs(seen *bucketDir, key string) {
 	if d != seen {
 		return
 	}
-	old := d.slots[d.slotIndex(hashToken(key))]
+	old := d.slots[d.slotIndex(hashToken(key))].Load()
 	old.mu.Lock()
 	defer old.mu.Unlock()
 
@@ -261,7 +266,7 @@ func (r *vertexRecord) splitPairs(seen *bucketDir, key string) {
 	}
 	entries := b.pairEntries()
 	nd := growDirIfNeeded(d, b)
-	splitSlots(nd, old, b.localDepth, func(bit int) *bucket {
+	splitSlots(nd, old, b.localDepth, hashToken(key), func(bit int) *bucket {
 		var g []*pairEntry
 		for _, p := range entries {
 			if int((hashToken(makePairKey(p.Type, p.Target))>>b.localDepth)&1) == bit {
