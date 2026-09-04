@@ -174,11 +174,82 @@ func newBucketSlot(b *bucket) *bucketSlot {
 	return s
 }
 
-// bucket is an immutable encoded block of entries plus the local depth that
-// extendible hashing needs to decide whether a split must grow the directory.
+// bucket is an immutable block of entries plus the local depth that extendible
+// hashing needs to decide whether a split must grow the directory.
+//
+// A bucket holds its entries EITHER encoded (data) or decoded (outs / ins), and
+// both forms answer the same questions. The decoded form exists because CRUD
+// writes a link as six separate keys, four of which land in the same bucket: a
+// bucket that re-encoded itself on every key would pay four serializations for
+// one link, which measured 1.6-3x more expensive than the tree — worst on the
+// hubs this format exists to make cheap. Writing therefore leaves the bucket
+// decoded, and encoding happens once, later, when the memory is wanted back.
+//
+// Immutability still holds: a write publishes a NEW bucket with its own slice,
+// so a reader that loaded the old one keeps reading a value nobody mutates.
 type bucket struct {
 	data       string
+	outs       []outLink // set instead of data while the bucket is dirty
+	ins        []inLink
+	decoded    bool
 	localDepth uint8
+}
+
+// outEntries returns the bucket's outgoing links, decoding only if needed.
+func (b *bucket) outEntries() []outLink {
+	if b == nil {
+		return nil
+	}
+	if b.decoded {
+		return b.outs
+	}
+	n := bucketCount(b.data)
+	out := make([]outLink, n)
+	for i := 0; i < n; i++ {
+		out[i] = decodeOutLink(bucketEntry(b.data, i))
+	}
+	return out
+}
+
+func (b *bucket) inEntries() []inLink {
+	if b == nil {
+		return nil
+	}
+	if b.decoded {
+		return b.ins
+	}
+	n := bucketCount(b.data)
+	out := make([]inLink, n)
+	for i := 0; i < n; i++ {
+		out[i] = decodeInLink(bucketEntry(b.data, i))
+	}
+	return out
+}
+
+// entryCount is how many entries the bucket holds, in either form.
+func (b *bucket) entryCount() int {
+	if b == nil {
+		return 0
+	}
+	if b.decoded {
+		if b.outs != nil {
+			return len(b.outs)
+		}
+		return len(b.ins)
+	}
+	return bucketCount(b.data)
+}
+
+// encoded returns the bucket in its byte form, encoding a dirty one. Called
+// when the memory of the decoded form is wanted back, never on a read path.
+func (b *bucket) encoded() *bucket {
+	if b == nil || !b.decoded {
+		return b
+	}
+	if b.outs != nil {
+		return &bucket{data: encodeOutBucket(b.outs), localDepth: b.localDepth}
+	}
+	return &bucket{data: encodeInBucket(b.ins), localDepth: b.localDepth}
 }
 
 func makeHead(body []byte, bodyTime int64, bodyDead, bodyJSON bool) string {
@@ -626,6 +697,13 @@ func (r *vertexRecord) lookupOutTarget(name string) (linkType, target string, ok
 	if b == nil {
 		return "", "", false
 	}
+	if b.decoded {
+		l, found := searchOutSlice(b.outs, name)
+		if !found || l.Tombstone {
+			return "", "", false
+		}
+		return l.Type, l.Target, true
+	}
 	e, found := bucketSearch(b.data, name, outLinkName)
 	if !found {
 		return "", "", false
@@ -635,6 +713,26 @@ func (r *vertexRecord) lookupOutTarget(name string) (linkType, target string, ok
 		return "", "", false
 	}
 	return lt, tgt, true
+}
+
+// searchOutSlice is the decoded-form counterpart of bucketSearch.
+func searchOutSlice(links []outLink, name string) (outLink, bool) {
+	i := sort.Search(len(links), func(i int) bool { return links[i].Name >= name })
+	if i < len(links) && links[i].Name == name {
+		return links[i], true
+	}
+	return outLink{}, false
+}
+
+func searchInSlice(links []inLink, from, name string) (inLink, bool) {
+	key := makeInLinkKey(from, name)
+	i := sort.Search(len(links), func(i int) bool {
+		return makeInLinkKey(links[i].From, links[i].Name) >= key
+	})
+	if i < len(links) && links[i].From == from && links[i].Name == name {
+		return links[i], true
+	}
+	return inLink{}, false
 }
 
 func (r *vertexRecord) lookupOutLink(name string) (outLink, bool) {
@@ -651,6 +749,9 @@ func (r *vertexRecord) lookupOutLinkGuard(name string) (outLink, bool) {
 	b := r.out.Load().bucketFor(hashToken(name))
 	if b == nil {
 		return outLink{}, false
+	}
+	if b.decoded {
+		return searchOutSlice(b.outs, name)
 	}
 	e, found := bucketSearch(b.data, name, outLinkName)
 	if !found {
@@ -672,6 +773,9 @@ func (r *vertexRecord) lookupInLinkGuard(from, name string) (inLink, bool) {
 	if b == nil {
 		return inLink{}, false
 	}
+	if b.decoded {
+		return searchInSlice(b.ins, from, name)
+	}
 	e, found := bucketSearch(b.data, makeInLinkKey(from, name), inLinkKey)
 	if !found {
 		return inLink{}, false
@@ -683,8 +787,7 @@ func (r *vertexRecord) lookupInLinkGuard(from, name string) (inLink, bool) {
 // name — the tree's own enumeration makes no ordering promise either.
 func (r *vertexRecord) rangeOutLinks(fn func(outLink) bool) {
 	r.out.Load().each(func(b *bucket) bool {
-		for i, n := 0, bucketCount(b.data); i < n; i++ {
-			l := decodeOutLink(bucketEntry(b.data, i))
+		for _, l := range b.outEntries() {
 			if l.Tombstone {
 				continue
 			}
@@ -698,8 +801,7 @@ func (r *vertexRecord) rangeOutLinks(fn func(outLink) bool) {
 
 func (r *vertexRecord) rangeInLinks(fn func(inLink) bool) {
 	r.in.Load().each(func(b *bucket) bool {
-		for i, n := 0, bucketCount(b.data); i < n; i++ {
-			l := decodeInLink(bucketEntry(b.data, i))
+		for _, l := range b.inEntries() {
 			if l.Tombstone {
 				continue
 			}
@@ -749,3 +851,62 @@ func le32(s string, i int) uint32 {
 func le64(s string, i int) uint64 {
 	return uint64(le32(s, i)) | uint64(le32(s, i+4))<<32
 }
+
+// approxBytes estimates what the record occupies. Deterministic — it counts
+// what is stored, not what the heap happens to show — so a test can assert on
+// it, and the budget regulator can maintain a running total without asking the
+// runtime.
+//
+// A decoded bucket is counted as its entry structs plus the bytes their strings
+// point at; an encoded one as its block. The difference between the two is the
+// memory compaction gives back.
+func (r *vertexRecord) approxBytes() int {
+	if r == nil {
+		return 0
+	}
+	n := len(r.headStr())
+	add := func(d *bucketDir) {
+		if d == nil {
+			return
+		}
+		n += len(d.slots) * 8 // directory entries
+		seen := make(map[*bucketSlot]struct{}, len(d.slots))
+		for _, s := range d.slots {
+			if s == nil {
+				continue
+			}
+			if _, dup := seen[s]; dup {
+				continue
+			}
+			seen[s] = struct{}{}
+			b := s.ptr.Load()
+			if b == nil {
+				continue
+			}
+			if !b.decoded {
+				n += len(b.data)
+				continue
+			}
+			for _, l := range b.outs {
+				n += outLinkBytes + len(l.Name) + len(l.Type) + len(l.Target) + len(l.Body)
+				for _, t := range l.Tags {
+					n += len(t) + 16
+				}
+			}
+			for _, l := range b.ins {
+				n += inLinkBytes + len(l.From) + len(l.Name) + len(l.Type)
+			}
+		}
+	}
+	add(r.out.Load())
+	add(r.in.Load())
+	return n
+}
+
+// Struct footprints of a decoded entry: three string headers, a byte slice, a
+// string slice, an int64 and a bool for an out-link; three string headers, an
+// int64 and a bool for an in-link.
+const (
+	outLinkBytes = 3*16 + 24 + 24 + 8 + 8
+	inLinkBytes  = 3*16 + 8 + 8
+)

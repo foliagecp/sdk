@@ -89,11 +89,11 @@ func (r *vertexRecord) withInSlot(key string, fn func(b *bucket) (*bucket, bucke
 // timestamp lost to what is already stored.
 func (r *vertexRecord) putOutLink(l outLink) bool {
 	d, res := r.withOutSlot(l.Name, func(b *bucket) (*bucket, bucketWriteResult) {
-		links, ok := applyOutLink(decodeOutBucket(b), l)
+		links, ok := applyOutLink(copyOutEntries(b), l)
 		if !ok {
 			return nil, bucketWriteResult{applied: false}
 		}
-		return &bucket{data: encodeOutBucket(links), localDepth: b.localDepth},
+		return &bucket{outs: links, decoded: true, localDepth: b.localDepth},
 			bucketWriteResult{applied: true, count: len(links)}
 	})
 	if res.applied && res.count > r.bucketLimit() {
@@ -106,11 +106,11 @@ func (r *vertexRecord) putOutLink(l outLink) bool {
 // an older time cannot bring it back.
 func (r *vertexRecord) deleteOutLink(name string, t int64) bool {
 	_, res := r.withOutSlot(name, func(b *bucket) (*bucket, bucketWriteResult) {
-		links, ok := applyOutLink(decodeOutBucket(b), outLink{Name: name, UpdateTime: t, Tombstone: true})
+		links, ok := applyOutLink(copyOutEntries(b), outLink{Name: name, UpdateTime: t, Tombstone: true})
 		if !ok {
 			return nil, bucketWriteResult{applied: false}
 		}
-		return &bucket{data: encodeOutBucket(links), localDepth: b.localDepth},
+		return &bucket{outs: links, decoded: true, localDepth: b.localDepth},
 			bucketWriteResult{applied: true, count: len(links)}
 	})
 	return res.applied
@@ -132,9 +132,19 @@ func applyOutLink(links []outLink, l outLink) ([]outLink, bool) {
 	return links, true
 }
 
-func decodeOutBucket(b *bucket) []outLink {
+// copyOutEntries returns the bucket's entries in a slice the caller may mutate.
+// Copying is what keeps published buckets immutable: a reader that loaded this
+// bucket must keep seeing what it loaded, so the writer works on its own slice
+// and publishes a new bucket around it. A decoded bucket copies; an encoded one
+// decodes, which is the same cost it always was.
+func copyOutEntries(b *bucket) []outLink {
 	if b == nil {
 		return nil
+	}
+	if b.decoded {
+		out := make([]outLink, len(b.outs), len(b.outs)+1)
+		copy(out, b.outs)
+		return out
 	}
 	n := bucketCount(b.data)
 	links := make([]outLink, 0, n+1)
@@ -150,11 +160,11 @@ func decodeOutBucket(b *bucket) []outLink {
 
 func (r *vertexRecord) putInLink(l inLink) bool {
 	d, res := r.withInSlot(l.From, func(b *bucket) (*bucket, bucketWriteResult) {
-		links, ok := applyInLink(decodeInBucket(b), l)
+		links, ok := applyInLink(copyInEntries(b), l)
 		if !ok {
 			return nil, bucketWriteResult{applied: false}
 		}
-		return &bucket{data: encodeInBucket(links), localDepth: b.localDepth},
+		return &bucket{ins: links, decoded: true, localDepth: b.localDepth},
 			bucketWriteResult{applied: true, count: len(links)}
 	})
 	if res.applied && res.count > r.bucketLimit() {
@@ -165,11 +175,11 @@ func (r *vertexRecord) putInLink(l inLink) bool {
 
 func (r *vertexRecord) deleteInLink(from, name string, t int64) bool {
 	_, res := r.withInSlot(from, func(b *bucket) (*bucket, bucketWriteResult) {
-		links, ok := applyInLink(decodeInBucket(b), inLink{From: from, Name: name, UpdateTime: t, Tombstone: true})
+		links, ok := applyInLink(copyInEntries(b), inLink{From: from, Name: name, UpdateTime: t, Tombstone: true})
 		if !ok {
 			return nil, bucketWriteResult{applied: false}
 		}
-		return &bucket{data: encodeInBucket(links), localDepth: b.localDepth},
+		return &bucket{ins: links, decoded: true, localDepth: b.localDepth},
 			bucketWriteResult{applied: true, count: len(links)}
 	})
 	return res.applied
@@ -193,9 +203,14 @@ func applyInLink(links []inLink, l inLink) ([]inLink, bool) {
 	return links, true
 }
 
-func decodeInBucket(b *bucket) []inLink {
+func copyInEntries(b *bucket) []inLink {
 	if b == nil {
 		return nil
+	}
+	if b.decoded {
+		out := make([]inLink, len(b.ins), len(b.ins)+1)
+		copy(out, b.ins)
+		return out
 	}
 	n := bucketCount(b.data)
 	links := make([]inLink, 0, n+1)
@@ -264,11 +279,11 @@ func (r *vertexRecord) splitOut(seen *bucketDir, key string) {
 	defer old.mu.Unlock()
 
 	b := old.ptr.Load()
-	if b == nil || bucketCount(b.data) <= r.bucketLimit() || b.localDepth >= maxDirDepth {
+	if b == nil || b.entryCount() <= r.bucketLimit() || b.localDepth >= maxDirDepth {
 		return
 	}
 
-	links := decodeOutBucket(b)
+	links := b.outEntries()
 	nd := growDirIfNeeded(d, b)
 	splitSlots(nd, old, b.localDepth, func(bit int) *bucket {
 		var g []outLink
@@ -278,7 +293,7 @@ func (r *vertexRecord) splitOut(seen *bucketDir, key string) {
 			}
 		}
 		sort.Slice(g, func(a, c int) bool { return g[a].Name < g[c].Name })
-		return &bucket{data: encodeOutBucket(g), localDepth: b.localDepth + 1}
+		return &bucket{outs: g, decoded: true, localDepth: b.localDepth + 1}
 	})
 	r.out.Store(nd)
 }
@@ -296,11 +311,11 @@ func (r *vertexRecord) splitIn(seen *bucketDir, key string) {
 	defer old.mu.Unlock()
 
 	b := old.ptr.Load()
-	if b == nil || bucketCount(b.data) <= r.bucketLimit() || b.localDepth >= maxDirDepth {
+	if b == nil || b.entryCount() <= r.bucketLimit() || b.localDepth >= maxDirDepth {
 		return
 	}
 
-	links := decodeInBucket(b)
+	links := b.inEntries()
 	nd := growDirIfNeeded(d, b)
 	splitSlots(nd, old, b.localDepth, func(bit int) *bucket {
 		var g []inLink
@@ -315,7 +330,7 @@ func (r *vertexRecord) splitIn(seen *bucketDir, key string) {
 			}
 			return g[a].Name < g[c].Name
 		})
-		return &bucket{data: encodeInBucket(g), localDepth: b.localDepth + 1}
+		return &bucket{ins: g, decoded: true, localDepth: b.localDepth + 1}
 	})
 	r.in.Store(nd)
 }
@@ -358,4 +373,76 @@ func splitSlots(nd *bucketDir, old *bucketSlot, localDepth uint8, make func(bit 
 			nd.slots[i] = one
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// giving the memory back
+// ---------------------------------------------------------------------------
+
+// compactBuckets re-encodes every bucket a write left decoded, and reports how
+// many it encoded.
+//
+// Writing deliberately does not encode: CRUD writes a link as several keys into
+// the same bucket, and encoding per key made a link write more expensive than
+// the tree. The cost of that choice is that a written bucket holds Go objects
+// until somebody asks for the memory back — which is what this is for, called
+// from the maintenance pass. Reads work on either form, so this is never on a
+// read path and never changes an answer.
+func (r *vertexRecord) compactBuckets() int {
+	n := 0
+	n += compactDir(r.out.Load())
+	n += compactDir(r.in.Load())
+	return n
+}
+
+func compactDir(d *bucketDir) int {
+	if d == nil {
+		return 0
+	}
+	n := 0
+	seen := make(map[*bucketSlot]struct{}, len(d.slots))
+	for _, s := range d.slots {
+		if s == nil {
+			continue
+		}
+		if _, dup := seen[s]; dup {
+			continue
+		}
+		seen[s] = struct{}{}
+
+		s.mu.Lock()
+		b := s.ptr.Load()
+		if b != nil && b.decoded {
+			s.ptr.Store(b.encoded())
+			n++
+		}
+		s.mu.Unlock()
+	}
+	return n
+}
+
+// dirtyBuckets counts buckets still holding decoded entries.
+func (r *vertexRecord) dirtyBuckets() int {
+	n := 0
+	count := func(d *bucketDir) {
+		if d == nil {
+			return
+		}
+		seen := make(map[*bucketSlot]struct{}, len(d.slots))
+		for _, s := range d.slots {
+			if s == nil {
+				continue
+			}
+			if _, dup := seen[s]; dup {
+				continue
+			}
+			seen[s] = struct{}{}
+			if b := s.ptr.Load(); b != nil && b.decoded {
+				n++
+			}
+		}
+	}
+	count(r.out.Load())
+	count(r.in.Load())
+	return n
 }

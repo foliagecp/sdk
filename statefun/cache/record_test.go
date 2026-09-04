@@ -3,6 +3,7 @@ package cache
 import (
 	"fmt"
 	"math/rand"
+	"runtime"
 	"sort"
 	"sync"
 	"testing"
@@ -215,7 +216,7 @@ func Test_Record_SplitKeepsEverything(t *testing.T) {
 
 	// ни одна корзина не осталась переполненной
 	r.out.Load().each(func(b *bucket) bool {
-		require.LessOrEqual(t, bucketCount(b.data), 2*defaultBucketLinks,
+		require.LessOrEqual(t, b.entryCount(), 2*defaultBucketLinks,
 			"корзина осталась вдвое больше предела — расщепление не сработало")
 		return true
 	})
@@ -347,3 +348,73 @@ func Benchmark_Record_Read(b *testing.B) {
 		})
 	}
 }
+
+// Test_Record_CompactBuckets — уплотнение возвращает память и не меняет ответов.
+func Test_Record_CompactBuckets(t *testing.T) {
+	r := newVertexRecord(vertexData{BodyTime: 1}, defaultBucketLinks)
+	const n = 2000
+	for i := 0; i < n; i++ {
+		require.True(t, r.putOutLink(mkOut(i)))
+		require.True(t, r.putInLink(mkIn(i)))
+	}
+	require.Greater(t, r.dirtyBuckets(), 0, "записи обязаны были оставить корзины разобранными")
+
+	before := map[string]outLink{}
+	r.rangeOutLinks(func(l outLink) bool { before[l.Name] = l; return true })
+
+	encoded := r.compactBuckets()
+	require.Greater(t, encoded, 0)
+	require.Equal(t, 0, r.dirtyBuckets(), "после уплотнения разобранных корзин быть не должно")
+
+	after := map[string]outLink{}
+	r.rangeOutLinks(func(l outLink) bool { after[l.Name] = l; return true })
+	require.Equal(t, len(before), len(after))
+	for name, l := range before {
+		got, ok := after[name]
+		require.True(t, ok, "%s пропала при уплотнении", name)
+		require.Equal(t, l.Target, got.Target)
+		require.Equal(t, l.UpdateTime, got.UpdateTime)
+	}
+	for i := 0; i < n; i++ {
+		_, ok := r.lookupOutLink(mkOut(i).Name)
+		require.True(t, ok, "после уплотнения не читается %d", i)
+		wi := mkIn(i)
+		_, ok = r.lookupInLink(wi.From, wi.Name)
+		require.True(t, ok)
+	}
+
+	// повторное уплотнение — ничего не делает
+	require.Equal(t, 0, r.compactBuckets())
+}
+
+// Test_Record_CompactionReturnsMemory — уплотнение возвращает память.
+//
+// Утверждение на детерминированной оценке, а не на размере кучи: замер кучи
+// внутри одного процесса зависит от того, что успел сделать сборщик, и такой
+// тест падает через раз. approxBytes считает то, что действительно хранится, —
+// и это же та оценка, которой пользуется регулятор бюджета.
+func Test_Record_CompactionReturnsMemory(t *testing.T) {
+	for _, links := range []int{40, 400, 4000} {
+		t.Run(fmt.Sprintf("links=%d", links), func(t *testing.T) {
+			r := newVertexRecord(vertexData{Body: []byte(`{"n":1}`), BodyTime: 1}, defaultBucketLinks)
+			for i := 0; i < links; i++ {
+				require.True(t, r.putOutLink(mkOut(i)))
+			}
+			dirty := r.approxBytes()
+			require.Greater(t, r.dirtyBuckets(), 0)
+
+			r.compactBuckets()
+			clean := r.approxBytes()
+
+			t.Logf("%d связей: разобранные %d B, уплотнённые %d B, %.2fx",
+				links, dirty, clean, float64(dirty)/float64(clean))
+			require.Less(t, clean, dirty, "уплотнение обязано возвращать память")
+			require.Less(t, float64(clean), 0.6*float64(dirty),
+				"уплотнение вернуло меньше 40 %% — форма записи не окупается")
+		})
+	}
+}
+
+func runtimeGC()             { runtime.GC(); runtime.GC() }
+func runtimeKeepAlive(v any) { runtime.KeepAlive(v) }
+func heapAllocNow() uint64   { var ms runtime.MemStats; runtime.ReadMemStats(&ms); return ms.HeapAlloc }
