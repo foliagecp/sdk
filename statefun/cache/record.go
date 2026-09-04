@@ -272,6 +272,7 @@ type bucket struct {
 	ins        []inLink
 	pairs      []pairEntry
 	decoded    bool
+	compressed bool // data holds a zstd frame (see record_compress.go)
 	localDepth uint8
 }
 
@@ -410,9 +411,12 @@ func (d *bucketDir) slotFor(h uint32) *bucketSlot {
 	return d.slots[d.slotIndex(h)]
 }
 
+// bucketFor returns a bucket ready to be read: readable() decompresses a
+// compressed one and publishes the raw form back, so a bucket under repeated
+// reads stops paying for its own compression.
 func (d *bucketDir) bucketFor(h uint32) *bucket {
 	if s := d.slotFor(h); s != nil {
-		return s.ptr.Load()
+		return s.readable()
 	}
 	return nil
 }
@@ -432,7 +436,7 @@ func (d *bucketDir) each(fn func(b *bucket) bool) {
 			continue
 		}
 		seen[s] = struct{}{}
-		b := s.ptr.Load()
+		b := s.readable()
 		if b == nil {
 			continue
 		}

@@ -54,7 +54,10 @@ func (r *vertexRecord) withOutSlot(key string, fn func(b *bucket) (*bucket, buck
 			s.mu.Unlock()
 			continue
 		}
-		nb, res := fn(s.ptr.Load())
+		// A compressed bucket is decompressed here rather than by the
+		// reader's opportunistic path: the writer already holds the slot
+		// lock, and it is about to replace the block anyway.
+		nb, res := fn(s.ptr.Load().rawForm())
 		if nb != nil {
 			s.ptr.Store(nb)
 		}
@@ -72,7 +75,10 @@ func (r *vertexRecord) withInSlot(key string, fn func(b *bucket) (*bucket, bucke
 			s.mu.Unlock()
 			continue
 		}
-		nb, res := fn(s.ptr.Load())
+		// A compressed bucket is decompressed here rather than by the
+		// reader's opportunistic path: the writer already holds the slot
+		// lock, and it is about to replace the block anyway.
+		nb, res := fn(s.ptr.Load().rawForm())
 		if nb != nil {
 			s.ptr.Store(nb)
 		}

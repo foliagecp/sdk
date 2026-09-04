@@ -829,6 +829,15 @@ func (cs *Store) RehydrateFromKV(ctx context.Context) error {
 func (cs *Store) traverseCacheForMaintenance() *maintenanceResult {
 	result := &maintenanceResult{}
 	cs.sweepSubtree(cs.rootValue, result)
+
+	// Records are maintained here too, and in this order. A write leaves its
+	// bucket decoded — deliberately, because encoding per key made a link
+	// write more expensive than the tree — so compaction is what gives that
+	// memory back. The dictionary is trained on raw buckets, so it has to see
+	// them before compression turns them into frames.
+	cs.compactRecords()
+	cs.maybeTrainDictionary(dictSampleLimit)
+	cs.compressRecords()
 	return result
 }
 

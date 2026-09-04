@@ -210,7 +210,7 @@ func (r *vertexRecord) withPairSlot(key string, fn func(b *bucket) (*bucket, buc
 			s.mu.Unlock()
 			continue
 		}
-		nb, res := fn(s.ptr.Load())
+		nb, res := fn(s.ptr.Load().rawForm())
 		if nb != nil {
 			s.ptr.Store(nb)
 		}
