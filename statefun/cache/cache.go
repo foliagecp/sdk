@@ -708,6 +708,28 @@ func (cs *Store) HasPendingWrites() bool {
 // `ExistsJson(types/<T>)` returns false after restart and JPGQL enumerations
 // like [l:type('__object')] silently produce empty results. The probe is one
 // `easyjson.JSONFromBytes` per entry — cheap on a one-shot load.
+// looksLikeJSONObject is the cheap half of the load's JSON probe: a value
+// whose first non-blank byte is not '{' cannot be a JSON object. It never
+// decides that something IS one — the parse still does that — so it can only
+// save work, never change what gets stored.
+//
+// It earns its lines on the shape of a real load: parsing a short non-JSON
+// value costs 210-275 ns and this costs 2, and KV holds five such values (link
+// target, type-target pair, index key, in-link, tag) for every vertex body.
+func looksLikeJSONObject(v []byte) bool {
+	for _, c := range v {
+		switch c {
+		case ' ', '\t', '\n', '\r':
+			continue
+		case '{':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
+}
+
 func (cs *Store) loadFromKV(ctx context.Context) error {
 	w, err := cs.kv.Watch(cs.cacheConfig.kvStorePrefix+".>", nats.IgnoreDeletes())
 	if err != nil {
@@ -737,21 +759,31 @@ func (cs *Store) loadFromKV(ctx context.Context) error {
 			// empty values here previously dropped every link-type/tag index
 			// key on reload, which broke JPGQL enumeration after a restart
 			// (consistency check would return 0 members).
-			if len(valueBytes) == 0 {
-				cs.SetValue(key, valueBytes, false, now)
-				continue
-			}
 			// Probe: if the bytes are a valid JSON object, store as JSON so
 			// callers that distinguish typeJson vs typeByteArray (ExistsJson,
 			// JPGQL filters, GetValueJSON*) see the right type. Otherwise
 			// store as raw bytes. This restores the type semantics that CMDB
 			// originally wrote (SetValueJSON for vertex bodies, SetValue for
 			// link targets and index keys).
-			if jv, ok := easyjson.JSONFromBytes(valueBytes); ok && jv.IsObject() {
-				cs.SetValueJSON(key, &jv, false, now)
-			} else {
-				cs.SetValue(key, valueBytes, false, now)
+			//
+			// The cheap test comes first and only ever rules the probe OUT:
+			// what is stored is still decided by the parse, so the types are
+			// exactly what they were before this shortcut existed. An empty
+			// value is ruled out by it too — and an empty value is a
+			// LEGITIMATE write, not a delete: CMDB writes index keys (e.g.
+			// <v>.out.index.<linkName>.type.<linkType>) with nil value because
+			// the information is encoded in the key shape alone. With
+			// IgnoreDeletes() the watcher already filters real tombstones, so
+			// any entry that arrives is a real key. Skipping empty values here
+			// previously dropped every link-type/tag index key on reload,
+			// which broke JPGQL enumeration after a restart.
+			if looksLikeJSONObject(valueBytes) {
+				if jv, ok := easyjson.JSONFromBytes(valueBytes); ok && jv.IsObject() {
+					cs.SetValueJSON(key, &jv, false, now)
+					continue
+				}
 			}
+			cs.SetValue(key, valueBytes, false, now)
 		}
 	}
 }
