@@ -56,6 +56,12 @@ const (
 	// stays in the header, reads see nothing.
 	flagBodyTombstoned uint8 = 1 << 0
 
+	// flagBodyJSON records that the body was written as a JSON value rather
+	// than as bytes. The tree keeps the same distinction in its node flags, and
+	// ExistsJson answers by it, so a record that lost it could not give the
+	// same answer as the tree.
+	flagBodyJSON uint8 = 1 << 1
+
 	// entryTombstoned marks a link entry that is a guard rather than a link.
 	entryTombstoned uint8 = 1 << 0
 )
@@ -94,6 +100,7 @@ type vertexData struct {
 	Body     []byte // raw JSON of the vertex body, nil when absent
 	BodyTime int64
 	BodyDead bool
+	BodyJSON bool
 	Out      []outLink
 	In       []inLink
 	OutDepth uint8 // directory depth; 0 means a single bucket
@@ -174,11 +181,14 @@ type bucket struct {
 	localDepth uint8
 }
 
-func makeHead(body []byte, bodyTime int64, bodyDead bool) string {
+func makeHead(body []byte, bodyTime int64, bodyDead, bodyJSON bool) string {
 	buf := make([]byte, recordHeadLen, recordHeadLen+len(body))
 	buf[0] = recordVersion
 	if bodyDead {
 		buf[1] |= flagBodyTombstoned
+	}
+	if bodyJSON {
+		buf[1] |= flagBodyJSON
 	}
 	binary.LittleEndian.PutUint64(buf[4:], uint64(bodyTime))
 	buf = append(buf, body...)
@@ -213,6 +223,11 @@ func (r *vertexRecord) bodyBytes() (string, int64, bool) {
 		return "", -1, false
 	}
 	return h[recordHeadLen:], int64(le64(h, 4)), true
+}
+
+// bodyIsJSON reports whether the body was stored as a JSON value.
+func (r *vertexRecord) bodyIsJSON() bool {
+	return r.valid() && r.flags()&flagBodyJSON != 0
 }
 
 // bodyGuardTime is the time a writer must beat, tombstone or not.
@@ -563,7 +578,7 @@ func newVertexRecord(v vertexData, bucketLinks int) *vertexRecord {
 	}
 
 	r := &vertexRecord{}
-	h := makeHead(v.Body, v.BodyTime, v.BodyDead)
+	h := makeHead(v.Body, v.BodyTime, v.BodyDead, v.BodyJSON)
 	r.head.Store(&h)
 	r.out.Store(buildDir(v.Out, func(l outLink) string { return l.Name }, outDepth,
 		encodeOutBucket, func(a, b outLink) bool { return a.Name < b.Name }))
@@ -698,13 +713,25 @@ func (r *vertexRecord) rangeInLinks(fn func(inLink) bool) {
 
 // lookupOutLinkByTypeTarget answers the `V.ltype.<type>.<target>` key shape,
 // which CRUD uses to find a link's name from its endpoints.
+//
+// That key is NOT a property of one link: it is keyed by the pair, so two links
+// of the same type to the same target — legal, since a link is identified by
+// its name — share it, and the tree holds whichever was written last. A record
+// has no write order, so it resolves the pair by the newest update time, with
+// the name as a deterministic tie-break. Exactness for simultaneous writes to a
+// colliding pair would need the mapping stored in its own right; the shapes
+// CRUD produces carry increasing operation times, so the newest link is the one
+// that wrote the key.
 func (r *vertexRecord) lookupOutLinkByTypeTarget(linkType, target string) (outLink, bool) {
 	var found outLink
 	var ok bool
 	r.rangeOutLinks(func(l outLink) bool {
-		if l.Type == linkType && l.Target == target {
+		if l.Type != linkType || l.Target != target {
+			return true
+		}
+		if !ok || l.UpdateTime > found.UpdateTime ||
+			(l.UpdateTime == found.UpdateTime && l.Name > found.Name) {
 			found, ok = l, true
-			return false
 		}
 		return true
 	})

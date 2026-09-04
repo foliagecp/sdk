@@ -172,13 +172,13 @@ func Test_Record_LastWriterWins(t *testing.T) {
 	require.True(t, ok)
 
 	// тело: тот же страж
-	require.False(t, r.putBody([]byte(`{"a":1}`), 0))
-	require.True(t, r.putBody([]byte(`{"a":1}`), 10))
+	require.False(t, r.putBody([]byte(`{"a":1}`), 0, true))
+	require.True(t, r.putBody([]byte(`{"a":1}`), 10, true))
 	require.True(t, r.deleteBody(20))
 	_, _, ok = r.bodyBytes()
 	require.False(t, ok)
-	require.False(t, r.putBody([]byte(`{"a":2}`), 19), "запоздавшая запись воскресила тело")
-	require.True(t, r.putBody([]byte(`{"a":2}`), 21))
+	require.False(t, r.putBody([]byte(`{"a":2}`), 19, true), "запоздавшая запись воскресила тело")
+	require.True(t, r.putBody([]byte(`{"a":2}`), 21, true))
 	body, _, ok := r.bodyBytes()
 	require.True(t, ok)
 	require.Equal(t, `{"a":2}`, body)

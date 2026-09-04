@@ -1862,3 +1862,17 @@ func (cs *Store) hasActiveOperationsUpTo(barrierTime int64) bool {
 }
 
 // -----------------------------------
+
+// NewStoreForTest builds a store that is only a tree: no NATS, no WAL, no KV.
+// Writes must pass updateInKV=false.
+//
+// Test-only, in the spirit of StatsForTest: comparing a record against the tree
+// it must be indistinguishable from needs a real tree and nothing else.
+func NewStoreForTest(id string) *Store {
+	cs := &Store{
+		cacheConfig: NewCacheConfig(id),
+		rootValue:   &StoreValue{valueUpdateTime: -1},
+	}
+	cs.rootValue.initRootSharded()
+	return cs
+}

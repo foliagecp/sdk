@@ -209,13 +209,13 @@ func decodeInBucket(b *bucket) []inLink {
 // the vertex body
 // ---------------------------------------------------------------------------
 
-func (r *vertexRecord) putBody(body []byte, t int64) bool {
+func (r *vertexRecord) putBody(body []byte, t int64, asJSON bool) bool {
 	r.headMu.Lock()
 	defer r.headMu.Unlock()
 	if t < r.bodyGuardTime() {
 		return false
 	}
-	h := makeHead(body, t, false)
+	h := makeHead(body, t, false, asJSON)
 	r.head.Store(&h)
 	return true
 }
@@ -226,7 +226,7 @@ func (r *vertexRecord) deleteBody(t int64) bool {
 	if t < r.bodyGuardTime() {
 		return false
 	}
-	h := makeHead(nil, t, true)
+	h := makeHead(nil, t, true, r.bodyIsJSON())
 	r.head.Store(&h)
 	return true
 }
