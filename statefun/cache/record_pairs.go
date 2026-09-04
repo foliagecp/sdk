@@ -207,24 +207,6 @@ func (r *vertexRecord) deletePair(linkType, target string, t int64) bool {
 	return res.applied
 }
 
-func applyPair(pairs []pairEntry, p pairEntry) ([]pairEntry, bool) {
-	key := makePairKey(p.Type, p.Target)
-	i := sort.Search(len(pairs), func(i int) bool {
-		return makePairKey(pairs[i].Type, pairs[i].Target) >= key
-	})
-	if i < len(pairs) && pairs[i].Type == p.Type && pairs[i].Target == p.Target {
-		if p.UpdateTime < pairs[i].UpdateTime {
-			return nil, false
-		}
-		pairs[i] = p
-		return pairs, true
-	}
-	pairs = append(pairs, pairEntry{})
-	copy(pairs[i+1:], pairs[i:])
-	pairs[i] = p
-	return pairs, true
-}
-
 func (r *vertexRecord) withPairSlot(key string, fn func(b *bucket) (*bucket, bucketWriteResult)) (*bucketDir, bucketWriteResult) {
 	for {
 		d := r.pairs.Load()

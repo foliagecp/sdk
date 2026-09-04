@@ -230,6 +230,26 @@ func (r *vertexRecord) setOutTag(name, tag string, t int64, live bool) bool {
 // incoming links
 // ---------------------------------------------------------------------------
 
+// spareFor is how much room a fresh copy of a bucket keeps beyond what it
+// holds. A bucket is copied to be written to, and the write that follows is
+// often an append; leaving room means the appends after it cost nothing at
+// all. The ceiling is about the split threshold, so the spare is never large.
+func spareFor(n int) int {
+	room := n + n/2 + 1
+	if ceiling := 2*defaultBucketLinks + 1; room > ceiling {
+		room = ceiling
+	}
+	if room < n {
+		// The ceiling must never cut below what the caller already holds. A
+		// bucket can outgrow it: a split runs after the write that overfilled
+		// the bucket, so under concurrent writers several may land before it
+		// does, and a bucket at the maximum directory depth never splits at
+		// all. Returning less than n made make() panic outright.
+		room = n
+	}
+	return room
+}
+
 func (r *vertexRecord) putInLink(l inLink) bool {
 	d, res := r.withInSlot(l.From, func(b *bucket) (*bucket, bucketWriteResult) {
 		links, ok := applyInLinkTo(b.inEntries(), b != nil && b.decoded, l)
@@ -285,50 +305,6 @@ func applyInLinkTo(cur []*inLink, decoded bool, l inLink) ([]*inLink, bool) {
 	out[i] = &l
 	copy(out[i+1:], cur[i:])
 	return out, true
-}
-
-// copyOutEntries returns the bucket's entries in a slice the caller may mutate.
-// Copying is what keeps published buckets immutable: a reader that loaded this
-// bucket must keep seeing what it loaded, so the writer works on its own slice
-// and publishes a new bucket around it.
-// spareFor is how much room a fresh copy of a bucket keeps beyond what it
-// holds. A bucket is copied to be written to, and the write that follows is
-// often an append; leaving room means the appends after it cost nothing at
-// all. The ceiling is the split threshold, so the spare is never large.
-func spareFor(n int) int {
-	room := n + n/2 + 1
-	if ceiling := 2*defaultBucketLinks + 1; room > ceiling {
-		room = ceiling
-	}
-	if room < n {
-		// The ceiling must never cut below what the caller already holds. A
-		// bucket can outgrow it: a split runs after the write that overfilled
-		// the bucket, so under concurrent writers several may land before it
-		// does, and a bucket at the maximum directory depth never splits at
-		// all. Returning less than n made make() panic outright.
-		room = n
-	}
-	return room
-}
-
-func copyOutEntries(b *bucket) []*outLink {
-	if b == nil {
-		return nil
-	}
-	if b.decoded {
-		// Room to spare, so a later insert at the end can use it instead of
-		// copying again — see mutateOutLink.
-		out := make([]*outLink, len(b.outs), spareFor(len(b.outs)))
-		copy(out, b.outs)
-		return out
-	}
-	n := bucketCount(b.data)
-	links := make([]*outLink, 0, spareFor(n))
-	for i := 0; i < n; i++ {
-		l := decodeOutLink(bucketEntry(b.data, i))
-		links = append(links, &l)
-	}
-	return links
 }
 
 // ---------------------------------------------------------------------------
