@@ -272,17 +272,45 @@ func (ri *recordIndex) get(id string) (*vertexRecord, bool) {
 
 // getOrCreate returns the record of id, making an empty one if needed.
 func (ri *recordIndex) getOrCreate(id string) *vertexRecord {
-	if r, ok := ri.get(id); ok {
+	if r, ok := ri.get(id); ok && !r.retired.Load() {
 		return r
 	}
 	ri.mu.Lock()
 	defer ri.mu.Unlock()
-	if r, ok := ri.m[id]; ok {
+	if r, ok := ri.m[id]; ok && !r.retired.Load() {
 		return r
 	}
 	r := newVertexRecord(vertexData{BodyTime: -1}, defaultBucketLinks)
 	ri.m[id] = r
 	return r
+}
+
+// removeDead drops the named records, but only those still holding nothing
+// live when the index is locked: between naming them and locking, a vertex may
+// have been created again.
+//
+// A record is retired before it leaves the map. A writer that fetched it a
+// moment earlier still holds the pointer and can write into a record nobody
+// can reach; it sees the flag afterwards and starts over on the live one. The
+// tree's own sweep has that window open — a write landing in a node just
+// detached from its parent is lost — and this closes it.
+func (ri *recordIndex) removeDead(ids []string) int {
+	if len(ids) == 0 {
+		return 0
+	}
+	ri.mu.Lock()
+	defer ri.mu.Unlock()
+	n := 0
+	for _, id := range ids {
+		r, ok := ri.m[id]
+		if !ok || !r.dead() {
+			continue
+		}
+		r.retired.Store(true)
+		delete(ri.m, id)
+		n++
+	}
+	return n
 }
 
 // reset empties the index. A rehydration replaces the whole world, so what the
@@ -398,8 +426,36 @@ func (cs *Store) tieredSet(key string, value []byte, asJSON bool, t int64) (hand
 	if !ok {
 		return false
 	}
-	r := cs.records.getOrCreate(vk.id)
+	for {
+		r := cs.records.getOrCreate(vk.id)
+		if hook := afterRecordFetchForTest; hook != nil {
+			// The window this loop exists for is nanoseconds wide, and no
+			// amount of concurrency reproduces it on demand. A test steps into
+			// it here.
+			hook(vk.id)
+		}
+		if !cs.applyToRecord(r, vk, value, asJSON, t) {
+			return false // a shape no record owns; the tree keeps it
+		}
+		if !r.retired.Load() {
+			return true
+		}
+		// The record was swept between being fetched and being written to, so
+		// the write went somewhere nobody can reach. Repeat it on whatever
+		// replaced it — every write here is idempotent under its own
+		// timestamp, so repeating costs nothing and loses nothing.
+	}
+}
 
+// afterRecordFetchForTest runs between fetching a record and writing to it,
+// and only a test ever sets it. Nil on every real path — one predictable
+// branch on a write that costs a microsecond.
+var afterRecordFetchForTest func(id string)
+
+// applyToRecord writes one key into a record. It reports false only for a key
+// shape no record owns; whether the write STANDS is the caller's question,
+// answered by the record's retired flag.
+func (cs *Store) applyToRecord(r *vertexRecord, vk vertexKey, value []byte, asJSON bool, t int64) bool {
 	switch k, a, b := vk.kind, vk.a, vk.b; k {
 	case tailBody:
 		r.putBody(value, t, asJSON)
@@ -541,6 +597,34 @@ func (cs *Store) RecordsBytesForTest() int {
 		return true
 	})
 	return n
+}
+
+// sweepRecords removes the records of vertices that no longer exist, and
+// reports how many it removed.
+//
+// Deleting a vertex leaves its record behind holding tombstones: the keys are
+// gone but the record, its three directories and their slots are not. Without
+// this, a workload that creates and deletes — an inventory rebuild, a trash
+// can cycling — grows the index by one record per deleted vertex forever. The
+// tree has always swept its dead nodes (sweepSubtree); this is the same job on
+// the same schedule.
+//
+// The tombstones go with the record, so a write that arrives afterwards with a
+// timestamp older than the delete is no longer refused by a guard that has
+// been collected. That is exactly what the tree does when it drops a
+// tombstoned node with no surviving children, and the two must not disagree.
+func (cs *Store) sweepRecords() int {
+	if !tieringEnabled() || cs.records == nil {
+		return 0
+	}
+	var dead []string
+	cs.records.each(func(id string, r *vertexRecord) bool {
+		if r.dead() {
+			dead = append(dead, id)
+		}
+		return true
+	})
+	return cs.records.removeDead(dead)
 }
 
 // RunMaintenanceForTest performs one maintenance pass: it compacts what writes

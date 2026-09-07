@@ -16,6 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
+	"sync/atomic"
 )
 
 // storeOp — одна операция над кэшем, применимая к любому Store.
@@ -452,4 +453,188 @@ func labelNamesOf(l prometheus.Labels) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// Test_SweepRecords_RemovesWhatIsGone — вершина, которой больше нет, не должна
+// оставлять после себя запись. Без этого нагрузка «создать — удалить» растит
+// индекс на одну запись за каждую удалённую вершину и не отдаёт её никогда.
+func Test_SweepRecords_RemovesWhatIsGone(t *testing.T) {
+	restore := SetCacheModeForTest("records")
+	defer restore()
+
+	cs := NewStoreForTest("sweep")
+	body, _ := easyjson.JSONFromString(`{"n":1}`)
+	const vertices = 20
+	create := func(i int) {
+		id := fmt.Sprintf("dom/v-%02d", i)
+		cs.SetValueJSON(id, &body, false, 1)
+		cs.SetValue(id+".out.to.l1", []byte("t.dom/x"), false, 1)
+		cs.SetValue(id+".ltype.t.dom/x", []byte("l1"), false, 1)
+		cs.SetValue(id+".out.index.l1.type.t", nil, false, 1)
+		cs.SetValue("dom/x.in."+id+".l1", []byte("t"), false, 1)
+	}
+	erase := func(i int) {
+		id := fmt.Sprintf("dom/v-%02d", i)
+		cs.DeleteValue(id, false, 2)
+		cs.DeleteValue(id+".out.to.l1", false, 2)
+		cs.DeleteValue(id+".ltype.t.dom/x", false, 2)
+		cs.DeleteValue(id+".out.index.l1.type.t", false, 2)
+		cs.DeleteValue("dom/x.in."+id+".l1", false, 2)
+	}
+
+	for i := 0; i < vertices; i++ {
+		create(i)
+	}
+	require.Equal(t, vertices+1, cs.RecordCountForTest(), "вершины и цель связей")
+	require.Zero(t, cs.sweepRecords(), "живые вершины выметать нельзя")
+
+	for i := 0; i < vertices; i++ {
+		erase(i)
+	}
+	require.Equal(t, vertices+1, cs.RecordCountForTest(),
+		"до обслуживания записи ещё на месте — в них надгробия")
+
+	require.Equal(t, vertices+1, cs.sweepRecords(), "все опустевшие записи обязаны уйти")
+	require.Zero(t, cs.RecordCountForTest(), "индекс обязан опустеть")
+
+	// и граф снова строится с нуля
+	for i := 0; i < vertices; i++ {
+		create(i)
+	}
+	require.Equal(t, vertices+1, cs.RecordCountForTest())
+	for i := 0; i < vertices; i++ {
+		require.True(t, cs.Exists(fmt.Sprintf("dom/v-%02d.out.to.l1", i)), "связь %d", i)
+	}
+}
+
+// Test_SweepRecords_CyclesReturnToBaseline — повторение цикла «создать —
+// удалить — обслужить» обязано возвращать индекс к исходному, а не расти.
+func Test_SweepRecords_CyclesReturnToBaseline(t *testing.T) {
+	restore := SetCacheModeForTest("records")
+	defer restore()
+
+	cs := NewStoreForTest("sweep_cycles")
+	body, _ := easyjson.JSONFromString(`{"n":1}`)
+	for cycle := 0; cycle < 5; cycle++ {
+		for i := 0; i < 30; i++ {
+			id := fmt.Sprintf("dom/c%d-v%02d", cycle, i)
+			cs.SetValueJSON(id, &body, false, int64(cycle*10+1))
+			cs.SetValue(id+".out.to.l1", []byte("t.dom/tgt"), false, int64(cycle*10+1))
+		}
+		for i := 0; i < 30; i++ {
+			id := fmt.Sprintf("dom/c%d-v%02d", cycle, i)
+			cs.DeleteValue(id, false, int64(cycle*10+2))
+			cs.DeleteValue(id+".out.to.l1", false, int64(cycle*10+2))
+		}
+		cs.RunMaintenanceForTest()
+		// dom/tgt держит входящие связи, поэтому переживает цикл; всё
+		// остальное обязано уйти.
+		require.LessOrEqualf(t, cs.RecordCountForTest(), 1,
+			"после цикла %d в индексе осталось %d записей", cycle, cs.RecordCountForTest())
+	}
+}
+
+// Test_SweepRecords_WriteIntoASweptRecordIsRepeated — запись, попавшая ровно в
+// окно между взятием записи и обращением к ней, не должна пропасть.
+//
+// Окно шириной в наносекунды, и никакая конкуренция не воспроизводит его по
+// требованию: без шва тест проходил и с выключенным повтором, то есть не
+// проверял ничего. Здесь выметание происходит внутри окна намеренно.
+func Test_SweepRecords_WriteIntoASweptRecordIsRepeated(t *testing.T) {
+	restore := SetCacheModeForTest("records")
+	defer restore()
+
+	cs := NewStoreForTest("sweep_window")
+	// пустая запись: связь создана и тут же удалена
+	cs.SetValue("dom/v.out.to.l1", []byte("t.dom/x"), false, 1)
+	cs.DeleteValue("dom/v.out.to.l1", false, 2)
+	first, ok := cs.records.get("dom/v")
+	require.True(t, ok)
+	require.True(t, first.dead())
+
+	once := false
+	afterRecordFetchForTest = func(id string) {
+		if once || id != "dom/v" {
+			return
+		}
+		once = true
+		require.Equal(t, 1, cs.sweepRecords(), "выметание внутри окна обязано забрать запись")
+	}
+	defer func() { afterRecordFetchForTest = nil }()
+
+	require.True(t, cs.SetValue("dom/v.out.to.l2", []byte("t.dom/y"), false, 3))
+	require.True(t, once, "шов не сработал — окно не проверено")
+	require.True(t, first.retired.Load(), "старая запись обязана быть помечена")
+
+	v, err := cs.GetValue("dom/v.out.to.l2")
+	require.NoError(t, err, "запись, попавшая в вымётанную запись, потеряна")
+	require.Equal(t, "t.dom/y", string(v))
+
+	second, ok := cs.records.get("dom/v")
+	require.True(t, ok)
+	require.NotSame(t, first, second, "писать должны были уже в новую запись")
+}
+
+// Test_SweepRecords_SweepingAlongsideWritingLosesNothing — выметание идёт
+// одновременно с записью и ничего не ломает.
+//
+// Точное окно этот тест не воспроизводит — оно слишком узко, для него есть
+// тест со швом выше. Здесь проверяется другое: выметание, работающее вперемешку
+// с записями и удалениями, оставляет граф целым.
+func Test_SweepRecords_SweepingAlongsideWritingLosesNothing(t *testing.T) {
+	restore := SetCacheModeForTest("records")
+	defer restore()
+
+	cs := NewStoreForTest("sweep_race")
+
+	const writers, rounds = 16, 300
+	stop := make(chan struct{})
+	var sweeps int64
+	var writersWG, sweeperWG sync.WaitGroup
+
+	sweeperWG.Add(1)
+	go func() {
+		defer sweeperWG.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if n := cs.sweepRecords(); n > 0 {
+				atomic.AddInt64(&sweeps, int64(n))
+			}
+		}
+	}()
+
+	for w := 0; w < writers; w++ {
+		writersWG.Add(1)
+		go func(w int) {
+			defer writersWG.Done()
+			id := fmt.Sprintf("dom/w-%02d", w)
+			ts := int64(1)
+			for r := 0; r < rounds; r++ {
+				name := fmt.Sprintf("%s.out.to.l%04d", id, r)
+				cs.SetValue(name, []byte(fmt.Sprintf("t.dom/tgt-%d-%d", w, r)), false, ts)
+				ts++
+				if r < rounds-1 { // последнюю оставляем жить
+					cs.DeleteValue(name, false, ts)
+					ts++
+				}
+			}
+		}(w)
+	}
+
+	// Выметание живёт ровно столько же, сколько писатели.
+	writersWG.Wait()
+	close(stop)
+	sweeperWG.Wait()
+
+	require.Positive(t, atomic.LoadInt64(&sweeps), "выметание обязано было что-то забрать — иначе гонки не было")
+	for w := 0; w < writers; w++ {
+		key := fmt.Sprintf("dom/w-%02d.out.to.l%04d", w, rounds-1)
+		v, err := cs.GetValue(key)
+		require.NoErrorf(t, err, "последняя связь писателя %d потеряна", w)
+		require.Equal(t, fmt.Sprintf("t.dom/tgt-%d-%d", w, rounds-1), string(v))
+	}
 }

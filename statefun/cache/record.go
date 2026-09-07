@@ -247,6 +247,12 @@ type vertexRecord struct {
 	// twice — keeping those would double the memory of the graph for nobody.
 	parsedBodySeen atomic.Bool
 
+	// retired says the record has been swept out of the index and nobody can
+	// reach it any more. A writer that fetched it just before the sweep checks
+	// this after writing and starts over, so its write cannot vanish with the
+	// record.
+	retired atomic.Bool
+
 	// headMu serializes body writes; dirMu serializes structural changes to a
 	// directory (splitting a bucket, doubling the directory). Ordinary link
 	// writes take neither — they take the lock of their own slot.
@@ -422,6 +428,19 @@ func (r *vertexRecord) flags() uint8 { return r.headStr()[1] }
 
 // bodyBytes returns the vertex body. A tombstoned body reads as absent — the
 // guard time stays for writers only.
+// hasBody says whether a live body is there, reading only the head flags.
+//
+// bodyBytes would answer the same question, but it decompresses the body to do
+// it and publishes the decompressed head back — which is right for a reader
+// and ruinous for a pass that asks about every record every second: it undid
+// the compression of the pass before it, and the graph grew by ten megabytes.
+func (r *vertexRecord) hasBody() bool {
+	if !r.valid() || r.flags()&flagBodyTombstoned != 0 {
+		return false
+	}
+	return len(r.headStr()) > recordHeadLen
+}
+
 func (r *vertexRecord) bodyBytes() (string, int64, bool) {
 	if !r.valid() || r.flags()&flagBodyTombstoned != 0 {
 		return "", -1, false
@@ -535,6 +554,35 @@ func (d *bucketDir) bucketFor(h uint32) *bucket {
 		return s.readable()
 	}
 	return nil
+}
+
+// eachStored visits every distinct bucket as it is STORED — a compressed one
+// stays compressed. `each` decompresses on the way past and publishes the raw
+// form back, which is right for a reader and wrong for a pass that is only
+// looking around: walking the graph once a second to see whether anything can
+// be shrunk would undo the compression of the pass before it.
+func (d *bucketDir) eachStored(fn func(b *bucket) bool) {
+	if d == nil {
+		return
+	}
+	seen := make(map[*bucketSlot]struct{}, len(d.slots))
+	for i := range d.slots {
+		s := d.slots[i].Load()
+		if s == nil {
+			continue
+		}
+		if _, dup := seen[s]; dup {
+			continue
+		}
+		seen[s] = struct{}{}
+		b := s.ptr.Load()
+		if b == nil {
+			continue
+		}
+		if !fn(b) {
+			return
+		}
+	}
 }
 
 // each visits every distinct bucket once: after a split two slots share one
@@ -1066,6 +1114,27 @@ func (r *vertexRecord) lookupInLinkGuard(from, name string) (inLink, bool) {
 		return inLink{}, false
 	}
 	return decodeInLink(e), true
+}
+
+// dead reports that nothing live is left in the record: no body, no link in
+// either direction, no pair — only tombstones and the shape they left behind.
+// It stops at the first live thing it finds, so a populated vertex costs one
+// bucket lookup rather than a walk.
+func (r *vertexRecord) dead() bool {
+	if r.hasBody() {
+		return false
+	}
+	live := false
+	r.rangeOutLinks(func(outLink) bool { live = true; return false })
+	if live {
+		return false
+	}
+	r.rangeInLinks(func(inLink) bool { live = true; return false })
+	if live {
+		return false
+	}
+	r.rangePairs(func(pairEntry) bool { live = true; return false })
+	return !live
 }
 
 // rangeOutLinks visits every live outgoing link. Order is by bucket, not by

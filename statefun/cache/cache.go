@@ -933,6 +933,9 @@ func (cs *Store) traverseCacheForMaintenance() *maintenanceResult {
 	// since the last pass go, the ones somebody did stay. What is held as trees
 	// is therefore the working set rather than the graph.
 	cs.ageParsedBodies()
+	// And the records of vertices that no longer exist go too, or a graph that
+	// churns grows one record per deleted vertex without end.
+	result.removedCount += cs.sweepRecords()
 	return result
 }
 

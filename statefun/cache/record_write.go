@@ -503,6 +503,123 @@ func (r *vertexRecord) compactBuckets() int {
 	n += compactDir(r.out.Load())
 	n += compactDir(r.in.Load())
 	n += compactDir(r.pairs.Load())
+	n += r.shrinkDirs()
+	return n
+}
+
+// depthOf is the directory's depth, zero for one that is not there at all.
+func depthOf(d *bucketDir) uint8 {
+	if d == nil {
+		return 0
+	}
+	return d.depth
+}
+
+// shrinkDirs rebuilds a directory that has grown far past what it now holds,
+// dropping the tombstones with it.
+//
+// A directory only ever split. A vertex that gathered ten thousand links and
+// then lost them kept the directory those links needed, and every deleted link
+// kept its tombstone inside it — so a hub under churn grew without end even
+// though nothing live was left. The tree collapses its tombstone cascades on
+// every sweep; this is the same thing for a record, and it is where the
+// tombstones a record holds are finally let go, exactly as the tree lets go of
+// a tombstoned node with no surviving children.
+//
+// Rebuilding publishes a whole new directory, which is what a split does too,
+// so a writer that was working against the old one re-checks and starts over.
+//
+// A directory holding a compressed bucket is left alone: reading it would mean
+// decompressing, and this pass runs every second over the whole graph — it
+// would undo the compression of the pass before it. The moment to shrink is
+// after writes, when the buckets they touched are still unpacked, and that is
+// exactly when a directory has anything to give back.
+func (r *vertexRecord) shrinkDirs() int {
+	// A directory that never split has nothing to give back, and that is
+	// almost every vertex: only a hub grows past one bucket. Checked before
+	// the lock, so the pass that runs every second walks nothing for them.
+	out, in, pairs := r.out.Load(), r.in.Load(), r.pairs.Load()
+	if depthOf(out) == 0 && depthOf(in) == 0 && depthOf(pairs) == 0 {
+		return 0
+	}
+
+	r.dirMu.Lock()
+	defer r.dirMu.Unlock()
+
+	n := 0
+
+	if d := r.out.Load(); d != nil && d.depth > 0 {
+		var live []*outLink
+		packed := false
+		d.eachStored(func(b *bucket) bool {
+			if b.compressed {
+				packed = true
+				return false
+			}
+			for _, l := range b.outEntries() {
+				if l.alive() {
+					live = append(live, l)
+				}
+			}
+			return true
+		})
+		if depth := depthFor(len(live), r.bucketLimit()); !packed && depth < d.depth {
+			r.out.Store(buildDir(live, func(l *outLink) string { return l.Name }, depth,
+				encodeOutBucket, func(a, b *outLink) bool { return a.Name < b.Name }))
+			n++
+		}
+	}
+
+	if d := r.in.Load(); d != nil && d.depth > 0 {
+		var live []*inLink
+		packed := false
+		d.eachStored(func(b *bucket) bool {
+			if b.compressed {
+				packed = true
+				return false
+			}
+			for _, l := range b.inEntries() {
+				if !l.Tombstone {
+					live = append(live, l)
+				}
+			}
+			return true
+		})
+		if depth := depthFor(len(live), r.bucketLimit()); !packed && depth < d.depth {
+			r.in.Store(buildDir(live, func(l *inLink) string { return l.From }, depth,
+				encodeInBucket, func(a, b *inLink) bool {
+					if a.From != b.From {
+						return a.From < b.From
+					}
+					return a.Name < b.Name
+				}))
+			n++
+		}
+	}
+
+	if d := r.pairs.Load(); d != nil && d.depth > 0 {
+		var live []*pairEntry
+		packed := false
+		d.eachStored(func(b *bucket) bool {
+			if b.compressed {
+				packed = true
+				return false
+			}
+			for _, p := range b.pairEntries() {
+				if !p.Tombstone {
+					live = append(live, p)
+				}
+			}
+			return true
+		})
+		if depth := depthFor(len(live), r.bucketLimit()); !packed && depth < d.depth {
+			r.pairs.Store(buildDir(live, func(p *pairEntry) string { return makePairKey(p.Type, p.Target) },
+				depth, encodePairBucket, func(a, b *pairEntry) bool {
+					return makePairKey(a.Type, a.Target) < makePairKey(b.Type, b.Target)
+				}))
+			n++
+		}
+	}
 	return n
 }
 
