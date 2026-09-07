@@ -134,6 +134,15 @@ var coreMetrics = []string{
 	"cache_live_values",
 	"cache_total_nodes",
 	"cache_tombstones",
+	// The tree counters above see nothing when vertices are kept as records —
+	// which is the default. They stayed at 0/1/0 while the record index grew
+	// by one record per deleted vertex, and the leak was caught by the heap
+	// slope instead: 700 bytes a vertex was large enough, a structural leak of
+	// tens of bytes would not have been. These three are the same invariant
+	// for the representation that actually holds the graph.
+	"cache_record_vertices",
+	"cache_record_buckets",
+	"cache_record_parsed_bodies",
 	"cache_pending_txs",
 	"cache_active_ops",
 	"graph_keymutex_entries",
@@ -149,6 +158,16 @@ func (s *leakSuite) collectCore(smp *Sample) {
 	smp.Custom["cache_live_values"] = float64(st.LiveValues)
 	smp.Custom["cache_total_nodes"] = float64(st.TotalNodes)
 	smp.Custom["cache_tombstones"] = float64(st.Tombstones)
+	vertices, bytes, buckets, compressed, decoded, parsed := s.cacheStore().RecordStatsForTest()
+	smp.Custom["cache_record_vertices"] = float64(vertices)
+	smp.Custom["cache_record_buckets"] = float64(buckets)
+	smp.Custom["cache_record_parsed_bodies"] = float64(parsed)
+	// CSV-only: bytes and the compressed/decoded split move with compaction
+	// and compression, which run on their own schedule, so they cannot carry
+	// an exact-zero-delta invariant.
+	smp.Custom["cache_record_bytes"] = float64(bytes)
+	smp.Custom["cache_record_buckets_compressed"] = float64(compressed)
+	smp.Custom["cache_record_buckets_decoded"] = float64(decoded)
 	smp.Custom["cache_pending_txs"] = float64(st.PendingTxs)
 	smp.Custom["cache_active_ops"] = float64(st.ActiveOps)
 	// CSV-only diagnostics (deliberately NOT in coreMetrics). The two ages are
