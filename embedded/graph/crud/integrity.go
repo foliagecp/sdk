@@ -13,25 +13,44 @@ package crud
 // Twelve keys. Lose any one of them and the object is no longer an object: a
 // read answers "not connected to objects topology", or "inlink from type is
 // broken", or the type resolves to nothing — and until now nothing put it
-// back. The damage outlives every operation, because each operation asks
-// whether the object is readable, not whether it is whole.
+// back. The damage outlived every operation, because each operation asked
+// whether the object was readable, not whether it was whole.
 //
-// THE RULE. If the type can be learned from ANY source, all twelve keys are
-// rewritten and the object is whole again. The type survives in more places
-// than one would think:
+// FIRST QUESTION: is this an object at all? Only one thing in the graph says
+// so — an __object link leading TO the vertex. The objects vertex writes one
+// to put an object in the model, its type writes another to own it, and the
+// trash can (itself a type) writes one over what it parks. Nothing else
+// creates __object links, and nothing points at a type or a root with one, so
+// nothing else can be mistaken for an object. Either half of either link is
+// the assertion, since both halves say the same thing.
+//
+// Everything weaker was tried and dropped: a link that happens to be named
+// "type" is a naming convention anyone can write; a blacklist of "not a type,
+// not a root" goes stale the moment the schema grows a kind nobody listed. A
+// vertex with none of those halves left is indistinguishable from a bare
+// vertex written through the low-level API, and is therefore neither rebuilt
+// nor erased — only its half-edges are closed, which says nothing about what
+// it is.
+//
+// SECOND QUESTION: what type is it? The graph is asked first, in this order:
 //
 //	the object's own type link, by value       obj.out.to.type = __type.<id>
 //	the index of that same link, by key        obj.ltype.__type.<id>
 //	the in-key the type wrote on the object    obj.in.<type>.<id>
 //	what this process already resolved         the object-type cache
-//	what the trash can parked it under         the trash-can edge body
+//	the trash can holding it — it is parked    the trash-can edge
 //	the halves that live on the type itself    a walk over the types
 //
-// If NO source has it, the vertex is not repairable and not admissible: an
-// object whose type nobody knows cannot be read, cannot be enumerated, and
-// cannot be restored later — parking it in the trash can would only record a
-// type we do not have. It is erased, along with every half-edge left pointing
-// at it.
+// The operation itself may name a type too, and it is asked LAST. What the
+// graph still says outranks it: an object created under one type and then
+// updated, by mistake, under another must come out of that update as what it
+// was. Only where the graph has gone silent is the caller believed — and then
+// restoring the object under the type they name keeps every other link it
+// holds, which erasing it would not.
+//
+// If nothing at all names the type, the vertex cannot be read, enumerated or
+// restored later, and parking it in the trash can would record a type nobody
+// has. It is erased, along with the half-edge left on the objects vertex.
 //
 // Cost. A healthy object is checked once per process and then remembered, so
 // the steady state pays one twelve-key probe per object and nothing after
