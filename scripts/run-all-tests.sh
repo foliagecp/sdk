@@ -8,7 +8,8 @@
 # See docs/TESTING.md for the full picture, the test map and the roadmap.
 #
 # Usage:
-#   scripts/run-all-tests.sh [--race] [--coverage] [--quick] [--go-only] [--system-only]
+#   scripts/run-all-tests.sh [--race] [--coverage] [--quick] [--go-only]
+#                            [--system-only] [--both-modes|--tree]
 #
 #   --race        run Go tests under the race detector (slower)
 #   --coverage    write a merged coverage profile (coverage.out) over ./...
@@ -16,6 +17,10 @@
 #                 may flake under contention; default is serial for reliability)
 #   --go-only     skip the system-test phase
 #   --system-only skip the Go-test phase
+#   --both-modes  run the Go-test phase twice, once per cache representation
+#                 (records, then tree) — the mode is a process-wide setting, so
+#                 a single run only ever covers one of them
+#   --tree        run the Go-test phase in the tree representation only
 #
 set -uo pipefail
 
@@ -27,6 +32,7 @@ COVER=""
 PARALLEL="-p 1"      # serial packages by default: embedded-NATS suites contend in parallel
 GO_ONLY=0
 SYSTEM_ONLY=0
+CACHE_MODES="records"   # which cache representations phase 1 runs in
 
 for arg in "$@"; do
   case "$arg" in
@@ -35,6 +41,8 @@ for arg in "$@"; do
     --quick)       PARALLEL="" ;;
     --go-only)     GO_ONLY=1 ;;
     --system-only) SYSTEM_ONLY=1 ;;
+    --both-modes)  CACHE_MODES="records tree" ;;
+    --tree)        CACHE_MODES="tree" ;;
     -h|--help)     sed -n '2,20p' "$SELF"; exit 0 ;;
     *) echo "unknown flag: $arg (see --help)"; exit 2 ;;
   esac
@@ -69,13 +77,19 @@ if [ "$SYSTEM_ONLY" -eq 0 ]; then
   echo "Phase 1: Go tests  (go test ${PARALLEL} -count=1 ${RACE} ${COVER} ./...)"
   echo "=================================================================="
   sweep_systest_leftovers
-  # shellcheck disable=SC2086
-  if go test ${PARALLEL} -count=1 ${RACE} ${COVER} ./...; then
-    echo ">> Go tests: PASS"
-  else
-    echo ">> Go tests: FAIL"
-    fail=1
-  fi
+  for mode in $CACHE_MODES; do
+    if [ "$CACHE_MODES" != "records" ]; then
+      echo "------------------------------------------------------------------"
+      echo ">> cache representation: ${mode}"
+    fi
+    # shellcheck disable=SC2086
+    if CACHE_MODE="$mode" go test ${PARALLEL} -count=1 ${RACE} ${COVER} ./...; then
+      echo ">> Go tests (${mode}): PASS"
+    else
+      echo ">> Go tests (${mode}): FAIL"
+      fail=1
+    fi
+  done
   if [ -n "$COVER" ] && [ -f coverage.out ]; then
     echo ">> Coverage summary:"
     go tool cover -func=coverage.out | tail -n 1

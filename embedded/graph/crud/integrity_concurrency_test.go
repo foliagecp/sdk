@@ -89,7 +89,10 @@ func (s *CMDBClientContractTestSuite) Test_RootCause_ConcurrentLinkCreateDelete(
 	var wg sync.WaitGroup
 	for r := 0; r < 12; r++ {
 		wg.Add(2)
-		go func() { defer wg.Done(); _ = s.dbc.CMDB.ObjectsLinkUpdate("ccl-a", "ccl-b", nil, easyjson.NewJSONObject(), false, "ccl-edge") }()
+		go func() {
+			defer wg.Done()
+			_ = s.dbc.CMDB.ObjectsLinkUpdate("ccl-a", "ccl-b", nil, easyjson.NewJSONObject(), false, "ccl-edge")
+		}()
 		go func() { defer wg.Done(); _ = s.dbc.CMDB.ObjectsLinkDelete("ccl-a", "ccl-b") }()
 	}
 	wg.Wait()
