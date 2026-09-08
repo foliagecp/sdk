@@ -649,6 +649,25 @@ func resolveOutLinkByLtypeScanInDomain(dm sfPlugins.Domain, ownerID, linkName st
 // cascade deletes a link identically, without a per-link statefun round-trip.
 // opName is recorded in the op-stack (the link-delete function, so the op-stack
 // entry matches the routed path byte-for-byte).
+// deleteOutLinkKeysByName removes every out-side key of a link that is
+// addressable by its NAME alone: the target pointer, the body and the index
+// family. It exists for the case where the link cannot be resolved — out.to is
+// gone and the ltype scan finds nothing — because the mirror in-key is removed
+// regardless, and leaving the owner's keys behind is exactly how an edge ends
+// up written on one side only (the production defect: objects kept its
+// out-side while the object had lost its in-key).
+//
+// The ltype entry is keyed by type+target rather than by name, so it cannot be
+// addressed here — but an unresolvable link has no ltype entry by definition:
+// the resolver falls back to scanning that very family before giving up.
+func deleteOutLinkKeysByName(ctx *sfPlugins.StatefunContextProcessor, ownerID, linkName string, opTime int64) {
+	for _, indexKey := range ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff2Pattern, ownerID, linkName, ">")) {
+		ctx.Domain.Cache().DeleteValue(indexKey, true, opTime)
+	}
+	ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, ownerID, linkName), true, opTime)
+	ctx.Domain.Cache().DeleteValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, ownerID, linkName), true, opTime)
+}
+
 func deleteOutLinkFromSideKeys(ctx *sfPlugins.StatefunContextProcessor, opName, ownerID, linkType, linkName, toId string, oldLinkBody *easyjson.JSON, opStack *easyjson.JSON, opTime int64) {
 	indexKeys := ctx.Domain.Cache().GetKeysByPattern(fmt.Sprintf(OutLinkIndexPrefPattern+KeySuff2Pattern, ownerID, linkName, ">"))
 	for _, indexKey := range indexKeys {
@@ -737,6 +756,11 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 					oldLinkBody, _ = ctx.Domain.Cache().GetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, fromObjectID, linkName))
 				}
 				deleteOutLinkFromSideKeys(ctx, linkDeleteTypename, fromObjectID, linkType, linkName, toId, oldLinkBody, opStack, opTime)
+			} else {
+				// The link does not resolve, but the in-key below goes anyway —
+				// so the owner's keys must go too, or the edge survives written
+				// on one side only. Everything addressable by name is removed.
+				deleteOutLinkKeysByName(ctx, fromObjectID, linkName, opTime)
 			}
 			ctx.Domain.Cache().DeleteValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, selfID, fromObjectID, linkName), true, opTime)
 			operationKeysMutexUnlock(ctx)
