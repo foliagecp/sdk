@@ -20,9 +20,11 @@ package crud_test
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/foliagecp/easyjson"
+	"github.com/foliagecp/sdk/embedded/graph/crud"
 )
 
 func (s *CMDBClientContractTestSuite) waitWALDrained() {
@@ -133,4 +135,44 @@ func (s *CMDBClientContractTestSuite) Test_RootCause_CacheChangeWhileWALDisabled
 		"KV still holds the key the cache dropped — this is the production divergence: KV whole, memory missing a half")
 
 	assertObjectIntegrity(s.T(), c, dm, "pas-1", objType, "after rehydrate the object must be whole again")
+}
+
+// The window that produces the production shape.
+//
+// The passive guard sits at the START of handling a message
+// (function_type.go: handleMsgForID). An operation that passed it and is still
+// running when the runtime steps down keeps writing — and by then
+// SetWALWriteEnabled(false) has already been applied, so those writes land in
+// the cache ALONE. A CMDB write touches twelve keys one by one, so the ones
+// written before the demotion reach KV and the ones after do not: the two
+// representations end up holding different halves of the same object.
+//
+// Here the flag is lowered around a whole ObjectDelete, which is the same
+// window widened to something a test can hit deterministically.
+func (s *CMDBClientContractTestSuite) Test_RootCause_CrudDuringDemotionDivergesFromKV() {
+	s.bootstrap()
+	const objType = "DemType"
+	s.NoError(s.dbc.CMDB.TypeCreate(objType))
+	s.NoError(s.dbc.CMDB.ObjectUpdate("dem-1", easyjson.NewJSONObject(), false, objType))
+
+	c, dm := s.Runtime().Domain.Cache(), s.Runtime().Domain
+	assertObjectIntegrity(s.T(), c, dm, "dem-1", objType, "precondition")
+	s.waitWALDrained()
+
+	// The runtime loses the lock: publishing stops, in-flight work does not.
+	c.SetWALWriteEnabled(false)
+	delErr := s.dbc.CMDB.ObjectDelete("dem-1")
+	s.T().Logf("ObjectDelete while WAL publishing is down returned: %v", delErr)
+
+	objectsID := dm.CreateObjectIDWithHubDomain("objects", false)
+	_, stillEnumerated := c.GetValue(fmt.Sprintf(crud.OutLinkTargetKeyPrefPattern+crud.KeySuff1Pattern, objectsID, "dem-1"))
+	s.T().Logf("after the delete, cache still enumerates the object: %v", stillEnumerated == nil)
+
+	c.SetWALWriteEnabled(true)
+	s.Require().NoError(c.RehydrateFromKV(context.Background()))
+
+	// KV never saw the delete, so rehydrate brings the object back whole. The
+	// cache and KV had been describing different graphs.
+	assertObjectIntegrity(s.T(), c, dm, "dem-1", objType,
+		"KV never learned about the delete performed while publishing was down")
 }
