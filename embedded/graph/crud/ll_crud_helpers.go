@@ -3,6 +3,7 @@ package crud
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/foliagecp/easyjson"
 	lg "github.com/foliagecp/sdk/statefun/logger"
@@ -23,13 +24,31 @@ func getOpStackFromOptions(options *easyjson.JSON) *easyjson.JSON {
 }
 
 // getOpTimeFromPayloadIfExist return operation time from payload or current time if operation time does not exist
+// getOpTimeFromPayloadIfExist takes the operation time from the payload, which
+// is how a cascade keeps every step of one logical operation on a single
+// timestamp — but NEVER accepts a time from the future.
+//
+// That timestamp is the arbiter of last-writer-wins on every key it touches,
+// and it arrives from the CALLER's clock. A delete stamped ahead of now (a
+// skewed clock, a replayed tail) becomes the newest write of those keys, and
+// every honest write that follows loses the comparison and is dropped —
+// silently, key by key, leaving an object written in halves. Clamping to the
+// graph's own clock removes that: an operation can be as old as its caller
+// claims, never newer than the moment it is applied.
 func getOpTimeFromPayloadIfExist(payload *easyjson.JSON) int64 {
+	now := system.GetCurrentTimeNs()
 	if payload != nil {
 		if opTime := int64(payload.GetByPath("op_time").AsInt64Default(-1)); opTime > 0 {
+			if opTime > now {
+				lg.Logf(lg.WarnLevel,
+					"op_time %d is ahead of this graph's clock by %dms; clamped to now — check clock skew on the caller",
+					opTime, (opTime-now)/int64(time.Millisecond))
+				return now
+			}
 			return opTime
 		}
 	}
-	return system.GetCurrentTimeNs()
+	return now
 }
 
 func addVertexOpToOpStack(opStack *easyjson.JSON, opName string, vertexId string, oldBody *easyjson.JSON, newBody *easyjson.JSON) bool {

@@ -423,7 +423,7 @@ func (csv *StoreValue) deleteChild(key string) {
 	csv.more.Store(&childOverflow{keys: nk, vals: nv})
 }
 
-func (csv *StoreValue) Put(value interface{}, updateInKV bool, customPutTime int64) {
+func (csv *StoreValue) Put(value interface{}, updateInKV bool, customPutTime int64) (applied bool) {
 	csv.Lock("Put")
 	key := csv.keyInParent
 
@@ -438,7 +438,7 @@ func (csv *StoreValue) Put(value interface{}, updateInKV bool, customPutTime int
 	// older customSetTime cannot resurrect it; equal/newer writes apply.
 	if customPutTime < csv.valueUpdateTime {
 		csv.Unlock("Put")
-		return
+		return false
 	}
 
 	csv.value = value
@@ -447,9 +447,10 @@ func (csv *StoreValue) Put(value interface{}, updateInKV bool, customPutTime int
 	_ = updateInKV // kept in signature for callers; no longer affects local state
 	_ = key        // formerly used for parent-subscriber notifications; gone with notifyUpdates
 	csv.Unlock("Put")
+	return true
 }
 
-func (csv *StoreValue) Delete(updateInKV bool, customDeleteTime int64) {
+func (csv *StoreValue) Delete(updateInKV bool, customDeleteTime int64) (applied bool) {
 	csv.Lock("Delete")
 	key := csv.keyInParent
 	// We keep the node as a tombstone (valueExists=false, valueUpdateTime set)
@@ -458,15 +459,26 @@ func (csv *StoreValue) Delete(updateInKV bool, customDeleteTime int64) {
 	// (traverseCacheForMaintenance -> sweepSubtree) removes the tombstoned node
 	// from the parent's container once it has no children, collapsing whole
 	// tombstone cascades in a single post-order sweep.
-	csv.value = nil
-	csv.setValueExists(false)
 	if customDeleteTime < 0 {
 		customDeleteTime = system.GetCurrentTimeNs()
 	}
+	// The guard is symmetrical to Put's: a deletion older than what the key
+	// already holds is a late tail of a previous incarnation and must not
+	// erase a newer write. Without this the two representations disagreed —
+	// records refused such a delete, the tree applied it — and a graph on the
+	// tree could lose a freshly written half of an edge to an obsolete
+	// deletion.
+	if customDeleteTime < csv.valueUpdateTime {
+		csv.Unlock("Delete")
+		return false
+	}
+	csv.value = nil
+	csv.setValueExists(false)
 	csv.valueUpdateTime = customDeleteTime
 	_ = updateInKV // kept in signature for callers; no longer affects local state
 	_ = key        // formerly used for parent-subscriber notifications; gone with notifyUpdates
 	csv.Unlock("Delete")
+	return true
 }
 
 // Range iterates the node's children. Lockless reads of the adaptive container.
@@ -1662,11 +1674,11 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 		if customSetTime < 0 {
 			customSetTime = system.GetCurrentTimeNs()
 		}
-		if handled := cs.tieredSet(key, newValue, false, customSetTime); handled {
-			if updateInKV {
+		if handled, applied := cs.tieredSet(key, newValue, false, customSetTime); handled {
+			if applied && updateInKV {
 				cs.publishDirtyOp(customSetTime, key, OpTypePUT, newValue)
 			}
-			return true
+			return applied
 		}
 	}
 	if keyLastToken, parent := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true); len(keyLastToken) > 0 && parent != nil {
@@ -1709,19 +1721,23 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 	}
 	// Decided before the tree is touched, for the same reason as in
 	// SetValueJSON: a record-backed vertex must not also grow a subtree.
-	if handled := cs.tieredSet(key, value, false, customSetTime); handled {
-		if updateInKV {
+	if handled, applied := cs.tieredSet(key, value, false, customSetTime); handled {
+		// Only a write that actually landed is worth publishing: a stale one
+		// was refused here and the newer value it lost to is already on its
+		// way to KV.
+		if applied && updateInKV {
 			cs.publishDirtyOp(customSetTime, key, OpTypePUT, value)
 		}
-		return true
+		return applied
 	}
 	keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true)
 	if len(keyLastToken) == 0 || parentCacheStoreValue == nil {
 		return true
 	}
+	applied := true
 	if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
 		csv.SetValueType(typeByteArray)
-		csv.Put(value, updateInKV, customSetTime)
+		applied = csv.Put(value, updateInKV, customSetTime)
 	} else {
 		csvUpdate := &StoreValue{
 			value:           value,
@@ -1729,15 +1745,19 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 			valueUpdateTime: customSetTime,
 		}
 		actual, loaded := parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate)
-		if loaded && customSetTime >= actual.valueUpdateTime {
-			actual.SetValueType(typeByteArray)
-			actual.Put(value, updateInKV, customSetTime)
+		if loaded {
+			if customSetTime >= actual.valueUpdateTime {
+				actual.SetValueType(typeByteArray)
+				applied = actual.Put(value, updateInKV, customSetTime)
+			} else {
+				applied = false
+			}
 		}
 	}
-	if updateInKV {
+	if applied && updateInKV {
 		cs.publishDirtyOp(customSetTime, key, OpTypePUT, value)
 	}
-	return true
+	return applied
 }
 
 func (cs *Store) SetValueJSON(key string, originValue *easyjson.JSON, updateInKV bool, customSetTime int64) bool {
@@ -1753,11 +1773,11 @@ func (cs *Store) SetValueJSON(key string, originValue *easyjson.JSON, updateInKV
 	// Decided BEFORE the tree is touched: navigating with createIfNotexists
 	// would build nodes for a vertex that lives in a record, and the tree would
 	// grow alongside the records instead of being replaced by them.
-	if handled := cs.tieredSet(key, walBytes, true, customSetTime); handled {
-		if updateInKV {
+	if handled, applied := cs.tieredSet(key, walBytes, true, customSetTime); handled {
+		if applied && updateInKV {
 			cs.publishDirtyOp(customSetTime, key, OpTypePUT, walBytes)
 		}
-		return true
+		return applied
 	}
 	keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true)
 	if len(keyLastToken) == 0 || parentCacheStoreValue == nil {
@@ -1767,9 +1787,10 @@ func (cs *Store) SetValueJSON(key string, originValue *easyjson.JSON, updateInKV
 	if !updateInKV {
 		walBytes = nil
 	}
+	applied := true
 	if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
 		csv.SetValueType(typeJson)
-		csv.Put(value, updateInKV, customSetTime)
+		applied = csv.Put(value, updateInKV, customSetTime)
 	} else {
 		csvUpdate := &StoreValue{
 			value:           value,
@@ -1777,30 +1798,37 @@ func (cs *Store) SetValueJSON(key string, originValue *easyjson.JSON, updateInKV
 			valueUpdateTime: customSetTime,
 		}
 		actual, loaded := parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate)
-		if loaded && customSetTime >= actual.valueUpdateTime {
-			actual.SetValueType(typeJson)
-			actual.Put(value, updateInKV, customSetTime)
+		if loaded {
+			if customSetTime >= actual.valueUpdateTime {
+				actual.SetValueType(typeJson)
+				applied = actual.Put(value, updateInKV, customSetTime)
+			} else {
+				applied = false
+			}
 		}
 	}
-	if updateInKV {
+	if applied && updateInKV {
 		cs.publishDirtyOp(customSetTime, key, OpTypePUT, walBytes)
 	}
-	return true
+	return applied
 }
 
 func (cs *Store) Destroy() {
 	cs.cancel()
 }
 
-func (cs *Store) DeleteValue(key string, updateInKV bool, customDeleteTime int64) {
+// DeleteValue removes a key and reports whether the removal was actually
+// applied: a deletion older than the value already stored is refused by the
+// time guard, and the caller must be able to tell that apart from success.
+func (cs *Store) DeleteValue(key string, updateInKV bool, customDeleteTime int64) (applied bool) {
 	if customDeleteTime < 0 {
 		customDeleteTime = system.GetCurrentTimeNs()
 	}
-	if handled := cs.tieredDelete(key, customDeleteTime); handled {
-		if updateInKV {
+	if handled, applied := cs.tieredDelete(key, customDeleteTime); handled {
+		if applied && updateInKV {
 			cs.publishDirtyOp(customDeleteTime, key, OpTypeDelete, nil)
 		}
-		return
+		return applied
 	}
 	if customDeleteTime < 0 {
 		customDeleteTime = system.GetCurrentTimeNs()
@@ -1819,12 +1847,15 @@ func (cs *Store) DeleteValue(key string, updateInKV bool, customDeleteTime int64
 	if !exists {
 		return
 	}
-	csv.Delete(updateInKV, customDeleteTime)
+	if !csv.Delete(updateInKV, customDeleteTime) {
+		return false // refused by the time guard: nothing changed, nothing to publish
+	}
 	if updateInKV {
 		// WAL DELETE op needs no value — the OpType tells the committer
 		// to issue a KV delete.
 		cs.publishDirtyOp(customDeleteTime, key, OpTypeDelete, nil)
 	}
+	return true
 }
 
 func (cs *Store) GetKeysByPattern(pattern string) []string {
