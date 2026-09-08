@@ -405,6 +405,14 @@ func (dm *Domain) WaitForKVCaughtUp(ctx context.Context, timeout time.Duration) 
 	}
 }
 
+// countPendingCommits reports how many WAL transactions have not reached KV
+// yet. That is both the ones the committer has not been handed (NumPending)
+// and the one it is holding right now (NumAckPending): the KV writes a
+// transaction carries happen between delivery and Ack, so a transaction that
+// is being applied is no longer "pending" to the server while being very much
+// not in KV. Counting only the undelivered ones let WaitForKVCaughtUp report
+// that everything was durable while the last transaction was still being
+// written — whoever reloaded the cache from KV next was short its whole tail.
 func (dm *Domain) countPendingCommits(consumerName string) int {
 	info, err := dm.js.ConsumerInfo(WALCommitsStreamName, consumerName)
 	if err != nil {
@@ -412,8 +420,9 @@ func (dm *Domain) countPendingCommits(consumerName string) int {
 		return 0
 	}
 
-	pending := int(info.NumPending)
-	lg.Logf(lg.TraceLevel, "Consumer %s has %d pending messages", consumerName, pending)
+	pending := int(info.NumPending) + int(info.NumAckPending)
+	lg.Logf(lg.TraceLevel, "Consumer %s has %d transactions not in KV yet (%d undelivered, %d being applied)",
+		consumerName, pending, info.NumPending, info.NumAckPending)
 	return pending
 }
 
