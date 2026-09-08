@@ -696,7 +696,37 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 }
 
 /*
- */
+Reads an object: its body, its type, the objects it links to and its links.
+
+Request:
+
+	payload: json - optional
+		details_v2: bool - optional // structured links format: links.out as array of {to, name, type} objects
+		with_link_content: bool - optional // "false" - (default). Only together with details_v2, with the same
+		                                   // meaning it has in functions.graph.api.vertex.read: each links.out
+		                                   // element additionally carries the link's `body` (omitted when the
+		                                   // body is empty/absent) and `tags` (omitted when there are none).
+		                                   // Without details_v2 the flag is IGNORED. The content is read inside
+		                                   // the vertex.read this function already makes, so it costs no extra
+		                                   // requests — but the reply grows by the total size of the object's
+		                                   // out-link bodies; batch readers should size their sub-batches
+		                                   // accordingly.
+
+	options: json - optional
+		op_stack: bool - optional
+
+Reply:
+
+	payload: json
+		status: string
+		details: string
+		data: json
+			body: json
+			type: string
+			name: string
+			to_objects: []string
+			links: json
+*/
 func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
 	detailsV2 := ctx.Payload.GetByPath("details_v2").AsBoolDefault(false)
@@ -705,6 +735,13 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	payload := easyjson.NewJSONObject()
 	if detailsV2 {
 		payload.SetByPath("details_v2", easyjson.NewJSON(true))
+		// The link content the caller asked for is produced by the vertex.read
+		// below and travels back untouched in `links` — nothing here has to
+		// know what it looks like. Forwarded only under details_v2, which is
+		// the only shape that carries it.
+		if ctx.Payload.GetByPath("with_link_content").AsBoolDefault(false) {
+			payload.SetByPath("with_link_content", easyjson.NewJSON(true))
+		}
 	} else {
 		payload.SetByPath("details", easyjson.NewJSON(true))
 	}

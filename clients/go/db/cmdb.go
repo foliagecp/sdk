@@ -520,11 +520,44 @@ func (cmdb CMDBSyncClient) ObjectRead(name string) (easyjson.JSON, error) {
 	})
 }
 
+// ObjectReadV2 reads an object with the structured links format.
+// The signature is frozen: downstream applications pin it in their own
+// interfaces, so new capabilities go into separate methods
+// (ObjectReadV2Full), never into new parameters here.
 func (cmdb CMDBSyncClient) ObjectReadV2(name string) (easyjson.JSON, error) {
-	return doRead(cmdb.readFlight, "ObjectRead:v2:"+name, func() (any, error) {
+	return cmdb.objectReadV2(name, false)
+}
+
+// ObjectReadV2Full is ObjectReadV2 with optional out-link content:
+// linkContent[0]=true adds with_link_content to the request, and each
+// links.out element then also carries the link's body and tags — fields are
+// omitted for links with an empty body / no tags, and the reply grows by the
+// total size of the object's out-link bodies, so batch readers should size
+// their sub-batches accordingly. A parked object still answers "not found",
+// with the flag or without it. On a runtime without with_link_content support
+// the reply degrades to the plain ObjectReadV2 shape, without errors. Without
+// arguments it behaves exactly like ObjectReadV2 — that method's signature is
+// frozen for downstream interfaces, which is why the variadic capabilities
+// live here.
+func (cmdb CMDBSyncClient) ObjectReadV2Full(name string, linkContent ...bool) (easyjson.JSON, error) {
+	return cmdb.objectReadV2(name, len(linkContent) > 0 && linkContent[0])
+}
+
+func (cmdb CMDBSyncClient) objectReadV2(name string, withLinkContent bool) (easyjson.JSON, error) {
+	// Without content this is the same request ObjectReadV2 sends — share its
+	// in-flight key; the content shape gets its own, or two readers wanting
+	// different shapes would collapse into one call.
+	key := "ObjectRead:v2:" + name
+	if withLinkContent {
+		key = "ObjectRead:v2full:" + name
+	}
+	return doRead(cmdb.readFlight, key, func() (any, error) {
 		payload := easyjson.NewJSONObject()
 		payload.SetByPath("op_time", easyjson.NewJSON(system.GetCurrentTimeNs()))
 		payload.SetByPath("details_v2", easyjson.NewJSON(true))
+		if withLinkContent {
+			payload.SetByPath("with_link_content", easyjson.NewJSON(true))
+		}
 		options := easyjson.NewJSONObject()
 		options.SetByPath(statefun.ShadowObjectCallParamOptionPath, easyjson.NewJSON(cmdb.ShadowObjectCanBeRecevier))
 		om := sfMediators.OpMsgFromSfReply(cmdb.request(sfp.AutoRequestSelect, "functions.cmdb.api.object.read", name, &payload, &options))

@@ -241,6 +241,13 @@ func readCases() []readCase {
 			},
 		},
 		{
+			name:     "CMDB.ObjectReadV2Full",
+			typename: "functions.cmdb.api.object.read",
+			invoke: func(t *testing.T, r map[string]mockReply) (easyjson.JSON, error) {
+				return newCMDB(t, r, nil).ObjectReadV2Full("o", true)
+			},
+		},
+		{
 			name:     "CMDB.TypesLinkRead",
 			typename: "functions.cmdb.api.types.link.read",
 			invoke: func(t *testing.T, r map[string]mockReply) (easyjson.JSON, error) {

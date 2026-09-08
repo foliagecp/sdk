@@ -138,6 +138,40 @@ func Test_Singleflight_CMDB_DifferentShapes_NotDeduped(t *testing.T) {
 	}
 }
 
+// Test_Singleflight_CMDB_LinkContentShapes: ObjectReadV2 and ObjectReadV2Full
+// with content ask the same endpoint for different shapes and must not
+// collapse; ObjectReadV2Full WITHOUT content sends exactly what ObjectReadV2
+// sends, so those two share one call.
+func Test_Singleflight_CMDB_LinkContentShapes(t *testing.T) {
+	run := func(t *testing.T, second func(cmdb CMDBSyncClient), want int64) {
+		t.Helper()
+		release := make(chan struct{})
+		var calls atomic.Int64
+		data := easyjson.NewJSONObjectWithKeyValue("ok", easyjson.NewJSON(true))
+		cmdb, err := NewCMDBSyncClientFromRequestFunction(blockingRequest(t, release, &calls, sfMediators.SYNC_OP_STATUS_OK, "", &data))
+		if err != nil {
+			t.Fatalf("client init: %v", err)
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); _, _ = cmdb.ObjectReadV2("same-id") }()
+		go func() { defer wg.Done(); second(cmdb) }()
+		time.Sleep(50 * time.Millisecond)
+		close(release)
+		wg.Wait()
+		if got := calls.Load(); got != want {
+			t.Fatalf("expected %d underlying calls, got %d", want, got)
+		}
+	}
+
+	t.Run("with content is its own shape", func(t *testing.T) {
+		run(t, func(cmdb CMDBSyncClient) { _, _ = cmdb.ObjectReadV2Full("same-id", true) }, 2)
+	})
+	t.Run("without content is the same request", func(t *testing.T) {
+		run(t, func(cmdb CMDBSyncClient) { _, _ = cmdb.ObjectReadV2Full("same-id") }, 1)
+	})
+}
+
 // Test_Singleflight_CMDB_DifferentIds_NotDeduped: same Read method
 // different ids must produce separate underlying calls.
 func Test_Singleflight_CMDB_DifferentIds_NotDeduped(t *testing.T) {

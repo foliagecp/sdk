@@ -52,6 +52,7 @@ var _ interface {
 	ObjectDeleteWithDetails(id string) (easyjson.JSON, error)
 	ObjectRead(name string) (easyjson.JSON, error)
 	ObjectReadV2(name string) (easyjson.JSON, error)
+	ObjectReadV2Full(name string, linkContent ...bool) (easyjson.JSON, error)
 	ObjectUpdate(objectID string, body easyjson.JSON, replace bool, originType4Upsert ...string) error
 	ObjectUpdateWithDetails(objectID string, body easyjson.JSON, replace bool, originType4Upsert ...string) (easyjson.JSON, error)
 	ObjectsLinkCreate(from, to, name string, tags []string, body ...easyjson.JSON) error
