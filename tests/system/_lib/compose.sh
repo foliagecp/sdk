@@ -72,4 +72,8 @@ cleanup() { dc down -v --remove-orphans >/dev/null 2>&1 || true; }
 install_trap() {
   trap cleanup EXIT INT TERM
   cleanup
+  # Which representation the runtimes in this project will hold the graph in.
+  # Empty means nothing was said and the SDK's own default applies — the
+  # runtime resolves it, so this line does not restate it.
+  echo ">> cache representation: ${CACHE_MODE:-<SDK default>}"
 }

@@ -24,6 +24,8 @@ services:
       dockerfile: samples/simple/Dockerfile
     command: /usr/bin/foliage -ll 5
     env_file: ./.env
+    environment:
+      - CACHE_MODE=${CACHE_MODE:-}
     depends_on:
       - nats
     # Give the drain path generous room. A clean drain is ~10s idle, but the

@@ -22,6 +22,8 @@ services:
       dockerfile: samples/simple/Dockerfile
     command: /usr/bin/foliage -ll 5
     env_file: ./.env
+    environment:
+      - CACHE_MODE=${CACHE_MODE:-}
     depends_on:
       - nats
 
