@@ -29,6 +29,7 @@ services:
     command: /usr/bin/foliage -ll 4
     env_file: ./.env
     environment:
+      - CACHE_MODE=${CACHE_MODE:-}
       - PPROF_ADDR=:6060
     ports:
       - "6060:6060"
@@ -41,6 +42,7 @@ services:
     command: /usr/bin/foliage -ll 4
     env_file: ./.env
     environment:
+      - CACHE_MODE=${CACHE_MODE:-}
       - PPROF_ADDR=:6060
     ports:
       - "6061:6060"
@@ -54,6 +56,7 @@ services:
     command: /usr/bin/foliage -ll 4
     env_file: ./.env
     environment:
+      - CACHE_MODE=${CACHE_MODE:-}
       - PPROF_ADDR=:6060
     ports:
       - "6062:6060"

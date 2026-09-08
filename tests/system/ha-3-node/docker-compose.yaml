@@ -23,6 +23,8 @@ services:
       dockerfile: samples/simple/Dockerfile
     command: /usr/bin/foliage -ll 5
     env_file: ./.env
+    environment:
+      - CACHE_MODE=${CACHE_MODE:-}
     depends_on:
       - nats
 
@@ -30,6 +32,8 @@ services:
     image: foliage-systest-runtime:latest
     command: /usr/bin/foliage -ll 5
     env_file: ./.env
+    environment:
+      - CACHE_MODE=${CACHE_MODE:-}
     depends_on:
       - nats
       - runtime-a
@@ -38,6 +42,8 @@ services:
     image: foliage-systest-runtime:latest
     command: /usr/bin/foliage -ll 5
     env_file: ./.env
+    environment:
+      - CACHE_MODE=${CACHE_MODE:-}
     depends_on:
       - nats
       - runtime-a

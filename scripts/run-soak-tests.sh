@@ -13,7 +13,11 @@
 #
 # Usage:
 #   scripts/run-soak-tests.sh [--scenario nats-stall-recovery|steady-state-1h|ha-promotion-flap|leak-hunt|all]
-#                             [--duration-min N]
+#                             [--duration-min N] [--cache-mode MODE]
+#
+#   --cache-mode  cache representation for the run: tree, records, zstd or
+#                 zstd-dict. Defaults to whatever the SDK ships as its default,
+#                 and reaches the runtimes inside the compose files.
 #
 # `all` runs the three production-grade scenarios (nats-stall-recovery,
 # steady-state-1h, ha-promotion-flap) which gate pass/fail. `leak-hunt` is
@@ -29,14 +33,23 @@ cd "$(dirname "$0")/.."
 SCENARIO="all"
 DURATION_MIN="${SOAK_DURATION_MIN:-60}"
 
+CACHE_MODE_ARG=""
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --scenario)     SCENARIO="$2"; shift 2 ;;
     --duration-min) DURATION_MIN="$2"; shift 2 ;;
+    --cache-mode)  CACHE_MODE_ARG="${2:-}"; shift 2 ;;
+    --cache-mode=*) CACHE_MODE_ARG="${1#*=}"; shift ;;
     -h|--help)      sed -n '2,30p' "$SELF"; exit 0 ;;
     *) echo "unknown flag: $1 (see --help)"; exit 2 ;;
   esac
 done
+
+# shellcheck source=_lib/cache-mode.sh
+source "$(dirname "$SELF")/_lib/cache-mode.sh"
+cache_mode_resolve "$CACHE_MODE_ARG" || exit 2
+cache_mode_banner
 
 export SOAK_DURATION_MIN="$DURATION_MIN"
 

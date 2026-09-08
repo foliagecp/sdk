@@ -27,6 +27,7 @@ services:
     command: /usr/bin/foliage -ll 4
     env_file: ./.env
     environment:
+      - CACHE_MODE=${CACHE_MODE:-}
       # Optional: when the samples/simple build exposes pprof, dump_state
       # will pick up goroutine + heap on failure. If the binary ignores the
       # env, the port is simply closed and dump_state degrades gracefully.

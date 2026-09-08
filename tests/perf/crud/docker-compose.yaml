@@ -23,6 +23,8 @@ services:
     # -ll 4 (warn) keeps log spam out of the way during measurement.
     command: /usr/bin/foliage -ll 4
     env_file: ./.env
+    environment:
+      - CACHE_MODE=${CACHE_MODE:-}
     depends_on:
       - nats
 

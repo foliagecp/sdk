@@ -21,6 +21,12 @@
 #                             [--warmup SEC] [--duration SEC]
 #                             [--concurrencies "1 4 16"] [--csv PATH] [--embedded]
 #
+#   --cache-mode M    cache representation for the run: tree, records, zstd or
+#                     zstd-dict. Defaults to whatever the SDK ships as its
+#                     default, and reaches the runtimes inside the compose
+#                     files. --gate ignores it: comparing the two modes is what
+#                     the gate does.
+#
 #   --gate            run the embedded scenarios under BOTH cache modes and
 #                     compare them: records must not fall below --floor of the
 #                     tree's throughput on any scenario. Implies --embedded.
@@ -57,6 +63,8 @@ GATE=0
 REPEATS=5
 FLOOR=0.8
 
+CACHE_MODE_ARG=""
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --scenario)      SCENARIO="$2"; shift 2 ;;
@@ -69,10 +77,17 @@ while [ $# -gt 0 ]; do
     --gate)          GATE=1; EMBEDDED=1; shift ;;
     --repeats)       REPEATS="$2"; shift 2 ;;
     --floor)         FLOOR="$2"; shift 2 ;;
+    --cache-mode)  CACHE_MODE_ARG="${2:-}"; shift 2 ;;
+    --cache-mode=*) CACHE_MODE_ARG="${1#*=}"; shift ;;
     -h|--help)       sed -n '2,35p' "$SELF"; exit 0 ;;
     *) echo "unknown flag: $1 (see --help)"; exit 2 ;;
   esac
 done
+
+# shellcheck source=_lib/cache-mode.sh
+source "$(dirname "$SELF")/_lib/cache-mode.sh"
+cache_mode_resolve "$CACHE_MODE_ARG" || exit 2
+cache_mode_banner
 
 # Resolve the per-run CSV up front so every scenario appends to the SAME file.
 if [ -z "$CSV" ]; then

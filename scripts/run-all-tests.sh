@@ -8,7 +8,8 @@
 # See docs/TESTING.md for the full picture, the test map and the roadmap.
 #
 # Usage:
-#   scripts/run-all-tests.sh [--race] [--coverage] [--quick] [--go-only] [--system-only]
+#   scripts/run-all-tests.sh [--race] [--coverage] [--quick] [--go-only]
+#                            [--system-only] [--cache-mode MODE]
 #
 #   --race        run Go tests under the race detector (slower)
 #   --coverage    write a merged coverage profile (coverage.out) over ./...
@@ -16,6 +17,10 @@
 #                 may flake under contention; default is serial for reliability)
 #   --go-only     skip the system-test phase
 #   --system-only skip the Go-test phase
+#   --cache-mode  which representation the cache holds the graph in for this
+#                 run: tree, records, zstd or zstd-dict. Defaults to whatever
+#                 the SDK ships as its default, and applies to everything the
+#                 run starts, containers included.
 #
 set -uo pipefail
 
@@ -27,18 +32,31 @@ COVER=""
 PARALLEL="-p 1"      # serial packages by default: embedded-NATS suites contend in parallel
 GO_ONLY=0
 SYSTEM_ONLY=0
+CACHE_MODE_ARG=""
 
-for arg in "$@"; do
+ARGS=("$@")
+for i in "${!ARGS[@]}"; do
+  arg="${ARGS[$i]}"
   case "$arg" in
     --race)        RACE="-race" ;;
     --coverage)    COVER="-coverprofile=coverage.out -coverpkg=./..." ;;
     --quick)       PARALLEL="" ;;
     --go-only)     GO_ONLY=1 ;;
     --system-only) SYSTEM_ONLY=1 ;;
-    -h|--help)     sed -n '2,20p' "$SELF"; exit 0 ;;
-    *) echo "unknown flag: $arg (see --help)"; exit 2 ;;
+    --cache-mode)  CACHE_MODE_ARG="${ARGS[$((i+1))]:-}" ;;
+    --cache-mode=*) CACHE_MODE_ARG="${arg#*=}" ;;
+    -h|--help)     sed -n '2,24p' "$SELF"; exit 0 ;;
+    *)
+      # the value of --cache-mode, already consumed above
+      [ "$i" -gt 0 ] && [ "${ARGS[$((i-1))]}" = "--cache-mode" ] && continue
+      echo "unknown flag: $arg (see --help)"; exit 2 ;;
   esac
 done
+
+# shellcheck source=_lib/cache-mode.sh
+source "$(dirname "$SELF")/_lib/cache-mode.sh"
+cache_mode_resolve "$CACHE_MODE_ARG" || exit 2
+cache_mode_banner
 
 fail=0
 
@@ -66,7 +84,7 @@ sweep_systest_leftovers() {
 # -----------------------------------------------------------------------------
 if [ "$SYSTEM_ONLY" -eq 0 ]; then
   echo "=================================================================="
-  echo "Phase 1: Go tests  (go test ${PARALLEL} -count=1 ${RACE} ${COVER} ./...)"
+  echo "Phase 1: Go tests  (CACHE_MODE=${CACHE_MODE} go test ${PARALLEL} -count=1 ${RACE} ${COVER} ./...)"
   echo "=================================================================="
   sweep_systest_leftovers
   # shellcheck disable=SC2086
@@ -91,7 +109,7 @@ fi
 # -----------------------------------------------------------------------------
 if [ "$GO_ONLY" -eq 0 ]; then
   echo "=================================================================="
-  echo "Phase 2: system tests (docker-compose)"
+  echo "Phase 2: system tests (docker-compose, CACHE_MODE=${CACHE_MODE})"
   echo "=================================================================="
   # Every system test binds the same host ports (e.g. NATS monitoring :8222), so
   # they must run one at a time on a clean slate: a leftover container keeps

@@ -10,6 +10,8 @@
 #   --scenario NAME  s0..s14, 'core' (s0 s1 s2 s5 s9), or 'all' (default)
 #   --results DIR    artifacts root (default tests/leak/_results/leak-<UTC>/)
 #   --race           run the Go suite under the race detector
+#   --cache-mode M   cache representation for the run: tree, records, zstd,
+#                    zstd-dict. Default: whatever the SDK ships as its default.
 #
 # Env knobs (override mode presets): LEAK_WARMUP, LEAK_CYCLES, LEAK_SCALE,
 # LEAK_FLOOR_HEAP_BYTES, LEAK_FLOOR_HEAP_OBJECTS.
@@ -29,6 +31,8 @@ RESULTS=""
 RACE=""
 SOAK_ARGS=()
 
+CACHE_MODE_ARG=""
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --mode)     MODE="${2:-}"; shift 2 ;;
@@ -36,10 +40,17 @@ while [ $# -gt 0 ]; do
     --results)  RESULTS="${2:-}"; shift 2 ;;
     --race)     RACE="-race"; shift ;;
     --duration-min) SOAK_ARGS+=("--duration-min" "${2:-}"); shift 2 ;;
+    --cache-mode)  CACHE_MODE_ARG="${2:-}"; shift 2 ;;
+    --cache-mode=*) CACHE_MODE_ARG="${1#*=}"; shift ;;
     -h|--help)  sed -n '2,20p' "$SELF"; exit 0 ;;
     *) echo "unknown flag: $1 (see --help)"; exit 2 ;;
   esac
 done
+
+# shellcheck source=_lib/cache-mode.sh
+source "$(dirname "$SELF")/_lib/cache-mode.sh"
+cache_mode_resolve "$CACHE_MODE_ARG" || exit 2
+cache_mode_banner
 
 # ----------------------------------------------------------------------------
 # soak mode: reuse the existing docker scenario, do not duplicate it
