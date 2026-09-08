@@ -27,14 +27,18 @@ import (
 	"github.com/foliagecp/sdk/embedded/graph/crud"
 )
 
+// waitWALDrained returns once everything written through the cache is IN KV.
+//
+// Both halves of that matter: the cache must have nothing left to publish, and
+// the committer must have applied what it published. Waiting on the cache
+// alone returns while WAL messages are still in flight, so a test that then
+// reads KV can find an object mid-write — which under a loaded full run fails
+// on something other than what it is measuring. WaitForKVCaughtUp is the
+// barrier the backup tooling uses, and it waits for both.
 func (s *CMDBClientContractTestSuite) waitWALDrained() {
 	s.T().Helper()
-	c := s.Runtime().Domain.Cache()
-	deadline := time.Now().Add(30 * time.Second)
-	for c.HasPendingWrites() && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
-	s.Require().False(c.HasPendingWrites(), "WAL did not drain in time")
+	s.Require().NoError(s.Runtime().Domain.WaitForKVCaughtUp(context.Background(), 30*time.Second),
+		"WAL did not reach KV in time")
 }
 
 // A stale write must be rejected everywhere, not only in memory: if it reaches
