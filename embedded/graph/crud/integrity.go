@@ -104,7 +104,11 @@ func (e skeletonEdge) broken(ctx *sfPlugins.StatefunContextProcessor) bool {
 	if err != nil || string(target) != e.linkType+"."+e.to {
 		return true
 	}
-	if !c.ExistsJson(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, e.from, e.name)) {
+	// Exists, not ExistsJson: what matters here is that the body key is there,
+	// and asking the JSON-typed question about a LINK body makes the cache log
+	// a nudge on every call — three per object, on a path that runs for every
+	// object this process meets.
+	if !c.Exists(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, e.from, e.name)) {
 		return true
 	}
 	if idx, err := c.GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, e.from, e.linkType, e.to)); err != nil || string(idx) != e.name {
@@ -222,26 +226,14 @@ func objectIsAsserted(ctx *sfPlugins.StatefunContextProcessor, objID string) (st
 	objectsID := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false)
 	name := ctx.Domain.GetObjectIDWithoutDomain(objID)
 
-	// The mirror halves, on the vertex itself.
-	for _, k := range c.GetKeysByPattern(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff1Pattern, objID, ">")) {
-		tokens := strings.Split(k, ".")
-		if len(tokens) < 2 || tokens[len(tokens)-1] != name {
-			continue
-		}
-		if v, err := c.GetValue(k); err != nil || string(v) != OBJECT_TYPELINK {
-			continue
-		}
-		from := tokens[len(tokens)-2]
-		if from == objectsID {
-			return "the objects vertex links to it", true
-		}
-		if isDeclaredType(ctx, from) {
-			return "type " + from + " links to it", true
-		}
+	// The objects edge, both of its halves, addressed directly. This is the
+	// answer for every healthy object, and it costs two lookups — no scan, no
+	// allocation. Everything below it is only reached by an object that has
+	// already lost something.
+	if lt, err := c.GetValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, objID, objectsID, name)); err == nil &&
+		string(lt) == OBJECT_TYPELINK {
+		return "the objects vertex links to it", true
 	}
-
-	// The owner half on the objects vertex, when its mirror is the part that
-	// was lost — the production case.
 	if v, err := c.GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, objectsID, name)); err == nil &&
 		string(v) == OBJECT_TYPELINK+"."+objID {
 		return "the objects vertex links to it", true
@@ -250,8 +242,24 @@ func objectIsAsserted(ctx *sfPlugins.StatefunContextProcessor, objID string) (st
 		return "the objects vertex indexes it", true
 	}
 
-	// The owner half on a type. Last, because it is the only one that costs a
-	// walk — and it is only reached for a vertex nothing nearer accounts for.
+	// The type's half, mirrored on the vertex. The type is not known here, so
+	// this one is a scan — of the vertex's own in-keys, which are few.
+	for _, k := range c.GetKeysByPattern(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff1Pattern, objID, ">")) {
+		tokens := strings.Split(k, ".")
+		if len(tokens) < 2 || tokens[len(tokens)-1] != name {
+			continue
+		}
+		if v, err := c.GetValue(k); err != nil || string(v) != OBJECT_TYPELINK {
+			continue
+		}
+		if from := tokens[len(tokens)-2]; isDeclaredType(ctx, from) {
+			return "type " + from + " links to it", true
+		}
+	}
+
+	// The type's half on the type itself. Last, because it is the only one
+	// that costs a walk — and it is only reached for a vertex nothing nearer
+	// accounts for.
 	if typeID, viaObjectLink, found := findTypeStillHoldingObject(ctx, objID); found && viaObjectLink {
 		return "type " + typeID + " links to it", true
 	}
