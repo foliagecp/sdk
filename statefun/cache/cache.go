@@ -1192,6 +1192,14 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 
 	cs.ctx, cs.cancel = context.WithCancel(ctx)
 
+	// Which representation this process is holding the graph in, said once, in
+	// the log. A deployment that flips CACHE_MODE has otherwise nothing to
+	// confirm the flip took but a metric, and a test run in a container has
+	// nothing at all.
+	lg.Logf(lg.InfoLevel, "cache %q: holding the graph as %s (%s=%q)",
+		cacheConfig.id, CacheMode(), cacheModeEnv,
+		system.GetEnvMustProceed[string](cacheModeEnv, ""))
+
 	// The root holds every top-level key (thousands of <domain>/<id> entries),
 	// so it is the single highest-fanout node — give it the sharded overflow
 	// directly instead of letting it grow through the small-overflow stages.
