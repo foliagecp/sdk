@@ -158,62 +158,69 @@ func resolveObjectTypeForRepair(ctx *sfPlugins.StatefunContextProcessor, objID s
 
 	// Nothing on the object names the type any more. The other two halves of
 	// its type edges live ON the type, so walk the types and ask them.
-	if t, found := findTypeStillHoldingObject(ctx, objID); found {
+	if t, _, found := findTypeStillHoldingObject(ctx, objID); found {
 		return t, "a type still holding half of the edge", true
 	}
 
 	return "", "", false
 }
 
-// mayBeAnObject excludes the vertices that are structure rather than data.
-//
-// A declared type must never be treated as an object, and it CAN look like one
-// from the outside: a link between two types is an __type link as well, so a
-// type that participates in a types-link appears to "have a type". Reading
-// that as an object's type link and completing the skeleton around it would
-// hang the type off the objects vertex and invent a membership that never
-// existed — schema damage done in the name of repair.
-//
-// The graph's own roots are excluded by name for the same reason: they are the
-// topology every object hangs from, not objects themselves. Everything else —
-// including a bare vertex somebody wrote through the low-level API — is judged
-// by what it actually holds.
-func mayBeAnObject(ctx *sfPlugins.StatefunContextProcessor, objID string) bool {
+// isDeclaredType reports whether the types vertex holds this vertex as a type.
+// Both halves of that link are asked: a type whose registration lost one side
+// is still a type, and must not become an object because of it.
+func isDeclaredType(ctx *sfPlugins.StatefunContextProcessor, id string) bool {
+	c := ctx.Domain.Cache()
 	typesID := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false)
-	if ctx.Domain.Cache().Exists(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, typesID, TO_TYPELINK, objID)) {
-		return false // a declared type
+	if c.Exists(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, typesID, TO_TYPELINK, id)) {
+		return true
 	}
-	switch ctx.Domain.GetObjectIDWithoutDomain(objID) {
-	case BUILT_IN_ROOT, BUILT_IN_TYPES, BUILT_IN_OBJECTS:
-		return false
+	if v, err := c.GetValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern,
+		id, typesID, ctx.Domain.GetObjectIDWithoutDomain(id))); err == nil && string(v) == TO_TYPELINK {
+		return true
 	}
-	return true
+	return false
 }
 
-// objectEvidence answers the only question that matters before touching
-// anything: does the graph itself assert that this vertex is an object?
+// objectIsAsserted answers the only question that may be answered from the
+// graph: does anything in it say this vertex is an object?
 //
-// What makes a vertex an object is an __object link leading TO it — the
-// objects vertex writes one to say "this is in the model", and its type writes
-// another to say "this is mine". Either half of either link is the assertion,
-// and nothing else in the graph carries __object links, so nothing else can be
-// mistaken for an object.
+// One thing does, and only one: an __object link leading TO the vertex. The
+// objects vertex writes one to put it in the model, and its type writes
+// another to own it. Nothing else in the graph creates __object links, so
+// nothing else can be mistaken for an object — and everything weaker (a link
+// that happens to be named "type", a trash-can record, what this process
+// resolved a moment ago) rests on convention or on memory, not on the graph,
+// and is not used here.
 //
-// One more thing counts: the object's own link to its type, which is named
-// exactly "type". That is the only trace left when both membership halves and
-// both halves on the type side are gone, and it is unambiguous — a link
-// between two types is named after the type it leads to, never "type", and a
-// declared type is excluded before this is ever asked.
-//
-// The walk over the types comes last and only runs when nothing local answers,
-// which is also when a repair is about to erase something — the one moment
-// worth paying for certainty.
-func objectEvidence(ctx *sfPlugins.StatefunContextProcessor, objID string) (string, bool) {
+// Either half of either link is the assertion, since both halves say the same
+// thing. The incoming halves come first: they sit on the vertex itself, one
+// scan answers for both possible sources at once, and a vertex that has them
+// needs nothing further looked up.
+func objectIsAsserted(ctx *sfPlugins.StatefunContextProcessor, objID string) (string, bool) {
 	c := ctx.Domain.Cache()
 	objectsID := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false)
 	name := ctx.Domain.GetObjectIDWithoutDomain(objID)
 
-	// The objects vertex says so, from its side.
+	// The mirror halves, on the vertex itself.
+	for _, k := range c.GetKeysByPattern(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff1Pattern, objID, ">")) {
+		tokens := strings.Split(k, ".")
+		if len(tokens) < 2 || tokens[len(tokens)-1] != name {
+			continue
+		}
+		if v, err := c.GetValue(k); err != nil || string(v) != OBJECT_TYPELINK {
+			continue
+		}
+		from := tokens[len(tokens)-2]
+		if from == objectsID {
+			return "the objects vertex links to it", true
+		}
+		if isDeclaredType(ctx, from) {
+			return "type " + from + " links to it", true
+		}
+	}
+
+	// The owner half on the objects vertex, when its mirror is the part that
+	// was lost — the production case.
 	if v, err := c.GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, objectsID, name)); err == nil &&
 		string(v) == OBJECT_TYPELINK+"."+objID {
 		return "the objects vertex links to it", true
@@ -222,45 +229,9 @@ func objectEvidence(ctx *sfPlugins.StatefunContextProcessor, objID string) (stri
 		return "the objects vertex indexes it", true
 	}
 
-	// Or an __object link leading to it, mirrored on the vertex itself: from
-	// the objects vertex, or from the type that owns it.
-	for _, k := range c.GetKeysByPattern(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff1Pattern, objID, ">")) {
-		tokens := strings.Split(k, ".")
-		if len(tokens) < 2 || tokens[len(tokens)-1] != name {
-			continue
-		}
-		if v, err := c.GetValue(k); err == nil && string(v) == OBJECT_TYPELINK {
-			if tokens[len(tokens)-2] == objectsID {
-				return "it holds the in-key from the objects vertex", true
-			}
-			return "it holds the in-key from its type", true
-		}
-	}
-
-	// Or its own link to a type, which only an object has.
-	if v, err := c.GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, objID, "type")); err == nil {
-		if parts := strings.SplitN(string(v), ".", 2); len(parts) == 2 && parts[0] == TO_TYPELINK && parts[1] != "" {
-			return "it holds a link named \"type\" to a type", true
-		}
-	}
-	// Or the trash can parked it, which it only ever does to objects.
-	if t, _ := trashCanEdgeInfo(ctx, objID); t != "" {
-		return "the trash can holds it", true
-	}
-
-	// Or this runtime resolved it as an object itself and still holds the
-	// answer. That is an assertion about THIS id made from the graph as it was
-	// moments ago, and it is dropped the moment the object leaves the model —
-	// so it speaks for an object whose every trace was just lost, and for
-	// nothing else. A type never reaches this cache: resolving a type would
-	// need a link named "type" leading out of it, and a declared type is
-	// excluded before any of this is asked.
-	if t, cached := cacheGetObjectType(objID); cached && t != "" {
-		return "this runtime resolved it as an object of type " + t, true
-	}
-
-	// Or a type still holds its half of the edge to it.
-	if typeID, found := findTypeStillHoldingObject(ctx, objID); found {
+	// The owner half on a type. Last, because it is the only one that costs a
+	// walk — and it is only reached for a vertex nothing nearer accounts for.
+	if typeID, viaObjectLink, found := findTypeStillHoldingObject(ctx, objID); found && viaObjectLink {
 		return "type " + typeID + " links to it", true
 	}
 	return "", false
@@ -270,7 +241,9 @@ func objectEvidence(ctx *sfPlugins.StatefunContextProcessor, objID string) (stri
 // still holds either half of an edge to this object. Only reached when
 // everything on the object itself is gone, and bounded by the number of types
 // — a repair path, not a hot one.
-func findTypeStillHoldingObject(ctx *sfPlugins.StatefunContextProcessor, objID string) (string, bool) {
+// The second return value says the type was found through an __object link it
+// owns — the one finding that also proves the vertex is an object.
+func findTypeStillHoldingObject(ctx *sfPlugins.StatefunContextProcessor, objID string) (string, bool, bool) {
 	c := ctx.Domain.Cache()
 	typesID := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_TYPES, false)
 	name := ctx.Domain.GetObjectIDWithoutDomain(objID)
@@ -286,18 +259,89 @@ func findTypeStillHoldingObject(ctx *sfPlugins.StatefunContextProcessor, objID s
 		// The type's link to the object: by index, or by name with the target
 		// checked — a type may well own another link under the same name.
 		if c.Exists(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, typeID, OBJECT_TYPELINK, objID)) {
-			return typeID, true
+			return typeID, true, true
 		}
 		if v, err := c.GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, typeID, name)); err == nil &&
 			string(v) == OBJECT_TYPELINK+"."+objID {
-			return typeID, true
+			return typeID, true, true
 		}
-		// The object's type link, mirrored on the type.
+		// The object's type link, mirrored on the type. It names the type, but
+		// it says nothing about the vertex being an object — an __type link
+		// leads out of types as well as out of objects.
 		if c.Exists(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, typeID, objID, "type")) {
-			return typeID, true
+			return typeID, false, true
 		}
 	}
-	return "", false
+	return "", false, false
+}
+
+// closeHalfEdges makes a vertex's edges whole again without deciding what the
+// vertex is. Two shapes, and the direction decides which way each is closed:
+//
+//	an out-link with no mirror   the owner side holds the whole edge — target,
+//	                             type, name, body — so the mirror is written
+//	                             and nothing is lost;
+//	an in-key with no out-link   the owner side is gone and cannot be
+//	                             reconstructed from a key that holds only the
+//	                             link type, so the orphan goes.
+//
+// Only the vertex the operation is about is walked, plus the one type that may
+// still hold an in-key from it — the half that lives out of this vertex's
+// reach.
+func closeHalfEdges(ctx *sfPlugins.StatefunContextProcessor, vertexID string, opTime int64) {
+	c := ctx.Domain.Cache()
+
+	for _, k := range c.GetKeysByPattern(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, vertexID, ">")) {
+		tokens := strings.Split(k, ".")
+		linkName := tokens[len(tokens)-1]
+		raw, err := c.GetValue(k)
+		if err != nil {
+			continue
+		}
+		parts := strings.SplitN(string(raw), ".", 2)
+		if len(parts) != 2 || parts[1] == "" {
+			continue
+		}
+		linkType, toID := parts[0], parts[1]
+		inKey := fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, toID, vertexID, linkName)
+		if c.Exists(inKey) {
+			continue
+		}
+		if ctx.Domain.GetDomainFromObjectID(toID) == ctx.Domain.Name() {
+			c.SetValue(inKey, []byte(linkType), true, opTime)
+			continue
+		}
+		inlink := easyjson.NewJSONObject()
+		inlink.SetByPath("in_name", easyjson.NewJSON(linkName))
+		inlink.SetByPath("in_type", easyjson.NewJSON(linkType))
+		inlink.SetByPath("op_time", easyjson.NewJSON(opTime))
+		_, _ = ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.create",
+			makeSequenceFreeParentBasedID(ctx, toID, "inlink"), &inlink, ctx.Options)
+	}
+
+	for _, k := range c.GetKeysByPattern(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff1Pattern, vertexID, ">")) {
+		tokens := strings.Split(k, ".")
+		if len(tokens) < 2 {
+			continue
+		}
+		from, linkName := tokens[len(tokens)-2], tokens[len(tokens)-1]
+		if !c.Exists(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, from, linkName)) {
+			c.DeleteValue(k, true, opTime)
+		}
+	}
+
+	// The type's own in-key from this vertex, when the vertex no longer owns
+	// the link that wrote it. It is out of reach from here — the walk is what
+	// finds it.
+	if c.Exists(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, vertexID, "type")) {
+		return
+	}
+	if typeID, _, found := findTypeStillHoldingObject(ctx, vertexID); found {
+		orphan := fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, typeID, vertexID, "type")
+		if c.Exists(orphan) {
+			c.DeleteValue(orphan, true, opTime)
+		}
+	}
 }
 
 // ensureObjectIntegrity makes the object whole, or removes it when no source
@@ -314,14 +358,14 @@ func ensureObjectIntegrity(ctx *sfPlugins.StatefunContextProcessor, objID string
 	if !ctx.Domain.Cache().ExistsJson(objID) {
 		return integrityAbsent
 	}
-	if !mayBeAnObject(ctx, objID) {
-		return integrityAbsent
-	}
 	// Nothing is repaired, and nothing is erased, on a vertex the graph does
 	// not call an object. A type, a root, a vertex somebody wrote through the
 	// low-level API — none of them may be given a skeleton, and none of them
-	// may lose anything for not having one.
-	if _, isObject := objectEvidence(ctx, objID); !isObject {
+	// may lose anything for not having one. What is still put right is a half
+	// of an edge left hanging: that is broken whoever the vertex turns out to
+	// be, and saying so asserts nothing about it.
+	if _, asserted := objectIsAsserted(ctx, objID); !asserted {
+		closeHalfEdges(ctx, objID, opTime)
 		return integrityAbsent
 	}
 

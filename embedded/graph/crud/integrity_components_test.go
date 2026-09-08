@@ -64,6 +64,22 @@ func typeRecoverableFromGraph(m component) bool {
 	return m&compBOut == 0 || m&compCIn == 0
 }
 
+// objectStillAsserted reports whether the graph still SAYS this vertex is an
+// object after the damage.
+//
+// One thing says it: an __object link leading to the vertex — from the objects
+// vertex, or from its type — and either half of either link is the assertion.
+// Nothing else in the graph creates __object links. When all four of those
+// halves are gone, what is left is a vertex with a body and perhaps a link to
+// a type, which is also exactly what a hand-written low-level vertex looks
+// like: nothing can tell them apart, so nothing may rebuild it as an object,
+// and nothing may erase it for failing to be one. All that is still owed is
+// the half-edge contract — asserted for every case, above.
+func objectStillAsserted(m component) bool {
+	const objectLinks = compAOut | compAIn | compCOut | compCIn
+	return m&objectLinks != objectLinks
+}
+
 func (s *CMDBClientContractTestSuite) damageComponents(objShort, typeShort string, m component) {
 	objID, typeID, objectsID, name := s.ids(objShort, typeShort)
 	if m&compAOut != 0 {
@@ -133,6 +149,11 @@ func (s *CMDBClientContractTestSuite) runComponentMatrix(cold bool) {
 				assertMirrorSymmetry(s.T(), c, typeID, ctx+" (type vertex)")
 
 				if op.terminal {
+					return
+				}
+				if !objectStillAsserted(mask) {
+					// Not provably an object any more: leaving it exactly as
+					// it is IS the contract.
 					return
 				}
 				if cold && !typeRecoverableFromGraph(mask) {
