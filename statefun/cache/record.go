@@ -556,6 +556,42 @@ func (d *bucketDir) bucketFor(h uint32) *bucket {
 	return nil
 }
 
+// distinctSlots lists the slots this directory points at, once each, in
+// directory order. Everything that has to hold more than one slot lock takes
+// them in this order and takes the record's dirMu first, so the orders of two
+// such passes can never cross.
+func (d *bucketDir) distinctSlots() []*bucketSlot {
+	if d == nil {
+		return nil
+	}
+	seen := make(map[*bucketSlot]struct{}, len(d.slots))
+	out := make([]*bucketSlot, 0, len(d.slots))
+	for i := range d.slots {
+		s := d.slots[i].Load()
+		if s == nil {
+			continue
+		}
+		if _, dup := seen[s]; dup {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
+}
+
+func lockSlots(ss []*bucketSlot) {
+	for _, s := range ss {
+		s.mu.Lock()
+	}
+}
+
+func unlockSlots(ss []*bucketSlot) {
+	for i := len(ss) - 1; i >= 0; i-- {
+		ss[i].mu.Unlock()
+	}
+}
+
 // eachStored visits every distinct bucket as it is STORED — a compressed one
 // stays compressed. `each` decompresses on the way past and publishes the raw
 // form back, which is right for a reader and wrong for a pass that is only

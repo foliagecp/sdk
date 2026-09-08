@@ -60,6 +60,12 @@ func (r *vertexRecord) withOutSlot(key string, fn func(b *bucket) (*bucket, buck
 			s.mu.Unlock()
 			continue
 		}
+		if hook := afterSlotLockedForTest; hook != nil {
+			// The window a rebuild of the directory has to respect: the slot
+			// is locked and its replacement block is not published yet. A test
+			// steps into it here; nil on every real path.
+			hook()
+		}
 		// A compressed bucket is decompressed here rather than by the
 		// reader's opportunistic path: the writer already holds the slot
 		// lock, and it is about to replace the block anyway.
@@ -71,6 +77,10 @@ func (r *vertexRecord) withOutSlot(key string, fn func(b *bucket) (*bucket, buck
 		return d, res
 	}
 }
+
+// afterSlotLockedForTest runs inside a slot write, after the directory check
+// and before the new block is published, and only a test ever sets it.
+var afterSlotLockedForTest func()
 
 func (r *vertexRecord) withInSlot(key string, fn func(b *bucket) (*bucket, bucketWriteResult)) (*bucketDir, bucketWriteResult) {
 	for {
@@ -547,80 +557,111 @@ func (r *vertexRecord) shrinkDirs() int {
 	defer r.dirMu.Unlock()
 
 	n := 0
-
-	if d := r.out.Load(); d != nil && d.depth > 0 {
-		var live []*outLink
-		packed := false
-		d.eachStored(func(b *bucket) bool {
-			if b.compressed {
-				packed = true
-				return false
-			}
-			for _, l := range b.outEntries() {
-				if l.alive() {
-					live = append(live, l)
-				}
-			}
-			return true
-		})
-		if depth := depthFor(len(live), r.bucketLimit()); !packed && depth < d.depth {
-			r.out.Store(buildDir(live, func(l *outLink) string { return l.Name }, depth,
-				encodeOutBucket, func(a, b *outLink) bool { return a.Name < b.Name }))
-			n++
-		}
+	if shrinkDir(&r.out, r.bucketLimit(),
+		func(b *bucket) []*outLink { return b.outEntries() },
+		func(l *outLink) bool { return l.alive() },
+		func(l *outLink) string { return l.Name },
+		encodeOutBucket,
+		func(a, b *outLink) bool { return a.Name < b.Name }) {
+		n++
 	}
-
-	if d := r.in.Load(); d != nil && d.depth > 0 {
-		var live []*inLink
-		packed := false
-		d.eachStored(func(b *bucket) bool {
-			if b.compressed {
-				packed = true
-				return false
+	if shrinkDir(&r.in, r.bucketLimit(),
+		func(b *bucket) []*inLink { return b.inEntries() },
+		func(l *inLink) bool { return !l.Tombstone },
+		func(l *inLink) string { return l.From },
+		encodeInBucket,
+		func(a, b *inLink) bool {
+			if a.From != b.From {
+				return a.From < b.From
 			}
-			for _, l := range b.inEntries() {
-				if !l.Tombstone {
-					live = append(live, l)
-				}
-			}
-			return true
-		})
-		if depth := depthFor(len(live), r.bucketLimit()); !packed && depth < d.depth {
-			r.in.Store(buildDir(live, func(l *inLink) string { return l.From }, depth,
-				encodeInBucket, func(a, b *inLink) bool {
-					if a.From != b.From {
-						return a.From < b.From
-					}
-					return a.Name < b.Name
-				}))
-			n++
-		}
+			return a.Name < b.Name
+		}) {
+		n++
 	}
-
-	if d := r.pairs.Load(); d != nil && d.depth > 0 {
-		var live []*pairEntry
-		packed := false
-		d.eachStored(func(b *bucket) bool {
-			if b.compressed {
-				packed = true
-				return false
-			}
-			for _, p := range b.pairEntries() {
-				if !p.Tombstone {
-					live = append(live, p)
-				}
-			}
-			return true
-		})
-		if depth := depthFor(len(live), r.bucketLimit()); !packed && depth < d.depth {
-			r.pairs.Store(buildDir(live, func(p *pairEntry) string { return makePairKey(p.Type, p.Target) },
-				depth, encodePairBucket, func(a, b *pairEntry) bool {
-					return makePairKey(a.Type, a.Target) < makePairKey(b.Type, b.Target)
-				}))
-			n++
-		}
+	if shrinkDir(&r.pairs, r.bucketLimit(),
+		func(b *bucket) []*pairEntry { return b.pairEntries() },
+		func(p *pairEntry) bool { return !p.Tombstone },
+		func(p *pairEntry) string { return makePairKey(p.Type, p.Target) },
+		encodePairBucket,
+		func(a, b *pairEntry) bool {
+			return makePairKey(a.Type, a.Target) < makePairKey(b.Type, b.Target)
+		}) {
+		n++
 	}
 	return n
+}
+
+// shrinkDir rebuilds one directory at the smallest depth its live entries need
+// and reports whether it did. The caller holds dirMu.
+//
+// Every bucket it copies from is held for the whole read-and-publish, which is
+// the same rule a split obeys for the one bucket it copies. Without it a writer
+// that passed its directory check a moment earlier publishes into a slot the
+// new directory does not point at, and its key is gone — no data race to report
+// it, nothing in the log, just a hub like `objects` missing one half of an edge
+// and a vertex that has stopped being readable as an object. A doubling makes
+// the ideal depth trail the real one by one, so this fires precisely while a
+// hub is being written to.
+//
+// The walk that DECIDES stays lock-free and comes first, so a directory with
+// nothing to give back — almost every one, on almost every pass — costs what it
+// always did.
+func shrinkDir[T any](
+	cur *atomic.Pointer[bucketDir],
+	limit int,
+	entries func(*bucket) []T,
+	alive func(T) bool,
+	keyOf func(T) string,
+	encode func([]T) string,
+	sortLess func(a, b T) bool,
+) bool {
+	d := cur.Load()
+	if d == nil || d.depth == 0 {
+		return false
+	}
+	slots := d.distinctSlots()
+
+	// A compressed bucket is left alone: reading it would mean decompressing,
+	// and this pass runs every second over the whole graph — it would undo the
+	// compression of the pass before it. The moment to shrink is after writes,
+	// when the buckets they touched are still unpacked, and that is exactly
+	// when a directory has anything to give back.
+	collect := func() (live []T, packed bool) {
+		for _, s := range slots {
+			b := s.ptr.Load()
+			if b == nil {
+				continue
+			}
+			if b.compressed {
+				return nil, true
+			}
+			for _, e := range entries(b) {
+				if alive(e) {
+					live = append(live, e)
+				}
+			}
+		}
+		return live, false
+	}
+
+	live, packed := collect()
+	if packed || depthFor(len(live), limit) >= d.depth {
+		return false
+	}
+
+	lockSlots(slots)
+	defer unlockSlots(slots)
+
+	// Under the locks the buckets are stable, so this is the walk whose answer
+	// the new directory is built from; the one above only decided that it was
+	// worth taking them.
+	live, packed = collect()
+	depth := depthFor(len(live), limit)
+	if packed || depth >= d.depth {
+		return false
+	}
+	cur.Store(buildDir(live, keyOf, depth, encode, sortLess))
+	return true
 }
 
 func compactDir(d *bucketDir) int {
