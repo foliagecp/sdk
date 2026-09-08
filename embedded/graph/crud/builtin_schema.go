@@ -206,6 +206,7 @@ func PurgeSchemaCaches() {
 		&typeObjectTriggersCache,
 		&typesLinkTriggersCache,
 		&typeHRNFieldCache,
+		&objectIntegrityVerified,
 	} {
 		m.Range(func(k, _ any) bool {
 			m.Delete(k)

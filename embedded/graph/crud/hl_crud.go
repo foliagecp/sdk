@@ -369,7 +369,9 @@ func createObjectInline(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators
 	// Best-effort: any failure during rollback is logged but not propagated.
 	if om.GetStatus() != sfMediators.SYNC_OP_STATUS_OK {
 		rollbackOpStack(ctx, &rollbackStack)
-		cacheDeleteObjectType(selfID) // type cache must not claim the partial state
+		// Neither cache may claim the partial state that is being rolled back.
+		cacheDeleteObjectType(selfID)
+		forgetObjectIntegrity(selfID)
 		return targetReply, nil
 	}
 	return targetReply, triggerOpStack
@@ -390,6 +392,12 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
 	ctx.Payload.SetByPath("op_time", easyjson.NewJSON(opTime))
+
+	// Before anything else: an object this operation is about must be whole,
+	// or the operation reasons about a skeleton with a piece missing and
+	// leaves it that way. Costs one probe the first time this process meets
+	// the object and nothing afterwards.
+	ensureObjectIntegrity(ctx, selfID, false, opTime)
 
 	// Exclusive lock only on the NEW object itself; SHARED on the objects root
 	// and the type. CreateObject only appends its own distinct membership child
@@ -432,6 +440,12 @@ func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	ctx.Payload.SetByPath("op_time", easyjson.NewJSON(opTime))
 
 	om := sfMediators.NewOpMediator(ctx)
+
+	// Before anything else: an object this operation is about must be whole,
+	// or the operation reasons about a skeleton with a piece missing and
+	// leaves it that way. Costs one probe the first time this process meets
+	// the object and nothing afterwards.
+	ensureObjectIntegrity(ctx, selfID, false, opTime)
 
 	// Handle upsert request ------------------------------
 	upsert := ctx.Payload.GetByPath("upsert").AsBoolDefault(false)
@@ -593,6 +607,12 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 
 	om := sfMediators.NewOpMediator(ctx)
 
+	// Before anything else: an object this operation is about must be whole,
+	// or the operation reasons about a skeleton with a piece missing and
+	// leaves it that way. Costs one probe the first time this process meets
+	// the object and nothing afterwards.
+	ensureObjectIntegrity(ctx, selfID, false, opTime)
+
 	// Write lock on the object only. The trash-can type is read-guarded LATE,
 	// in the park branch right before re-linking: the physical branch's nested
 	// vertex.delete needs a WRITE on the trash-can type (to remove the
@@ -610,6 +630,7 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 			// objectTypeCache entry: a partially deleted object would keep
 			// it in the process-global cache forever otherwise.
 			cacheDeleteObjectType(selfID)
+			forgetObjectIntegrity(selfID)
 			operationKeysMutexUnlock(ctx)
 			om.AggregateOpMsg(sfMediators.OpMsgIdle(err.Error())).Reply()
 			return
@@ -618,6 +639,7 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 		// objectType. vertex.delete still runs; trigger dispatch is
 		// skipped below because objectType == "".
 		cacheDeleteObjectType(selfID)
+		forgetObjectIntegrity(selfID)
 		objectType = ""
 	}
 
@@ -692,6 +714,7 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	}
 
 	cacheDeleteObjectType(selfID)
+	forgetObjectIntegrity(selfID)
 	replyWithoutOpStack(om, ctx)
 }
 
@@ -710,9 +733,27 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	}
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
-	operationKeysMutexLock(ctx, []string{selfID}, false, opTime)
-	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &payload), ctx.Options))
-	operationKeysMutexUnlock(ctx)
+	readVertex := func() sfMediators.OpMsg {
+		operationKeysMutexLock(ctx, []string{selfID}, false, opTime)
+		defer operationKeysMutexUnlock(ctx)
+		return sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &payload), ctx.Options))
+	}
+	m := readVertex()
+
+	// A read is where a broken object announces itself — every answer below
+	// depends on the skeleton being whole. Repairing it here, outside the
+	// lock the read just released, is what stops "not connected to objects
+	// topology" from being permanent. A whole object is remembered and costs
+	// nothing on the next read.
+	if m.Status != sfMediators.SYNC_OP_STATUS_IDLE {
+		switch ensureObjectIntegrity(ctx, selfID, false, opTime) {
+		case integrityRepaired:
+			m = readVertex()
+		case integrityErased:
+			om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("object with id=%s does not exist", selfID))).Reply()
+			return
+		}
+	}
 
 	om.AggregateOpMsg(m)
 
@@ -1120,6 +1161,11 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
 
+	// A link between objects is only meaningful while both ends are objects;
+	// repairing this one here is what keeps a link operation from cementing a
+	// half-built skeleton.
+	ensureObjectIntegrity(ctx, selfID, false, opTime)
+
 	om := sfMediators.NewOpMediator(ctx)
 
 	objectToID, ok := ctx.Payload.GetByPath("to").AsString()
@@ -1325,6 +1371,12 @@ func ReadObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	objectToID = ctx.Domain.CreateObjectIDWithThisDomain(objectToID, false)
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+
+	// A link between objects is only meaningful while both ends are objects;
+	// repairing this one here is what keeps a link operation from cementing a
+	// half-built skeleton.
+	ensureObjectIntegrity(ctx, selfID, false, opTime)
+
 	operationKeysMutexLock(ctx, []string{edgeLockKey(selfID, objectToID)}, false, opTime)
 
 	// ReadObjectsLink reads the link of the BASE type declared by the TypesLink

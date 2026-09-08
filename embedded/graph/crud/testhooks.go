@@ -62,6 +62,7 @@ func ResetPackageCachesForTest() {
 	clearSyncMapForTest(&typeObjectTriggersCache)
 	clearSyncMapForTest(&typesLinkTriggersCache)
 	clearSyncMapForTest(&typeHRNFieldCache)
+	clearSyncMapForTest(&objectIntegrityVerified)
 }
 
 func clearSyncMapForTest(m *sync.Map) {

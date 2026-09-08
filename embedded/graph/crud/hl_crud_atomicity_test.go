@@ -29,6 +29,7 @@ import (
 	"github.com/foliagecp/sdk/statefun"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
+	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/foliagecp/sdk/statefun/test"
 	"github.com/stretchr/testify/suite"
 )
@@ -609,13 +610,45 @@ func (s *CrudAtomicityTestSuite) Test_D2_super_DeleteObjectsLinkFromSuperTypes_S
 // must surface from cmdb.api.object.read as IDLE ("not found") rather
 // than FAILED with "has no type". This is what lets the client-side
 // IDLE→ErrNotFound mapping work uniformly across "missing" and "orphan"
-// states, and stops the noisy error storms in production logs.
-func (s *CrudAtomicityTestSuite) Test_D4_ReadOrphan_ReturnsIdle() {
+
+// stripEveryTraceOfType removes everything that could still name the object's
+// type: the type link on the object with its index, the in-key the type wrote
+// back, the type's own link to the object, and what this process remembers.
+// What is left is a vertex nothing can identify.
+func (s *CrudAtomicityTestSuite) stripEveryTraceOfType(objShort, typeShort string) {
+	c := s.Runtime().Domain.Cache()
+	dm := s.Runtime().Domain
+	objID := dm.CreateObjectIDWithThisDomain(objShort, false)
+	typeID := dm.CreateObjectIDWithHubDomain(typeShort, false)
+	name := dm.GetObjectIDWithoutDomain(objID)
+	now := system.GetCurrentTimeNs()
+
+	for _, k := range []string{
+		fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, objID, "type"),
+		fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, objID, "type"),
+		fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, objID, TO_TYPELINK, typeID),
+		fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, typeID, objID, "type"),
+		fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, typeID, name),
+		fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, typeID, name),
+		fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, typeID, OBJECT_TYPELINK, objID),
+		fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, objID, typeID, name),
+	} {
+		c.DeleteValue(k, true, now)
+	}
+	ResetPackageCachesForTest()
+}
+
+// An object that lost its type link is not debris while something else still
+// names its type — the type's own half of the edge does, and so does the
+// in-key that half wrote. A read repairs it and answers as an object again.
+//
+// This is the D4 orphan, and the contract changed on purpose: it used to be
+// reported as missing and left to accumulate until a rebuild wiped it.
+func (s *CrudAtomicityTestSuite) Test_D4_ReadOrphan_WithTypeStillTraceableIsRepaired() {
 	s.bootstrap()
 	s.cmdbTypeCreate("TypeD4r")
 	s.Equal("ok", s.cmdbObjectCreate("obj-d4r", "TypeD4r").GetByPath("status").AsStringDefault(""))
 
-	// Synthesise the orphan by removing the __type link via LL.
 	delTypeLink := easyjson.NewJSONObjectWithKeyValue("name", easyjson.NewJSON("type"))
 	tl, err := s.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", "obj-d4r", &delTypeLink, nil)
 	s.NoError(err)
@@ -626,94 +659,83 @@ func (s *CrudAtomicityTestSuite) Test_D4_ReadOrphan_ReturnsIdle() {
 	res, err := s.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", "obj-d4r", easyjson.NewJSONObject().GetPtr(), nil)
 	s.NoError(err)
 	status := res.GetByPath("status").AsStringDefault("")
-	details := res.GetByPath("details").AsStringDefault("")
-	s.T().Logf("object.read on orphan → status=%q details=%q", status, details)
-
-	s.Equalf("idle", status,
-		"D4/1A: ObjectRead on orphan must return idle (mapped to ErrNotFound client-side), got %q (details=%q)", status, details)
-	s.Containsf(details, "does not exist",
-		"D4/1A: idle details should describe missing object, got %q", details)
+	s.Equalf("ok", status, "the read must repair an object whose type is still traceable, got %q (details=%q)",
+		status, res.GetByPath("details").AsStringDefault(""))
+	s.Truef(s.hasOutLinkOfType("obj-d4r", TO_TYPELINK), "the type link must be back after the read")
 }
 
-// Test_D4_DeleteObject_IsIdempotentOnOrphanVertex pins down Option 1B:
-// cmdb.api.object.delete on an orphan must clean up the body, not bail
-// out with "has no type". This is what lets the next HLMB rebuild cycle
-// naturally wipe accumulated orphans.
+// The other half of the same rule: when NOTHING names the type any more, the
+// vertex cannot be restored and is not admissible. It is erased on sight, and
+// a read reports what is now true — there is no such object.
+func (s *CrudAtomicityTestSuite) Test_D4_ReadOrphan_WithNoTypeLeftIsErased() {
+	s.bootstrap()
+	s.cmdbTypeCreate("TypeD4n")
+	s.Equal("ok", s.cmdbObjectCreate("obj-d4n", "TypeD4n").GetByPath("status").AsStringDefault(""))
+
+	s.stripEveryTraceOfType("obj-d4n", "TypeD4n")
+
+	res, err := s.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", "obj-d4n", easyjson.NewJSONObject().GetPtr(), nil)
+	s.NoError(err)
+	status := res.GetByPath("status").AsStringDefault("")
+	details := res.GetByPath("details").AsStringDefault("")
+	s.Equalf("idle", status, "a vertex nothing can identify must read as missing, got %q (details=%q)", status, details)
+	s.Containsf(details, "does not exist", "idle details should describe a missing object, got %q", details)
+	s.Falsef(s.vertexExists("obj-d4n"), "the unidentifiable vertex must be gone, not left behind")
+}
+
+// object.delete must never bail out with "has no type", whatever state the
+// object is in. Where the type is still traceable the object is repaired first
+// and then deleted as any object is — parked, not erased, because the trash
+// can knows what to restore it as.
 func (s *CrudAtomicityTestSuite) Test_D4_DeleteObject_IsIdempotentOnOrphanVertex() {
 	s.bootstrap()
 	s.cmdbTypeCreate("TypeD4o")
 	s.Equal("ok", s.cmdbObjectCreate("obj-d4o", "TypeD4o").GetByPath("status").AsStringDefault(""))
 
-	// Synthesise the orphan: drop the __type out-link directly via LL.
 	delTypeLink := easyjson.NewJSONObjectWithKeyValue("name", easyjson.NewJSON("type"))
 	tlRes, err := s.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", "obj-d4o", &delTypeLink, nil)
 	s.NoError(err)
 	s.Equal("ok", tlRes.GetByPath("status").AsStringDefault(""), "LL link.delete of __type must succeed")
-	s.True(s.vertexExists("obj-d4o"), "vertex body must still exist — that's the orphan state we're testing")
-	s.False(s.hasOutLinkOfType("obj-d4o", TO_TYPELINK), "the orphan must have no __type link")
+	s.True(s.vertexExists("obj-d4o"))
 
 	delPayload := easyjson.NewJSONObject()
 	res, err := s.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.delete", "obj-d4o", &delPayload, nil)
 	s.NoError(err)
 	status := res.GetByPath("status").AsStringDefault("")
-	s.T().Logf("object.delete on orphan → status=%q details=%q",
+	s.Containsf([]string{"ok", "idle"}, status,
+		"D4/1B: cmdb.api.object.delete on a typeless vertex must succeed, got %q (details=%q)",
 		status, res.GetByPath("details").AsStringDefault(""))
 
-	s.Containsf([]string{"ok", "idle"}, status,
-		"D4/1B: cmdb.api.object.delete on a typeless vertex must succeed, got %q", status)
-	s.Falsef(s.vertexExists("obj-d4o"),
-		"D4/1B: vertex body must be removed after delete on orphan; got body still present")
+	read, err := s.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", "obj-d4o", easyjson.NewJSONObject().GetPtr(), nil)
+	s.NoError(err)
+	s.Equalf("idle", read.GetByPath("status").AsStringDefault(""),
+		"D4/1B: the object must be out of the model after the delete")
 }
 
-// Test_D4_PartialDelete_RecoverableViaSubsequentDelete describes the canonical
-// production failure mode and the recovery path that 1A+1B provide: a delete
-// that died half-way leaves a typeless vertex behind, and
-//
-//  1. ObjectRead on that debris returns IDLE (1A);
-//  2. the next ordinary ObjectDelete cleans it up (1B) — recovery is bounded
-//     and happens in the next normal CMDB operation, not via a KV reset.
-//
-// The debris is synthesised directly (drop the __type link via LL) rather than
-// provoked with a failing link.delete: a vertex delete now removes LOCAL links
-// in-process instead of issuing nested link.delete requests, so overriding that
-// function type intercepts nothing in a single-domain test — the delete simply
-// succeeded and parked the object, and the test only ever passed because a
-// second object.delete used to erase a parked object.
+// And with no type anywhere, a delete has nothing to park: the debris is
+// erased, which is what keeps recovery bounded — the next ordinary CMDB
+// operation clears it, without a KV reset.
 func (s *CrudAtomicityTestSuite) Test_D4_PartialDelete_RecoverableViaSubsequentDelete() {
 	s.bootstrap()
 	s.cmdbTypeCreate("TypeD4p")
 	s.Equal("ok", s.cmdbObjectCreate("obj-d4p", "TypeD4p").GetByPath("status").AsStringDefault(""))
 	s.True(s.vertexExists("obj-d4p"), "sanity: vertex must exist before delete")
 
-	// 1) The debris a half-finished delete leaves: body present, no __type.
-	delTypeLink := easyjson.NewJSONObjectWithKeyValue("name", easyjson.NewJSON("type"))
-	tl, err := s.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", "obj-d4p", &delTypeLink, nil)
-	s.NoError(err)
-	s.Equal("ok", tl.GetByPath("status").AsStringDefault(""))
-	s.True(s.vertexExists("obj-d4p"))
-	s.False(s.hasOutLinkOfType("obj-d4p", TO_TYPELINK))
+	s.stripEveryTraceOfType("obj-d4p", "TypeD4p")
 
-	// 2) Whatever state the graph is in, ObjectRead must report IDLE
-	//    ("not found") and NOT raise "has no type".
+	// Whatever the state, a read must never surface "has no type".
 	readRes, err := s.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.read", "obj-d4p", easyjson.NewJSONObject().GetPtr(), nil)
 	s.NoError(err)
 	readStatus := readRes.GetByPath("status").AsStringDefault("")
-	s.T().Logf("post-failure read → status=%q details=%q",
-		readStatus, readRes.GetByPath("details").AsStringDefault(""))
 	s.Containsf([]string{"idle", "ok"}, readStatus,
 		"D4 recovery: post-failure ObjectRead must not surface 'has no type'; got %q", readStatus)
 
-	// 3) Recovery via a normal ObjectDelete. Debris is erased, not parked:
-	//    there is no type to restore it under, so keeping it would preserve
-	//    garbage and break this very recovery contract.
 	delPayload := easyjson.NewJSONObject()
 	del2, err := s.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.object.delete", "obj-d4p", &delPayload, nil)
 	s.NoError(err)
-	del2Status := del2.GetByPath("status").AsStringDefault("")
-	s.T().Logf("recovery object.delete → status=%q", del2Status)
-	s.Containsf([]string{"ok", "idle"}, del2Status,
-		"D4 recovery: recovery ObjectDelete must succeed, got %q", del2Status)
+	s.Containsf([]string{"ok", "idle"}, del2.GetByPath("status").AsStringDefault(""),
+		"D4 recovery: recovery ObjectDelete must succeed")
 	s.Falsef(s.vertexExists("obj-d4p"),
-		"D4 recovery: vertex body must be removed after recovery ObjectDelete")
+		"D4 recovery: the unidentifiable vertex must be gone")
 }
 
