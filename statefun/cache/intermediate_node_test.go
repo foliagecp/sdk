@@ -52,7 +52,9 @@ func Test_IntermediateNode_GuardStillProtectsRealValues(t *testing.T) {
 	cs := NewStoreForTest("guard")
 
 	require.True(t, cs.SetValue("dom/v", []byte("новое"), false, 2000))
-	require.True(t, cs.SetValue("dom/v", []byte("старое"), false, 1000))
+	// The return value now means "the write landed": a write the guard refused
+	// must say so, or the caller takes a dropped write for a successful one.
+	require.False(t, cs.SetValue("dom/v", []byte("старое"), false, 1000))
 	got, err := cs.GetValue("dom/v")
 	require.NoError(t, err)
 	require.Equal(t, "новое", string(got), "запись со старым временем не должна побеждать")
@@ -60,7 +62,7 @@ func Test_IntermediateNode_GuardStillProtectsRealValues(t *testing.T) {
 	// после удаления запоздавшая запись не воскрешает ключ
 	cs.DeleteValue("dom/v", false, 3000)
 	require.False(t, cs.Exists("dom/v"))
-	require.True(t, cs.SetValue("dom/v", []byte("воскрешение"), false, 2500))
+	require.False(t, cs.SetValue("dom/v", []byte("воскрешение"), false, 2500))
 	require.False(t, cs.Exists("dom/v"), "запоздавшая запись воскресила удалённый ключ")
 }
 

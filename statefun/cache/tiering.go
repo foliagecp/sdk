@@ -421,10 +421,10 @@ func (cs *Store) tieredKeys(pattern string) ([]string, bool) {
 
 // tieredSet applies a write to a record. handled is false for keys the tree
 // still owns.
-func (cs *Store) tieredSet(key string, value []byte, asJSON bool, t int64) (handled bool) {
+func (cs *Store) tieredSet(key string, value []byte, asJSON bool, t int64) (handled, applied bool) {
 	vk, ok := tieredVertex(key)
 	if !ok {
-		return false
+		return false, false
 	}
 	for {
 		r := cs.records.getOrCreate(vk.id)
@@ -434,11 +434,12 @@ func (cs *Store) tieredSet(key string, value []byte, asJSON bool, t int64) (hand
 			// it here.
 			hook(vk.id)
 		}
-		if !cs.applyToRecord(r, vk, value, asJSON, t) {
-			return false // a shape no record owns; the tree keeps it
+		owned, ok := cs.applyToRecord(r, vk, value, asJSON, t)
+		if !owned {
+			return false, false // a shape no record owns; the tree keeps it
 		}
 		if !r.retired.Load() {
-			return true
+			return true, ok
 		}
 		// The record was swept between being fetched and being written to, so
 		// the write went somewhere nobody can reach. Repeat it on whatever
@@ -455,74 +456,79 @@ var afterRecordFetchForTest func(id string)
 // applyToRecord writes one key into a record. It reports false only for a key
 // shape no record owns; whether the write STANDS is the caller's question,
 // answered by the record's retired flag.
-func (cs *Store) applyToRecord(r *vertexRecord, vk vertexKey, value []byte, asJSON bool, t int64) bool {
+// applyToRecord reports both whether a record owns this shape of key (owned)
+// and whether the write actually landed (applied). The two differ when the
+// time guard refuses a stale write: the record owns the key, but nothing
+// changed — and the caller must not report success for a write that was
+// dropped.
+func (cs *Store) applyToRecord(r *vertexRecord, vk vertexKey, value []byte, asJSON bool, t int64) (owned, applied bool) {
 	switch k, a, b := vk.kind, vk.a, vk.b; k {
 	case tailBody:
-		r.putBody(value, t, asJSON)
+		applied = r.putBody(value, t, asJSON)
 
 	case tailOutTo:
-		r.setOutTo(a, string(value), t)
+		applied = r.setOutTo(a, string(value), t)
 
 	case tailOutBody:
-		r.setOutBody(a, value, t)
+		applied = r.setOutBody(a, value, t)
 
 	case tailIndexType:
-		r.setOutIndexType(a, b, t, true)
+		applied = r.setOutIndexType(a, b, t, true)
 
 	case tailIndexTag:
-		r.setOutTag(a, b, t, true)
+		applied = r.setOutTag(a, b, t, true)
 
 	case tailLinkType:
-		r.putPair(pairEntry{Type: a, Target: b, Name: string(value), UpdateTime: t})
+		applied = r.putPair(pairEntry{Type: a, Target: b, Name: string(value), UpdateTime: t})
 
 	case tailIn:
-		r.putInLink(inLink{From: a, Name: b, Type: string(value), UpdateTime: t})
+		applied = r.putInLink(inLink{From: a, Name: b, Type: string(value), UpdateTime: t})
 
 	default:
-		return false
+		return false, false
 	}
-	return true
+	return true, applied
 }
 
 // tieredDelete removes one key from a record.
-func (cs *Store) tieredDelete(key string, t int64) (handled bool) {
+func (cs *Store) tieredDelete(key string, t int64) (handled, applied bool) {
 	vk, ok := tieredVertex(key)
 	if !ok {
-		return false
+		return false, false
 	}
 	r, found := cs.records.get(vk.id)
 	if !found {
-		return false
+		return false, false
 	}
 
 	switch k, a, b := vk.kind, vk.a, vk.b; k {
 	case tailBody:
-		r.deleteBody(t)
+		applied = r.deleteBody(t)
 
 	case tailOutTo:
-		r.deleteOutTo(a, t)
+		applied = r.deleteOutTo(a, t)
 
 	case tailOutBody:
-		r.deleteOutBody(a, t)
+		applied = r.deleteOutBody(a, t)
 
 	case tailIndexType:
 		// CRUD drops the index key of the old type when a link changes type,
 		// while the link itself lives on with its new one.
-		r.setOutIndexType(a, b, t, false)
+		applied = r.setOutIndexType(a, b, t, false)
 
 	case tailIndexTag:
-		r.setOutTag(a, b, t, false)
+		applied = r.setOutTag(a, b, t, false)
 
 	case tailLinkType:
-		r.deletePair(a, b, t)
+		applied = r.deletePair(a, b, t)
 
 	case tailIn:
-		r.deleteInLink(a, b, t)
+		applied = r.deleteInLink(a, b, t)
 
 	default:
-		return false
+		return false, false
 	}
-	return true
+	return true, applied
 }
 
 // splitTypeTarget cuts the value of `out.to.<name>`, which CRUD writes as
