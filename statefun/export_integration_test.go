@@ -39,7 +39,22 @@ func runTestServer(t *testing.T) *server.Server {
 	return natsservertest.RunServer(&opts)
 }
 
+// The WAL export runs in whichever representation the cache is holding the
+// graph in, and the events it emits are derived from the ops the cache
+// publishes — so it is asked of both. A representation that publishes fewer
+// ops exports a smaller graph than it holds, and nothing downstream can tell.
 func TestExportCommitter_Integration(t *testing.T) {
+	for _, mode := range []string{"records", "tree"} {
+		mode := mode
+		t.Run(mode, func(t *testing.T) {
+			restore := cache.SetCacheModeForTest(mode)
+			defer restore()
+			exportCommitterIntegration(t)
+		})
+	}
+}
+
+func exportCommitterIntegration(t *testing.T) {
 	ensurePrometrics()
 
 	srv := runTestServer(t)
