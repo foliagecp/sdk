@@ -39,6 +39,13 @@ func runTestServer(t *testing.T) *server.Server {
 	return natsservertest.RunServer(&opts)
 }
 
+// The WAL export runs in whichever representation the cache is holding the
+// graph in, and the events it emits are derived from the ops the cache
+// publishes — a representation that publishes fewer ops exports a smaller
+// graph than it holds, and nothing downstream can tell. Both are covered by
+// running the suite twice (scripts/run-all-tests.sh --cache-mode), not by
+// switching here: the mode is a process-wide setting, and other tests in this
+// package leave runtimes whose maintenance pass is reading it.
 func TestExportCommitter_Integration(t *testing.T) {
 	ensurePrometrics()
 
