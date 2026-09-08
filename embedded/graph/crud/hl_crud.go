@@ -377,6 +377,16 @@ func createObjectInline(ctx *sfPlugins.StatefunContextProcessor, om *sfMediators
 	return targetReply, triggerOpStack
 }
 
+// typeNamedByOperation is the type the request itself carries, domain-
+// qualified, or "" when it carries none. Only object.create and an upsert do.
+func typeNamedByOperation(ctx *sfPlugins.StatefunContextProcessor) string {
+	t, ok := ctx.Payload.GetByPath("origin_type").AsString()
+	if !ok || t == "" {
+		return ""
+	}
+	return ctx.Domain.CreateObjectIDWithHubDomain(t, true)
+}
+
 func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	selfID := getOriginalID(ctx.Self.ID)
 	om := sfMediators.NewOpMediator(ctx)
@@ -397,7 +407,7 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	// or the operation reasons about a skeleton with a piece missing and
 	// leaves it that way. Costs one probe the first time this process meets
 	// the object and nothing afterwards.
-	ensureObjectIntegrity(ctx, selfID, false, opTime)
+	ensureObjectIntegrity(ctx, selfID, typeNamedByOperation(ctx), false, opTime)
 
 	// Exclusive lock only on the NEW object itself; SHARED on the objects root
 	// and the type. CreateObject only appends its own distinct membership child
@@ -445,7 +455,7 @@ func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	// or the operation reasons about a skeleton with a piece missing and
 	// leaves it that way. Costs one probe the first time this process meets
 	// the object and nothing afterwards.
-	ensureObjectIntegrity(ctx, selfID, false, opTime)
+	ensureObjectIntegrity(ctx, selfID, typeNamedByOperation(ctx), false, opTime)
 
 	// Handle upsert request ------------------------------
 	upsert := ctx.Payload.GetByPath("upsert").AsBoolDefault(false)
@@ -611,7 +621,7 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	// or the operation reasons about a skeleton with a piece missing and
 	// leaves it that way. Costs one probe the first time this process meets
 	// the object and nothing afterwards.
-	ensureObjectIntegrity(ctx, selfID, false, opTime)
+	ensureObjectIntegrity(ctx, selfID, "", false, opTime)
 
 	// Write lock on the object only. The trash-can type is read-guarded LATE,
 	// in the park branch right before re-linking: the physical branch's nested
@@ -746,7 +756,7 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	// topology" from being permanent. A whole object is remembered and costs
 	// nothing on the next read.
 	if m.Status != sfMediators.SYNC_OP_STATUS_IDLE {
-		switch ensureObjectIntegrity(ctx, selfID, false, opTime) {
+		switch ensureObjectIntegrity(ctx, selfID, "", false, opTime) {
 		case integrityRepaired:
 			m = readVertex()
 		case integrityErased:
@@ -1164,7 +1174,7 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	// A link between objects is only meaningful while both ends are objects;
 	// repairing this one here is what keeps a link operation from cementing a
 	// half-built skeleton.
-	ensureObjectIntegrity(ctx, selfID, false, opTime)
+	ensureObjectIntegrity(ctx, selfID, "", false, opTime)
 
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -1375,7 +1385,7 @@ func ReadObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	// A link between objects is only meaningful while both ends are objects;
 	// repairing this one here is what keeps a link operation from cementing a
 	// half-built skeleton.
-	ensureObjectIntegrity(ctx, selfID, false, opTime)
+	ensureObjectIntegrity(ctx, selfID, "", false, opTime)
 
 	operationKeysMutexLock(ctx, []string{edgeLockKey(selfID, objectToID)}, false, opTime)
 

@@ -151,9 +151,11 @@ func resolveObjectTypeForRepair(ctx *sfPlugins.StatefunContextProcessor, objID s
 		return t, "the object-type cache", true
 	}
 
-	// The trash can records the type it parked the object under.
+	// The trash can holding it means it is PARKED, and a parked object's type
+	// is the trash can — not the type it was parked from. Answering with the
+	// original type here would rebuild a deleted object as a live one.
 	if t, _ := trashCanEdgeInfo(ctx, objID); t != "" {
-		return ctx.Domain.CreateObjectIDWithHubDomain(t, false), "the trash can", true
+		return trashCanTypeID(ctx), "the trash can holding it", true
 	}
 
 	// Nothing on the object names the type any more. The other two halves of
@@ -344,14 +346,25 @@ func closeHalfEdges(ctx *sfPlugins.StatefunContextProcessor, vertexID string, op
 	}
 }
 
-// ensureObjectIntegrity makes the object whole, or removes it when no source
-// can name its type. It is safe to call on anything: a vertex that is not an
+// ensureObjectIntegrity makes the object whole, or removes it when nothing can
+// name its type. It is safe to call on anything: a vertex that is not an
 // object, one that does not exist, and one that is already whole all return
 // without writing.
 //
+// callerType is the type the operation itself was given — object.create and an
+// upsert carry one, a read does not. It is the LAST source consulted and it
+// can never overrule the graph. An object created under one type and then
+// updated, by mistake, under another must not have its type rewritten by that
+// mistake: what the graph still says about an object outranks what a caller
+// says about it, and the caller is believed only where the graph has gone
+// silent. Even then it is a judgement rather than a fact — but the caller of
+// an upsert is usually the system that owns the object, and restoring it under
+// the type they name keeps everything else the object holds, which erasing it
+// would not.
+//
 // parentHoldsLocks says the caller already holds the operation's locks, so the
 // repair must not try to take them again.
-func ensureObjectIntegrity(ctx *sfPlugins.StatefunContextProcessor, objID string, parentHoldsLocks bool, opTime int64) integrityOutcome {
+func ensureObjectIntegrity(ctx *sfPlugins.StatefunContextProcessor, objID, callerType string, parentHoldsLocks bool, opTime int64) integrityOutcome {
 	if _, seen := objectIntegrityVerified.Load(objID); seen {
 		return integrityIntact
 	}
@@ -370,9 +383,24 @@ func ensureObjectIntegrity(ctx *sfPlugins.StatefunContextProcessor, objID string
 	}
 
 	typeID, source, found := resolveObjectTypeForRepair(ctx, objID)
-	if !found {
+	switch {
+	case found && callerType != "" && callerType != typeID:
+		// The two disagree, and the graph wins. Rebuilding the skeleton under
+		// the type the caller named would change what the object IS, and no
+		// repair may do that on its own.
 		lg.Logf(lg.WarnLevel,
-			"object %s has lost every trace of its type and cannot be restored; erasing what is left of it", objID)
+			"object %s is of type %s (from %s) but this operation names type %s; repairing as %s and leaving the type alone",
+			objID, typeID, source, callerType, typeID)
+	case !found && callerType != "":
+		// The graph knows this is an object and no longer knows of what. The
+		// caller does, so the object is restored instead of erased — and
+		// everything else it holds is kept.
+		typeID, source = callerType, "the operation that named it"
+		lg.Logf(lg.WarnLevel,
+			"object %s has lost every trace of its type; restoring it as %s, the type this operation names", objID, typeID)
+	case !found:
+		lg.Logf(lg.WarnLevel,
+			"object %s has lost every trace of its type and nothing names it; erasing what is left of it", objID)
 		eraseUnrecoverableObject(ctx, objID, opTime)
 		return integrityErased
 	}
