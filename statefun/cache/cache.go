@@ -116,6 +116,18 @@ type StoreValue struct {
 	// SetValueType / SetValueIfDoesNotExist all hold it), so the read-modify-
 	// write on the shared byte never loses an update.
 	flags uint8
+	// detached says the maintenance sweep has taken this node out of its
+	// parent's container: nothing reaches it from the root any more, and a
+	// write landing here would be lost without a trace. It is set under the
+	// node's own lock, inside the very critical section that decides the node
+	// is dead, so a writer attaching a child either gets there first (and the
+	// sweep then sees a live child and leaves the node alone) or sees this
+	// flag afterwards and starts the write over from the root. Records close
+	// the same window with vertexRecord.retired; this is the tree's half.
+	//
+	// It lands in the padding that followed `flags`, so the node stays in the
+	// same 80-byte size class it already used.
+	detached atomic.Bool
 	// lockIdx selects this node's RWMutex from the shared lockPool (instead of
 	// an inline 24-byte sync.RWMutex per node). It lands in what used to be
 	// struct padding after `flags`, so it costs ZERO extra bytes while removing
@@ -314,11 +326,17 @@ func (csv *StoreValue) StoreChild(key string, child *StoreValue) (actual *StoreV
 		child.lockIdx = atomic.AddUint32(&lockIdxNext, 1)
 	}
 
-	// Hot-node fast path: already sharded — use the shard locks directly, no
-	// node lock (this is what preserves concurrent-write scaling on high-fanout
-	// nodes; see BenchmarkContainerConcurrentInsert_*).
+	// Hot-node fast path: already sharded — the shard locks do the work, which
+	// is what preserves concurrent-write scaling on high-fanout nodes (see
+	// BenchmarkContainerConcurrentInsert_*). The node lock is taken SHARED
+	// here, so concurrent attachers still run in parallel; it only excludes
+	// the sweep's confirm, which holds the same lock exclusively. Without it a
+	// sharded node emptied by deletions could be judged dead and unlinked
+	// between this LoadOrStore and the caller reading the result back.
 	if m := csv.more.Load(); m != nil && m.sharded != nil {
+		csv.nodeMutex().RLock()
 		a, l := m.sharded.LoadOrStore(key, child)
+		csv.nodeMutex().RUnlock()
 		return a.(*StoreValue), l
 	}
 
@@ -991,6 +1009,16 @@ func (cs *Store) sweepSubtree(csv *StoreValue, result *maintenanceResult) bool {
 			}
 			child.Lock("sweepSubtree-confirm")
 			stillDead := !child.getValueExists() && child.storeLen() == 0
+			if stillDead {
+				// Marked while the verdict still holds and the lock is still
+				// held: from here on any writer that reaches this node through
+				// a pointer it took earlier can tell that its write would go
+				// nowhere. Unlinking happens after the lock is released — it
+				// takes the PARENT's lock, and no cache path may hold two node
+				// locks at once (the shared lock pool can back both with the
+				// same mutex).
+				child.detached.Store(true)
+			}
 			child.Unlock("sweepSubtree-confirm")
 			if stillDead {
 				csv.deleteChild(k)
@@ -1666,6 +1694,30 @@ func (cs *Store) GetValueJSONByPath(key string, path string) (*easyjson.JSON, er
 	return result, resultError
 }
 
+// unreachable reports that this node, or one above it, has been taken out of
+// the tree by the maintenance sweep — so a write that just landed on it is not
+// in the graph at all and has to be repeated on whatever replaced it.
+//
+// The question is only worth asking AFTER the write: a node carrying a value,
+// or one holding a live child, is a node the sweep will not take, so a walk
+// that comes back clean afterwards is a write that stands. The walk is as long
+// as the key is deep — four or five atomic loads.
+func unreachable(csv *StoreValue) bool {
+	for n := csv; n != nil; n = n.parent {
+		if n.detached.Load() {
+			return true
+		}
+	}
+	return false
+}
+
+// afterTreePathWalkForTest runs between resolving a key's path and writing at
+// the end of it, and only a test ever sets it. Nil on every real path. The
+// records side has afterRecordFetchForTest for the same window and the same
+// reason: nanoseconds wide, and no amount of concurrency reproduces it on
+// demand.
+var afterTreePathWalkForTest func(key string)
+
 func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV bool, customSetTime int64) bool {
 	if _, ok := tieredVertex(key); ok {
 		if exists, handled := cs.tieredExists(key); handled && exists {
@@ -1681,7 +1733,14 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 			return applied
 		}
 	}
-	if keyLastToken, parent := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true); len(keyLastToken) > 0 && parent != nil {
+	for {
+		keyLastToken, parent := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true)
+		if len(keyLastToken) == 0 || parent == nil {
+			return false
+		}
+		if hook := afterTreePathWalkForTest; hook != nil {
+			hook(key)
+		}
 		candidate := &StoreValue{
 			value:           newValue,
 			flags:           flagValueExists,
@@ -1689,6 +1748,9 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 		}
 		actual, loaded := parent.StoreChild(keyLastToken, candidate)
 		if !loaded {
+			if unreachable(actual) {
+				continue
+			}
 			if updateInKV {
 				cs.publishDirtyOp(customSetTime, key, OpTypePUT, newValue)
 			}
@@ -1697,19 +1759,21 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 
 		// Already exists — set only if "empty"
 		actual.Lock("SetValueIfDoesNotExist")
-		if !actual.getValueExists() && actual.value == nil {
+		wrote := !actual.getValueExists() && actual.value == nil
+		if wrote {
 			actual.value = newValue
 			actual.setValueExists(true)
 			actual.valueUpdateTime = customSetTime
-			actual.Unlock("SetValueIfDoesNotExist")
-			if updateInKV {
-				cs.publishDirtyOp(customSetTime, key, OpTypePUT, newValue)
-			}
-			return true
 		}
 		actual.Unlock("SetValueIfDoesNotExist")
+		if unreachable(actual) {
+			continue
+		}
+		if wrote && updateInKV {
+			cs.publishDirtyOp(customSetTime, key, OpTypePUT, newValue)
+		}
+		return wrote
 	}
-	return false
 }
 
 func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTime int64) bool {
@@ -1730,29 +1794,45 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 		}
 		return applied
 	}
-	keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true)
-	if len(keyLastToken) == 0 || parentCacheStoreValue == nil {
-		return true
-	}
 	applied := true
-	if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
-		csv.SetValueType(typeByteArray)
-		applied = csv.Put(value, updateInKV, customSetTime)
-	} else {
-		csvUpdate := &StoreValue{
-			value:           value,
-			flags:           flagValueExists, // typeByteArray == flagValueTypeJSON clear
-			valueUpdateTime: customSetTime,
+	for {
+		keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true)
+		if len(keyLastToken) == 0 || parentCacheStoreValue == nil {
+			return true
 		}
-		actual, loaded := parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate)
-		if loaded {
-			if customSetTime >= actual.valueUpdateTime {
-				actual.SetValueType(typeByteArray)
-				applied = actual.Put(value, updateInKV, customSetTime)
-			} else {
-				applied = false
+		if hook := afterTreePathWalkForTest; hook != nil {
+			hook(key)
+		}
+		var landedOn *StoreValue
+		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
+			csv.SetValueType(typeByteArray)
+			applied = csv.Put(value, updateInKV, customSetTime)
+			landedOn = csv
+		} else {
+			csvUpdate := &StoreValue{
+				value:           value,
+				flags:           flagValueExists, // typeByteArray == flagValueTypeJSON clear
+				valueUpdateTime: customSetTime,
+			}
+			actual, loaded := parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate)
+			landedOn = actual
+			if loaded {
+				if customSetTime >= actual.valueUpdateTime {
+					actual.SetValueType(typeByteArray)
+					applied = actual.Put(value, updateInKV, customSetTime)
+				} else {
+					applied = false
+				}
 			}
 		}
+		if !unreachable(landedOn) {
+			break
+		}
+		// The sweep unlinked a node on this path between the walk and the
+		// write, so the value went into a subtree nothing reaches. Walk the
+		// path again and repeat the write on what is there now: every write
+		// here is idempotent under its own timestamp, so repeating it costs
+		// nothing and loses nothing.
 	}
 	if applied && updateInKV {
 		cs.publishDirtyOp(customSetTime, key, OpTypePUT, value)
@@ -1779,33 +1859,45 @@ func (cs *Store) SetValueJSON(key string, originValue *easyjson.JSON, updateInKV
 		}
 		return applied
 	}
-	keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true)
-	if len(keyLastToken) == 0 || parentCacheStoreValue == nil {
-		return true
-	}
 	value := originValue.Clone().GetPtr()
 	if !updateInKV {
 		walBytes = nil
 	}
 	applied := true
-	if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
-		csv.SetValueType(typeJson)
-		applied = csv.Put(value, updateInKV, customSetTime)
-	} else {
-		csvUpdate := &StoreValue{
-			value:           value,
-			flags:           flagValueExists | flagValueTypeJSON,
-			valueUpdateTime: customSetTime,
+	for {
+		keyLastToken, parentCacheStoreValue := cs.getLastKeyTokenAndItsParentCacheStoreValue(key, true)
+		if len(keyLastToken) == 0 || parentCacheStoreValue == nil {
+			return true
 		}
-		actual, loaded := parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate)
-		if loaded {
-			if customSetTime >= actual.valueUpdateTime {
-				actual.SetValueType(typeJson)
-				applied = actual.Put(value, updateInKV, customSetTime)
-			} else {
-				applied = false
+		if hook := afterTreePathWalkForTest; hook != nil {
+			hook(key)
+		}
+		var landedOn *StoreValue
+		if csv, ok := parentCacheStoreValue.LoadChild(keyLastToken); ok {
+			csv.SetValueType(typeJson)
+			applied = csv.Put(value, updateInKV, customSetTime)
+			landedOn = csv
+		} else {
+			csvUpdate := &StoreValue{
+				value:           value,
+				flags:           flagValueExists | flagValueTypeJSON,
+				valueUpdateTime: customSetTime,
+			}
+			actual, loaded := parentCacheStoreValue.StoreChild(keyLastToken, csvUpdate)
+			landedOn = actual
+			if loaded {
+				if customSetTime >= actual.valueUpdateTime {
+					actual.SetValueType(typeJson)
+					applied = actual.Put(value, updateInKV, customSetTime)
+				} else {
+					applied = false
+				}
 			}
 		}
+		if !unreachable(landedOn) {
+			break
+		}
+		// Same window as in SetValue: the path was unlinked under the write.
 	}
 	if applied && updateInKV {
 		cs.publishDirtyOp(customSetTime, key, OpTypePUT, walBytes)
