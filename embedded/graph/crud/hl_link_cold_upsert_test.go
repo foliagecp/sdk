@@ -263,6 +263,56 @@ func (s *LinkResolveTestSuite) Test_LowLevelDeleteByNameRecoversOnlyALinkWithABo
 	s.Equal(scannedBefore, crud.LinkResolveScannedKeysForTest(), "and an absent link is not walked for")
 }
 
+// A link that lost BOTH its target pointer and its body is a bare remnant: an
+// ltype entry and a mirror in-key, nothing readable. It is not addressable by
+// name — it has no name key — but it is by its pair, which is all that is
+// left of it, and that is enough: the delete removes what remains, and the
+// pair can be linked again. It used to refuse ("link body ... does not
+// exist") and leave the entry to block every create of the pair for good.
+func (s *LinkResolveTestSuite) Test_BareRemnantIsDeletedByItsPair() {
+	s.boot()
+	s.NoError(s.cmdb.TypeCreate("llr_t"))
+	s.NoError(s.cmdb.TypesLinkCreate("llr_t", "llr_t", "llr_rel", nil))
+	for _, id := range []string{"llr_a", "llr_b", "llr_c"} {
+		s.NoError(s.cmdb.ObjectCreate(id, "llr_t", easyjson.NewJSONObject()))
+	}
+	from := s.SetThisDomainPreffix("llr_a")
+	store := s.Runtime().Domain.Cache()
+	ltypeKey := func(to string) string {
+		return fmt.Sprintf(crud.OutLinkTypeKeyPrefPattern+crud.KeySuff2Pattern, from, "llr_rel", s.SetThisDomainPreffix(to))
+	}
+	inKey := func(to, name string) string {
+		return fmt.Sprintf(crud.InLinkKeyPrefPattern+crud.KeySuff2Pattern, s.SetThisDomainPreffix(to), from, name)
+	}
+	strip := func(to, name string) {
+		s.NoError(s.cmdb.ObjectsLinkCreate("llr_a", to, name, nil, easyjson.NewJSONObjectWithKeyValue("weight", easyjson.NewJSON(1))))
+		s.dropKey(fmt.Sprintf(crud.OutLinkTargetKeyPrefPattern+crud.KeySuff1Pattern, from, name))
+		s.dropKey(fmt.Sprintf(crud.OutLinkBodyKeyPrefPattern+crud.KeySuff1Pattern, from, name))
+		s.Require().True(store.Exists(ltypeKey(to)), "sanity: the ltype entry is what is left")
+	}
+
+	// Through the high-level API, by the pair: no name, no walk.
+	strip("llr_b", "custom_b")
+	scannedBefore := crud.LinkResolveScannedKeysForTest()
+	s.Require().NoError(s.cmdb.ObjectsLinkDelete("llr_a", "llr_b"), "a bare remnant must be deletable by its pair")
+	s.Equal(scannedBefore, crud.LinkResolveScannedKeysForTest(), "and found by its ltype key, not by a walk")
+	s.False(store.Exists(ltypeKey("llr_b")), "the ltype entry must be gone")
+	s.False(store.Exists(inKey("llr_b", "custom_b")), "and the mirror in-key with it")
+	s.NoError(s.cmdb.ObjectsLinkCreate("llr_a", "llr_b", "custom_b", nil, easyjson.NewJSONObjectWithKeyValue("weight", easyjson.NewJSON(2))),
+		"the pair must be linkable again once the remnant is gone")
+	s.Equal(int64(2), s.linkWeight("llr_a", "llr_b"))
+
+	// Through the low-level API, by type and target — the remnant's own key.
+	strip("llr_c", "custom_c")
+	p := easyjson.NewJSONObjectWithKeyValue("to", easyjson.NewJSON("llr_c"))
+	p.SetByPath("type", easyjson.NewJSON("llr_rel"))
+	res, err := s.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.link.delete", "llr_a", &p, nil)
+	s.Require().NoError(err)
+	s.Equal("ok", res.GetByPath("status").AsStringDefault(""), res.ToString())
+	s.False(store.Exists(ltypeKey("llr_c")), "the ltype entry must be gone")
+	s.False(store.Exists(inKey("llr_c", "custom_c")), "and the mirror in-key with it")
+}
+
 // dropKey removes one key from the operating representation only — the damage
 // the resolvers exist to survive.
 func (s *LinkResolveTestSuite) dropKey(key string) {

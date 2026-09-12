@@ -1460,11 +1460,15 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 		operationKeysMutexLockMixed(ctx, []string{edgeLockKey(selfID, linkName)}, []string{selfID, toId}, opTime)
 
+		// The body is the delete's record of what it removed, not its permission
+		// to remove it. A link that has lost its body is still a link — its ltype
+		// entry alone keeps the pair from ever being linked again ("already
+		// exists ... only once") — and refusing to delete what cannot be read
+		// left exactly that remnant in the graph for good. It is deleted whole,
+		// and the op-stack entry simply carries no old body.
 		oldLinkBody, err := ctx.Domain.Cache().GetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName))
 		if err != nil {
-			operationKeysMutexUnlock(ctx)
-			om.AggregateOpMsg(sfMediators.OpMsgFailed(fmt.Sprintf("link body from=%s with name=%s does not exist", selfID, linkName))).Reply()
-			return
+			oldLinkBody = nil
 		}
 
 		deleteOutLinkFromSideKeys(ctx, ctx.Self.Typename, selfID, linkType, linkName, toId, oldLinkBody, opStack, opTime)
