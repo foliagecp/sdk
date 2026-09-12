@@ -605,10 +605,22 @@ type Store struct {
 	// Built lazily, retried after failures — same contract as the old
 	// per-call error path: no Prometrics, no measurement.
 	metrics atomic.Pointer[storeMetrics]
+
+	// enumeratedKeys counts every key GetKeysByPattern has handed out since
+	// the store was created, in either representation. A CRUD operation that
+	// walks a vertex's keys costs its out-degree here, and one that resolves by
+	// direct key costs nothing — so a test can pin that an operation does not
+	// grow with the size of the vertex it touches, exactly and without timing,
+	// and the metric shows an operator the same thing on a live runtime.
+	enumeratedKeys atomic.Int64
 }
+
+// EnumeratedKeys reports how many keys GetKeysByPattern has returned so far.
+func (cs *Store) EnumeratedKeys() int64 { return cs.enumeratedKeys.Load() }
 
 type storeMetrics struct {
 	getKeysByPattern prometheus.Gauge
+	keysEnumerated   prometheus.Gauge
 }
 
 func (cs *Store) getMetrics() *storeMetrics {
@@ -623,7 +635,13 @@ func (cs *Store) getMetrics() *storeMetrics {
 	if err != nil {
 		return nil
 	}
-	m := &storeMetrics{getKeysByPattern: gv.With(prometheus.Labels{"id": cs.cacheConfig.id})}
+	ev, err := gp.EnsureGaugeVecSimple("cache_keys_enumerated_total",
+		"keys handed out by GetKeysByPattern since start; grows with every walk over a vertex's keys", []string{"id"})
+	if err != nil {
+		return nil
+	}
+	labels := prometheus.Labels{"id": cs.cacheConfig.id}
+	m := &storeMetrics{getKeysByPattern: gv.With(labels), keysEnumerated: ev.With(labels)}
 	cs.metrics.Store(m)
 	return m
 }
@@ -1963,9 +1981,7 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 	if keys, handled := cs.tieredKeys(pattern); handled {
 		// Reported from here too, or the metric would quietly stop covering
 		// graph vertices the moment they moved into records.
-		if m := cs.getMetrics(); m != nil {
-			m.getKeysByPattern.Set(float64(time.Since(start).Microseconds()))
-		}
+		cs.noteEnumerated(len(keys), start)
 		return keys
 	}
 
@@ -2041,11 +2057,18 @@ func (cs *Store) GetKeysByPattern(pattern string) []string {
 		i++
 	}
 
+	cs.noteEnumerated(len(keysSlice), start)
+	return keysSlice
+}
+
+// noteEnumerated accounts for one GetKeysByPattern call: n keys handed out,
+// started at start.
+func (cs *Store) noteEnumerated(n int, start time.Time) {
+	total := cs.enumeratedKeys.Add(int64(n))
 	if m := cs.getMetrics(); m != nil {
 		m.getKeysByPattern.Set(float64(time.Since(start).Microseconds()))
+		m.keysEnumerated.Set(float64(total))
 	}
-
-	return keysSlice
 }
 
 // createIfNotexistsOption - 0 // Do not create, 1 // Create non parent StoreValue thread safe, 2 // Create parent StoreValue thread safe
