@@ -24,6 +24,7 @@ package crud_test
 //     ObjectReadV2Full(id) is ObjectReadV2.
 
 import (
+	"sort"
 	"testing"
 	"time"
 
@@ -189,5 +190,41 @@ func (s *ObjectReadLinkContentTestSuite) Test_ClientSurface() {
 
 	v2, err := s.dbc.CMDB.ObjectReadV2("olc-src")
 	s.Require().NoError(err)
-	s.Equal(v2.ToString(), plain.ToString(), "ObjectReadV2Full(id) and ObjectReadV2(id) must answer identically")
+	// The link arrays come out of an enumeration whose order is not the same
+	// from one call to the next (the tree ranges a map), so the two answers are
+	// compared as sets of links, and byte for byte in everything else.
+	s.Equal(linksAsSet(v2, "links.out", "name"), linksAsSet(plain, "links.out", "name"),
+		"ObjectReadV2Full(id) and ObjectReadV2(id) must return the same out-links")
+	s.Equal(linksAsSet(v2, "links.in", "from"), linksAsSet(plain, "links.in", "from"),
+		"ObjectReadV2Full(id) and ObjectReadV2(id) must return the same in-links")
+	s.Equal(linksAsSet(v2, "to_objects", ""), linksAsSet(plain, "to_objects", ""),
+		"ObjectReadV2Full(id) and ObjectReadV2(id) must return the same to_objects")
+	s.Equal(withoutLinks(v2), withoutLinks(plain), "ObjectReadV2Full(id) and ObjectReadV2(id) must answer identically")
+}
+
+// linksAsSet renders the array at path as sorted "key: element" lines (the
+// element itself when keyField is empty), so two answers compare equal
+// whatever order the enumeration produced them in.
+func linksAsSet(data easyjson.JSON, path, keyField string) []string {
+	arr := data.GetByPath(path)
+	lines := make([]string, 0, arr.ArraySize())
+	for i := 0; i < arr.ArraySize(); i++ {
+		l := arr.ArrayElement(i)
+		key := l.ToString()
+		if keyField != "" {
+			key = l.GetByPath(keyField).AsStringDefault("")
+		}
+		lines = append(lines, key+": "+l.ToString())
+	}
+	sort.Strings(lines)
+	return lines
+}
+
+// withoutLinks is the answer with every enumeration-ordered array removed.
+func withoutLinks(data easyjson.JSON) string {
+	c := data.Clone()
+	c.RemoveByPath("links.out")
+	c.RemoveByPath("links.in")
+	c.RemoveByPath("to_objects")
+	return c.ToString()
 }
