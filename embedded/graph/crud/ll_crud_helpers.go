@@ -160,6 +160,24 @@ func resultWithOpStack(existingResult *easyjson.JSON, opStack *easyjson.JSON) ea
 	}
 }
 
+// ltypeEntryNamed reads the one ltype key the payload's type and target
+// address, and reports it when it carries linkName. One key read; a miss says
+// nothing about the link, only that this pair is not where it is.
+func ltypeEntryNamed(ctx *sfPlugins.StatefunContextProcessor, selfID, linkName string) (linkType, toId string, ok bool) {
+	to, hasTo := ctx.Payload.GetByPath("to").AsString()
+	lt, hasType := ctx.Payload.GetByPath("type").AsString()
+	if !hasTo || !hasType {
+		return "", "", false
+	}
+	to = ctx.Domain.CreateObjectIDWithThisDomain(to, false)
+	lt = ctx.Domain.GetObjectIDWithoutDomain(lt)
+	nameBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfID, lt, to))
+	if err != nil || ctx.Domain.GetObjectIDWithoutDomain(string(nameBytes)) != linkName {
+		return "", "", false
+	}
+	return lt, to, true
+}
+
 // getFullLinkInfoFromSpecifiedIdentifier resolves the out-link a payload
 // addresses, trying BOTH identities a link has:
 //
@@ -190,11 +208,25 @@ func getFullLinkInfoFromSpecifiedIdentifier(ctx *sfPlugins.StatefunContextProces
 
 			return ctx.Domain.GetObjectIDWithoutDomain(linkType), name, toId, true
 		}
-		// out.to missing: the link may still exist partially (interrupted
-		// write) — recover the target from the ltype family so it stays
-		// addressable and deletable.
-		if lt, to, ok := resolveOutLinkByLtypeScan(ctx, selfID, name); ok {
-			return lt, name, to, true
+		// out.to missing. A link that lost its target pointer but kept its body
+		// is recovered from the ltype family, which carries the type and the
+		// target in its keys — a walk over the vertex's out-links, paid only for
+		// that damage. A name with no body either is not a damaged link, it is an
+		// absent one: what every link looks like before it is created, on a path
+		// that creates thousands of them on a single hub. Nothing is lost by
+		// not walking for it — the update, the read and the delete all need the
+		// body next, and fail on it when the walk did find a bare remnant.
+		if ctx.Domain.Cache().Exists(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, name)) {
+			// A caller that also says where the link goes has named its ltype
+			// key outright; when that key confirms the name, the walk is not
+			// needed. Any other name there is another link, and the walk still
+			// looks for this one.
+			if lt, to, ok := ltypeEntryNamed(ctx, selfID, name); ok {
+				return lt, name, to, true
+			}
+			if lt, to, ok := resolveOutLinkByLtypeScan(ctx, selfID, name); ok {
+				return lt, name, to, true
+			}
 		}
 		requestedName = name
 		// name miss — fall through to the type+to identity

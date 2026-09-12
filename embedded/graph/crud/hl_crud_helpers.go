@@ -551,7 +551,7 @@ func resolveLinkBetweenTwoObjectsByName(ctx *sfPlugins.StatefunContextProcessor,
 	if linkName == "" {
 		return "", false
 	}
-	linkType, toId, ok := resolveOutLinkByName(ctx, fromObjectId, linkName)
+	linkType, toId, ok := lookupOutLinkByName(ctx.Domain, fromObjectId, linkName)
 	if !ok || toId != toObjectId || linkType == "" {
 		return "", false
 	}
@@ -569,12 +569,16 @@ func resolveLinkBetweenTwoObjectsByName(ctx *sfPlugins.StatefunContextProcessor,
 
 // resolveObjectsLinkForUpdate finds the base object-link (from → to) the way
 // the update and delete paths need it: by name if the name is known — the
-// caller's, or the default one the create path writes — and only then by the
-// scanning search over the from-vertex's out-links.
+// caller's, or the default one the create path writes — and then by the pair
+// itself, through the ltype key the reference type and the target address
+// directly. Every step is a single key read, whatever the out-degree of
+// `from`; a link that does not exist yet is found absent for the same price,
+// which is what the first pass of an inventory load asks a hub thousands of
+// times.
 //
-// Both steps answer the same question; they differ in cost. The name is a
-// single key read; the search is O(out-degree of `from`), which on a hub vertex
-// dominates the whole operation.
+// The walk over the from-vertex's out-links remains only for a pair whose
+// reference type cannot be determined — a schema that is no longer there — so
+// an edge written under it stays updatable and deletable.
 func resolveObjectsLinkForUpdate(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId string) (linkName, linkType string, ok bool) {
 	// Candidates, cheapest first, each a single key read whose target is verified:
 	//   1. the name the caller passed;
@@ -597,7 +601,19 @@ func resolveObjectsLinkForUpdate(ctx *sfPlugins.StatefunContextProcessor, fromOb
 			return name, lt, true
 		}
 	}
-	return resolveLinkBetweenTwoObjects(ctx, fromObjectId, toObjectId)
+	// By the pair: the base edge between two objects carries the type their
+	// types' link declares — the same key ReadObjectsLink resolves by — and the
+	// ltype entry for it names the edge. This is also how an edge that lost its
+	// out.to key is found: its ltype entry is still there, and it costs one read.
+	_, _, referenceType, err := getReferenceLinkTypeBetweenTwoObjects(ctx, fromObjectId, toObjectId)
+	if err != nil {
+		return resolveLinkBetweenTwoObjects(ctx, fromObjectId, toObjectId)
+	}
+	nameBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, fromObjectId, referenceType, toObjectId))
+	if err != nil || len(nameBytes) == 0 {
+		return "", "", false
+	}
+	return string(nameBytes), referenceType, true
 }
 
 func resolveLinkBetweenTwoObjectsByTypePrefix(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId, linkTypePrefix string) (string, string, bool) {

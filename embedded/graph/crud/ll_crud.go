@@ -596,14 +596,33 @@ func resolveOutLinkByName(ctx *sfPlugins.StatefunContextProcessor, ownerID, link
 // resolveOutLinkByNameInDomain is resolveOutLinkByName without a statefun
 // context — usable from plain goroutines (e.g. the trash-can retention sweep),
 // which have a Domain but no in-flight message.
+//
+// The recovery walk here is unconditional, and the callers are chosen for it:
+// the vertex-delete cascade and the force-create replace what they find, so a
+// bare remnant — an ltype entry with nothing else left of the link — is
+// exactly what they must still reach. Anything on an ordinary path resolves
+// with lookupOutLinkByName and goes on to a key it can address directly.
 func resolveOutLinkByNameInDomain(dm sfPlugins.Domain, ownerID, linkName string) (linkType, toId string, ok bool) {
+	if linkType, toId, ok = lookupOutLinkByName(dm, ownerID, linkName); ok {
+		return linkType, toId, true
+	}
+	return resolveOutLinkByLtypeScanInDomain(dm, ownerID, linkName)
+}
+
+// lookupOutLinkByName reads the out.to key of the out-link named linkName and
+// nothing else: one key, whatever the vertex's out-degree. A miss means the
+// key is not there — which for a link that does not exist yet is the ordinary
+// state, not damage. Callers that need the damaged case recovered use
+// resolveOutLinkByName, or address the ltype key directly when they know the
+// type and the target.
+func lookupOutLinkByName(dm sfPlugins.Domain, ownerID, linkName string) (linkType, toId string, ok bool) {
 	b, err := dm.Cache().GetValue(fmt.Sprintf(OutLinkTargetKeyPrefPattern+KeySuff1Pattern, ownerID, linkName))
 	if err != nil {
-		return resolveOutLinkByLtypeScanInDomain(dm, ownerID, linkName)
+		return "", "", false
 	}
 	tokens := strings.Split(string(b), ".")
 	if len(tokens) < 2 {
-		return resolveOutLinkByLtypeScanInDomain(dm, ownerID, linkName)
+		return "", "", false
 	}
 	return dm.GetObjectIDWithoutDomain(tokens[0]), tokens[1], true
 }
@@ -626,7 +645,9 @@ func resolveOutLinkByLtypeScan(ctx *sfPlugins.StatefunContextProcessor, ownerID,
 // fallback too.
 func resolveOutLinkByLtypeScanInDomain(dm sfPlugins.Domain, ownerID, linkName string) (linkType, toId string, ok bool) {
 	prefix := fmt.Sprintf(OutLinkTypeKeyPrefPattern, ownerID)
-	for _, key := range dm.Cache().GetKeysByPattern(prefix + ">") {
+	keys := dm.Cache().GetKeysByPattern(prefix + ">")
+	linkResolveScannedKeys.Add(int64(len(keys)))
+	for _, key := range keys {
 		nameBytes, err := dm.Cache().GetValue(key)
 		if err != nil || string(nameBytes) != linkName {
 			continue
