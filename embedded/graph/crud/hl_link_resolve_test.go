@@ -173,6 +173,82 @@ func (s *LinkResolveTestSuite) Test_BaseApiDoesNotTouchAClaimEdge() {
 		"and keep its body untouched")
 }
 
+// The supertype flavour of read and delete resolved the edge by walking the
+// from-vertex's out-links for a compound-type PREFIX, on every call, found or
+// not. The rel is fixed by the claim types' link, so the full compound type is
+// known and the ltype key it addresses names the edge: one read. Two hubs,
+// one eight times the other, the same eight reads and deletes on each — the
+// store hands out the same number of keys for both, and the walk counter does
+// not move.
+func (s *LinkResolveTestSuite) Test_SuperTypeReadAndDeleteDoNotScanOutLinks() {
+	s.boot()
+	store := s.Runtime().Domain.Cache()
+
+	measure := func(tag string, fanout int) (reads, deletes int64) {
+		from, targets := s.claimHub(tag, fanout, 8)
+		scannedBefore := crud.LinkResolveScannedKeysForTest()
+
+		before := store.EnumeratedKeys()
+		for _, to := range targets {
+			p := easyjson.NewJSONObjectWithKeyValue("to", easyjson.NewJSON(to))
+			p.SetByPath("from_super_type", easyjson.NewJSON(tag+"_SuperFrom"))
+			p.SetByPath("to_super_type", easyjson.NewJSON(tag+"_SuperTo"))
+			res, err := s.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.objects.link.supertype.read", from, &p, nil)
+			s.Require().NoError(err)
+			s.Require().Equal("ok", res.GetByPath("status").AsStringDefault(""), res.ToString())
+			s.Equal(int64(1), int64(res.GetByPath("data.body.weight").AsNumericDefault(0)), "the read must return the claim edge's body")
+		}
+		reads = store.EnumeratedKeys() - before
+
+		before = store.EnumeratedKeys()
+		for _, to := range targets {
+			s.Require().NoError(s.cmdb.ObjectsLinkSuperTypeDelete(from, to, tag+"_SuperFrom", tag+"_SuperTo"))
+		}
+		deletes = store.EnumeratedKeys() - before
+
+		s.Equal(scannedBefore, crud.LinkResolveScannedKeysForTest(), "a supertype read or delete walked the from-vertex's out-links")
+		for _, to := range targets {
+			s.False(s.claimEdgeExists(from, tag+"_SuperFrom#"+tag+"_SuperTo#"+tag+"_rel", to), "the delete must have removed the claim edge")
+		}
+		return
+	}
+
+	smallReads, smallDeletes := measure("lsr", 16)
+	bigReads, bigDeletes := measure("lsb", 128)
+	s.T().Logf("keys enumerated by eight supertype reads: %d on a hub of 16 links, %d on a hub of 128; by eight deletes: %d and %d",
+		smallReads, bigReads, smallDeletes, bigDeletes)
+	s.LessOrEqualf(bigReads, smallReads, "supertype reads enumerated %d keys on a hub of 128 links and %d on a hub of 16", bigReads, smallReads)
+	s.LessOrEqualf(bigDeletes, smallDeletes, "supertype deletes enumerated %d keys on a hub of 128 links and %d on a hub of 16", bigDeletes, smallDeletes)
+}
+
+// claimHub builds a from-object of a child type with `fanout` base links of
+// its own, and `claims` claim edges to objects of another child type — the
+// shape a cross-pack hub has. Returns the from-object and the claim targets.
+func (s *LinkResolveTestSuite) claimHub(tag string, fanout, claims int) (from string, targets []string) {
+	for _, t := range []string{tag + "_SuperFrom", tag + "_SuperTo", tag + "_ChildFrom", tag + "_ChildTo"} {
+		s.NoError(s.cmdb.TypeCreate(t))
+	}
+	s.setSubtype(tag+"_SuperFrom", tag+"_ChildFrom")
+	s.setSubtype(tag+"_SuperTo", tag+"_ChildTo")
+	s.NoError(s.cmdb.TypesLinkCreate(tag+"_SuperFrom", tag+"_SuperTo", tag+"_rel", nil))
+	s.NoError(s.cmdb.TypesLinkCreate(tag+"_ChildFrom", tag+"_ChildFrom", tag+"_self", nil))
+	from = tag + "_from"
+	s.NoError(s.cmdb.ObjectCreate(from, tag+"_ChildFrom", easyjson.NewJSONObject()))
+	for i := 0; i < fanout; i++ {
+		peer := fmt.Sprintf("%s_peer%d", tag, i)
+		s.NoError(s.cmdb.ObjectCreate(peer, tag+"_ChildFrom", easyjson.NewJSONObject()))
+		s.NoError(s.cmdb.ObjectsLinkCreate(from, peer, peer, nil, easyjson.NewJSONObject()))
+	}
+	body := easyjson.NewJSONObjectWithKeyValue("weight", easyjson.NewJSON(1))
+	for i := 0; i < claims; i++ {
+		to := fmt.Sprintf("%s_claim%d", tag, i)
+		s.NoError(s.cmdb.ObjectCreate(to, tag+"_ChildTo", easyjson.NewJSONObject()))
+		s.NoError(s.cmdb.ObjectsLinkSuperTypeCreate(from, to, tag+"_SuperFrom", tag+"_SuperTo", to, nil, body))
+		targets = append(targets, to)
+	}
+	return from, targets
+}
+
 func (s *LinkResolveTestSuite) setSubtype(parent, child string) {
 	p := easyjson.NewJSONObjectWithKeyValue("sub_type", easyjson.NewJSON(child))
 	res, err := s.Request(sfPlugins.AutoRequestSelect, "functions.cmdb.api.type.subtype.set", parent, &p, nil)

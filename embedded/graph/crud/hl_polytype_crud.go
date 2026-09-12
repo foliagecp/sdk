@@ -288,26 +288,18 @@ func DeleteObjectsLinkFromSuperTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugin
 
 	// Cross-pack edges store a compound type "<fromClaim>#<toClaim>#<rel>".
 	// Between the same (from, to) object pair there can be multiple such
-	// edges with DIFFERENT claim pairs (and therefore different compound
-	// prefixes). We MUST pick the edge whose compound type starts with
-	// "<fromClaim>#<toClaim>#" matching the caller's claim — anything else
-	// is a different cross-pack edge and must be left alone.
-	//
-	// The previous implementation called resolveLinkBetweenTwoObjects (which
-	// returns the first key from a sharded-map scan) and verified the claim
-	// post-hoc; that was non-deterministic and could silently leave the
-	// targeted edge in the graph while returning idle.
-	fromClaimShort := ctx.Domain.GetObjectIDWithoutDomain(
-		ctx.Domain.CreateObjectIDWithHubDomain(ctx.Payload.GetByPath("from_super_type").AsStringDefault(""), true))
-	toClaimShort := ctx.Domain.GetObjectIDWithoutDomain(
-		ctx.Domain.CreateObjectIDWithHubDomain(ctx.Payload.GetByPath("to_super_type").AsStringDefault(""), true))
-	compoundPrefix := fromClaimShort + "#" + toClaimShort + "#"
+	// edges with DIFFERENT claim pairs. The one the caller's claim addresses
+	// is resolved by its full compound type — anything else is a different
+	// cross-pack edge and must be left alone.
+	fromClaimType := ctx.Domain.CreateObjectIDWithHubDomain(ctx.Payload.GetByPath("from_super_type").AsStringDefault(""), true)
+	toClaimType := ctx.Domain.CreateObjectIDWithHubDomain(ctx.Payload.GetByPath("to_super_type").AsStringDefault(""), true)
 
 	// Resolve the SPECIFIC edge (by KV) BEFORE locking so we lock the edge itself,
 	// not the owner vertex — supertype deletes of DIFFERENT links run in parallel.
-	linkName, linkType, edgeExists := resolveLinkBetweenTwoObjectsByTypePrefix(ctx, selfID, objectToID, compoundPrefix)
+	linkName, linkType, edgeExists := resolveSuperTypeLinkForPair(ctx, selfID, objectToID, fromClaimType, toClaimType)
 	if !edgeExists {
-		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("object link from=%s to=%s with claimed types (%s,%s) does not exist", selfID, objectToID, fromClaimShort, toClaimShort))).Reply()
+		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("object link from=%s to=%s with claimed types (%s,%s) does not exist", selfID, objectToID,
+			ctx.Domain.GetObjectIDWithoutDomain(fromClaimType), ctx.Domain.GetObjectIDWithoutDomain(toClaimType)))).Reply()
 		return
 	}
 
@@ -355,19 +347,17 @@ func ReadObjectsLinkFromSuperTypes(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.
 
 	// Address the SPECIFIC cross-pack edge by its claim pair. As in
 	// DeleteObjectsLinkFromSuperTypes, multiple compound edges with different
-	// claim pairs can exist between the same (from, to) — match the exact
-	// "<fromClaim>#<toClaim>#" prefix rather than picking an arbitrary edge.
-	fromClaimShort := ctx.Domain.GetObjectIDWithoutDomain(
-		ctx.Domain.CreateObjectIDWithHubDomain(ctx.Payload.GetByPath("from_super_type").AsStringDefault(""), true))
-	toClaimShort := ctx.Domain.GetObjectIDWithoutDomain(
-		ctx.Domain.CreateObjectIDWithHubDomain(ctx.Payload.GetByPath("to_super_type").AsStringDefault(""), true))
-	compoundPrefix := fromClaimShort + "#" + toClaimShort + "#"
+	// claim pairs can exist between the same (from, to) — the full compound
+	// type names the one the caller means.
+	fromClaimType := ctx.Domain.CreateObjectIDWithHubDomain(ctx.Payload.GetByPath("from_super_type").AsStringDefault(""), true)
+	toClaimType := ctx.Domain.CreateObjectIDWithHubDomain(ctx.Payload.GetByPath("to_super_type").AsStringDefault(""), true)
 
 	// Resolve the SPECIFIC edge (by KV) BEFORE locking so we read-lock the edge
 	// itself, not the owner vertex.
-	linkName, _, edgeExists := resolveLinkBetweenTwoObjectsByTypePrefix(ctx, selfID, objectToID, compoundPrefix)
+	linkName, _, edgeExists := resolveSuperTypeLinkForPair(ctx, selfID, objectToID, fromClaimType, toClaimType)
 	if !edgeExists {
-		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("object link from=%s to=%s with claimed types (%s,%s) does not exist", selfID, objectToID, fromClaimShort, toClaimShort))).Reply()
+		om.AggregateOpMsg(sfMediators.OpMsgIdle(fmt.Sprintf("object link from=%s to=%s with claimed types (%s,%s) does not exist", selfID, objectToID,
+			ctx.Domain.GetObjectIDWithoutDomain(fromClaimType), ctx.Domain.GetObjectIDWithoutDomain(toClaimType)))).Reply()
 		return
 	}
 

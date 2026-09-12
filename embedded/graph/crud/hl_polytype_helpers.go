@@ -1,6 +1,7 @@
 package crud
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/foliagecp/easyjson"
@@ -155,6 +156,29 @@ func isObjectLinkPermittedForClaimedTypes(ctx *sfPlugins.StatefunContextProcesso
 	}
 
 	return s
+}
+
+// resolveSuperTypeLinkForPair finds the cross-pack edge (from → to) claimed
+// under (fromClaimType, toClaimType) the way the update path writes it: the
+// compound type is "<fromClaim>#<toClaim>#<rel>" with the rel taken from the
+// claim types' link, and the ltype key it addresses names the edge — one
+// read, whatever the out-degree of `from`. Resolving by a prefix instead
+// walked every out-link of the from-vertex on every read and delete.
+//
+// The walk remains only when the rel cannot be determined — the claim types'
+// link is gone — so an edge written under it stays readable and deletable.
+func resolveSuperTypeLinkForPair(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, toObjectId, fromClaimType, toClaimType string) (linkName, linkType string, ok bool) {
+	compoundPrefix := ctx.Domain.GetObjectIDWithoutDomain(fromClaimType) + "#" + ctx.Domain.GetObjectIDWithoutDomain(toClaimType) + "#"
+	rel, err := getObjectsLinkTypeFromTypesLink(ctx, fromClaimType, toClaimType)
+	if err != nil || rel == "" {
+		return resolveLinkBetweenTwoObjectsByTypePrefix(ctx, fromObjectId, toObjectId, compoundPrefix)
+	}
+	linkType = compoundPrefix + rel
+	nameBytes, err := ctx.Domain.Cache().GetValue(fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, fromObjectId, linkType, toObjectId))
+	if err != nil || len(nameBytes) == 0 {
+		return "", "", false
+	}
+	return string(nameBytes), linkType, true
 }
 
 func deleteObjectOutLinkIfInvalidByInheritance(ctx *sfPlugins.StatefunContextProcessor, fromObjectId, outLinkType, toObjectId string) {
