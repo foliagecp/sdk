@@ -326,8 +326,13 @@ func (dm *Domain) applyTransactionOps(ops []cache.WALOp, txID string) error {
 		deadline := time.After(applyTransactionOpsAckTimeout)
 		for i, p := range pending {
 			select {
-			case <-p.future.Ok():
-				// happy path
+			case pa := <-p.future.Ok():
+				// A DEL is a marker the broker keeps until somebody removes
+				// it; the ack says where it landed, and the purger removes
+				// it by that sequence (cache/kv_tombstones.go).
+				if p.opType == cache.OpTypeDelete && pa != nil {
+					dm.cache.NoteKVTombstone(p.key, pa.Sequence)
+				}
 
 			case err := <-p.future.Err():
 				// DEL tombstone publish never reports "not found":

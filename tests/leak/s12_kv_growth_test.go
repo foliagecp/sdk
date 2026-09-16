@@ -6,17 +6,20 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/suite"
 )
 
-// S12 — NATS-side storage growth REPORT (no assertion). Deleting a cache key
-// appends a KV DEL tombstone that is retained forever (MaxMsgsPerSubject=1
-// keeps the last message per subject — the tombstone — and the KV stream has
-// no size/age limits by default). Fresh-id churn therefore grows the KV
-// stream monotonically even though the SDK heap and cache tree stay flat.
-// This scenario measures that by-design growth per cycle so the run report
-// states it explicitly; the SDK-side invariants are still asserted.
+// S12 — NATS-side storage under fresh-id churn. Deleting a cache key appends
+// a KV DEL marker that the broker keeps for as long as the key stays deleted
+// (MaxMsgsPerSubject=1 keeps the last message per subject — the marker — and
+// the KV stream has no size/age limits by default). The committer reports
+// every marker it leaves and the purger removes it by its sequence, so churn
+// must NOT grow the KV stream: the scenario measures the stream per cycle for
+// the run report and then asserts that, once the purger has caught up, the
+// stream holds no delete markers at all.
 
 type S12Suite struct{ leakSuite }
 
@@ -79,19 +82,46 @@ func (s *S12Suite) Test_KVStreamGrowth() {
 	rep.ReportMetric(s.T(), "js_total_msgs")
 	rep.ReportMetric(s.T(), "js_total_bytes")
 
-	// The accumulated tombstones are reclaimable: the maintenance loop purges
-	// delete markers periodically (KV_PURGE_DELETES_INTERVAL_SEC). Verify the
-	// mechanism end-to-end by purging ALL markers now and re-reading the
-	// stream — the churned keys' markers must be gone.
-	msgsBefore, _ := s.streamStats("cache_bucket")
-	s.Require().NoError(s.cacheStore().PurgeKVDeleteMarkers(-1))
-	msgsAfter, _ := s.streamStats("cache_bucket")
-	if msgsAfter < msgsBefore {
-		emitCheck("s12_kv_growth", "kv_purge_delete_markers", "PASS",
-			"before="+f1(msgsBefore), "after="+f1(msgsAfter))
-	} else {
-		emitCheck("s12_kv_growth", "kv_purge_delete_markers", "FAIL",
-			"before="+f1(msgsBefore), "after="+f1(msgsAfter))
-		s.T().Errorf("PurgeKVDeleteMarkers did not shrink the KV stream: %.0f -> %.0f msgs", msgsBefore, msgsAfter)
+	// Every marker the churn left is reported to the purger by the committer
+	// as it lands; once the purger has caught up, the bucket must hold no
+	// delete markers — the churned keys are absent, not marked.
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) && s.cacheStore().KVTombstonesPendingForTest() > 0 {
+		time.Sleep(50 * time.Millisecond)
 	}
+	pending := s.cacheStore().KVTombstonesPendingForTest()
+	markers := s.deleteMarkers()
+	msgs, _ := s.streamStats("cache_bucket")
+	if pending == 0 && markers == 0 {
+		emitCheck("s12_kv_growth", "kv_delete_markers_purged", "PASS",
+			"markers=0", "stream_msgs="+f1(msgs))
+	} else {
+		emitCheck("s12_kv_growth", "kv_delete_markers_purged", "FAIL",
+			"markers="+f1(float64(markers)), "pending="+f1(float64(pending)), "stream_msgs="+f1(msgs))
+		s.T().Errorf("the churn left %d delete marker(s) in the KV stream (%d still pending in the purger)", markers, pending)
+	}
+}
+
+// deleteMarkers counts the keys of the cache bucket whose last message is a
+// delete or purge marker.
+func (s *S12Suite) deleteMarkers() int {
+	js, err := s.Runtime().GetNatsConnection().JetStream()
+	s.Require().NoError(err)
+	// Domain.start names the bucket "<domain>_<cache id>_cache_bucket"; the
+	// harness calls its cache "test_cache".
+	kv, err := js.KeyValue(fmt.Sprintf("%s_test_cache_cache_bucket", s.Runtime().Domain.Name()))
+	s.Require().NoError(err)
+	w, err := kv.Watch(s.cacheStore().GetStorePrefix() + ".>")
+	s.Require().NoError(err)
+	defer func() { _ = w.Stop() }()
+	n := 0
+	for entry := range w.Updates() {
+		if entry == nil {
+			break
+		}
+		if op := entry.Operation(); op == nats.KeyValueDelete || op == nats.KeyValuePurge {
+			n++
+		}
+	}
+	return n
 }

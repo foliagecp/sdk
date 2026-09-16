@@ -94,19 +94,6 @@ func (csv *StoreValue) nodeMutex() *sync.RWMutex {
 	return &lockPool[csv.lockIdx&lockPoolMask]
 }
 
-// KV delete markers are pure dead weight in this architecture: the cache is
-// the source of truth and every KV load runs with IgnoreDeletes, so nothing
-// ever consumes the markers — they only accumulate, one retained message per
-// key ever deleted (MaxMsgsPerSubject=1 keeps the marker as the subject's
-// last message), growing the broker's stream without bound under key churn.
-// An ACTIVE instance therefore purges markers periodically from its
-// maintenance loop. KV_PURGE_DELETES_INTERVAL_SEC <= 0 disables the periodic
-// purge; the age threshold keeps a safety margin for anything mid-flight.
-var (
-	kvPurgeDeletesInterval  = time.Duration(system.GetEnvMustProceed[int]("KV_PURGE_DELETES_INTERVAL_SEC", 600)) * time.Second
-	kvPurgeMarkersOlderThan = time.Duration(system.GetEnvMustProceed[int]("KV_PURGE_DELETE_MARKERS_OLDER_THAN_SEC", 600)) * time.Second
-)
-
 type StoreValue struct {
 	parent      *StoreValue
 	keyInParent string
@@ -592,11 +579,10 @@ type Store struct {
 	totalWALPublishes     int64
 	totalWALPublishErrors int64
 
-	// Periodic KV delete-marker purge state (see PurgeKVDeleteMarkers):
-	// last trigger time (touched only by the kvLazyWriter goroutine) and a
-	// guard against overlapping purge goroutines.
-	lastKVPurgeDeletes time.Time
-	kvPurgeRunning     atomic.Bool
+	// tombstones removes the delete markers the committer leaves in the KV
+	// bucket, as the committer reports them (kv_tombstones.go). Nil without
+	// a KV.
+	tombstones *tombstonePurger
 
 	// metrics caches this store's prometheus series (label id=cacheConfig.id
 	// is constant). GetKeysByPattern is called several times per CRUD
@@ -779,7 +765,12 @@ func looksLikeJSONObject(v []byte) bool {
 }
 
 func (cs *Store) loadFromKV(ctx context.Context) error {
-	w, err := cs.kv.Watch(cs.cacheConfig.kvStorePrefix+".>", nats.IgnoreDeletes())
+	// Deletes are watched too, deliberately: this is the one walk over the
+	// bucket that happens anyway, and a delete marker met here is a leftover —
+	// from a version that did not remove them, or a shutdown that cut the
+	// purger off with work queued. It is not data; it is handed to the
+	// purger, which removes it by its own sequence and nothing after it.
+	w, err := cs.kv.Watch(cs.cacheConfig.kvStorePrefix + ".>")
 	if err != nil {
 		return fmt.Errorf("kv.Watch: %w", err)
 	}
@@ -796,14 +787,18 @@ func (cs *Store) loadFromKV(ctx context.Context) error {
 				// End of historical replay — load complete.
 				return nil
 			}
+			if op := entry.Operation(); op == nats.KeyValueDelete || op == nats.KeyValuePurge {
+				cs.NoteKVTombstone(entry.Key(), entry.Revision())
+				continue
+			}
 			key := cs.fromStoreKey(entry.Key())
 			valueBytes := entry.Value()
 			now := system.GetCurrentTimeNs()
 			// Empty value is a LEGITIMATE write, not a delete: CMDB writes
 			// index keys (e.g. <v>.out.index.<linkName>.type.<linkType>) with
 			// nil value because the information is encoded in the key shape
-			// alone. With IgnoreDeletes() the watcher already filters real
-			// tombstones, so any entry that arrives is a real key. Skipping
+			// alone. Real tombstones were told apart by their operation
+			// above, so any entry that gets here is a real key. Skipping
 			// empty values here previously dropped every link-type/tag index
 			// key on reload, which broke JPGQL enumeration after a restart
 			// (consistency check would return 0 members).
@@ -816,15 +811,7 @@ func (cs *Store) loadFromKV(ctx context.Context) error {
 			//
 			// The cheap test comes first and only ever rules the probe OUT:
 			// what is stored is still decided by the parse, so the types are
-			// exactly what they were before this shortcut existed. An empty
-			// value is ruled out by it too — and an empty value is a
-			// LEGITIMATE write, not a delete: CMDB writes index keys (e.g.
-			// <v>.out.index.<linkName>.type.<linkType>) with nil value because
-			// the information is encoded in the key shape alone. With
-			// IgnoreDeletes() the watcher already filters real tombstones, so
-			// any entry that arrives is a real key. Skipping empty values here
-			// previously dropped every link-type/tag index key on reload,
-			// which broke JPGQL enumeration after a restart.
+			// exactly what they were before this shortcut existed.
 			if looksLikeJSONObject(valueBytes) {
 				if jv, ok := easyjson.JSONFromBytes(valueBytes); ok && jv.IsObject() {
 					cs.SetValueJSON(key, &jv, false, now)
@@ -1120,19 +1107,6 @@ func (cs *Store) countSubtreeForTest(csv *StoreValue, st *StoreStatsForTest) {
 	})
 }
 
-// PurgeKVDeleteMarkers removes KV delete/purge markers older than olderThan
-// (negative removes them all regardless of age). Markers are never consumed
-// in this architecture — the cache is the source of truth and every KV load
-// runs with IgnoreDeletes — so they are pure broker-side growth: one retained
-// message per key ever deleted. Called periodically by the active instance's
-// maintenance loop; safe to call manually (ops/tests). No-op without a KV.
-func (cs *Store) PurgeKVDeleteMarkers(olderThan time.Duration) error {
-	if cs.kv == nil {
-		return nil
-	}
-	return cs.kv.PurgeDeletes(nats.DeleteMarkersOlderThan(olderThan))
-}
-
 // initialLoadBudget bounds how long the store keeps retrying its first load
 // from KV before giving up (env CACHE_INITIAL_LOAD_BUDGET_SEC, default 300s).
 // A JetStream that is briefly unavailable at startup — a broker still forming
@@ -1225,6 +1199,13 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 
 	// default - can not publish to WAL
 	cs.walWriteEnabled.Store(false)
+
+	// The purger is up before the load: the load is the first thing that
+	// reports markers to it.
+	if js != nil && kv != nil {
+		cs.tombstones = newTombstonePurger(js, kv, cacheConfig.id)
+		go cs.tombstones.run(cs.ctx)
+	}
 
 	initErrChan := make(chan error, 1)
 	initialLoader := func(cs *Store) {
@@ -1379,20 +1360,6 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 				maintenanceCounter++
 				if maintenanceCounter >= maintenanceInterval {
 					maintenanceCounter = 0
-
-					// Purge KV delete markers periodically, off the hot loop
-					// (see PurgeKVDeleteMarkers for why they are dead weight).
-					if kvPurgeDeletesInterval > 0 && time.Since(cs.lastKVPurgeDeletes) >= kvPurgeDeletesInterval {
-						cs.lastKVPurgeDeletes = time.Now()
-						if cs.kvPurgeRunning.CompareAndSwap(false, true) {
-							go func() {
-								defer cs.kvPurgeRunning.Store(false)
-								if err := cs.PurgeKVDeleteMarkers(kvPurgeMarkersOlderThan); err != nil {
-									le.Debugf(ctx, "kvLazyWriter: PurgeKVDeleteMarkers: %s", err)
-								}
-							}()
-						}
-					}
 
 					maintResult := cs.traverseCacheForMaintenance()
 					cs.valuesInCache = maintResult.valueCount

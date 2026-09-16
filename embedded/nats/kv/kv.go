@@ -245,11 +245,12 @@ func KVDelete(js nats.JetStreamContext, kv nats.KeyValue, key string) error {
 //     message disappear, which most consumers cannot observe.
 //
 //   - KVDeleteAsync APPENDS a tombstone message with header
-//     "KV-Operation: DEL". kv.Get returns nats.ErrKeyDeleted; watchers
+//     "KV-Operation: DEL". kv.Get reports the key as not found; watchers
 //     receive a delete event (unless IgnoreDeletes is set on the
-//     watcher). Storage of the original PUT message is reclaimed only
-//     by JetStream history pruning (MaxHistory) or by an explicit
-//     PurgeDeletes() pass.
+//     watcher). The original PUT message goes with the bucket's
+//     one-per-subject limit; the tombstone itself goes only when
+//     somebody removes it — KVPurgeTombstone, with the sequence the
+//     returned ack carries.
 //
 // For WAL apply paths the tombstone style is preferred:
 //   - replication-aware (passive caches see the delete),
@@ -273,6 +274,46 @@ func KVDeleteAsync(js nats.JetStreamContext, kv nats.KeyValue, key string) (nats
 	m := nats.NewMsg(subject)
 	m.Header.Set(kvop, kvdel)
 	return js.PublishMsgAsync(m)
+}
+
+// KVStreamName is the name of the JetStream stream that backs the bucket.
+func KVStreamName(kv nats.KeyValue) string {
+	return reflect.ValueOf(kv).Elem().FieldByName("stream").String()
+}
+
+// KVStoredSubject is the subject the bucket's stream keeps key under — the
+// subject a stream purge filters on. It is the bucket prefix plus the key and
+// never the JetStream API prefix a publish may travel through: the server
+// strips that on the way in, and the stream stores only what its own subject
+// space names.
+func KVStoredSubject(kv nats.KeyValue, key string) string {
+	return reflect.ValueOf(kv).Elem().FieldByName("pre").String() + key
+}
+
+// KVPurgeTombstone removes the delete marker KVDeleteAsync left under key at
+// stream sequence seq — and nothing written to the key after it.
+//
+// A KV delete is a message: the marker becomes the subject's last message and
+// the bucket's one-per-subject limit drops the value it replaces. The marker
+// itself is dropped by nothing. Every load reads the bucket with IgnoreDeletes,
+// so nobody ever consumes it, and it sits in the stream for as long as the key
+// stays deleted — one message per key ever deleted, without bound under churn.
+//
+// The purge is bounded by sequence: it takes the subject's messages below
+// seq+1, which is the marker and whatever it replaced, and leaves a later PUT
+// of the same key alone. That is what makes it safe to issue from the side,
+// after the write pipeline has moved on: a key deleted and created again keeps
+// its new value whether the purge runs before or after that write. Purging a
+// subject that has nothing below the bound — the key was written again and the
+// limit already dropped the marker — is a no-op.
+func KVPurgeTombstone(js nats.JetStreamContext, kv nats.KeyValue, key string, seq uint64) error {
+	if !KeyValid(key) {
+		return nats.ErrInvalidKey
+	}
+	return js.PurgeStream(KVStreamName(kv), &nats.StreamPurgeRequest{
+		Subject:  KVStoredSubject(kv, key),
+		Sequence: seq + 1,
+	})
 }
 
 func KVPut(js nats.JetStreamContext, kv nats.KeyValue, key string, value []byte) (revision uint64, err error) {

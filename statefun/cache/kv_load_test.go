@@ -53,6 +53,10 @@ func Test_Load_ProbeNeverRulesOutAnObject(t *testing.T) {
 
 // --- обвязка со встроенным NATS -------------------------------------------
 
+// lastTestNatsURL — адрес сервера, поднятого последним вызовом newKVForTest,
+// для теста, которому нужно второе соединение к нему же.
+var lastTestNatsURL string
+
 func newKVForTest(t *testing.T, bucket string) (nats.JetStreamContext, nats.KeyValue) {
 	t.Helper()
 	if system.GlobalPrometrics == nil {
@@ -64,6 +68,7 @@ func newKVForTest(t *testing.T, bucket string) (nats.JetStreamContext, nats.KeyV
 	opts.StoreDir = t.TempDir()
 	srv := natsservertest.RunServer(&opts)
 	t.Cleanup(srv.Shutdown)
+	lastTestNatsURL = srv.ClientURL()
 
 	nc, err := nats.Connect(srv.ClientURL())
 	require.NoError(t, err)
