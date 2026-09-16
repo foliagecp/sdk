@@ -73,48 +73,47 @@ func NewCMDBSyncClientFromRequestFunction(request sfp.SFRequestFunc) (CMDBSyncCl
 
 // ------------------------------------------------------------------------------------------------
 
+// commonTriggerDelete returns the body with the named statefuns taken out of
+// triggers.<kind>. The other names of the kind, the other kinds and the rest of
+// the body are returned as they were: the caller writes the result back with
+// replace=true, so whatever is not in it is gone from the type.
+//
+// It used to return body.GetByPath("body") — a field the body does not have —
+// which is an empty object, and the write-back then replaced the whole type
+// body with it: every trigger of every kind, every other field, and on a
+// types-link the object link type the schema declares. Since 2024.
 func (cmdb CMDBSyncClient) commonTriggerDelete(body easyjson.JSON, triggerType TriggerType, statefunName ...string) easyjson.JSON {
+	if !body.IsObject() {
+		body = easyjson.NewJSONObject()
+	}
 	triggerPath := fmt.Sprintf("triggers.%s", triggerType)
-	var bodyTriggers easyjson.JSON
-	if body.GetByPath(triggerPath).IsNonEmptyObject() {
-		newTriggers := []string{}
-		if arr, ok := body.GetByPath(triggerPath).AsArrayString(); ok {
-			for _, sf := range arr {
-				toRemove := false
-				for _, sf2Remove := range statefunName {
-					if sf == sf2Remove {
-						toRemove = true
-					}
-				}
-				if !toRemove {
-					newTriggers = append(newTriggers, sf)
+	kept := []string{}
+	if arr, ok := body.GetByPath(triggerPath).AsArrayString(); ok {
+		for _, sf := range arr {
+			remove := false
+			for _, sf2Remove := range statefunName {
+				if sf == sf2Remove {
+					remove = true
+					break
 				}
 			}
+			if !remove {
+				kept = append(kept, sf)
+			}
 		}
-		bodyTriggers = easyjson.NewJSONObjectWithKeyValue(triggerPath, easyjson.NewJSON(newTriggers))
-	} else {
-		bodyTriggers = easyjson.NewJSONObjectWithKeyValue(triggerPath, easyjson.NewJSONArray())
 	}
-
-	body.SetByPath(triggerPath, bodyTriggers)
-	newBody := body.GetByPath("body")
-	if newBody.IsNull() {
-		newBody = easyjson.NewJSONObject()
-	}
-
-	return newBody
+	body.SetByPath(triggerPath, easyjson.NewJSON(kept))
+	return body
 }
 
+// commonTriggersDrop returns the body with triggers.<kind> emptied and nothing
+// else touched.
 func (cmdb CMDBSyncClient) commonTriggersDrop(body easyjson.JSON, triggerType TriggerType) easyjson.JSON {
-	triggerPath := fmt.Sprintf("triggers.%s", triggerType)
-
-	body.SetByPath(triggerPath, easyjson.NewJSONArray())
-	newBody := body.GetByPath("body")
-	if newBody.IsNull() {
-		newBody = easyjson.NewJSONObject()
+	if !body.IsObject() {
+		body = easyjson.NewJSONObject()
 	}
-
-	return newBody
+	body.SetByPath(fmt.Sprintf("triggers.%s", triggerType), easyjson.NewJSONArray())
+	return body
 }
 
 func (cmdb CMDBSyncClient) TriggerObjectSet(typeName string, triggerType TriggerType, statefunName ...string) error {
