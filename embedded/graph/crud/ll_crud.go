@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/foliagecp/easyjson"
@@ -41,16 +42,29 @@ var (
 	// key's lock (logged) rather than hanging the worker forever — recovery and
 	// liveness over strict serialization in the pathological case. Tunable via
 	// GRAPH_KEY_LOCK_TIMEOUT_SEC.
-	graphKeyLockTimeout = time.Duration(system.GetEnvMustProceed[int]("GRAPH_KEY_LOCK_TIMEOUT_SEC", 300)) * time.Second
+	//
+	// Held as nanoseconds in an atomic: every worker goroutine reads it on
+	// every lock acquire, and a test may lower it or put it back while a
+	// runtime is still running.
+	graphKeyLockTimeout = func() *atomic.Int64 {
+		v := new(atomic.Int64)
+		v.Store(int64(time.Duration(system.GetEnvMustProceed[int]("GRAPH_KEY_LOCK_TIMEOUT_SEC", 300)) * time.Second))
+		return v
+	}()
 )
 
-// SetGraphKeyLockTimeoutForTest overrides graphKeyLockTimeout. graphKeyLockTimeout
-// is resolved once at package init, so a test cannot lower it via the environment;
-// this lets a deadlock-reproduction test bound how long a genuinely stuck operation
-// blocks before proceeding without the lock, keeping the test (and the subsequent
-// runtime shutdown) fast instead of waiting the production default. Call it before
-// issuing operations (e.g. from a test init); not for non-test use.
-func SetGraphKeyLockTimeoutForTest(d time.Duration) { graphKeyLockTimeout = d }
+func graphKeyLockTimeoutValue() time.Duration { return time.Duration(graphKeyLockTimeout.Load()) }
+
+// SetGraphKeyLockTimeoutForTest overrides graphKeyLockTimeout and returns the
+// value it replaced, so a test can put it back. graphKeyLockTimeout is resolved
+// once at package init, so a test cannot lower it via the environment; this lets
+// a deadlock-reproduction test bound how long a genuinely stuck operation blocks
+// before proceeding without the lock, keeping the test (and the subsequent
+// runtime shutdown) fast instead of waiting the production default. Safe to call
+// while runtimes are running; not for non-test use.
+func SetGraphKeyLockTimeoutForTest(d time.Duration) (previous time.Duration) {
+	return time.Duration(graphKeyLockTimeout.Swap(int64(d)))
+}
 
 // sameBody reports whether two bodies denote the same value.
 //
@@ -224,6 +238,7 @@ func operationKeysMutexLock(ctx *sfPlugins.StatefunContextProcessor, keys []stri
 	keys = system.UniqueStrings(keys)
 	sort.Strings(keys)
 
+	timeout := graphKeyLockTimeoutValue()
 	lockedWriteAny := false
 	for _, k := range keys {
 		if writeOperation {
@@ -232,19 +247,19 @@ func operationKeysMutexLock(ctx *sfPlugins.StatefunContextProcessor, keys []stri
 				// holder. On timeout we record nothing (so Unlock won't touch a
 				// lock we don't hold) and proceed — the holder is presumed
 				// deadlocked/frozen, so it is not actively mutating this key.
-				if graphIdKeyMutex.LockTimeout(k, graphKeyLockTimeout) {
+				if graphIdKeyMutex.LockTimeout(k, timeout) {
 					recordHeldLock(ctx, k, "w")
 					lockedWriteAny = true
 				} else {
-					lg.Logf(lg.WarnLevel, "operationKeysMutexLock: write-lock acquire for key=%s timed out after %s; proceeding without it", k, graphKeyLockTimeout)
+					lg.Logf(lg.WarnLevel, "operationKeysMutexLock: write-lock acquire for key=%s timed out after %s; proceeding without it", k, timeout)
 				}
 			}
 		} else {
 			if !parentHoldsAnyLock(ctx, k) {
-				if graphIdKeyMutex.RLockTimeout(k, graphKeyLockTimeout) {
+				if graphIdKeyMutex.RLockTimeout(k, timeout) {
 					recordHeldLock(ctx, k, "r")
 				} else {
-					lg.Logf(lg.WarnLevel, "operationKeysMutexLock: read-lock acquire for key=%s timed out after %s; proceeding without it", k, graphKeyLockTimeout)
+					lg.Logf(lg.WarnLevel, "operationKeysMutexLock: read-lock acquire for key=%s timed out after %s; proceeding without it", k, timeout)
 				}
 			}
 		}
@@ -283,23 +298,24 @@ func operationKeysMutexLockMixed(ctx *sfPlugins.StatefunContextProcessor, writeK
 	}
 	sort.Strings(all)
 
+	timeout := graphKeyLockTimeoutValue()
 	lockedWriteAny := false
 	for _, k := range all {
 		if write[k] {
 			if !parentHoldsWriteLock(ctx, k) {
-				if graphIdKeyMutex.LockTimeout(k, graphKeyLockTimeout) {
+				if graphIdKeyMutex.LockTimeout(k, timeout) {
 					recordHeldLock(ctx, k, "w")
 					lockedWriteAny = true
 				} else {
-					lg.Logf(lg.WarnLevel, "operationKeysMutexLockMixed: write-lock acquire for key=%s timed out after %s; proceeding without it", k, graphKeyLockTimeout)
+					lg.Logf(lg.WarnLevel, "operationKeysMutexLockMixed: write-lock acquire for key=%s timed out after %s; proceeding without it", k, timeout)
 				}
 			}
 		} else {
 			if !parentHoldsAnyLock(ctx, k) {
-				if graphIdKeyMutex.RLockTimeout(k, graphKeyLockTimeout) {
+				if graphIdKeyMutex.RLockTimeout(k, timeout) {
 					recordHeldLock(ctx, k, "r")
 				} else {
-					lg.Logf(lg.WarnLevel, "operationKeysMutexLockMixed: read-lock acquire for key=%s timed out after %s; proceeding without it", k, graphKeyLockTimeout)
+					lg.Logf(lg.WarnLevel, "operationKeysMutexLockMixed: read-lock acquire for key=%s timed out after %s; proceeding without it", k, timeout)
 				}
 			}
 		}

@@ -18,6 +18,10 @@ package crud_test
 // The recompute now happens before the guard is taken, the way ReadType itself
 // orders it. Pinned with a short lock timeout: with the stall the delete takes
 // the whole timeout, without it a few milliseconds.
+//
+// The timeout is process-wide and every worker reads it, so it is put back in
+// T().Cleanup — after TearDownTest has shut this runtime down — not in a defer,
+// which would run while the runtime's goroutines are still working.
 
 import (
 	"testing"
@@ -40,8 +44,8 @@ func TestTypesLinkDeleteStallTestSuite(t *testing.T) {
 
 func (s *TypesLinkDeleteStallTestSuite) Test_SecondTypesLinkDeleteDoesNotStall() {
 	const lockTimeout = 2 * time.Second
-	crud.SetGraphKeyLockTimeoutForTest(lockTimeout)
-	defer crud.SetGraphKeyLockTimeoutForTest(300 * time.Second)
+	previous := crud.SetGraphKeyLockTimeoutForTest(lockTimeout)
+	s.T().Cleanup(func() { crud.SetGraphKeyLockTimeoutForTest(previous) })
 
 	crud.RegisterAllFunctionTypes(s.Runtime())
 	s.Require().NoError(s.StartRuntime())
