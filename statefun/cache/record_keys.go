@@ -334,7 +334,7 @@ func (r *vertexRecord) eachKey(head, want string, fn func(key string) bool) {
 
 	if mayMatch("out.") {
 		stop := false
-		r.out.Load().each(func(b *bucket) bool {
+		r.eachBucket(r.out.Load(), func(b *bucket) bool {
 			if b.decoded {
 				for _, l := range b.outs {
 					if !eachOutKey(l, head, want, full, fn) {
@@ -367,7 +367,7 @@ func (r *vertexRecord) eachKey(head, want string, fn func(key string) bool) {
 	// them on the heap, and an enumeration touches all of them.
 	if mayMatch("ltype.") {
 		stop := false
-		r.pairs.Load().each(func(b *bucket) bool {
+		r.eachBucket(r.pairs.Load(), func(b *bucket) bool {
 			if b.decoded {
 				for _, p := range b.pairs {
 					if p.Tombstone {
@@ -401,7 +401,7 @@ func (r *vertexRecord) eachKey(head, want string, fn func(key string) bool) {
 	}
 
 	if mayMatch("in.") {
-		r.in.Load().each(func(b *bucket) bool {
+		r.eachBucket(r.in.Load(), func(b *bucket) bool {
 			if b.decoded {
 				for _, l := range b.ins {
 					if l.Tombstone {

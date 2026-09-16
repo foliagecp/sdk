@@ -253,6 +253,19 @@ type vertexRecord struct {
 	// record.
 	retired atomic.Bool
 
+	// attended says the record is on the index's attention list, waiting for
+	// the maintenance pass. A write sets it and puts the record on the list;
+	// the pass clears it before doing its work, so a write that lands while
+	// the pass is busy with the record puts it back for the next one.
+	attended atomic.Bool
+	// idx and id are the index the record lives in and its key there, set
+	// when the index creates it, so the record can put itself on the
+	// attention list from wherever it leaves something for the pass: a
+	// bucket a read decompressed, a parse a read kept. Nil for a record
+	// outside an index.
+	idx *recordIndex
+	id  string
+
 	// headMu serializes body writes; dirMu serializes structural changes to a
 	// directory (splitting a bucket, doubling the directory). Ordinary link
 	// writes take neither — they take the lock of their own slot.
@@ -462,12 +475,22 @@ func (r *vertexRecord) bodyBytes() (string, int64, bool) {
 				nh := makeHeadFlags([]byte(raw), int64(le64(h, 4)),
 					false, r.flags()&flagBodyJSON != 0, false)
 				r.head.Store(&nh)
+				r.askAttention() // for the pass to compress it again
 			}
 			r.headMu.Unlock()
 		}
 		return raw, int64(le64(h, 4)), true
 	}
 	return body, int64(le64(h, 4)), true
+}
+
+// askAttention puts the record on its index's attention list: something was
+// left for the maintenance pass — a decoded or decompressed bucket, a body to
+// compress, a parse to age, a vertex that may be dead.
+func (r *vertexRecord) askAttention() {
+	if r.idx != nil {
+		r.idx.attend(r.id, r)
+	}
 }
 
 // bodyTree returns the body as a tree, parsing it once and keeping the result
@@ -493,6 +516,7 @@ func (r *vertexRecord) bodyTree() (easyjson.JSON, bool) {
 	}
 	r.parsedBody.Store(&j)
 	r.parsedBodyUsed.Store(true)
+	r.askAttention() // the pass is what ages it
 	return j.Clone(), true
 }
 
@@ -548,12 +572,32 @@ func (d *bucketDir) slotFor(h uint32) *bucketSlot {
 
 // bucketFor returns a bucket ready to be read: readable() decompresses a
 // compressed one and publishes the raw form back, so a bucket under repeated
-// reads stops paying for its own compression.
-func (d *bucketDir) bucketFor(h uint32) *bucket {
+// reads stops paying for its own compression. It reports whether a raw form
+// was published, for the record to ask the maintenance pass to come by.
+func (d *bucketDir) bucketFor(h uint32) (b *bucket, published bool) {
 	if s := d.slotFor(h); s != nil {
 		return s.readable()
 	}
-	return nil
+	return nil, false
+}
+
+// bucketFor is the record's bucketFor: a bucket the read decompressed is a
+// bucket the maintenance pass has to compress again, so the record asks for
+// the pass.
+func (r *vertexRecord) bucketFor(d *bucketDir, h uint32) *bucket {
+	b, published := d.bucketFor(h)
+	if published {
+		r.askAttention()
+	}
+	return b
+}
+
+// eachBucket is the record's each, asking for the maintenance pass when a
+// bucket was decompressed along the way.
+func (r *vertexRecord) eachBucket(d *bucketDir, fn func(b *bucket) bool) {
+	if d.each(fn) {
+		r.askAttention()
+	}
 }
 
 // distinctSlots lists the slots this directory points at, once each, in
@@ -622,10 +666,11 @@ func (d *bucketDir) eachStored(fn func(b *bucket) bool) {
 }
 
 // each visits every distinct bucket once: after a split two slots share one
-// bucket, and visiting it twice would list its links twice.
-func (d *bucketDir) each(fn func(b *bucket) bool) {
+// bucket, and visiting it twice would list its links twice. It reports whether
+// any bucket was decompressed and its raw form published along the way.
+func (d *bucketDir) each(fn func(b *bucket) bool) (published bool) {
 	if d == nil {
-		return
+		return false
 	}
 	seen := make(map[*bucketSlot]struct{}, len(d.slots))
 	for i := range d.slots {
@@ -637,14 +682,16 @@ func (d *bucketDir) each(fn func(b *bucket) bool) {
 			continue
 		}
 		seen[s] = struct{}{}
-		b := s.readable()
+		b, pub := s.readable()
+		published = published || pub
 		if b == nil {
 			continue
 		}
 		if !fn(b) {
-			return
+			return published
 		}
 	}
+	return published
 }
 
 // ---------------------------------------------------------------------------
@@ -1027,7 +1074,7 @@ func encodeInBucket(links []*inLink) string {
 // without materializing the link: type and target only, no body, no tags, no
 // allocation on the path.
 func (r *vertexRecord) lookupOutTarget(name string) (linkType, target string, ok bool) {
-	b := r.out.Load().bucketFor(hashToken(name))
+	b := r.bucketFor(r.out.Load(), hashToken(name))
 	if b == nil {
 		return "", "", false
 	}
@@ -1055,7 +1102,7 @@ func (r *vertexRecord) lookupOutTarget(name string) (linkType, target string, ok
 // it: a traversal reads this key far more often than the body or the tags, and
 // decoding those would allocate a slice per lookup.
 func (r *vertexRecord) lookupOutTo(name string) (subValue, bool) {
-	b := r.out.Load().bucketFor(hashToken(name))
+	b := r.bucketFor(r.out.Load(), hashToken(name))
 	if b == nil {
 		return subValue{}, false
 	}
@@ -1107,7 +1154,7 @@ func (r *vertexRecord) lookupOutLink(name string) (outLink, bool) {
 // lookupOutLinkGuard returns the entry even when it is a tombstone: this is
 // what a writer consults before deciding whether its timestamp may apply.
 func (r *vertexRecord) lookupOutLinkGuard(name string) (outLink, bool) {
-	b := r.out.Load().bucketFor(hashToken(name))
+	b := r.bucketFor(r.out.Load(), hashToken(name))
 	if b == nil {
 		return outLink{}, false
 	}
@@ -1134,7 +1181,7 @@ func (r *vertexRecord) lookupInLink(from, name string) (inLink, bool) {
 }
 
 func (r *vertexRecord) lookupInLinkGuard(from, name string) (inLink, bool) {
-	b := r.in.Load().bucketFor(hashToken(from))
+	b := r.bucketFor(r.in.Load(), hashToken(from))
 	if b == nil {
 		return inLink{}, false
 	}
@@ -1176,7 +1223,7 @@ func (r *vertexRecord) dead() bool {
 // rangeOutLinks visits every live outgoing link. Order is by bucket, not by
 // name — the tree's own enumeration makes no ordering promise either.
 func (r *vertexRecord) rangeOutLinks(fn func(outLink) bool) {
-	r.out.Load().each(func(b *bucket) bool {
+	r.eachBucket(r.out.Load(), func(b *bucket) bool {
 		for _, l := range b.outEntries() {
 			if !l.alive() {
 				continue
@@ -1190,7 +1237,7 @@ func (r *vertexRecord) rangeOutLinks(fn func(outLink) bool) {
 }
 
 func (r *vertexRecord) rangeInLinks(fn func(inLink) bool) {
-	r.in.Load().each(func(b *bucket) bool {
+	r.eachBucket(r.in.Load(), func(b *bucket) bool {
 		for _, l := range b.inEntries() {
 			if l.Tombstone {
 				continue

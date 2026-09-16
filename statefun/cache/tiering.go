@@ -257,10 +257,51 @@ func tieredVertex(key string) (vertexKey, bool) {
 type recordIndex struct {
 	mu sync.RWMutex
 	m  map[string]*vertexRecord
+
+	// attention is the records that need the maintenance pass: written since
+	// the last one, or holding a body parse that ages by the pass. The pass
+	// takes the list whole and looks at nothing else, so what the pass costs
+	// is what changed, and a graph nobody is writing to costs it nothing.
+	amu       sync.Mutex
+	attention []attentionEntry
+}
+
+// attentionEntry is a record on the attention list together with its id,
+// which the pass needs to sweep the record should it turn out dead.
+type attentionEntry struct {
+	id string
+	r  *vertexRecord
 }
 
 func newRecordIndex() *recordIndex {
 	return &recordIndex{m: map[string]*vertexRecord{}}
+}
+
+// attend puts the record on the attention list, once: a record already there
+// stays there once.
+func (ri *recordIndex) attend(id string, r *vertexRecord) {
+	if !r.attended.CompareAndSwap(false, true) {
+		return
+	}
+	ri.amu.Lock()
+	ri.attention = append(ri.attention, attentionEntry{id: id, r: r})
+	ri.amu.Unlock()
+}
+
+// takeAttention hands over the attention list and starts a new one.
+func (ri *recordIndex) takeAttention() []attentionEntry {
+	ri.amu.Lock()
+	batch := ri.attention
+	ri.attention = nil
+	ri.amu.Unlock()
+	return batch
+}
+
+// attentionLen is how many records are waiting for the pass.
+func (ri *recordIndex) attentionLen() int {
+	ri.amu.Lock()
+	defer ri.amu.Unlock()
+	return len(ri.attention)
 }
 
 func (ri *recordIndex) get(id string) (*vertexRecord, bool) {
@@ -281,6 +322,7 @@ func (ri *recordIndex) getOrCreate(id string) *vertexRecord {
 		return r
 	}
 	r := newVertexRecord(vertexData{BodyTime: -1}, defaultBucketLinks)
+	r.idx, r.id = ri, id
 	ri.m[id] = r
 	return r
 }
@@ -321,6 +363,10 @@ func (ri *recordIndex) reset() {
 	ri.mu.Lock()
 	ri.m = map[string]*vertexRecord{}
 	ri.mu.Unlock()
+	// The records the list pointed at are gone with the map.
+	ri.amu.Lock()
+	ri.attention = nil
+	ri.amu.Unlock()
 }
 
 func (ri *recordIndex) len() int {
@@ -439,6 +485,9 @@ func (cs *Store) tieredSet(key string, value []byte, asJSON bool, t int64) (hand
 			return false, false // a shape no record owns; the tree keeps it
 		}
 		if !r.retired.Load() {
+			// The write left something for the maintenance pass: a decoded
+			// bucket, a body to compress, or a record that may now be dead.
+			r.askAttention()
 			return true, ok
 		}
 		// The record was swept between being fetched and being written to, so
@@ -528,6 +577,7 @@ func (cs *Store) tieredDelete(key string, t int64) (handled, applied bool) {
 	default:
 		return false, false
 	}
+	r.askAttention()
 	return true, applied
 }
 
@@ -557,6 +607,61 @@ func (cs *Store) compactRecords() int {
 		return true
 	})
 	return n
+}
+
+// recordPass is what one maintenance pass over the attended records did.
+type recordPass struct {
+	visited    int // records taken off the attention list
+	compacted  int // buckets re-encoded
+	compressed int // buckets and bodies compressed
+	aged       int // body parses dropped
+	removed    int // dead records swept out of the index
+}
+
+// maintainRecords is the maintenance pass over the records: it visits the
+// attention list — what was written since the last pass, and what holds a
+// body parse — and nothing else.
+//
+// Compaction goes first for the whole batch, then dictionary training, then
+// compression: the dictionary is trained on raw buckets, so it has to see
+// them after compaction gave them their bytes and before compression turns
+// them into frames — the order the whole-store walks kept, on the batch. A
+// record holding a parse after aging is put back on the list: a parse ages
+// one pass at a time, and only a visit can drop it.
+func (cs *Store) maintainRecords() recordPass {
+	var p recordPass
+	if !tieringEnabled() || cs.records == nil {
+		return p
+	}
+	batch := cs.records.takeAttention()
+	p.visited = len(batch)
+	if len(batch) == 0 {
+		return p
+	}
+	records := make([]*vertexRecord, 0, len(batch))
+	for _, e := range batch {
+		// Cleared first: a write that lands from here on puts the record
+		// back for the next pass instead of being missed by this one.
+		e.r.attended.Store(false)
+		p.compacted += e.r.compactBuckets()
+		records = append(records, e.r)
+	}
+	cs.maybeTrainDictionaryFrom(records, dictSampleLimit)
+	var dead []string
+	for _, e := range batch {
+		p.compressed += e.r.compressBuckets()
+		if e.r.ageParsedBody() {
+			p.aged++
+		}
+		if e.r.parsedBody.Load() != nil {
+			e.r.askAttention()
+		}
+		if e.r.dead() {
+			dead = append(dead, e.id)
+		}
+	}
+	p.removed = cs.records.removeDead(dead)
+	return p
 }
 
 // recordStats is what one walk over the records sees: the shape of the graph as
@@ -639,6 +744,25 @@ func (cs *Store) sweepRecords() int {
 // deliberately instead of sleeping until the background pass happens.
 func (cs *Store) RunMaintenanceForTest() {
 	cs.traverseCacheForMaintenance()
+}
+
+// LastRecordPassForTest reports what the most recent maintenance pass over
+// the records did: how many it visited, and what it compacted, compressed,
+// aged and removed. Zero visited means the pass had nothing to look at.
+func (cs *Store) LastRecordPassForTest() (visited, compacted, compressed, aged, removed int) {
+	p := cs.lastRecordPass.Load()
+	if p == nil {
+		return 0, 0, 0, 0, 0
+	}
+	return p.visited, p.compacted, p.compressed, p.aged, p.removed
+}
+
+// RecordsAwaitingPassForTest is how many records are on the attention list.
+func (cs *Store) RecordsAwaitingPassForTest() int {
+	if cs.records == nil {
+		return 0
+	}
+	return cs.records.attentionLen()
 }
 
 // RecordStatsForTest reports what the records hold — the same numbers the

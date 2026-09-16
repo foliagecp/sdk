@@ -232,24 +232,28 @@ func (b *bucket) rawForm() *bucket {
 }
 
 // readable returns a bucket a lookup can read, decompressing if needed and
-// publishing the raw form back so the next read does not repeat the work.
+// publishing the raw form back so the next read does not repeat the work. It
+// reports whether it published: a raw form left in the slot is the
+// maintenance pass's to compress again, and the record has to ask for the
+// pass.
 //
 // Publishing takes the slot lock only if it is free: a read must never wait on
 // a writer, and missing the chance costs one more decompression, not
 // correctness.
-func (s *bucketSlot) readable() *bucket {
-	b := s.ptr.Load()
+func (s *bucketSlot) readable() (b *bucket, published bool) {
+	b = s.ptr.Load()
 	if b == nil || !b.compressed {
-		return b
+		return b, false
 	}
 	raw := b.rawForm()
 	if raw != b && s.mu.TryLock() {
 		if s.ptr.Load() == b { // nobody changed it while we worked
 			s.ptr.Store(raw)
+			published = true
 		}
 		s.mu.Unlock()
 	}
-	return raw
+	return raw, published
 }
 
 // ---------------------------------------------------------------------------
@@ -519,11 +523,29 @@ func (cs *Store) maybeTrainDictionary(sampleLimit int) bool {
 	if !dictionaryEnabled() || cs.records == nil {
 		return false
 	}
-	samples := make([][]byte, 0, sampleLimit)
+	var all []*vertexRecord
 	cs.records.each(func(_ string, r *vertexRecord) bool {
-		r.sampleBuckets(sampleLimit, &samples)
-		return len(samples) < sampleLimit
+		all = append(all, r)
+		return true
 	})
+	return cs.maybeTrainDictionaryFrom(all, sampleLimit)
+}
+
+// maybeTrainDictionaryFrom is maybeTrainDictionary sampling the given records
+// only — the maintenance pass hands it the batch it has just compacted, which
+// is where the raw buckets are: everything else is already compressed, and a
+// walk over it all to find that out is what the pass no longer does.
+func (cs *Store) maybeTrainDictionaryFrom(records []*vertexRecord, sampleLimit int) bool {
+	if !dictionaryEnabled() || cs.records == nil {
+		return false
+	}
+	samples := make([][]byte, 0, sampleLimit)
+	for _, r := range records {
+		r.sampleBuckets(sampleLimit, &samples)
+		if len(samples) >= sampleLimit {
+			break
+		}
+	}
 	if len(samples) < 8 {
 		return false
 	}

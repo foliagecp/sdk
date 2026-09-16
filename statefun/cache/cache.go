@@ -37,6 +37,12 @@ const (
 	shutdownStatusReady
 )
 
+// recordStatsEveryTicks is how many maintenance ticks (one a second) pass
+// between two walks over every record for the cache_record_* shape gauges.
+// The walk is what a pass used to cost on a graph nobody is writing to; ten
+// seconds is still a dashboard's cadence.
+const recordStatsEveryTicks = 10
+
 var (
 	keyValidationRegexp *regexp.Regexp = regexp.MustCompile(`^[a-zA-Z0-9/=_$#@$%+-][a-zA-Z0-9/=._$#@%+-]+[a-zA-Z0-9/=_$#@%+-]$|^[a-zA-Z0-9/=_$#@%+-]*$`)
 )
@@ -579,6 +585,16 @@ type Store struct {
 	totalWALPublishes     int64
 	totalWALPublishErrors int64
 
+	// recordStatsTick counts maintenance ticks since the record gauges last
+	// took their walk over every record; recordStatsCached is what that walk
+	// saw. Both belong to the kvLazyWriter goroutine alone.
+	recordStatsTick   int
+	recordStatsCached *recordStats
+
+	// lastRecordPass is what the most recent maintenance pass over the
+	// records did, for the gauges and the tests.
+	lastRecordPass atomic.Pointer[recordPass]
+
 	// tombstones removes the delete markers the committer leaves in the KV
 	// bucket, as the committer reports them (kv_tombstones.go). Nil without
 	// a KV.
@@ -881,7 +897,23 @@ func (cs *Store) publishRecordGauges() {
 		gv.With(prometheus.Labels{"id": cs.cacheConfig.id}).Set(value)
 	}
 
+	if p := cs.lastRecordPass.Load(); p != nil {
+		set("cache_record_pass_visited", "records the last maintenance pass looked at: what was written since the pass before, plus what holds a body parse",
+			float64(p.visited))
+	}
+	set("cache_record_awaiting_pass", "records on the attention list, waiting for the next maintenance pass",
+		float64(cs.records.attentionLen()))
+
+	// The shape of the graph takes a walk over every record, and the walk is
+	// most of what a pass used to cost — so it is taken once every
+	// recordStatsEveryTicks passes and the gauges hold in between.
+	cs.recordStatsTick++
+	if cs.recordStatsTick < recordStatsEveryTicks && cs.recordStatsCached != nil {
+		return
+	}
+	cs.recordStatsTick = 0
 	st := cs.recordStats()
+	cs.recordStatsCached = &st
 	set("cache_record_vertices", "vertices kept as records", float64(st.vertices))
 	set("cache_record_bytes", "bytes held by those records", float64(st.bytes))
 	set("cache_record_buckets", "buckets across all record directories", float64(st.buckets))
@@ -956,21 +988,18 @@ func (cs *Store) traverseCacheForMaintenance() *maintenanceResult {
 	result := &maintenanceResult{}
 	cs.sweepSubtree(cs.rootValue, result)
 
-	// Records are maintained here too, and in this order. A write leaves its
-	// bucket decoded — deliberately, because encoding per key made a link
-	// write more expensive than the tree — so compaction is what gives that
-	// memory back. The dictionary is trained on raw buckets, so it has to see
-	// them before compression turns them into frames.
-	cs.compactRecords()
-	cs.maybeTrainDictionary(dictSampleLimit)
-	cs.compressRecords()
-	// Bodies kept parsed for readers are aged here: the ones nobody asked for
-	// since the last pass go, the ones somebody did stay. What is held as trees
-	// is therefore the working set rather than the graph.
-	cs.ageParsedBodies()
-	// And the records of vertices that no longer exist go too, or a graph that
-	// churns grows one record per deleted vertex without end.
-	result.removedCount += cs.sweepRecords()
+	// Records are maintained here too — the ones that asked for it. A write
+	// leaves its bucket decoded (deliberately: encoding per key made a link
+	// write more expensive than the tree) and puts the record on the
+	// attention list; the pass compacts and compresses what it finds there,
+	// ages the body parses kept for readers so what is held as trees is the
+	// working set rather than the graph, and sweeps the records of vertices
+	// that no longer exist, or a graph that churns would grow one record per
+	// deleted vertex without end. It looks at nothing that did not change: on
+	// a graph nobody is writing to, the pass costs nothing.
+	pass := cs.maintainRecords()
+	cs.lastRecordPass.Store(&pass)
+	result.removedCount += pass.removed
 	return result
 }
 

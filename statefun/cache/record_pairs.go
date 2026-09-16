@@ -145,7 +145,7 @@ func (r *vertexRecord) lookupPair(linkType, target string) (pairEntry, bool) {
 }
 
 func (r *vertexRecord) lookupPairGuard(linkType, target string) (pairEntry, bool) {
-	b := r.pairs.Load().bucketFor(hashToken(makePairKey(linkType, target)))
+	b := r.bucketFor(r.pairs.Load(), hashToken(makePairKey(linkType, target)))
 	if b == nil {
 		return pairEntry{}, false
 	}
@@ -164,7 +164,7 @@ func (r *vertexRecord) lookupPairGuard(linkType, target string) (pairEntry, bool
 }
 
 func (r *vertexRecord) rangePairs(fn func(pairEntry) bool) {
-	r.pairs.Load().each(func(b *bucket) bool {
+	r.eachBucket(r.pairs.Load(), func(b *bucket) bool {
 		for _, p := range b.pairEntries() {
 			if p.Tombstone {
 				continue
