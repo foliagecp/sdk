@@ -1039,6 +1039,13 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	}
 	toType = ctx.Domain.CreateObjectIDWithHubDomain(toType, true)
 
+	// Before the guard on selfID is taken, as ReadType orders it: findTypeObjects
+	// below reads this type, and a read of a type whose inheritance cache is
+	// stale recomputes it under a WRITE lock on the type. Taken under our own
+	// read-guard that wait ran out the whole key-lock timeout — five minutes —
+	// on the second types-link delete after any schema change.
+	RecalculateInheritanceCacheForTypeAtSelfIDIfNeeded(ctx)
+
 	operationKeysMutexLockMixed(ctx, []string{edgeLockKey(selfID, toType)}, []string{selfID, toType}, opTime)
 
 	originLinkType, err := getObjectsLinkTypeFromTypesLink(ctx, selfID, toType)
