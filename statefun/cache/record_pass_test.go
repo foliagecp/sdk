@@ -162,6 +162,90 @@ func Test_Pass_RecompressesWhatAReadDecompressed(t *testing.T) {
 	require.Zero(t, pass(cs).visited)
 }
 
+// Test_Pass_EveryReadThatDecompressesAsks — a record cannot list itself: a
+// read that leaves a raw form behind raises the record's flag, and the store
+// lists the record on the way out of the read. Every read the store answers
+// from a record goes through that, whichever kind of key it asked about.
+func Test_Pass_EveryReadThatDecompressesAsks(t *testing.T) {
+	bigBody := func(i int) easyjson.JSON {
+		body := easyjson.NewJSONObject()
+		for f := 0; f < 40; f++ {
+			body.SetByPath(fmt.Sprintf("field_%02d", f), easyjson.NewJSON(fmt.Sprintf("value-%02d-%02d-padding-padding-padding", i, f)))
+		}
+		return body
+	}
+	reads := []struct {
+		name string
+		read func(cs *Store, v string)
+	}{
+		{"GetValue of a link", func(cs *Store, v string) { _, _ = cs.GetValue(fmt.Sprintf(kOutTo, v, "link_07")) }},
+		{"Exists of a link", func(cs *Store, v string) { _ = cs.Exists(fmt.Sprintf(kOutTo, v, "link_07")) }},
+		{"GetValueUpdateTime of a link", func(cs *Store, v string) { _ = cs.GetValueUpdateTime(fmt.Sprintf(kOutTo, v, "link_07")) }},
+		{"GetKeysByPattern over the links", func(cs *Store, v string) { _ = cs.GetKeysByPattern(v + ".out.to.>") }},
+		{"GetValue of the body", func(cs *Store, v string) { _, _ = cs.GetValue(v) }},
+		{"GetValueJSON of the body", func(cs *Store, v string) { _, _ = cs.GetValueJSON(v) }},
+		{"ExistsJson of the body", func(cs *Store, v string) { _ = cs.ExistsJson(v) }},
+		{"StoredValueEquals of the body", func(cs *Store, v string) { _, _ = cs.StoredValueEquals(v, []byte("{}")) }},
+	}
+	for i, rd := range reads {
+		t.Run(rd.name, func(t *testing.T) {
+			ResetCompressionForTest()
+			restore := SetCacheModeForTest("zstd")
+			defer restore()
+			cs := NewStoreForTest(fmt.Sprintf("pass_reads_%02d", i))
+			v := "dom/read-me"
+			body := bigBody(i)
+			cs.SetValueJSON(v, &body, false, 1_000_000)
+			for k := 0; k < 40; k++ {
+				cs.SetValue(fmt.Sprintf(kOutTo, v, fmt.Sprintf("link_%02d", k)), []byte(fmt.Sprintf("__object.dom/tgt-%02d", k)), false, 1_000_000)
+			}
+			require.Equal(t, 1, pass(cs).visited)
+			require.Zero(t, pass(cs).visited, "sanity: quiet once compressed")
+			_, _, _, compressed, _, _ := cs.RecordStatsForTest()
+			require.Greater(t, compressed, 0, "sanity: there is something to decompress")
+			// A raw form is bigger than its frame, body or bucket: the bytes
+			// the record holds say whether one was left behind.
+			cold := cs.RecordsBytesForTest()
+
+			rd.read(cs, v)
+			require.Greater(t, cs.RecordsBytesForTest(), cold, "sanity: the read left a raw form behind")
+			require.Equal(t, 1, cs.RecordsAwaitingPassForTest(), "the store must have listed the record after the read")
+
+			require.Equal(t, 1, pass(cs).visited)
+			require.Equal(t, cold, cs.RecordsBytesForTest(), "the pass must have compressed again what the read decompressed")
+		})
+	}
+}
+
+// Test_Pass_AVertexWithoutABodyGoesQuiet — the pass asks every record it
+// visits whether it is dead, and for a vertex without a body that means
+// looking into its link buckets. Looking must not decompress them into the
+// slot: that would leave the record asking for the pass that just compressed
+// it, and the pass would visit it — compress, look, decompress — forever.
+func Test_Pass_AVertexWithoutABodyGoesQuiet(t *testing.T) {
+	ResetCompressionForTest()
+	restore := SetCacheModeForTest("zstd")
+	defer restore()
+	cs := NewStoreForTest("pass_nobody")
+	v := "dom/no-body"
+	for k := 0; k < 40; k++ {
+		cs.SetValue(fmt.Sprintf(kOutTo, v, fmt.Sprintf("link_%02d", k)), []byte(fmt.Sprintf("__object.dom/tgt-%02d", k)), false, 1_000_000)
+	}
+	require.False(t, cs.Exists(v), "sanity: no body")
+	p := pass(cs)
+	require.Equal(t, 1, p.visited)
+	require.Greater(t, p.compressed, 0, "sanity: the links compressed")
+	_, _, _, compressed, _, _ := cs.RecordStatsForTest()
+	require.Greater(t, compressed, 0)
+
+	for i := 0; i < 3; i++ {
+		require.Zero(t, pass(cs).visited, "pass %d: a vertex nobody touches must not keep coming back", i+2)
+		_, _, _, still, _, _ := cs.RecordStatsForTest()
+		require.Equal(t, compressed, still, "pass %d: and its buckets must stay compressed", i+2)
+	}
+	require.Equal(t, 1, cs.RecordCountForTest(), "a vertex with links is not dead")
+}
+
 // Test_Pass_ListIsDroppedWithTheIndex — a rehydration empties the index, and
 // the attention list with it: it pointed at records that no longer exist.
 func Test_Pass_ListIsDroppedWithTheIndex(t *testing.T) {

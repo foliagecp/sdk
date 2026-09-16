@@ -1566,6 +1566,7 @@ func (cs *Store) Exists(key string) bool {
 func (cs *Store) ExistsJson(key string) bool {
 	if vk, ok := tieredVertex(key); ok {
 		if r, found := cs.records.get(vk.id); found {
+			defer cs.records.afterRead(vk.id, r)
 			// Existence is reported honestly whatever the value's type — the
 			// tree does the same and only logs a nudge towards the other
 			// method, so a record must not be stricter.
@@ -1597,6 +1598,7 @@ func (cs *Store) ExistsJson(key string) bool {
 func (cs *Store) GetValueJSON(key string) (*easyjson.JSON, error) {
 	if vk, ok := tieredVertex(key); ok {
 		if r, found := cs.records.get(vk.id); found {
+			defer cs.records.afterRead(vk.id, r)
 			// The body is parsed straight from the record's own bytes: going
 			// through the []byte-returning path would copy the whole body
 			// first, and a vertex body is the largest thing a record holds.

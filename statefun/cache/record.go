@@ -253,18 +253,20 @@ type vertexRecord struct {
 	// record.
 	retired atomic.Bool
 
-	// attended says the record is on the index's attention list, waiting for
-	// the maintenance pass. A write sets it and puts the record on the list;
-	// the pass clears it before doing its work, so a write that lands while
-	// the pass is busy with the record puts it back for the next one.
-	attended atomic.Bool
-	// idx and id are the index the record lives in and its key there, set
-	// when the index creates it, so the record can put itself on the
-	// attention list from wherever it leaves something for the pass: a
-	// bucket a read decompressed, a parse a read kept. Nil for a record
-	// outside an index.
-	idx *recordIndex
-	id  string
+	// attention is where the record stands with the maintenance pass:
+	// nothing to ask for, asking, or on the index's attention list. Writes
+	// put the record on the list themselves — the store has the id there —
+	// but a read that leaves something for the pass (a bucket it
+	// decompressed, a parse it kept) happens deep in the record, where there
+	// is no id: it raises the flag, and the store puts the record on the list
+	// on the way out. The pass clears the word before doing its work, so
+	// anything that lands while it is busy with the record puts the record
+	// back for the next one.
+	//
+	// One word, not a flag plus the index and the id: the record is the
+	// unit the graph's memory is made of, and this fits in the padding the
+	// struct already had.
+	attention atomic.Uint32
 
 	// headMu serializes body writes; dirMu serializes structural changes to a
 	// directory (splitting a bucket, doubling the directory). Ordinary link
@@ -274,6 +276,13 @@ type vertexRecord struct {
 }
 
 const recordHeadLen = 12
+
+// What a record's attention word says.
+const (
+	attentionNone   uint32 = iota // nothing left for the pass
+	attentionAsked                // something left, and the store has yet to list the record
+	attentionListed               // on the attention list, the pass will come
+)
 
 // bucketDir is an extendible-hashing directory: 2^depth slots, several of
 // which may point at the same bucket after a split.
@@ -484,13 +493,13 @@ func (r *vertexRecord) bodyBytes() (string, int64, bool) {
 	return body, int64(le64(h, 4)), true
 }
 
-// askAttention puts the record on its index's attention list: something was
-// left for the maintenance pass — a decoded or decompressed bucket, a body to
-// compress, a parse to age, a vertex that may be dead.
+// askAttention says something was left for the maintenance pass — a
+// decompressed bucket, a body to compress again, a parse to age. The record
+// cannot list itself, having no id; the store lists it after the read that
+// got here (recordIndex.afterRead). A record already asking or already listed
+// stays as it is.
 func (r *vertexRecord) askAttention() {
-	if r.idx != nil {
-		r.idx.attend(r.id, r)
-	}
+	r.attention.CompareAndSwap(attentionNone, attentionAsked)
 }
 
 // bodyTree returns the body as a tree, parsing it once and keeping the result
@@ -663,6 +672,14 @@ func (d *bucketDir) eachStored(fn func(b *bucket) bool) {
 			return
 		}
 	}
+}
+
+// eachQuiet visits every distinct bucket in readable form and publishes
+// nothing back: a compressed bucket is decompressed into a temporary that is
+// dropped after the visit, and the slot keeps its frame. For the maintenance
+// pass, which is only looking.
+func (d *bucketDir) eachQuiet(fn func(b *bucket) bool) {
+	d.eachStored(func(b *bucket) bool { return fn(b.rawForm()) })
 }
 
 // each visits every distinct bucket once: after a split two slots share one
@@ -1203,20 +1220,49 @@ func (r *vertexRecord) lookupInLinkGuard(from, name string) (inLink, bool) {
 // either direction, no pair — only tombstones and the shape they left behind.
 // It stops at the first live thing it finds, so a populated vertex costs one
 // bucket lookup rather than a walk.
+//
+// It looks without leaving a trace: a compressed bucket is read from a
+// temporary and stays compressed in its slot. The pass asks this of every
+// record it visits, right after compressing it — publishing the raw form back
+// would undo that and put the record on the list again, every pass, forever.
 func (r *vertexRecord) dead() bool {
 	if r.hasBody() {
 		return false
 	}
 	live := false
-	r.rangeOutLinks(func(outLink) bool { live = true; return false })
+	r.out.Load().eachQuiet(func(b *bucket) bool {
+		for _, l := range b.outEntries() {
+			if l.alive() {
+				live = true
+				return false
+			}
+		}
+		return true
+	})
 	if live {
 		return false
 	}
-	r.rangeInLinks(func(inLink) bool { live = true; return false })
+	r.in.Load().eachQuiet(func(b *bucket) bool {
+		for _, l := range b.inEntries() {
+			if !l.Tombstone {
+				live = true
+				return false
+			}
+		}
+		return true
+	})
 	if live {
 		return false
 	}
-	r.rangePairs(func(pairEntry) bool { live = true; return false })
+	r.pairs.Load().eachQuiet(func(b *bucket) bool {
+		for _, p := range b.pairEntries() {
+			if !p.Tombstone {
+				live = true
+				return false
+			}
+		}
+		return true
+	})
 	return !live
 }
 

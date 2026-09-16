@@ -163,20 +163,6 @@ func (r *vertexRecord) lookupPairGuard(linkType, target string) (pairEntry, bool
 	return decodePairEntry(e), true
 }
 
-func (r *vertexRecord) rangePairs(fn func(pairEntry) bool) {
-	r.eachBucket(r.pairs.Load(), func(b *bucket) bool {
-		for _, p := range b.pairEntries() {
-			if p.Tombstone {
-				continue
-			}
-			if !fn(*p) {
-				return false
-			}
-		}
-		return true
-	})
-}
-
 // putPair writes the mapping, honouring the last-writer-wins guard.
 func (r *vertexRecord) putPair(p pairEntry) bool {
 	key := makePairKey(p.Type, p.Target)

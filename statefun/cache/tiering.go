@@ -280,12 +280,29 @@ func newRecordIndex() *recordIndex {
 // attend puts the record on the attention list, once: a record already there
 // stays there once.
 func (ri *recordIndex) attend(id string, r *vertexRecord) {
-	if !r.attended.CompareAndSwap(false, true) {
-		return
+	for {
+		state := r.attention.Load()
+		if state == attentionListed {
+			return
+		}
+		if r.attention.CompareAndSwap(state, attentionListed) {
+			break
+		}
 	}
 	ri.amu.Lock()
 	ri.attention = append(ri.attention, attentionEntry{id: id, r: r})
 	ri.amu.Unlock()
+}
+
+// afterRead lists the record if the read that just finished left something
+// for the pass — the record raised the flag on the way, having no id to list
+// itself with; this is where the id is. A read that left nothing costs one
+// atomic load here and nothing else, which is what keeps a traversal from
+// turning the attention list into the whole graph.
+func (ri *recordIndex) afterRead(id string, r *vertexRecord) {
+	if r.attention.Load() == attentionAsked {
+		ri.attend(id, r)
+	}
 }
 
 // takeAttention hands over the attention list and starts a new one.
@@ -322,7 +339,6 @@ func (ri *recordIndex) getOrCreate(id string) *vertexRecord {
 		return r
 	}
 	r := newVertexRecord(vertexData{BodyTime: -1}, defaultBucketLinks)
-	r.idx, r.id = ri, id
 	ri.m[id] = r
 	return r
 }
@@ -412,6 +428,7 @@ func (cs *Store) tieredGet(key string) (value []byte, exists bool, handled bool)
 		return nil, false, false
 	}
 	v, e := r.getParsed(vk.kind, vk.a, vk.b)
+	cs.records.afterRead(vk.id, r)
 	return v, e, true
 }
 
@@ -426,7 +443,9 @@ func (cs *Store) tieredExists(key string) (exists bool, handled bool) {
 	if !found {
 		return false, false
 	}
-	return r.existsParsed(vk.kind, vk.a, vk.b), true
+	exists = r.existsParsed(vk.kind, vk.a, vk.b)
+	cs.records.afterRead(vk.id, r)
+	return exists, true
 }
 
 func (cs *Store) tieredUpdateTime(key string) (int64, bool) {
@@ -438,7 +457,9 @@ func (cs *Store) tieredUpdateTime(key string) (int64, bool) {
 	if !found {
 		return -1, false
 	}
-	return r.updateTimeParsed(vk.kind, vk.a, vk.b), true
+	t := r.updateTimeParsed(vk.kind, vk.a, vk.b)
+	cs.records.afterRead(vk.id, r)
+	return t, true
 }
 
 // tieredKeys answers a pattern whose vertex is a record.
@@ -458,7 +479,9 @@ func (cs *Store) tieredKeys(pattern string) ([]string, bool) {
 	if !found {
 		return nil, false
 	}
-	return r.keysByPattern(id, pattern), true
+	keys := r.keysByPattern(id, pattern)
+	cs.records.afterRead(id, r)
+	return keys, true
 }
 
 // ---------------------------------------------------------------------------
@@ -487,7 +510,7 @@ func (cs *Store) tieredSet(key string, value []byte, asJSON bool, t int64) (hand
 		if !r.retired.Load() {
 			// The write left something for the maintenance pass: a decoded
 			// bucket, a body to compress, or a record that may now be dead.
-			r.askAttention()
+			cs.records.attend(vk.id, r)
 			return true, ok
 		}
 		// The record was swept between being fetched and being written to, so
@@ -577,7 +600,7 @@ func (cs *Store) tieredDelete(key string, t int64) (handled, applied bool) {
 	default:
 		return false, false
 	}
-	r.askAttention()
+	cs.records.attend(vk.id, r)
 	return true, applied
 }
 
@@ -619,15 +642,16 @@ type recordPass struct {
 }
 
 // maintainRecords is the maintenance pass over the records: it visits the
-// attention list — what was written since the last pass, and what holds a
-// body parse — and nothing else.
+// attention list — what was written since the last pass, what a read left
+// decompressed, and what holds a body parse — and nothing else.
 //
 // Compaction goes first for the whole batch, then dictionary training, then
 // compression: the dictionary is trained on raw buckets, so it has to see
 // them after compaction gave them their bytes and before compression turns
 // them into frames — the order the whole-store walks kept, on the batch. A
-// record holding a parse after aging is put back on the list: a parse ages
-// one pass at a time, and only a visit can drop it.
+// record found dead is named for the sweep and not compressed: it is about to
+// go. A record holding a parse after aging is put back on the list: a parse
+// ages one pass at a time, and only a visit can drop it.
 func (cs *Store) maintainRecords() recordPass {
 	var p recordPass
 	if !tieringEnabled() || cs.records == nil {
@@ -640,24 +664,25 @@ func (cs *Store) maintainRecords() recordPass {
 	}
 	records := make([]*vertexRecord, 0, len(batch))
 	for _, e := range batch {
-		// Cleared first: a write that lands from here on puts the record
-		// back for the next pass instead of being missed by this one.
-		e.r.attended.Store(false)
+		// Cleared first: a write or a read that lands from here on puts the
+		// record back for the next pass instead of being missed by this one.
+		e.r.attention.Store(attentionNone)
 		p.compacted += e.r.compactBuckets()
 		records = append(records, e.r)
 	}
 	cs.maybeTrainDictionaryFrom(records, dictSampleLimit)
 	var dead []string
 	for _, e := range batch {
+		if e.r.dead() {
+			dead = append(dead, e.id)
+			continue
+		}
 		p.compressed += e.r.compressBuckets()
 		if e.r.ageParsedBody() {
 			p.aged++
 		}
 		if e.r.parsedBody.Load() != nil {
-			e.r.askAttention()
-		}
-		if e.r.dead() {
-			dead = append(dead, e.id)
+			cs.records.attend(e.id, e.r)
 		}
 	}
 	p.removed = cs.records.removeDead(dead)
@@ -833,6 +858,7 @@ func (cs *Store) StoredValueEquals(key string, serialized []byte) (equal bool, k
 	if !found {
 		return false, false
 	}
+	defer cs.records.afterRead(vk.id, r)
 	if vk.isBody() {
 		body, _, exists := r.bodyBytes()
 		if !exists {
