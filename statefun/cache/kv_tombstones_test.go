@@ -113,6 +113,8 @@ func Test_PurgeTombstone_RemovesTheMarkerAndNothingAfter(t *testing.T) {
 	require.Equal(t, "absent", lastOf(t, js, kvs, key), "the marker must be gone, not just superseded")
 	require.Equal(t, before-1, streamMsgs(t, js, kvs), "exactly the marker left the stream")
 	require.Empty(t, deleteMarkers(t, kvs, KVStorePrefix))
+	require.NoError(t, customNatsKv.KVPurgeTombstone(js, kvs, key, seq),
+		"a marker removed already is not an error: a retry must not count it as a failure")
 
 	// Deleted and written again before the purge ran: the new value must
 	// survive a purge issued for the old marker.
@@ -138,6 +140,91 @@ func Test_PurgeTombstone_RemovesTheMarkerAndNothingAfter(t *testing.T) {
 	require.Equal(t, "marker", lastOf(t, js, kvs, key), "the newer marker must still be there")
 	require.NoError(t, customNatsKv.KVPurgeTombstone(js, kvs, key, seq2))
 	require.Equal(t, "absent", lastOf(t, js, kvs, key))
+}
+
+// Test_PurgeTombstone_DeleteDeniedBucketStillLosesItsMarker — a bucket whose
+// stream refuses message deletes still gets its markers removed. The runtime
+// creates its bucket with deletes allowed, but a bucket made by something
+// else — nats.go's own CreateKeyValue denies them — is served too, by the
+// bounded subject purge, with the same guarantee: the marker goes, a value
+// written after it stays.
+func Test_PurgeTombstone_DeleteDeniedBucketStillLosesItsMarker(t *testing.T) {
+	js, _ := newKVForTest(t, "allowed")
+	kvs, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: "deny_delete"})
+	require.NoError(t, err)
+	info, err := js.StreamInfo(customNatsKv.KVStreamName(kvs))
+	require.NoError(t, err)
+	require.True(t, info.Config.DenyDelete, "sanity: nats.go makes buckets that deny message deletes")
+
+	const key = KVStorePrefix + ".dom/x"
+	_, err = kvs.Put(key, []byte("v1"))
+	require.NoError(t, err)
+	seq := markerSeq(t, js, kvs, key)
+	require.NoError(t, customNatsKv.KVPurgeTombstone(js, kvs, key, seq))
+	require.Equal(t, "absent", lastOf(t, js, kvs, key), "the marker must be gone")
+
+	_, err = kvs.Put(key, []byte("v2"))
+	require.NoError(t, err)
+	seq = markerSeq(t, js, kvs, key)
+	_, err = kvs.Put(key, []byte("v3"))
+	require.NoError(t, err)
+	require.NoError(t, customNatsKv.KVPurgeTombstone(js, kvs, key, seq))
+	require.Equal(t, "v3", lastOf(t, js, kvs, key), "the value written after the marker must survive its removal")
+}
+
+// Test_PurgeTombstone_CostDoesNotGrowWithTheBucket — removing a marker costs
+// the same on a big bucket as on a small one.
+//
+// The runtime's leases live in this same stream, so whatever a removal holds
+// up, a lease refresh waits behind. A subject purge bounded by sequence walks
+// every block of the stream under the store's lock (the 2.10 file store's
+// PurgeEx), so its cost grows with the bucket: on a stand's bucket, a burst
+// of deletes stretched lease refreshes past their request timeout. Removing
+// the message by its sequence touches the one block that holds it.
+func Test_PurgeTombstone_CostDoesNotGrowWithTheBucket(t *testing.T) {
+	if testing.Short() {
+		t.Skip("long: fills a bucket with a hundred thousand keys")
+	}
+	const markers = 200
+	value := make([]byte, 1000)
+	for i := range value {
+		value[i] = byte('a' + i%26)
+	}
+	cost := func(keys int) time.Duration {
+		js, kvs := newKVForTest(t, fmt.Sprintf("cost_%d", keys))
+		key := func(i int) string { return fmt.Sprintf("%s.dom/v-%06d", KVStorePrefix, i) }
+		for i := 0; i < keys; i++ {
+			_, err := js.PublishAsync(customNatsKv.KVStoredSubject(kvs, key(i)), value)
+			require.NoError(t, err)
+			if i%2000 == 1999 {
+				<-js.PublishAsyncComplete()
+			}
+		}
+		<-js.PublishAsyncComplete()
+		seqs := make([]uint64, markers)
+		for m := range seqs {
+			seqs[m] = markerSeq(t, js, kvs, key(m*(keys/markers)))
+		}
+		// The median removal, not the total: one collector pause in a few
+		// hundred round trips must not decide the verdict.
+		took := make([]time.Duration, len(seqs))
+		for m, seq := range seqs {
+			started := time.Now()
+			require.NoError(t, customNatsKv.KVPurgeTombstone(js, kvs, key(m*(keys/markers)), seq))
+			took[m] = time.Since(started)
+		}
+		require.Empty(t, deleteMarkers(t, kvs, KVStorePrefix), "sanity: every marker is gone")
+		sort.Slice(took, func(i, j int) bool { return took[i] < took[j] })
+		return took[len(took)/2]
+	}
+	cost(1_000) // warm-up: the first server of the process is slower to answer
+	small := cost(5_000)
+	big := cost(100_000)
+	t.Logf("median marker removal: %s on 5 000 keys, %s on 100 000 keys (x%.1f)",
+		small, big, float64(big)/float64(small))
+	require.Lessf(t, big, 4*small,
+		"removing a marker got %.1f times dearer on a bucket 20 times bigger: the removal walks the stream, and holds up the leases that live in it",
+		float64(big)/float64(small))
 }
 
 // Test_Load_SweepsLeftoverMarkers — markers nobody removed are met by the

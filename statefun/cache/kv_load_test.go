@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/foliagecp/easyjson"
+	customNatsKv "github.com/foliagecp/sdk/embedded/nats/kv"
 	"github.com/foliagecp/sdk/statefun/system"
 	natsservertest "github.com/nats-io/nats-server/v2/test"
 	"github.com/nats-io/nats.go"
@@ -76,7 +77,10 @@ func newKVForTest(t *testing.T, bucket string) (nats.JetStreamContext, nats.KeyV
 
 	js, err := nc.JetStream()
 	require.NoError(t, err)
-	kvs, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: bucket})
+	// Created the way Domain.start creates the runtime's bucket, not with
+	// nats.go's CreateKeyValue: the two differ in DenyDelete, and the tests
+	// here are about the bucket the runtime actually has.
+	kvs, err := customNatsKv.CreateKeyValue(nc, js, &nats.KeyValueConfig{Bucket: bucket})
 	require.NoError(t, err)
 	return js, kvs
 }

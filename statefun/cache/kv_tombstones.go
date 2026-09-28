@@ -14,10 +14,13 @@ package cache
 //
 // The marker is ours: the committer published it, and the broker's ack says
 // exactly where it landed. So the committer hands the marker's key and
-// sequence here, and the purger removes it from the stream with a purge
-// bounded by that sequence — the marker and nothing written after it. That
-// is proportional to what was deleted and touches nothing else; it never
-// needs to look at the bucket to find out what to remove.
+// sequence here, and the purger deletes that one message from the stream by
+// its sequence — the marker and nothing written after it. That is
+// proportional to what was deleted and touches nothing else: it never needs
+// to look at the bucket to find out what to remove, and the broker finds the
+// message without walking the stream either (see KVPurgeTombstone — the
+// runtime's leases live in the same stream, and a removal that held the
+// stream up held them up too).
 //
 // Markers left from before — a version without this, or a shutdown that cut
 // the purger off with work queued — are met by the one walk over the bucket
@@ -38,7 +41,7 @@ import (
 )
 
 const (
-	// tombstonePurgeWorkers is how many purge requests are in flight at once:
+	// tombstonePurgeWorkers is how many removal requests are in flight at once:
 	// each is one round trip to the broker, and a delete cascade queues
 	// thousands.
 	tombstonePurgeWorkers = 4

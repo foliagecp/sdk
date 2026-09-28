@@ -282,10 +282,10 @@ func KVStreamName(kv nats.KeyValue) string {
 }
 
 // KVStoredSubject is the subject the bucket's stream keeps key under — the
-// subject a stream purge filters on. It is the bucket prefix plus the key and
-// never the JetStream API prefix a publish may travel through: the server
-// strips that on the way in, and the stream stores only what its own subject
-// space names.
+// subject a direct get or a stream purge filters on. It is the bucket prefix
+// plus the key and never the JetStream API prefix a publish may travel
+// through: the server strips that on the way in, and the stream stores only
+// what its own subject space names.
 func KVStoredSubject(kv nats.KeyValue, key string) string {
 	return reflect.ValueOf(kv).Elem().FieldByName("pre").String() + key
 }
@@ -299,22 +299,74 @@ func KVStoredSubject(kv nats.KeyValue, key string) string {
 // so nobody ever consumes it, and it sits in the stream for as long as the key
 // stays deleted — one message per key ever deleted, without bound under churn.
 //
-// The purge is bounded by sequence: it takes the subject's messages below
-// seq+1, which is the marker and whatever it replaced, and leaves a later PUT
-// of the same key alone. That is what makes it safe to issue from the side,
-// after the write pipeline has moved on: a key deleted and created again keeps
-// its new value whether the purge runs before or after that write. Purging a
-// subject that has nothing below the bound — the key was written again and the
-// limit already dropped the marker — is a no-op.
+// The marker is deleted by its sequence, which names that one message and no
+// other: sequences are never reused. That is what makes it safe to issue from
+// the side, after the write pipeline has moved on — a key deleted and created
+// again keeps its new value whether the removal runs before or after that
+// write. A marker already gone — the key was written again and the limit
+// dropped it, or it was removed before — is not an error: there is nothing
+// left to remove.
+//
+// Not a subject purge bounded by the sequence, which would do the same job:
+// the file store walks every block of the stream for it, holding the store's
+// lock, so its cost grows with the bucket and it holds up every other writer
+// and reader of the stream — the runtime's leases live in this same bucket,
+// and a burst of deletes stretched their refreshes past the request timeout.
+// A delete by sequence touches the one block that holds the message.
+//
+// A bucket whose stream denies message deletes — created by something other
+// than CreateKeyValue here, nats.go's own sets DenyDelete — still gets its
+// marker removed, by the bounded subject purge: slower on a big bucket, but a
+// marker left in place grows the stream forever.
 func KVPurgeTombstone(js nats.JetStreamContext, kv nats.KeyValue, key string, seq uint64) error {
 	if !KeyValid(key) {
 		return nats.ErrInvalidKey
 	}
-	return js.PurgeStream(KVStreamName(kv), &nats.StreamPurgeRequest{
-		Subject:  KVStoredSubject(kv, key),
-		Sequence: seq + 1,
-	})
+	err := js.DeleteMsg(KVStreamName(kv), seq)
+	switch {
+	case err == nil || messageGone(err):
+		return nil
+	case deleteDenied(err):
+		return js.PurgeStream(KVStreamName(kv), &nats.StreamPurgeRequest{
+			Subject:  KVStoredSubject(kv, key),
+			Sequence: seq + 1,
+		})
+	}
+	return err
 }
+
+// messageGone says a delete by sequence failed only because there is no such
+// message any more: the sequence was removed already or never held one the
+// store still has.
+func messageGone(err error) bool {
+	var apiErr *nats.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	switch apiErr.ErrorCode {
+	case nats.JSErrCodeMessageNotFound, jsErrCodeSequenceNotFound:
+		return true
+	case jsErrCodeMessageDeleteFailed:
+		// The store's own words for "not there", wrapped in the generic
+		// deletion failure.
+		return strings.Contains(apiErr.Description, "no message found") ||
+			strings.Contains(apiErr.Description, "stream store EOF")
+	}
+	return false
+}
+
+// deleteDenied says the stream refuses message deletes (DenyDelete).
+func deleteDenied(err error) bool {
+	var apiErr *nats.APIError
+	return errors.As(err, &apiErr) && apiErr.ErrorCode == jsErrCodeMessageDeleteFailed &&
+		strings.Contains(apiErr.Description, "message delete not permitted")
+}
+
+// JetStream API error codes nats.go has no names for.
+const (
+	jsErrCodeSequenceNotFound    nats.ErrorCode = 10043 // "sequence {seq} not found"
+	jsErrCodeMessageDeleteFailed nats.ErrorCode = 10057 // generic message deletion failure, "{err}"
+)
 
 func KVPut(js nats.JetStreamContext, kv nats.KeyValue, key string, value []byte) (revision uint64, err error) {
 	if !KeyValid(key) {
