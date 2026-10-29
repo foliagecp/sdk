@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/foliagecp/easyjson"
+	"github.com/foliagecp/sdk/internal/requestdiag"
 	sf "github.com/foliagecp/sdk/statefun"
+	"github.com/foliagecp/sdk/statefun/logger"
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfp "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
@@ -135,16 +137,27 @@ func buildNatsData(callerTypename string, callerID string, payload *easyjson.JSO
 }
 
 func getRequestFunc(nc *nats.Conn, NatsRequestTimeoutSec int, HubDomainName string) sfp.SFRequestFunc {
-	return func(r sfp.RequestProvider, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
+	return func(r sfp.RequestProvider, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (result *easyjson.JSON, callErr error) {
 		targetDomain := HubDomainName
 		tokens := strings.Split(targetID, sf.ObjectIDDomainSeparator)
 		if len(tokens) == 2 {
 			targetDomain = tokens[0]
 		}
+
 		requestTimeout := time.Duration(NatsRequestTimeoutSec) * time.Second
 		if len(timeout) > 0 && timeout[0] > 0 {
 			requestTimeout = timeout[0]
 		}
+		source := "client_default"
+		if len(tokens) == 2 {
+			source = "object_id_prefix"
+		}
+		defer func() {
+			if callErr != nil {
+				callErr = requestdiag.Wrap(callErr, requestdiag.Address{DefaultDomain: HubDomainName, TargetDomain: targetDomain, Function: targetTypename, ObjectID: targetID, Transport: "NATS Request/Reply", DomainSource: source, Timeout: requestTimeout})
+				logger.Logf(logger.WarnLevel, "%s", callErr)
+			}
+		}()
 
 		resp, err := nc.Request(
 			fmt.Sprintf("%s.%s.%s.%s", sf.RequestPrefix, targetDomain, targetTypename, targetID),

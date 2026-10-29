@@ -2,9 +2,11 @@ package statefun
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/foliagecp/easyjson"
+	"github.com/foliagecp/sdk/internal/requestdiag"
 	"github.com/nats-io/nats.go"
 
 	"github.com/foliagecp/sdk/statefun/logger"
@@ -224,9 +226,9 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 			}()
 			return nil
 		case 1:
-			return fmt.Errorf("goLangLocalSignal: cannot request function with the typename %s via golang, domain differs: %s(runtime) != %s(id)", callerTypename, r.Domain.name, r.Domain.GetDomainFromObjectID(targetID))
+			return fmt.Errorf("goLangLocalSignal: cannot request function with the typename %s via golang, domain differs: %s(runtime) != %s(id)", targetTypename, r.Domain.name, r.Domain.GetDomainFromObjectID(targetID))
 		case 2:
-			return fmt.Errorf("goLangLocalSignal: cannot request function with the typename %s via golang, not registered", callerTypename)
+			return fmt.Errorf("goLangLocalSignal: cannot request function with the typename %s via golang, not registered", targetTypename)
 		case 3:
 			fallthrough
 		default:
@@ -255,11 +257,12 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 	}
 }
 
-func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON, traceCtx *easyjson.JSON, timeout ...time.Duration) (*easyjson.JSON, error) {
+func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypename string, callerID string, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON, traceCtx *easyjson.JSON, timeout ...time.Duration) (result *easyjson.JSON, callErr error) {
 	shadowObjectCanBeReceiver := false
 	if options != nil {
 		shadowObjectCanBeReceiver = options.GetByPath(ShadowObjectCallParamOptionPath).AsBoolDefault(false)
 	}
+
 	requestTimeoutDuration := time.Duration(r.config.requestTimeoutSec) * time.Second
 	if len(timeout) > 0 {
 		requestTimeoutDuration = timeout[0]
@@ -267,6 +270,32 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 	if requestTimeoutDuration <= 0 {
 		requestTimeoutDuration = time.Duration(r.config.requestTimeoutSec) * time.Second
 	}
+	if requestProvider != sfPlugins.AutoRequestSelect {
+		domain := r.Domain.GetDomainFromObjectID(targetID)
+		source := "runtime_default"
+		if strings.Contains(targetID, ObjectIDDomainSeparator) {
+			source = "object_id_prefix"
+		}
+		effectiveTimeout := requestTimeoutDuration
+		transport := "NATS Request/Reply"
+		if requestProvider == sfPlugins.GolangLocalRequest {
+			transport = "Go local"
+		}
+		if requestProvider == sfPlugins.NatsCoreGlobalRequest && !shadowObjectCanBeReceiver && r.Domain.IsShadowObject(targetID) {
+			if d, _, e := r.Domain.GetShadowObjectDomainAndID(targetID); e == nil {
+				domain = d
+				source = "shadow_object_target"
+				effectiveTimeout = time.Duration(r.config.requestTimeoutSec) * time.Second
+			}
+		}
+		defer func() {
+			if callErr != nil {
+				callErr = requestdiag.Wrap(callErr, requestdiag.Address{LocalDomain: r.Domain.name, DefaultDomain: r.Domain.name, TargetDomain: domain, Function: targetTypename, ObjectID: targetID, Transport: transport, DomainSource: source, Timeout: effectiveTimeout})
+				logger.Logf(logger.WarnLevel, "%s", callErr)
+			}
+		}()
+	}
+
 	natsCoreGlobalRequest := func() (*easyjson.JSON, error) {
 		var (
 			resp *nats.Msg
@@ -356,13 +385,13 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 				return nil, fmt.Errorf("goLangLocalRequest: timeout occured while requesting function typename \"%s\" with id \"%s\"", targetTypename, targetID)
 			}
 		case 1:
-			return nil, fmt.Errorf("goLangLocalRequest: cannot request function with the typename %s via golang, domain differs: %s(runtime) != %s(id)", callerTypename, r.Domain.name, r.Domain.GetDomainFromObjectID(targetID))
+			return nil, fmt.Errorf("goLangLocalRequest: cannot request function with the typename %s via golang, domain differs: %s(runtime) != %s(id)", targetTypename, r.Domain.name, r.Domain.GetDomainFromObjectID(targetID))
 		case 2:
-			return nil, fmt.Errorf("goLangLocalRequest: cannot request function with the typename %s via golang, not registered", callerTypename)
+			return nil, fmt.Errorf("goLangLocalRequest: cannot request function with the typename %s via golang, not registered", targetTypename)
 		case 3:
 			fallthrough
 		default:
-			return nil, fmt.Errorf("goLangLocalRequest: function with the typename %s does not support request-reply via golang", callerTypename)
+			return nil, fmt.Errorf("goLangLocalRequest: function with the typename %s does not support request-reply via golang", targetTypename)
 		}
 	}
 
