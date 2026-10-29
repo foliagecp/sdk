@@ -243,6 +243,10 @@ func (r *Runtime) RegisterOnBecamePassive(f OnBecamePassiveFunction) {
 // Start initializes streams and starts function subscriptions.
 // It also handles graceful shutdown via context.Context.
 func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
+	// Validate persisted domain addressing before creating any state or workers.
+	if err := r.validateDomainState(ctx, cacheConfig.GetId()); err != nil {
+		return err
+	}
 	logger := lg.GetLogger()
 	r.gs = NewGracefulShutdown(context.Background())
 
