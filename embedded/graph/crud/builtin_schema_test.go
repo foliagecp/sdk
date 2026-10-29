@@ -150,7 +150,7 @@ func (s *BuiltInSchemaTestSuite) Test_RepairedSchema_TrashCanStillWorks() {
 }
 
 // The statefun wrapper is what out-of-process importers (snapshot restore in
-// pregel-backend, tooling) call — it must repair the same way.
+// other applications, tooling) call — it must repair the same way.
 func (s *BuiltInSchemaTestSuite) Test_EnsureViaStatefun() {
 	s.boot()
 

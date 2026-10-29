@@ -974,9 +974,8 @@ func (cs *Store) publishRecordGauges() {
 // Put on the same path could resurrect the child. We protect against
 // that by re-checking the child's state under its own lock just before
 // the delete; if the recheck shows the child became valid again, we
-// leave it alone. This is the protocol Skala-backend's report flagged
-// the old asynchronous collectGarbage cascade for racing on, and it is
-// fixed here.
+// leave it alone. This prevents garbage collection from deleting a child
+// that a concurrent writer has restored.
 //
 // Root is never removed (it has no parent and is the cache entry point).
 //

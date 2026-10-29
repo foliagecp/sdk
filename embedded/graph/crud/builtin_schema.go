@@ -217,7 +217,7 @@ func PurgeSchemaCaches() {
 /*
 EnsureBuiltInSchemaFunction exposes EnsureBuiltInSchema as a statefun, so any
 importer — including ones living outside this process (snapshot restore in
-pregel-backend, operator tooling) — can repair the skeleton after a bulk load
+other applications, operator tooling) — can repair the skeleton after a bulk load
 without linking this package.
 
 Request:

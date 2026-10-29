@@ -87,7 +87,7 @@ nats -s nats://nats:foliage@nats:4222 req request.hub.functions.graph.api.query.
 {
     "payload": {
         "jpgql_uoi": [
-            [{"jpgql": "..*", "from_uuid": "pak1/scala_hlm_hw-server"}]
+            [{"jpgql": "..*", "from_uuid": "example_domain/server"}]
         ]
     },
     "options": { "qds_timeout_sec": 2.0, "max_depth": 5 }
@@ -162,13 +162,13 @@ nats -s nats://nats:foliage@nats:4222 req request.hub.functions.graph.api.query.
             [
                 {
                     "jpgql": ".*[v:has(\"hostname\",\"string\",\">\",\"cluster\")]",
-                    "from_uuid": "pak1/scala_hlm_hw-server"
+                    "from_uuid": "example_domain/server"
                 }
             ],
             [
                 {
                     "jpgql": ".*[v:has(\"hostname\",\"string\",\">\",\"bc\")]",
-                    "from_uuid": "pak1/scala_hlm_hw-server"
+                    "from_uuid": "example_domain/server"
                 }
             ]
         ],
@@ -186,13 +186,13 @@ nats -s nats://nats:foliage@nats:4222 req request.hub.functions.graph.api.query.
             [
                 {
                     "jpgql": ".*[v:has(\"hostname\",\"string\",\">\",\"cluster\")]",
-                    "from_uuid": "pak1/scala_hlm_hw-server"
+                    "from_uuid": "example_domain/server"
                 }
             ],
             [
                 {
                     "jpgql": ".*[v:has(\"hostname\",\"string\",\">\",\"bc\")]",
-                    "from_uuid": "pak1/scala_hlm_hw-server"
+                    "from_uuid": "example_domain/server"
                 }
             ]
         ],

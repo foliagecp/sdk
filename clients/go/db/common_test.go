@@ -105,7 +105,7 @@ func TestOpErrorFromOpMsgStrict(t *testing.T) {
 	})
 
 	t.Run("IDLE preserves server details for legacy strings.Contains callers", func(t *testing.T) {
-		// Legacy code (e.g. skala-backend/common/hlmb/factory.go) checks
+		// Legacy application code checks
 		// `strings.Contains(err.Error(), "does not exist")` to detect missing
 		// entities. The fmt.Errorf("%w: %s", ...) wrap must keep that working.
 		err := OpErrorFromOpMsgStrict(sfMediators.OpMsgIdle("object \"foo\" does not exist"))

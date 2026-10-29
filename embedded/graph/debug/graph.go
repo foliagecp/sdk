@@ -308,7 +308,7 @@ source: string // "file" | "payload"
 data: string // "graph data" | "file path"
 
 Example:
-nats -s nats://nats:foliage@nats:4222 pub signal.hub.functions.graph.api.import.a "{\"payload\":{\"format\":\"graphml\",\"source\":\"file\",\"data\":\"./skala-xml.graphml\"}}"
+nats -s nats://nats:foliage@nats:4222 pub signal.hub.functions.graph.api.import.a "{\"payload\":{\"format\":\"graphml\",\"source\":\"file\",\"data\":\"./example.graphml\"}}"
 */
 func LLAPIImportGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
 	const workers = 10
