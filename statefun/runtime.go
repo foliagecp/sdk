@@ -249,6 +249,15 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 	}
 	logger := lg.GetLogger()
 	r.gs = NewGracefulShutdown(context.Background())
+	startupComplete := false
+	defer func() {
+		if !startupComplete {
+			r.gs.cancelPhaseOne()
+			r.gs.cancelPhaseTwo()
+			r.gs.cancelPhaseThree()
+			r.nc.Close()
+		}
+	}()
 
 	// Listen for OS termination signals and run the same graceful drain that
 	// an explicit Shutdown() runs. The drain body lives in gracefulShutdown so
@@ -257,9 +266,13 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-		<-sig
-		logger.Debugf(ctx, "Received shutdown signal, shutting down gracefully...")
-		r.gracefulShutdown(ctx)
+		defer signal.Stop(sig)
+		select {
+		case <-sig:
+			logger.Debugf(ctx, "Received shutdown signal, shutting down gracefully...")
+			r.gracefulShutdown(ctx)
+		case <-r.gs.ctxPhaseThree.Done():
+		}
 	}()
 
 	// Disable registering new functions after the runtime has started.
@@ -275,7 +288,17 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 	}
 
 	// Start the domain.
-	if err := r.Domain.start(r.gs.ctxPhaseTwo, cacheConfig, r.config.handlesDomainRouters); err != nil {
+	// Caller cancellation bounds startup without canceling the later phased drain.
+	startupCtx, cancelStartup := context.WithCancel(r.gs.ctxPhaseTwo)
+	stopStartupCancellation := context.AfterFunc(ctx, cancelStartup)
+	err := r.Domain.start(startupCtx, cacheConfig, r.config.handlesDomainRouters)
+	stopStartupCancellation()
+	if err != nil {
+		cancelStartup()
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		cancelStartup()
 		return err
 	}
 
@@ -320,6 +343,7 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 
 	// Set Runtime ready
 	r.isReady.Store(true)
+	startupComplete = true
 
 	// Run afterStart functions immediately now that the runtime is ready,
 	// instead of waiting for the first runtimeLifecycleUpdater tick (which is

@@ -101,6 +101,14 @@ type Domain struct {
 	exportCommitter *ExportCommitter
 	exportEnabled   bool
 	exportSC        streamConfig
+
+	walCreated         time.Time
+	walKVStream        string
+	walKVSubjectPrefix string
+	walKVCreated       time.Time
+	walProgress        atomic.Uint64
+	walApply           atomic.Pointer[walApplyCursor]
+	walFailure         atomic.Pointer[walFailure]
 }
 
 type streamConfig struct {
@@ -431,6 +439,9 @@ func (dm *Domain) CreateObjectIDWithHubDomain(objectID string, domainReplace boo
 }
 
 func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDomainRouters bool) error {
+	if prefix := cacheConfig.GetKVStorePrefix(); prefix == "__wal_applied__" || strings.HasPrefix(prefix, walReceiptPrefix) {
+		return fmt.Errorf("cache prefix %q overlaps reserved WAL receipt keys", prefix)
+	}
 	bucketName := fmt.Sprintf("%s_%s_cache_bucket", dm.name, cacheConfig.GetId())
 
 	// Create application key value store bucket if does not exist. Retry on
@@ -526,6 +537,14 @@ func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDo
 	if err := dm.checkKvConsistency(ctx); err != nil {
 		return err
 	}
+	// The initial load preceded WAL replay. Never serve that older snapshot:
+	// both restored PUTs and DELETEs must be reflected in the working cache.
+	committed := dm.cache.CommittedTxTime()
+	if err := dm.cache.RehydrateFromKV(ctx); err != nil {
+		return fmt.Errorf("reload cache after WAL recovery: %w", err)
+	}
+	dm.cache.RecordCommittedTx(committed)
+	go dm.maintainWALReceipts(ctx)
 
 	if dm.exportEnabled {
 		if err := dm.startExportCommitter(ctx); err != nil {
@@ -547,80 +566,7 @@ func (dm *Domain) start(ctx context.Context, cacheConfig *cache.Config, createDo
 }
 
 func (dm *Domain) checkKvConsistency(ctx context.Context) error {
-	consumerName := CommitterDurableName + "-" + dm.kv.Bucket()
-
-	const (
-		checkInterval = 100 * time.Millisecond
-		waitTimeout   = 30 * time.Second
-	)
-
-	timeout := time.NewTimer(waitTimeout)
-	defer timeout.Stop()
-
-	ticker := time.NewTicker(checkInterval)
-	defer ticker.Stop()
-
-	lg.Logln(lg.TraceLevel, "Waiting for KV consistency ...")
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-
-		case <-timeout.C:
-			return fmt.Errorf("timeout waiting for KV consistency")
-
-		case <-ticker.C:
-			info, err := dm.js.ConsumerInfo(WALCommitsStreamName, consumerName)
-			if err != nil {
-				lg.Logf(lg.DebugLevel, "Failed to get consumer info: %s", err)
-				continue
-			}
-
-			noPendingWork :=
-				info.NumPending == 0 &&
-					info.NumAckPending == 0
-
-			consistent, err := dm.isKVConsistent()
-			if err != nil {
-				lg.Logf(lg.ErrorLevel, "Failed to check consistency: %s", err)
-				continue
-			}
-
-			if !noPendingWork {
-				lg.Logf(lg.TraceLevel, "Transactions in progress: pending=%d, ackPending=%d", info.NumPending, info.NumAckPending)
-
-				if consistent {
-					if err := dm.setKVConsistent(false); err != nil {
-						return fmt.Errorf(
-							"failed to set KV inconsistent: %w", err,
-						)
-					}
-				}
-
-				if !timeout.Stop() {
-					select {
-					case <-timeout.C:
-					default:
-					}
-				}
-				timeout.Reset(waitTimeout)
-				continue
-			}
-
-			if !consistent {
-				lg.Logln(lg.TraceLevel, "No pending work, setting KV consistent")
-				if err := dm.setKVConsistent(true); err != nil {
-					return fmt.Errorf(
-						"failed to set KV consistent: %w", err,
-					)
-				}
-			}
-
-			lg.Logln(lg.TraceLevel, "KV is consistent")
-			return nil
-		}
-	}
+	return dm.waitForWALRecovery(ctx, 30*time.Second, 100*time.Millisecond)
 }
 
 // publishStartupSnapshot reads all current KV entries and publishes them

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	customNatsKv "github.com/foliagecp/sdk/embedded/nats/kv"
@@ -16,13 +17,13 @@ import (
 )
 
 const (
-	WALCommitsStreamName    = "wal_commits"
-	WALCommitsSubject       = "wal.commits.*"
-	CommitterDurableName    = "TRANSACTION_COMMITTER_CONSUMER"
+	WALCommitsStreamName = "wal_commits"
+	WALCommitsSubject    = "wal.commits.*"
+	CommitterDurableName = "TRANSACTION_COMMITTER_CONSUMER"
 
 	// Export-dedicated stream — parallel pipeline for export committer.
 	WALExportCommitsStreamName = "wal_export_commits"
-	WALExportCommitsSubject   = "wal.export.commits.*"
+	WALExportCommitsSubject    = "wal.export.commits.*"
 	ExportCommitterDurableName = "EXPORT_COMMITTER_CONSUMER"
 
 	// --- Transaction consumer ---
@@ -58,178 +59,180 @@ const (
 	applyTransactionOpsAckTimeout = 30 * time.Second
 )
 
+type walStartResult struct{ err error }
+
 func (dm *Domain) TransactionCommitter(ctx context.Context) error {
-	ready := make(chan struct{})
+	ready := make(chan walStartResult, 1)
 	go func() {
-		if err := dm.runTransactionCommitter(ctx, ready); err != nil {
+		err := dm.runTransactionCommitter(ctx, ready)
+		if err != nil && !errors.Is(err, context.Canceled) {
 			lg.Logf(lg.ErrorLevel, "TransactionCommitter error: %s", err)
 		}
+		// Startup errors must reach the caller, not leave it waiting forever.
+		select {
+		case ready <- walStartResult{err}:
+		default:
+		}
 	}()
-	<-ready
-	return nil
+	select {
+	case result := <-ready:
+		return result.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
-func (dm *Domain) runTransactionCommitter(ctx context.Context, ready chan struct{}) error {
+func (dm *Domain) runTransactionCommitter(ctx context.Context, ready chan walStartResult) error {
 	dm.shutdown = make(chan struct{})
 	defer close(dm.shutdown)
-
-	commitSubject := fmt.Sprintf("wal.commits.%s", dm.kv.Bucket())
 	consumerName := CommitterDurableName + "-" + dm.kv.Bucket()
-
-	lg.Logf(lg.TraceLevel, "TransactionCommitter starting for bucket=%s, subject=%s", dm.kv.Bucket(), commitSubject)
-
+	commitSubject := "wal.commits." + dm.kv.Bucket()
+	if err := dm.prepareWALConsumer(ctx); err != nil {
+		return err
+	}
 	if err := dm.setKVConsistent(false); err != nil {
 		return err
 	}
-	lg.Logln(lg.TraceLevel, "KV marked as inconsistent, will process pending transactions")
-
-	// Retry on transient cluster-formation errors; an already-existing consumer
-	// is success.
-	err := retryStartupJS(context.Background(), "WAL consumer "+consumerName, func() error {
-		_, e := dm.js.AddConsumer(WALCommitsStreamName, &nats.ConsumerConfig{
-			Name:           consumerName,
-			Durable:        consumerName,
-			DeliverSubject: consumerName,
-			DeliverGroup:   consumerName + "-group",
-			FilterSubject:  commitSubject,
-			AckPolicy:      nats.AckExplicitPolicy,
-			AckWait:        commitAckWait,
-			MaxDeliver:     commitMaxDeliver,
-			MaxAckPending:  1,
-		})
-		if e != nil && !errors.Is(e, nats.ErrConsumerNameAlreadyInUse) {
-			return e
-		}
-		return nil
-	})
-	if err != nil {
-		lg.Logf(lg.ErrorLevel, "TransactionCommitter failed to create consumer: %s", err)
+	if _, err := dm.recoverMissingWALAck(ctx); err != nil {
 		return err
 	}
 
-	lg.Logf(lg.TraceLevel, "TransactionCommitter consumer created/exists: %s", consumerName)
+	sub, err := dm.js.QueueSubscribe(commitSubject, consumerName+"-group", func(msg *nats.Msg) {
+		if err := dm.walTerminalError(); err != nil {
+			return
+		}
+		// Keep the broker from handing the same transaction to another replica
+		// while a large apply or a backup barrier is still in progress.
+		done := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(commitAckWait / 3)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					_ = msg.InProgress()
+				}
+			}
+		}()
+		err := dm.commitWALMessage(ctx, msg)
+		close(done)
+		if err != nil {
+			lg.Logf(lg.ErrorLevel, "TransactionCommitter: %s", err)
+			if errors.Is(err, ErrWALRecovery) {
+				dm.walFailure.CompareAndSwap(nil, &walFailure{err})
+			} else if ctx.Err() == nil {
+				_ = msg.NakWithDelay(time.Second)
+			}
+		}
+	}, nats.Bind(WALCommitsStreamName, consumerName), nats.ManualAck())
+	if err != nil {
+		return err
+	}
+	defer sub.Unsubscribe()
+	ready <- walStartResult{}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-dm.cache.Synced:
+	}
+	if err := dm.setKVConsistent(false); err != nil {
+		return err
+	}
+	deadline := time.NewTimer(shutdownMaxWait)
+	defer deadline.Stop()
+	ticker := time.NewTicker(shutdownPollInterval)
+	defer ticker.Stop()
+	for {
+		if err := dm.walTerminalError(); err != nil {
+			return err
+		}
+		pending, err := dm.countPendingCommits(consumerName)
+		if err != nil {
+			return err
+		}
+		if pending == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("WAL shutdown drain timed out with %d transactions outstanding", pending)
+		case <-ticker.C:
+		}
+	}
+}
 
-	pendingCount := dm.countPendingCommits(consumerName)
-	lg.Logf(lg.TraceLevel, "Found %d pending transactions to process", pendingCount)
-
-	if pendingCount == 0 {
-		lg.Logln(lg.TraceLevel, "No pending transactions, marking KV as consistent immediately")
-		if err = dm.setKVConsistent(true); err != nil {
-			lg.Logf(lg.ErrorLevel, "Failed to set KV as consistent: %s", err)
+func (dm *Domain) commitWALMessage(ctx context.Context, msg *nats.Msg) error {
+	meta, err := msg.Metadata()
+	if err != nil {
+		return fmt.Errorf("%w: invalid commit metadata: %v", ErrWALRecovery, err)
+	}
+	txID := msg.Header.Get("tx_id")
+	if txID == "" {
+		return fmt.Errorf("%w: WAL sequence %d has no tx_id; transaction retained", ErrWALRecovery, meta.Sequence.Stream)
+	}
+	var ops []cache.WALOp
+	if err := json.Unmarshal(msg.Data, &ops); err != nil || ops == nil {
+		return fmt.Errorf("%w: malformed transaction at WAL sequence %d; transaction retained", ErrWALRecovery, meta.Sequence.Stream)
+	}
+	for _, op := range ops {
+		if op.Key == "" || strings.HasPrefix(op.Key, walReceiptPrefix) || op.Key == cache.ConsistencyKey || (op.OpType != cache.OpTypePUT && op.OpType != cache.OpTypeDelete) {
+			return fmt.Errorf("%w: invalid operation at WAL sequence %d; transaction retained", ErrWALRecovery, meta.Sequence.Stream)
+		}
+	}
+	receipt, err := dm.readWALReceipt(meta.Sequence.Stream)
+	if err != nil {
+		return err
+	}
+	var deletes []walAppliedDelete
+	if receipt != nil {
+		deletes = receipt.Deletes
+		if err := dm.validateWALReceipt(receipt, meta.Sequence.Stream); err != nil {
+			return err
+		}
+		if receipt.TxID != txID || receipt.Digest != walDigest(msg.Data) {
+			return fmt.Errorf("%w: applied receipt differs from WAL sequence %d; transaction retained", ErrWALRecovery, meta.Sequence.Stream)
+		}
+	} else {
+		if err := dm.checkWALReceiptWindow(meta.Sequence.Stream); err != nil {
+			return err
+		}
+		for dm.isBackupBarrierActive() {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(200 * time.Millisecond):
+			}
+		}
+		deletes, err = dm.applyTransactionOps(ctx, ops, txID, meta.Sequence.Stream)
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := dm.saveWALReceipt(msg, meta, txID, deletes); err != nil {
 			return err
 		}
 	}
-
-	// Safe without mutex: MaxAckPending=1 guarantees sequential processing
-	processedCount := 0
-
-	_, err = dm.js.QueueSubscribe(
-		commitSubject,
-		consumerName+"-group",
-		func(msg *nats.Msg) {
-			txID := msg.Header.Get("tx_id")
-			if txID == "" {
-				lg.Logln(lg.ErrorLevel, "TransactionCommitter: received commit without tx_id")
-				system.MsgOnErrorReturn(msg.Ack())
-				return
-			}
-
-			// Parse ops from message body
-			var ops []cache.WALOp
-			if err := json.Unmarshal(msg.Data, &ops); err != nil {
-				lg.Logf(lg.ErrorLevel, "TransactionCommitter: failed to unmarshal ops for tx=%s: %s", txID, err)
-				system.MsgOnErrorReturn(msg.Ack())
-				return
-			}
-
-			lg.Logf(lg.TraceLevel, "TransactionCommitter: processing tx_id=%s, ops=%d", txID, len(ops))
-
-			// Backup barrier pause
-			for dm.isBackupBarrierActive() {
-				lg.Logln(lg.WarnLevel, "Backup barrier active, pausing commit apply")
-				time.Sleep(200 * time.Millisecond)
-			}
-
-			if err := dm.applyTransactionOps(ops, txID); err != nil {
-				lg.Logf(lg.ErrorLevel, "TransactionCommitter: failed to apply transaction %s: %s", txID, err)
-				system.MsgOnErrorReturn(msg.Nak())
-				return
-			}
-
-			// Advance the cache's "last committed tx" watermark. The
-			// backup-write-barrier readiness check uses this watermark
-			// instead of the old per-node syncedWithKV scan: a barrier set
-			// at time B is ready once the watermark ≥ B (i.e. every WAL
-			// transaction up to B has landed in KV). txID is the int64 tx
-			// timestamp formatted by cache.kvLazyWriter.
-			if txTime, perr := strconv.ParseInt(txID, 10, 64); perr == nil {
-				dm.cache.RecordCommittedTx(txTime)
-			}
-
-			lg.Logf(lg.TraceLevel, "TransactionCommitter: transaction %s completed, Ack()", txID)
-			system.MsgOnErrorReturn(msg.Ack())
-
-			processedCount++
-			if pendingCount > 0 && processedCount >= pendingCount {
-				lg.Logf(lg.DebugLevel, "TransactionCommitter: all %d pending transactions processed, marking KV as consistent", pendingCount)
-				if err = dm.setKVConsistent(true); err != nil {
-					lg.Logf(lg.ErrorLevel, "TransactionCommitter: failed to set KV as consistent: %s", err)
-				}
-				pendingCount = 0
-			}
-		},
-		nats.Bind(WALCommitsStreamName, consumerName),
-		nats.ManualAck(),
-	)
-
-	if err != nil {
-		return err
+	// Reclaim delete markers only after their revisions are covered by a receipt.
+	for _, deletion := range deletes {
+		dm.cache.NoteKVTombstone(deletion.Key, deletion.Revision)
 	}
-
-	close(ready)
-
-	<-dm.cache.Synced
-
-	if err = dm.setKVConsistent(false); err != nil {
-		lg.Logf(lg.ErrorLevel, "Failed to set KV as inconsistent: %s", err)
+	// An existing receipt means this is a redelivery of a completed apply.
+	// Do not reapply an older PUT or DELETE over newer values in KV.
+	if txTime, err := strconv.ParseInt(txID, 10, 64); err == nil {
+		dm.cache.RecordCommittedTx(txTime)
 	}
-
-	lg.Logf(lg.TraceLevel, "Cache synced, recounting pending transactions for shutdown")
-
-	finalPendingCount := dm.countPendingCommits(consumerName)
-	lg.Logf(lg.TraceLevel, "Final pending transactions count: %d", finalPendingCount)
-
-	if finalPendingCount == 0 {
-		lg.Logf(lg.TraceLevel, "No final pending transactions, shutdown complete")
-		return nil
+	if err := msg.AckSync(nats.Context(ctx)); err != nil {
+		return fmt.Errorf("WAL sequence %d acknowledgement: %w", meta.Sequence.Stream, err)
 	}
-
-	startWait := time.Now()
-	lastLogTime := startWait
-
-	for {
-		currentPending := dm.countPendingCommits(consumerName)
-
-		if time.Since(lastLogTime) >= shutdownLogInterval {
-			lg.Logf(lg.TraceLevel, "Shutdown: waiting for transactions, pending=%d, elapsed=%v",
-				currentPending, time.Since(startWait).Round(time.Second))
-			lastLogTime = time.Now()
-		}
-
-		if currentPending == 0 {
-			lg.Logf(lg.TraceLevel, "All transactions processed in %v, shutdown complete",
-				time.Since(startWait).Round(time.Millisecond))
-			return nil
-		}
-
-		if time.Since(startWait) > shutdownMaxWait {
-			lg.Logf(lg.WarnLevel, "Shutdown timeout reached after %v with %d pending transactions",
-				shutdownMaxWait, currentPending)
-			return nil
-		}
-
-		time.Sleep(shutdownPollInterval)
-	}
+	return nil
 }
 
 // pendingKVOp is one in-flight async KV write whose PubAck is pending.
@@ -288,8 +291,12 @@ type pendingKVOp struct {
 // roughly 5–10× on a local NATS server (RT ≈ 200µs, chunk of 1024
 // publishes shares one pipeline), and 15–25× on a remote NATS
 // (RT ≈ 5ms+).
-func (dm *Domain) applyTransactionOps(ops []cache.WALOp, txID string) error {
+func (dm *Domain) applyTransactionOps(ctx context.Context, ops []cache.WALOp, txID string, sequence uint64) ([]walAppliedDelete, error) {
+	var deletes []walAppliedDelete
 	for start := 0; start < len(ops); start += applyTransactionOpsChunkSize {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		end := start + applyTransactionOpsChunkSize
 		if end > len(ops) {
 			end = len(ops)
@@ -304,14 +311,14 @@ func (dm *Domain) applyTransactionOps(ops []cache.WALOp, txID string) error {
 			case cache.OpTypePUT:
 				f, err := customNatsKv.KVPutAsync(dm.js, dm.kv, op.Key, op.Value)
 				if err != nil {
-					return fmt.Errorf("KV apply (publish PUT) failed for key=%s in tx=%s: %w", op.Key, txID, err)
+					return nil, fmt.Errorf("KV apply (publish PUT) failed for key=%s in tx=%s: %w", op.Key, txID, err)
 				}
 				pending = append(pending, pendingKVOp{key: op.Key, opType: op.OpType, future: f})
 
 			case cache.OpTypeDelete:
 				f, err := customNatsKv.KVDeleteAsync(dm.js, dm.kv, op.Key)
 				if err != nil {
-					return fmt.Errorf("KV apply (publish DEL) failed for key=%s in tx=%s: %w", op.Key, txID, err)
+					return nil, fmt.Errorf("KV apply (publish DEL) failed for key=%s in tx=%s: %w", op.Key, txID, err)
 				}
 				pending = append(pending, pendingKVOp{key: op.Key, opType: op.OpType, future: f})
 
@@ -326,12 +333,17 @@ func (dm *Domain) applyTransactionOps(ops []cache.WALOp, txID string) error {
 		deadline := time.After(applyTransactionOpsAckTimeout)
 		for i, p := range pending {
 			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
 			case pa := <-p.future.Ok():
 				// A DEL is a marker the broker keeps until somebody removes
 				// it; the ack says where it landed, and the purger removes
 				// it by that sequence (cache/kv_tombstones.go).
-				if p.opType == cache.OpTypeDelete && pa != nil {
-					dm.cache.NoteKVTombstone(p.key, pa.Sequence)
+				if pa == nil || pa.Sequence == 0 {
+					return nil, fmt.Errorf("KV apply returned no durable revision in tx=%s", txID)
+				}
+				if p.opType == cache.OpTypeDelete {
+					deletes = append(deletes, walAppliedDelete{Key: p.key, Revision: pa.Sequence})
 				}
 
 			case err := <-p.future.Err():
@@ -341,16 +353,17 @@ func (dm *Domain) applyTransactionOps(ops []cache.WALOp, txID string) error {
 				// do not swallow "key not found" / "message not
 				// found" here — any error is a real publish failure
 				// and must trigger redelivery.
-				return fmt.Errorf("KV apply ack failed in tx=%s at op %d (key=%s, type=%s): %w", txID, start+i, p.key, p.opType, err)
+				return nil, fmt.Errorf("KV apply ack failed in tx=%s at op %d (key=%s, type=%s): %w", txID, start+i, p.key, p.opType, err)
 
 			case <-deadline:
-				return fmt.Errorf("KV apply ack timed out (%s) in tx=%s at op %d (key=%s, type=%s, pool may be saturated)",
+				return nil, fmt.Errorf("KV apply ack timed out (%s) in tx=%s at op %d (key=%s, type=%s, pool may be saturated)",
 					applyTransactionOpsAckTimeout, txID, start+i, p.key, p.opType)
 			}
 		}
+		dm.recordWALApplyProgress(sequence, end)
 	}
 
-	return nil
+	return deletes, nil
 }
 
 func (dm *Domain) setKVConsistent(consistent bool) error {
@@ -394,7 +407,13 @@ func (dm *Domain) WaitForKVCaughtUp(ctx context.Context, timeout time.Duration) 
 	consumerName := CommitterDurableName + "-" + dm.kv.Bucket()
 	for {
 		cachePending := dm.cache.HasPendingWrites()
-		committerPending := dm.countPendingCommits(consumerName)
+		if err := dm.walTerminalError(); err != nil {
+			return err
+		}
+		committerPending, err := dm.countPendingCommits(consumerName)
+		if err != nil {
+			return err
+		}
 		if !cachePending && committerPending == 0 {
 			return nil
 		}
@@ -418,17 +437,16 @@ func (dm *Domain) WaitForKVCaughtUp(ctx context.Context, timeout time.Duration) 
 // not in KV. Counting only the undelivered ones let WaitForKVCaughtUp report
 // that everything was durable while the last transaction was still being
 // written — whoever reloaded the cache from KV next was short its whole tail.
-func (dm *Domain) countPendingCommits(consumerName string) int {
+func (dm *Domain) countPendingCommits(consumerName string) (int, error) {
 	info, err := dm.js.ConsumerInfo(WALCommitsStreamName, consumerName)
 	if err != nil {
-		lg.Logf(lg.ErrorLevel, "Failed to get consumer info: %s", err)
-		return 0
+		return 0, fmt.Errorf("read WAL consumer %s: %w", consumerName, err)
 	}
 
 	pending := int(info.NumPending) + int(info.NumAckPending)
 	lg.Logf(lg.TraceLevel, "Consumer %s has %d transactions not in KV yet (%d undelivered, %d being applied)",
 		consumerName, pending, info.NumPending, info.NumAckPending)
-	return pending
+	return pending, nil
 }
 
 func generateTransactionID() string {
@@ -549,4 +567,3 @@ func (dm *Domain) startExportCommitter(ctx context.Context) error {
 	lg.Logf(lg.DebugLevel, "ExportCommitter pipeline started")
 	return nil
 }
-

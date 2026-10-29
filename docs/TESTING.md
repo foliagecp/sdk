@@ -48,6 +48,9 @@ are the only non-pass/fail items (they measure, they do not gate).
   `ha_test.go` (two-runtime active/passive exclusivity + recovery),
   `function_type_msg_test.go` (nil-`Caller` guard), `semantic_translator_test.go`,
   `export_committer_test.go`, `export_consumer_test.go`, `export_integration_test.go`.
+  `wal_recovery_test.go` covers applied receipts before ACK, safe redelivery,
+  invalid evidence, storage failures, progress deadlines, receipt pruning,
+  conditional delete reconciliation and cache reload after WAL replay.
 - **`statefun/cache`** — `store_value_lazy_test.go`, `backup_barrier_test.go`.
 - **`statefun/system`** — `keymutex_timeout_test.go`.
 - **`clients/go/db`** — `common_test.go`.
@@ -167,6 +170,7 @@ The per-test design notes (topology, steps, assertions) are in
 | Concurrency (`-race`) | covered | exercised by `crud-soak` under load |
 | HA active/passive + recovery | covered (2 in-proc) | **`ha-3-node`** failover/continuity |
 | WAL durability across restart | covered (2 in-proc) | **`wal-restart-recovery`** (SIGKILL + restart) |
+| Missing WAL record with a pending ACK | covered (observable-state fault injection) | **`wal-ack-recovery`** (real NATS 2.12.4 SIGKILL, archive/restore, proven repair and legacy refusal) |
 | Graceful shutdown (drain) | not go-testable¹ | **`graceful-shutdown`** (real SIGTERM) |
 | Load / soak (degradation) | — | `crud-soak` (responsive + consistent after load) |
 | Coherent export (PG/Neo4j) | covered by `tests/integration/export` | — (already an integration test) |
@@ -191,3 +195,9 @@ real NATS instance with the runtime in its own container.
 - Concurrency-sensitive tests run under `-race`.
 - Mutating CRUD tests assert graph invariants (no orphans/phantoms/dangling
   indices; exactly one `__type` link) via the shared consistency helper.
+
+The `wal-ack-recovery` fixture runs NATS 2.12.4 in Docker and the SDK in separate
+host processes to control the broker crash point. It uses only generated data
+and local temporary containers, without modifying a persisted state file.
+See [WAL crash recovery](./domain_lifecycle.md#wal-crash-recovery) for guarantees,
+retention limits, commands and prerequisites.

@@ -67,6 +67,7 @@ run **sequentially** (one at a time) so they do not contend for ports/CPU.
 |---|---|
 | `graceful-shutdown` | clean drain on real SIGTERM (exit 0, bounded, no committed op lost) |
 | `wal-restart-recovery` | committed data survives an ungraceful SIGKILL + restart |
+| `wal-ack-recovery` | NATS 2.12.4 orphan ACK after real SIGKILL and archive/restore; receipt-based repair, exact data verification and legacy refusal |
 | `ha-3-node` | leadership/failover across 3 runtimes; service continuity + no data loss |
 | `crud-soak` | sustained concurrent CRUD; runtime stays responsive; graph stays consistent |
 | `_lib/` | shared harness (compose helpers + the `assert` client) — not a test |
@@ -88,3 +89,8 @@ See [`docs/TESTING.md`](../docs/TESTING.md) for the overall strategy and
 roadmap.
 
 [testcontainers-go]: https://golang.testcontainers.org/
+
+`wal-ack-recovery` controls disposable NATS containers through the local Docker
+CLI/Unix endpoint and runs the SDK in separate host processes. It needs Go and
+tar; it does not use Python or edit NATS state files. All containers, copied
+stores and archives are scoped to the test and removed on completion.
