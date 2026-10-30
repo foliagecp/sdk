@@ -1,7 +1,7 @@
 package statefun
 
-// HA active/passive correctness (the 116 area) with two real runtimes sharing
-// one embedded NATS and the same domain:
+// HA active/passive correctness with two real runtimes sharing
+// one containerized NATS broker and the same domain:
 //   - exactly one instance is active at a time (KV runtime-lock exclusivity);
 //   - after the active shuts down, the passive takes over (recovery).
 //
@@ -15,7 +15,6 @@ import (
 
 	"github.com/foliagecp/sdk/statefun/cache"
 	"github.com/foliagecp/sdk/statefun/system"
-	natsservertest "github.com/nats-io/nats-server/v2/test"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,17 +33,7 @@ func Test_HA_ActivePassive_ExclusivityAndRecovery(t *testing.T) {
 	if system.GlobalPrometrics == nil {
 		system.GlobalPrometrics = system.NewPrometrics("", "")
 	}
-	opts := natsservertest.DefaultTestOptions
-	opts.JetStream = true
-	opts.Port = -1
-	// DefaultTestOptions leaves StoreDir empty → nats-server falls back to the
-	// FIXED shared path $TMPDIR/jetstream, which persists across runs and is
-	// shared with sibling packages during `go test ./...`. Give every run its
-	// own auto-cleaned store dir so stale streams/KV cannot poison it.
-	opts.StoreDir = t.TempDir()
-	srv := natsservertest.RunServer(&opts)
-	defer srv.Shutdown()
-	url := srv.ClientURL()
+	url := newHABroker(t)
 
 	// Cancellable contexts so both runtimes' goroutines wind down at test end —
 	// otherwise they keep thrashing and destabilize sibling tests in the package.

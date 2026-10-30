@@ -11,7 +11,7 @@
 #   scripts/run-all-tests.sh [--race] [--coverage] [--quick] [--go-only]
 #                            [--system-only] [--cache-mode MODE]
 #
-#   --race        run Go tests under the race detector (slower)
+#   --race        race-check Go tests and containerized recovery regressions
 #   --coverage    write a merged coverage profile (coverage.out) over ./...
 #   --quick       run Go packages in parallel (fast, but embedded-NATS suites
 #                 may flake under contention; default is serial for reliability)
@@ -58,6 +58,22 @@ source "$(dirname "$SELF")/_lib/cache-mode.sh"
 cache_mode_resolve "$CACHE_MODE_ARG" || exit 2
 cache_mode_banner
 
+# Propagate race mode to system fixtures which compile Go regression tests.
+SDK_TEST_RACE=0
+[ -n "$RACE" ] && SDK_TEST_RACE=1
+export SDK_TEST_RACE
+
+# NATS 2.10's macOS sysmem implementation fails checkptr under Go 1.27
+# before SDK race tests start. Keep checks enabled and run that phase in Linux.
+run_go_tests() {
+  if [ -n "$RACE" ] && [ "$(uname -s)" = Darwin ]; then
+    source scripts/_lib/linux-go-test.sh
+    SDK_TEST_DOCKER_ACCESS=1 SDK_TEST_SOURCE_MODE=rw sdk_go_test_in_linux "$@"
+  else
+    go test "$@"
+  fi
+}
+
 fail=0
 
 # sweep_systest_leftovers removes containers/volumes surviving an interrupted
@@ -88,7 +104,7 @@ if [ "$SYSTEM_ONLY" -eq 0 ]; then
   echo "=================================================================="
   sweep_systest_leftovers
   # shellcheck disable=SC2086
-  if go test ${PARALLEL} -count=1 ${RACE} ${COVER} ./...; then
+  if run_go_tests ${PARALLEL} -count=1 ${RACE} ${COVER} ./...; then
     echo ">> Go tests: PASS"
   else
     echo ">> Go tests: FAIL"

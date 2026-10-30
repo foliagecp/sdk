@@ -66,6 +66,7 @@ run **sequentially** (one at a time) so they do not contend for ports/CPU.
 | Project | Verifies |
 |---|---|
 | `graceful-shutdown` | clean drain on real SIGTERM (exit 0, bounded, no committed op lost) |
+| `cache-graph-recovery` | synthetic WAL replay/publication, stale operations, partial deletion, read repair and concurrent trash-can restore; reuses Go assertions in Linux and honors `--race` |
 | `wal-restart-recovery` | committed data survives an ungraceful SIGKILL + restart |
 | `wal-ack-recovery` | NATS 2.12.4 orphan ACK after real SIGKILL and archive/restore; receipt-based repair, exact data verification and legacy refusal |
 | `ha-3-node` | leadership/failover across 3 runtimes; service continuity + no data loss |
@@ -94,3 +95,12 @@ roadmap.
 CLI/Unix endpoint and runs the SDK in separate host processes. It needs Go and
 tar; it does not use Python or edit NATS state files. All containers, copied
 stores and archives are scoped to the test and removed on completion.
+
+`cache-graph-recovery` runs the same Go regression assertions used by Phase 1
+inside a Linux Go container. It is intentionally included in `--system-only`
+so recovery fixes cannot escape that gate. `--race` instruments these tests
+in either mode. On macOS the full Go race phase also runs in Linux to avoid
+the embedded test broker's platform-specific checkptr failure. The full phase
+mounts the local Docker socket for testcontainers; the focused recovery fixture
+does not. Downloaded modules and compiled packages are retained in the Docker
+volumes `foliage-test-go-mod` and `foliage-test-go-build` for subsequent runs.

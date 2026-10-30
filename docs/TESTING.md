@@ -40,6 +40,16 @@ are the only non-pass/fail items (they measure, they do not gate).
   - `hunt_property_test.go` + `hunt_consistency_helper_test.go` — property-based
     random CRUD sequences with a graph-consistency invariant after every step.
   - `hunt_triggers_test.go` — CMDB trigger firing.
+  - `restart_pending_wal_test.go`, `wal_apply_failure_test.go` and
+    `wal_publish_gap_test.go` — cache/KV agreement after restart, retry after
+    temporary broker refusal, and changes appended during a WAL publish.
+  - `trash_can_bodyless_test.go`, `stale_delete_cascade_test.go`,
+    `delete_recovery_controls_test.go`, `type_read_recovery_test.go` and
+    `object_structure_recovery_test.go` — partial deletion cleanup, safe
+    read repair around existing bodies, parked-object preservation and no
+    recreation of missing bodies.
+  - `stale_write_resurrect_test.go` — pre-recovery operations cannot recreate
+    deleted vertices or links after a cache reload.
   - `hunt_wal_sync_test.go` — a second runtime syncs state from the shared KV/WAL.
 - **`embedded/graph/jpgql`** — `body_filter_test.go`, `fanout_filter_test.go`
   (filters, parse-once, multi-hop).
@@ -115,7 +125,7 @@ then the system tests (when present). Flags:
 
 | Flag | Effect |
 |---|---|
-| `--race` | run Go tests under the race detector (slower) |
+| `--race` | instrument Go tests and the containerized recovery regression fixture with the race detector |
 | `--coverage` | write a merged `coverage.out` over `./...` |
 | `--quick` | run Go packages in parallel (fast, may flake) |
 | `--go-only` | skip the system-test phase |
@@ -201,3 +211,36 @@ host processes to control the broker crash point. It uses only generated data
 and local temporary containers, without modifying a persisted state file.
 See [WAL crash recovery](./domain_lifecycle.md#wal-crash-recovery) for guarantees,
 retention limits, commands and prerequisites.
+
+## Recovery regression gate
+
+The tests imported from the WAL regression branch remain ordinary `*_test.go`
+files in `embedded/graph/crud/`; no private snapshots are required. Their
+assertions run in the normal Go phase and are also reused by the Linux
+`cache-graph-recovery` system fixture. New cache boundary, conditional-write,
+shutdown retry, structural repair and concurrent restore checks run alongside
+them. Failing assertions fail the runner; there are no expected failures or
+silent skips in this gate. The system fixture prints individual subtest
+verdicts, including the synthetic snapshot replay which previously required
+a private archive and was skipped when it was unavailable.
+
+```sh
+scripts/run-all-tests.sh                       # Go and all system fixtures
+scripts/run-all-tests.sh --system-only         # includes recovery regressions
+scripts/run-all-tests.sh --system-only --race  # race-checks recovery regressions
+scripts/run-all-tests.sh --race                # full Go race phase + systems
+```
+
+The recovery fixture uses the Go major/minor version declared in `go.mod` and
+passes through the selected cache mode. On macOS the Go race phase runs in
+Linux Docker because the embedded NATS 2.10 sysmem code otherwise aborts in
+checkptr before the SDK tests run. Pointer checks are not disabled. The full
+Go phase mounts the local Docker socket for integration-test dependencies;
+the focused recovery fixture does not need that access. Test containers are
+removed on completion; dependency/build caches remain in named Docker volumes.
+
+The HA component tests use a pinned NATS 2.12.4 container for concurrent runtime
+startup. The old embedded NATS 2.10.12 broker has a reservation-accounting race
+under concurrent stream creation; the SDK gate does not disable detection to
+hide it. SDK code stays instrumented, and runtime client/module dependencies
+are unchanged. Running the HA component tests therefore requires local Docker.

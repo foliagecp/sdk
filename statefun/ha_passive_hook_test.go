@@ -16,7 +16,6 @@ import (
 
 	"github.com/foliagecp/sdk/statefun/cache"
 	"github.com/foliagecp/sdk/statefun/system"
-	natsservertest "github.com/nats-io/nats-server/v2/test"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,13 +23,7 @@ func Test_HA_OnBecamePassive_FiresOnDemotion(t *testing.T) {
 	if system.GlobalPrometrics == nil {
 		system.GlobalPrometrics = system.NewPrometrics("", "")
 	}
-	opts := natsservertest.DefaultTestOptions
-	opts.JetStream = true
-	opts.Port = -1
-	opts.StoreDir = t.TempDir() // own auto-cleaned JetStream store (see ha_test.go)
-	srv := natsservertest.RunServer(&opts)
-	defer srv.Shutdown()
-	url := srv.ClientURL()
+	url := newHABroker(t)
 
 	var passiveCount atomic.Int64
 	var ctxBounded atomic.Bool

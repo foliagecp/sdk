@@ -7,13 +7,13 @@ package statefun
 // active — the same guarantee a statically-registered FT has. Before the fix in
 // startFunctionSubscriptions, any single-instance FT missing from the startup
 // `revisions` map was skipped on every promotion, so dynamic handlers stayed
-// dead after the first failover (osm-app's per-pack slot handlers).
+// dead after the first failover.
 //
 // This test registers one static and one dynamic single-instance FT, forces a
 // real demotion (OnBecamePassive marks the moment subscriptions are torn down),
 // then verifies BOTH receive signals again after the instance re-promotes: the
 // static one proving no regression (T4), the dynamic one proving the fix
-// (T1/T2). Runs on embedded NATS.
+// (T1/T2). Runs against a containerized NATS broker.
 
 import (
 	"context"
@@ -25,7 +25,6 @@ import (
 	"github.com/foliagecp/sdk/statefun/cache"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
-	natsservertest "github.com/nats-io/nats-server/v2/test"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,13 +32,7 @@ func Test_HA_DynamicFunctionType_ResubscribesAfterFailover(t *testing.T) {
 	if system.GlobalPrometrics == nil {
 		system.GlobalPrometrics = system.NewPrometrics("", "")
 	}
-	opts := natsservertest.DefaultTestOptions
-	opts.JetStream = true
-	opts.Port = -1
-	opts.StoreDir = t.TempDir()
-	srv := natsservertest.RunServer(&opts)
-	defer srv.Shutdown()
-	url := srv.ClientURL()
+	url := newHABroker(t)
 
 	var staticHits, dynamicHits atomic.Int64
 	demoted := make(chan struct{}, 1)
@@ -130,13 +123,7 @@ func Test_HA_DynamicFunctionType_FailoverToSecondInstance(t *testing.T) {
 	if system.GlobalPrometrics == nil {
 		system.GlobalPrometrics = system.NewPrometrics("", "")
 	}
-	opts := natsservertest.DefaultTestOptions
-	opts.JetStream = true
-	opts.Port = -1
-	opts.StoreDir = t.TempDir()
-	srv := natsservertest.RunServer(&opts)
-	defer srv.Shutdown()
-	url := srv.ClientURL()
+	url := newHABroker(t)
 
 	const fn = "fn.dynamic.failover2"
 	var activeHits, passiveHits atomic.Int64
