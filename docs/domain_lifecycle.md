@@ -77,6 +77,45 @@ Upgrade all SDK replicas serving the same bucket to obtain this protection;
 older binaries do not write receipts. Public function signatures, application
 payloads and request/reply formats are unchanged.
 
+## Cache recovery and graph read repair
+
+Before serving functions, the runtime drains pending WAL into KV and reloads
+its working cache. Each completed KV load establishes a process-local time
+boundary. Mutations stamped earlier than that boundary are refused even for
+absent keys. Graph operations report a failed OpMsg instructing the caller to
+retry with a new operation timestamp. The boundary advances again after an
+HA promotion reload. It does not add per-key service records or change KV/WAL
+payload formats. An unstamped request receives its timestamp when processed;
+the SDK cannot infer its original creation time from an absent timestamp.
+
+Pending changes appended while a WAL publish awaits its acknowledgement stay
+pending until their own publication succeeds. A failed shutdown publication
+retains those changes and does not close the cache's successful-flush signal.
+Retries are bounded during shutdown; this does not make writes which never
+reached WAL survive an abrupt process kill.
+
+Vertex bodies are authoritative during read repair. A local type membership
+pointing at a missing body is removed, never used to recreate that body or
+park a nonexistent object. A surviving object body and its own current type
+pointer can justify repairing its structural links. Repair preserves the body
+and existing link metadata, and never chooses a type from a stale membership
+on another vertex. Missing or malformed trash-edge provenance is reported as
+an error rather than replaced with an invented deletion time or original type.
+A parked object's current type takes precedence over an
+old membership, so reading the old type cannot restore it to the live graph.
+Local cache absence is not evidence that a remote vertex is missing.
+
+A failed vertex deletion can leave its body and some links present. The call
+reports failure; a subsequent explicit deletion cleans addressable remnants,
+including links without bodies and vertices whose type link is already gone.
+Deleting a bodyless object cleans links rather than moving it into the trash
+can. Successful ordinary vertex deletion removes the body; `links_only` and
+trash-can parking deliberately retain it. An isolated low-level vertex is
+valid data: there is no blanket garbage collector deleting all unlinked
+bodies, and no persistent background delete-intent mechanism is introduced.
+A stale incoming reference must not delete a replacement edge which now
+points to a different vertex.
+
 ## Validation
 
 Run the focused regression checks with the race detector:

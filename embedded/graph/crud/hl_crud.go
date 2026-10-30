@@ -45,6 +45,10 @@ func CreateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 		return
 	}
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 	operationKeysMutexLock(ctx, []string{selfID, typesVertexId}, true, opTime)
 
 	ctx.Payload.SetByPath("op_time", easyjson.NewJSON(opTime))
@@ -104,6 +108,10 @@ func UpdateType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	}
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 	operationKeysMutexLock(ctx, []string{selfID}, true, opTime)
 
 	ctx.Payload.SetByPath("op_time", easyjson.NewJSON(opTime))
@@ -152,6 +160,10 @@ func DeleteType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	}
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 	operationKeysMutexLock(ctx, []string{selfID}, true, opTime)
 
 	ctx.Payload.SetByPath("op_time", easyjson.NewJSON(opTime))
@@ -221,6 +233,10 @@ func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProces
 	RecalculateInheritanceCacheForTypeAtSelfIDIfNeeded(ctx) // Will try to do operationKeysMutexLock(ctx, []string{selfID}, true) that's why it is before operationKeysMutexLock(ctx, []string{selfID}, false), otherwise deadlock appears
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 	operationKeysMutexLock(ctx, []string{selfID}, false, opTime)
 
 	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &payload), ctx.Options))
@@ -255,16 +271,56 @@ func ReadType(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProces
 
 	toTypes := []string{}
 	toObjects := []string{}
+	outNames, outTypes, outIDs := []string{}, []string{}, []string{}
 	for i := 0; i < m.Data.GetByPath("links.out.names").ArraySize(); i++ {
+		name := m.Data.GetByPath("links.out.names").ArrayElement(i).AsStringDefault("")
 		tp := m.Data.GetByPath("links.out.types").ArrayElement(i).AsStringDefault("")
 		toId := m.Data.GetByPath("links.out.ids").ArrayElement(i).AsStringDefault("")
+		if tp == OBJECT_TYPELINK {
+			keep, err := repairTypeReadMember(ctx, selfID, toId, name, opTime)
+			if err != nil {
+				om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
+				return
+			}
+			if !keep {
+				continue
+			}
+			toObjects = append(toObjects, toId)
+		}
 		if tp == TO_TYPELINK {
 			toTypes = append(toTypes, toId)
 		}
-		if tp == OBJECT_TYPELINK {
-			toObjects = append(toObjects, toId)
+		outNames, outTypes, outIDs = append(outNames, name), append(outTypes, tp), append(outIDs, toId)
+	}
+	seenObjects := make(map[string]bool, len(toObjects))
+	for _, id := range toObjects {
+		seenObjects[id] = true
+	}
+	for i := 0; i < m.Data.GetByPath("links.in").ArraySize(); i++ {
+		in := m.Data.GetByPath("links.in").ArrayElement(i)
+		if in.GetByPath("type").AsStringDefault("") != TO_TYPELINK {
+			continue
+		}
+		id := in.GetByPath("from").AsStringDefault("")
+		if seenObjects[id] || ctx.Domain.GetDomainFromObjectID(id) != ctx.Domain.Name() {
+			continue
+		}
+		name := ctx.Domain.GetObjectIDWithoutDomain(id)
+		keep, err := repairTypeReadMember(ctx, selfID, id, name, opTime)
+		if err != nil {
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
+			return
+		}
+		if keep {
+			seenObjects[id] = true
+			toObjects = append(toObjects, id)
+			outNames, outTypes, outIDs = append(outNames, name), append(outTypes, OBJECT_TYPELINK), append(outIDs, id)
 		}
 	}
+
+	m.Data.SetByPath("links.out.names", easyjson.NewJSON(outNames))
+	m.Data.SetByPath("links.out.types", easyjson.NewJSON(outTypes))
+	m.Data.SetByPath("links.out.ids", easyjson.NewJSON(outIDs))
 
 	result := easyjson.NewJSONObject()
 	if m.Data.PathExists("body") {
@@ -389,6 +445,10 @@ func CreateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	builtInObjectsVertexId := ctx.Domain.CreateObjectIDWithHubDomain(BUILT_IN_OBJECTS, false)
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 	ctx.Payload.SetByPath("op_time", easyjson.NewJSON(opTime))
 
 	// Exclusive lock only on the NEW object itself; SHARED on the objects root
@@ -429,6 +489,10 @@ func UpdateObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	selfID := getOriginalID(ctx.Self.ID)
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 	ctx.Payload.SetByPath("op_time", easyjson.NewJSON(opTime))
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -589,6 +653,10 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	selfID := getOriginalID(ctx.Self.ID)
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 	ctx.Payload.SetByPath("op_time", easyjson.NewJSON(opTime))
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -600,23 +668,9 @@ func DeleteObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextPr
 	// same-goroutine read→write upgrade — a deadlock.
 	operationKeysMutexLock(ctx, []string{selfID}, true, opTime)
 	objectType, err := findObjectType(ctx, selfID)
-	if err != nil {
-		// Probe the cache directly: with Option 1A applied, ReadObject
-		// returns IDLE for both "vertex missing" and "vertex is an orphan",
-		// so findObjectType's error text alone cannot distinguish them.
-		vertexID := ctx.Domain.CreateObjectIDWithThisDomain(selfID, false)
-		if !ctx.Domain.Cache().ExistsJson(vertexID) {
-			// (a) Vertex truly absent — idempotent IDLE. Still drop the
-			// objectTypeCache entry: a partially deleted object would keep
-			// it in the process-global cache forever otherwise.
-			cacheDeleteObjectType(selfID)
-			operationKeysMutexUnlock(ctx)
-			om.AggregateOpMsg(sfMediators.OpMsgIdle(err.Error())).Reply()
-			return
-		}
-		// (b) Orphan: clear stale cached type and fall through with empty
-		// objectType. vertex.delete still runs; trigger dispatch is
-		// skipped below because objectType == "".
+	if err != nil || !ctx.Domain.Cache().ExistsJson(selfID) {
+		// Missing bodies cannot be parked. Route both typeless vertices and
+		// bodyless link remnants through the low-level cleanup pipeline.
 		cacheDeleteObjectType(selfID)
 		objectType = ""
 	}
@@ -747,6 +801,17 @@ func ReadObject(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProc
 	}
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
+	if kind, typeID, ok := lookupOutLinkByName(ctx.Domain, selfID, "type"); ok && kind == TO_TYPELINK && ctx.Domain.Cache().ExistsJson(selfID) {
+		if _, err := repairExistingObjectStructure(ctx, selfID, typeID, opTime); err != nil {
+			om.AggregateOpMsg(sfMediators.OpMsgFailed(err.Error())).Reply()
+			return
+		}
+	}
+
 	operationKeysMutexLock(ctx, []string{selfID}, false, opTime)
 	m := sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, "functions.graph.api.vertex.read", makeSequenceFreeParentBasedID(ctx, selfID), injectParentHoldsLocks(ctx, &payload), ctx.Options))
 	operationKeysMutexUnlock(ctx)
@@ -884,6 +949,10 @@ func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	}
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -942,6 +1011,10 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	}
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -1023,6 +1096,10 @@ func DeleteTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	}
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 
 	goal := PolyTypeCascadeDeleteGoalType{
 		reason: SuperTypeDeleteOutTypeObjectLink,
@@ -1130,6 +1207,10 @@ func ReadTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 	payload.SetByPath("details", easyjson.NewJSON(true))
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 	// Read locks only the link owner (selfID); the target type vertex (toType) is not
 	// read here, only used to resolve the link name in the delegated link.read. Same
 	// unnecessary-lock / deadlock fix as LLAPILinkRead.
@@ -1163,6 +1244,10 @@ func CreateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	selfID := getOriginalID(ctx.Self.ID)
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -1227,6 +1312,10 @@ func UpdateObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	selfID := getOriginalID(ctx.Self.ID)
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -1309,6 +1398,10 @@ func DeleteObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	selfID := getOriginalID(ctx.Self.ID)
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -1369,6 +1462,10 @@ func ReadObjectsLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	objectToID = ctx.Domain.CreateObjectIDWithThisDomain(objectToID, false)
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 	operationKeysMutexLock(ctx, []string{edgeLockKey(selfID, objectToID)}, false, opTime)
 
 	// ReadObjectsLink reads the link of the BASE type declared by the TypesLink

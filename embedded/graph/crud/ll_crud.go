@@ -437,6 +437,10 @@ func LLAPIVertexCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	}
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 	operationKeysMutexLock(ctx, []string{selfID}, true, opTime)
 	if ctx.Domain.Cache().ExistsJson(selfID) { // If vertex already exists
 		operationKeysMutexUnlock(ctx)
@@ -487,6 +491,10 @@ func LLAPIVertexUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	selfID := getOriginalID(ctx.Self.ID)
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 	ctx.Payload.SetByPath("op_time", easyjson.NewJSON(opTime))
 
 	om := sfMediators.NewOpMediator(ctx)
@@ -723,10 +731,14 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	selfID := getOriginalID(ctx.Self.ID)
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 
 	om := sfMediators.NewOpMediator(ctx)
 
-	if !ctx.Domain.Cache().ExistsJson(selfID) { // If vertex does not exist
+	if !ctx.Domain.Cache().ExistsJson(selfID) && len(vertexLinkResidue(ctx, selfID)) == 0 {
 		// Even an idempotent no-op delete must drop the objectTypeCache
 		// entry: a partially deleted vertex (body already gone) otherwise
 		// keeps its entry in the process-global cache forever.
@@ -736,6 +748,15 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 	}
 
 	opStack := getOpStackFromOptions(ctx.Options)
+	failDelete := func(details string) {
+		cacheDeleteObjectType(selfID)
+		om.AggregateOpMsg(sfMediators.OpMsgFailed(details))
+		system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
+	}
+	if deletionKeysAreStale(ctx, append(vertexLinkResidue(ctx, selfID), selfID), opTime) {
+		failDelete("stale vertex deletion: newer values are present")
+		return
+	}
 
 	// Delete all out links -------------------------------
 	// When both endpoints are local (the common case) the whole link is deleted
@@ -751,13 +772,29 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 
 		if linkType, toId, ok := resolveOutLinkByName(ctx, selfID, linkName); ok && ctx.Domain.GetDomainFromObjectID(toId) == ctx.Domain.Name() {
 			operationKeysMutexLock(ctx, []string{selfID, toId}, true, opTime)
+			if kind, target, found := resolveOutLinkByName(ctx, selfID, linkName); !found || kind != linkType || target != toId {
+				operationKeysMutexUnlock(ctx)
+				failDelete("outgoing link changed while deletion was acquiring its lock; retry")
+				return
+			}
+			edgeKeys := deletionEdgeKeys(ctx, selfID, toId, linkName, linkType)
+			if deletionKeysAreStale(ctx, edgeKeys, opTime) {
+				operationKeysMutexUnlock(ctx)
+				failDelete("stale outgoing-link deletion")
+				return
+			}
 			var oldLinkBody *easyjson.JSON
 			if opStack != nil {
 				oldLinkBody, _ = ctx.Domain.Cache().GetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName))
 			}
 			deleteOutLinkFromSideKeys(ctx, linkDeleteTypename, selfID, linkType, linkName, toId, oldLinkBody, opStack, opTime)
 			ctx.Domain.Cache().DeleteValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, toId, selfID, linkName), true, opTime)
+			left := deletionKeysRemain(ctx, edgeKeys)
 			operationKeysMutexUnlock(ctx)
+			if left {
+				failDelete("outgoing link was not fully removed")
+				return
+			}
 			continue
 		}
 
@@ -786,26 +823,19 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 		linkName := inLinkKeyTokens[len(inLinkKeyTokens)-1]
 
 		if ctx.Domain.GetDomainFromObjectID(fromObjectID) == ctx.Domain.Name() {
-			operationKeysMutexLock(ctx, []string{fromObjectID, selfID}, true, opTime)
-			if linkType, toId, ok := resolveOutLinkByName(ctx, fromObjectID, linkName); ok {
-				var oldLinkBody *easyjson.JSON
-				if opStack != nil {
-					oldLinkBody, _ = ctx.Domain.Cache().GetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, fromObjectID, linkName))
-				}
-				deleteOutLinkFromSideKeys(ctx, linkDeleteTypename, fromObjectID, linkType, linkName, toId, oldLinkBody, opStack, opTime)
-			} else {
-				// The link does not resolve, but the in-key below goes anyway —
-				// so the owner's keys must go too, or the edge survives written
-				// on one side only. Everything addressable by name is removed.
-				deleteOutLinkKeysByName(ctx, fromObjectID, linkName, opTime)
+			if err := deleteIncomingLocalResidue(ctx, selfID, fromObjectID, linkName, opTime, opStack); err != nil {
+				failDelete(err.Error())
+				return
 			}
-			ctx.Domain.Cache().DeleteValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, selfID, fromObjectID, linkName), true, opTime)
-			operationKeysMutexUnlock(ctx)
 			continue
 		}
 
 		deleteLinkPayload := easyjson.NewJSONObject()
 		deleteLinkPayload.SetByPath("name", easyjson.NewJSON(linkName))
+		deleteLinkPayload.SetByPath("_delete_expected_to", easyjson.NewJSON(selfID))
+		if kind, err := ctx.Domain.Cache().GetValue(inLinkKey); err == nil {
+			deleteLinkPayload.SetByPath("_delete_expected_kind", easyjson.NewJSON(string(kind)))
+		}
 		deleteLinkPayload.SetByPath("op_time", easyjson.NewJSON(opTime))
 		om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, linkDeleteTypename, makeSequenceFreeParentBasedID(ctx, fromObjectID), injectParentHoldsLocks(ctx, &deleteLinkPayload), ctx.Options)))
 		mergeOpStack(opStack, om.GetLastSyncOp().Data.GetByPath("op_stack").GetPtr())
@@ -814,25 +844,43 @@ func LLAPIVertexDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunCont
 			system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
 			return
 		}
+		if !deleteRecoveryKey(ctx, inLinkKey, opTime) {
+			failDelete("incoming link cleanup was refused")
+			return
+		}
 	}
 	// ----------------------------------------------------
+
+	if err := recoverVertexDeleteResidue(ctx, selfID, opTime, opStack); err != nil {
+		failDelete(err.Error())
+		return
+	}
+	operationKeysMutexLock(ctx, []string{selfID}, true, opTime)
+	if len(vertexLinkResidue(ctx, selfID)) != 0 {
+		operationKeysMutexUnlock(ctx)
+		failDelete("vertex still has links after deletion cascade")
+		return
+	}
 
 	// links_only=true: run ONLY the link cascade above and keep the vertex body.
 	// Used by the trash can (hl_crud DeleteObject): a "deleted" object keeps its
 	// body and gets re-linked under the trash-can type instead of being erased.
 	if ctx.Payload.GetByPath("links_only").AsBoolDefault(false) {
+		operationKeysMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
 		return
 	}
-
-	operationKeysMutexLock(ctx, []string{selfID}, true, opTime)
 
 	var oldBody *easyjson.JSON = nil
 	if opStack != nil {
 		oldBody = getVertexBody(ctx, selfID)
 	}
 
-	ctx.Domain.Cache().DeleteValue(selfID, true, opTime) // Delete vertex's body
+	if !deleteRecoveryKey(ctx, selfID, opTime) {
+		operationKeysMutexUnlock(ctx)
+		failDelete("vertex body deletion was refused")
+		return
+	}
 
 	// The vertex's per-id FUNCTION CONTEXTS (`<typename>.<id>` cache keys) die
 	// with the vertex. Without this, a context written without an expiration
@@ -905,6 +953,10 @@ func LLAPIVertexRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	om := sfMediators.NewOpMediator(ctx)
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 	if details {
 		operationKeysMutexLock(ctx, []string{selfID}, false, opTime)
 	}
@@ -1059,6 +1111,10 @@ func LLAPILinkCreate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	selfID := getOriginalID(ctx.Self.ID)
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -1226,6 +1282,10 @@ func LLAPILinkUpdate(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	selfID := getOriginalID(ctx.Self.ID)
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -1421,6 +1481,10 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	selfID := getOriginalID(ctx.Self.ID)
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 
 	om := sfMediators.NewOpMediator(ctx)
 
@@ -1432,7 +1496,10 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 		if inLinkName, ok := payload.GetByPath("in_name").AsString(); ok && len(inLinkName) > 0 {
 			if linkFromObjectUUID := getOriginalID(ctx.Caller.ID); len(linkFromObjectUUID) > 0 {
 				//fmt.Println("delete vertex in link: ", selfID, linkFromObjectUUID)
-				ctx.Domain.Cache().DeleteValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, selfID, linkFromObjectUUID, inLinkName), true, opTime)
+				if !deleteRecoveryKey(ctx, fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, selfID, linkFromObjectUUID, inLinkName), opTime) {
+					om.AggregateOpMsg(sfMediators.OpMsgFailed("incoming link deletion was refused")).Reply()
+					return
+				}
 				om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONNull())).Reply()
 				return
 			} else {
@@ -1476,35 +1543,66 @@ func LLAPILinkDelete(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 		operationKeysMutexLockMixed(ctx, []string{edgeLockKey(selfID, linkName)}, []string{selfID, toId}, opTime)
 
-		// The body is the delete's record of what it removed, not its permission
-		// to remove it. A link that has lost its body is still a link — its ltype
-		// entry alone keeps the pair from ever being linked again ("already
-		// exists ... only once") — and refusing to delete what cannot be read
-		// left exactly that remnant in the graph for good. It is deleted whole,
-		// and the op-stack entry simply carries no old body.
-		oldLinkBody, err := ctx.Domain.Cache().GetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName))
-		if err != nil {
-			oldLinkBody = nil
+		// Re-resolve under the edge guard: a name can have been retargeted
+		// between the initial lookup and this lock acquisition.
+		currentType, currentTo, currentOK := lookupOutLinkByName(ctx.Domain, selfID, linkName)
+		if !currentOK {
+			// The initial lookup may have resolved a bodyless edge by its
+			// explicit pair. Revalidate that exact key, without a degree scan.
+			pair := fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfID, linkType, toId)
+			if name, err := ctx.Domain.Cache().GetValue(pair); err == nil && string(name) == linkName {
+				currentType, currentTo, currentOK = linkType, toId, true
+			}
 		}
+		expectedTo := payload.GetByPath("_delete_expected_to").AsStringDefault("")
+		if expectedTo != "" && (!currentOK || currentTo != expectedTo) {
+			expectedKind := payload.GetByPath("_delete_expected_kind").AsStringDefault("")
+			pair := fmt.Sprintf(OutLinkTypeKeyPrefPattern+KeySuff2Pattern, selfID, expectedKind, expectedTo)
+			if value, err := ctx.Domain.Cache().GetValue(pair); expectedKind != "" && err == nil && string(value) == linkName {
+				if !deleteRecoveryKey(ctx, pair, opTime) {
+					operationKeysMutexUnlock(ctx)
+					om.AggregateOpMsg(sfMediators.OpMsgFailed("stale endpoint cleanup was refused")).Reply()
+					return
+				}
+			}
+			operationKeysMutexUnlock(ctx)
+			om.AggregateOpMsg(sfMediators.OpMsgIdle("the link no longer points to the deleted vertex")).Reply()
+			return
+		}
+		if !currentOK || currentType != linkType || currentTo != toId {
+			operationKeysMutexUnlock(ctx)
+			om.AggregateOpMsg(sfMediators.OpMsgFailed("link changed while deletion was acquiring its lock; retry")).Reply()
+			return
+		}
+		edgeKeys := deletionEdgeKeys(ctx, selfID, toId, linkName, linkType)
+		if deletionKeysAreStale(ctx, edgeKeys, opTime) {
+			operationKeysMutexUnlock(ctx)
+			om.AggregateOpMsg(sfMediators.OpMsgFailed("stale link deletion: newer values are present")).Reply()
+			return
+		}
+		oldLinkBody, _ := ctx.Domain.Cache().GetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, selfID, linkName))
 
-		deleteOutLinkFromSideKeys(ctx, ctx.Self.Typename, selfID, linkType, linkName, toId, oldLinkBody, opStack, opTime)
-
-		// Delete in link on descendant vertex --------------------
-		if ctx.Domain.GetDomainFromObjectID(toId) == ctx.Domain.Name() {
-			ctx.Domain.Cache().DeleteValue(fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, toId, selfID, linkName), true, opTime)
-		} else {
-			nextCallPayload := easyjson.NewJSONObject()
-			nextCallPayload.SetByPath("in_name", easyjson.NewJSON(linkName))
+		// Keep the owner's endpoint information until the remote side has
+		// accepted deletion. A failed request can then be retried safely.
+		if ctx.Domain.GetDomainFromObjectID(toId) != ctx.Domain.Name() {
+			nextCallPayload := easyjson.NewJSONObjectWithKeyValue("in_name", easyjson.NewJSON(linkName))
 			nextCallPayload.SetByPath("op_time", easyjson.NewJSON(opTime))
-
 			om.AggregateOpMsg(sfMediators.OpMsgFromSfReply(ctx.Request(sfPlugins.AutoRequestSelect, ctx.Self.Typename, makeSequenceFreeParentBasedID(ctx, toId, "inlink"), injectParentHoldsLocks(ctx, &nextCallPayload), ctx.Options)))
-			if om.GetLastSyncOp().Status == sfMediators.SYNC_OP_STATUS_FAILED {
+			if status := om.GetLastSyncOp().Status; status != sfMediators.SYNC_OP_STATUS_OK && status != sfMediators.SYNC_OP_STATUS_IDLE {
 				operationKeysMutexUnlock(ctx)
 				system.MsgOnErrorReturn(om.ReplyWithData(resultWithOpStack(nil, opStack).GetPtr()))
 				return
 			}
 		}
-		// --------------------------------------------------------
+		deleteOutLinkFromSideKeys(ctx, ctx.Self.Typename, selfID, linkType, linkName, toId, oldLinkBody, opStack, opTime)
+		if ctx.Domain.GetDomainFromObjectID(toId) == ctx.Domain.Name() {
+			deleteRecoveryKey(ctx, fmt.Sprintf(InLinkKeyPrefPattern+KeySuff2Pattern, toId, selfID, linkName), opTime)
+		}
+		if deletionKeysRemain(ctx, edgeKeys) {
+			operationKeysMutexUnlock(ctx)
+			om.AggregateOpMsg(sfMediators.OpMsgFailed("link was not fully removed")).Reply()
+			return
+		}
 
 		operationKeysMutexUnlock(ctx)
 		om.AggregateOpMsg(sfMediators.OpMsgOk(resultWithOpStack(nil, opStack))).Reply()
@@ -1561,6 +1659,10 @@ func LLAPILinkRead(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextP
 	details := ctx.Payload.GetByPath("details").AsBoolDefault(false)
 
 	opTime := getOpTimeFromPayloadIfExist(ctx.Payload)
+	if !ctx.Domain.Cache().AcceptsOperationTime(opTime) {
+		sfMediators.NewOpMediator(ctx).AggregateOpMsg(sfMediators.OpMsgFailed("operation predates cache recovery; retry with a new operation timestamp")).Reply()
+		return
+	}
 	if details {
 		// Read locks only the link owner (selfID): the link's body and tags are stored
 		// under selfID keys; the target (toId) vertex is never read here, only echoed
