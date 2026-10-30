@@ -4,6 +4,7 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -556,6 +557,11 @@ type Store struct {
 	// readiness check (replaces the old per-node syncedWithKV scan).
 	committedTxTime atomic.Int64
 
+	// recoveryFloor is the completed KV snapshot's time boundary. Mutations
+	// from an older cache generation are refused even when their key is absent.
+	// It is process-local; KV values and WAL payloads keep their wire format.
+	recoveryFloor atomic.Int64
+
 	// activeOps tracks in-flight write operations by opTime.
 	// key: int64 opTime, value: *atomic.Int32 (reference count).
 	// kvLazyWriter waits until all operations with opTime ≤ barrierTime
@@ -664,10 +670,24 @@ type pendingTx struct {
 	ops []WALOp
 }
 
-func (ptx *pendingTx) Add(op WALOp) {
-	ptx.mu.Lock()
-	ptx.ops = append(ptx.ops, op)
-	ptx.mu.Unlock()
+// pendingTxCut describes the immutable prefix included in one WAL publish.
+// Writes appended while that publish waits for its broker ACK remain pending.
+type pendingTxCut struct {
+	time  int64
+	tx    *pendingTx
+	count int
+}
+
+func (cs *Store) acknowledgePendingTx(cut pendingTxCut) {
+	cut.tx.mu.Lock()
+	defer cut.tx.mu.Unlock()
+	remaining := len(cut.tx.ops) - cut.count
+	copy(cut.tx.ops, cut.tx.ops[cut.count:])
+	clear(cut.tx.ops[remaining:])
+	cut.tx.ops = cut.tx.ops[:remaining]
+	if remaining == 0 {
+		cs.pendingTxs.CompareAndDelete(cut.time, cut.tx)
+	}
 }
 
 func (ptx *pendingTx) Collect() []WALOp {
@@ -687,7 +707,7 @@ type WALOp struct {
 }
 
 // publishDirtyOp appends a WAL op to the pending transaction for writeTime.
-// Lock-free — uses sync.Map internally.
+// Appends and published-prefix acknowledgement share a transaction lock.
 func (cs *Store) publishDirtyOp(writeTime int64, key string, opType OpType, finalBytes []byte) {
 	if cs.getTransactionGenerator() == nil || !cs.walWriteEnabled.Load() {
 		return
@@ -696,12 +716,21 @@ func (cs *Store) publishDirtyOp(writeTime int64, key string, opType OpType, fina
 		return
 	}
 
-	v, _ := cs.pendingTxs.LoadOrStore(writeTime, &pendingTx{})
-	v.(*pendingTx).Add(WALOp{
-		OpType: string(opType),
-		Key:    cs.toStoreKey(key),
-		Value:  finalBytes,
-	})
+	for {
+		v, _ := cs.pendingTxs.LoadOrStore(writeTime, &pendingTx{})
+		tx := v.(*pendingTx)
+		tx.mu.Lock()
+		current, exists := cs.pendingTxs.Load(writeTime)
+		if !exists || current != tx {
+			// An ACK removed this empty entry while the writer waited for
+			// its lock. Retry on the live entry, never append to an orphan.
+			tx.mu.Unlock()
+			continue
+		}
+		tx.ops = append(tx.ops, WALOp{OpType: string(opType), Key: cs.toStoreKey(key), Value: finalBytes})
+		tx.mu.Unlock()
+		return
+	}
 }
 
 // RecordCommittedTx is invoked by the WAL→KV transaction committer
@@ -800,7 +829,10 @@ func (cs *Store) loadFromKV(ctx context.Context) error {
 				return fmt.Errorf("kv watcher channel closed unexpectedly during load")
 			}
 			if entry == nil {
-				// End of historical replay — load complete.
+				// Publish the boundary only after the entire snapshot has loaded.
+				// No handlers run until recovery completes, so it also covers
+				// keys missing from this snapshot, including deleted vertices.
+				cs.recoveryFloor.Store(max(cs.recoveryFloor.Load(), system.GetCurrentTimeNs()))
 				return nil
 			}
 			if op := entry.Operation(); op == nats.KeyValueDelete || op == nats.KeyValuePurge {
@@ -809,7 +841,9 @@ func (cs *Store) loadFromKV(ctx context.Context) error {
 			}
 			key := cs.fromStoreKey(entry.Key())
 			valueBytes := entry.Value()
-			now := system.GetCurrentTimeNs()
+			// A trusted snapshot must not be rejected as an old user write,
+			// even if the wall clock moved back since the previous recovery.
+			now := max(system.GetCurrentTimeNs(), cs.recoveryFloor.Load())
 			// Empty value is a LEGITIMATE write, not a delete: CMDB writes
 			// index keys (e.g. <v>.out.index.<linkName>.type.<linkType>) with
 			// nil value because the information is encoded in the key shape
@@ -837,6 +871,13 @@ func (cs *Store) loadFromKV(ctx context.Context) error {
 			cs.SetValue(key, valueBytes, false, now)
 		}
 	}
+}
+
+// AcceptsOperationTime reports whether a mutation belongs to the current
+// recovered cache generation. Callers performing multi-key operations should
+// check before their first mutation and report a stale-operation failure.
+func (cs *Store) AcceptsOperationTime(opTime int64) bool {
+	return opTime >= cs.recoveryFloor.Load()
 }
 
 // RehydrateFromKV drops the in-memory cache tree and reloads it from KV.
@@ -1263,6 +1304,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 		const maintenanceInterval = 10 // run maintenance DFS every N iterations
 
 		shutdownStatus := shutdownStatusNone
+		var shutdownPublishFailureSince time.Time
 		maintenanceCounter := 0
 		lastWALNotReadyLogAt := time.Time{}
 		lastWALDisabledLogAt := time.Time{}
@@ -1323,7 +1365,7 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 					sort.Slice(pendingTimes, func(i, j int) bool { return pendingTimes[i] < pendingTimes[j] })
 
 					var batchOps []WALOp
-					var batchTimes []int64
+					var batchCuts []pendingTxCut
 
 					for _, txTime := range pendingTimes {
 						if cs.hasActiveOperationsUpTo(txTime) {
@@ -1338,37 +1380,37 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 						}
 						ops := v.(*pendingTx).Collect()
 						batchOps = append(batchOps, ops...)
-						batchTimes = append(batchTimes, txTime)
+						batchCuts = append(batchCuts, pendingTxCut{time: txTime, tx: v.(*pendingTx), count: len(ops)})
 
 						if len(batchOps) >= cacheConfig.walBatchMinOps {
 							// Publish batch — txID is the latest time in the batch
 							txID := strconv.FormatInt(txTime, 10)
-							le.Tracef(ctx, "Publishing batched tx=%s with %d ops (%d txs merged)", txID, len(batchOps), len(batchTimes))
+							le.Tracef(ctx, "Publishing batched tx=%s with %d ops (%d txs merged)", txID, len(batchOps), len(batchCuts))
 							if err := cs.getTransactionGenerator().PublishTransaction(txID, batchOps); err != nil {
 								atomic.AddInt64(&cs.totalWALPublishErrors, 1)
 								le.Errorf(ctx, "kvLazyWriter: cannot publish tx=%s: %s", txID, err)
 								break // retry next iteration
 							}
 							atomic.AddInt64(&cs.totalWALPublishes, 1)
-							for _, t := range batchTimes {
-								cs.pendingTxs.Delete(t)
+							for _, cut := range batchCuts {
+								cs.acknowledgePendingTx(cut)
 							}
 							batchOps = nil
-							batchTimes = nil
+							batchCuts = nil
 						}
 					}
 
 					// Publish remaining batch if any ops accumulated
 					if len(batchOps) > 0 {
-						txID := strconv.FormatInt(batchTimes[len(batchTimes)-1], 10)
-						le.Tracef(ctx, "Publishing batched tx=%s with %d ops (%d txs merged)", txID, len(batchOps), len(batchTimes))
+						txID := strconv.FormatInt(batchCuts[len(batchCuts)-1].time, 10)
+						le.Tracef(ctx, "Publishing batched tx=%s with %d ops (%d txs merged)", txID, len(batchOps), len(batchCuts))
 						if err := cs.getTransactionGenerator().PublishTransaction(txID, batchOps); err != nil {
 							atomic.AddInt64(&cs.totalWALPublishErrors, 1)
 							le.Errorf(ctx, "kvLazyWriter: cannot publish tx=%s: %s", txID, err)
 						} else {
 							atomic.AddInt64(&cs.totalWALPublishes, 1)
-							for _, t := range batchTimes {
-								cs.pendingTxs.Delete(t)
+							for _, cut := range batchCuts {
+								cs.acknowledgePendingTx(cut)
 							}
 						}
 					}
@@ -1445,11 +1487,21 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 						le.Debugf(ctx, "Shutdown: publishing tx=%s with %d ops", txID, len(ops))
 						if err := cs.getTransactionGenerator().PublishTransaction(txID, ops); err != nil {
 							atomic.AddInt64(&cs.totalWALPublishErrors, 1)
-							le.Errorf(ctx, "Shutdown: cannot publish tx=%s: %s", txID, err)
-						} else {
-							atomic.AddInt64(&cs.totalWALPublishes, 1)
+							le.Errorf(ctx, "Shutdown: cannot publish tx=%s: %s; pending operations retained", txID, err)
+							if shutdownPublishFailureSince.IsZero() {
+								shutdownPublishFailureSince = time.Now()
+							}
+							if errors.Is(err, nats.ErrConnectionClosed) || time.Since(shutdownPublishFailureSince) >= 5*time.Second {
+								// Do not claim Synced after an unsuccessful flush.
+								// The runtime's bounded drain reports the failure.
+								return
+							}
+							time.Sleep(100 * time.Millisecond)
+							break
 						}
-						cs.pendingTxs.Delete(txTime)
+						atomic.AddInt64(&cs.totalWALPublishes, 1)
+						shutdownPublishFailureSince = time.Time{}
+						cs.acknowledgePendingTx(pendingTxCut{time: txTime, tx: v.(*pendingTx), count: len(ops)})
 					}
 				} else {
 					shutdownStatus = shutdownStatusReady
@@ -1742,6 +1794,12 @@ func unreachable(csv *StoreValue) bool {
 var afterTreePathWalkForTest func(key string)
 
 func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV bool, customSetTime int64) bool {
+	if customSetTime < 0 {
+		customSetTime = system.GetCurrentTimeNs()
+	}
+	if !cs.AcceptsOperationTime(customSetTime) {
+		return false
+	}
 	if _, ok := tieredVertex(key); ok {
 		if exists, handled := cs.tieredExists(key); handled && exists {
 			return false
@@ -1782,7 +1840,7 @@ func (cs *Store) SetValueIfDoesNotExist(key string, newValue []byte, updateInKV 
 
 		// Already exists — set only if "empty"
 		actual.Lock("SetValueIfDoesNotExist")
-		wrote := !actual.getValueExists() && actual.value == nil
+		wrote := !actual.getValueExists() && actual.value == nil && customSetTime >= actual.valueUpdateTime
 		if wrote {
 			actual.value = newValue
 			actual.setValueExists(true)
@@ -1805,6 +1863,9 @@ func (cs *Store) SetValue(key string, value []byte, updateInKV bool, customSetTi
 	}
 	if customSetTime < 0 {
 		customSetTime = system.GetCurrentTimeNs()
+	}
+	if !cs.AcceptsOperationTime(customSetTime) {
+		return false
 	}
 	// Decided before the tree is touched, for the same reason as in
 	// SetValueJSON: a record-backed vertex must not also grow a subtree.
@@ -1869,6 +1930,9 @@ func (cs *Store) SetValueJSON(key string, originValue *easyjson.JSON, updateInKV
 	}
 	if customSetTime < 0 {
 		customSetTime = system.GetCurrentTimeNs()
+	}
+	if !cs.AcceptsOperationTime(customSetTime) {
+		return false
 	}
 	// Pre-serialize before any locks — reuse for WAL publish. KV stores
 	// the raw JSON payload (no header) now.
@@ -1938,6 +2002,9 @@ func (cs *Store) Destroy() {
 func (cs *Store) DeleteValue(key string, updateInKV bool, customDeleteTime int64) (applied bool) {
 	if customDeleteTime < 0 {
 		customDeleteTime = system.GetCurrentTimeNs()
+	}
+	if !cs.AcceptsOperationTime(customDeleteTime) {
+		return false
 	}
 	if handled, applied := cs.tieredDelete(key, customDeleteTime); handled {
 		if applied && updateInKV {

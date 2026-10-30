@@ -25,6 +25,7 @@ import (
 
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/embedded/graph/crud"
+	"github.com/foliagecp/sdk/statefun/system"
 )
 
 // waitWALDrained returns once everything written through the cache is IN KV.
@@ -48,8 +49,10 @@ func (s *CMDBClientContractTestSuite) Test_RootCause_RejectedWriteMustNotReachKV
 	c := s.Runtime().Domain.Cache()
 	key := s.SetThisDomainPreffix("wal-obj") + ".in." + s.SetThisDomainPreffix("objects") + ".wal-obj"
 
-	s.Require().True(c.SetValue(key, []byte("__object"), true, 2000))
-	c.SetValue(key, []byte("STALE"), true, 1000) // older than the write above
+	// Both timestamps belong to this recovered cache generation.
+	stamp := system.GetCurrentTimeNs()
+	s.Require().True(c.SetValue(key, []byte("__object"), true, stamp))
+	c.SetValue(key, []byte("STALE"), true, stamp-1) // older than the write above
 
 	got, err := c.GetValue(key)
 	s.Require().NoError(err)
@@ -71,8 +74,10 @@ func (s *CMDBClientContractTestSuite) Test_RootCause_RejectedDeleteMustNotReachK
 	c := s.Runtime().Domain.Cache()
 	key := s.SetThisDomainPreffix("wal-obj2") + ".in." + s.SetThisDomainPreffix("objects") + ".wal-obj2"
 
-	s.Require().True(c.SetValue(key, []byte("__object"), true, 2000))
-	c.DeleteValue(key, true, 1000) // older than the write: must be refused
+	// Both timestamps belong to this recovered cache generation.
+	stamp := system.GetCurrentTimeNs()
+	s.Require().True(c.SetValue(key, []byte("__object"), true, stamp))
+	c.DeleteValue(key, true, stamp-1) // older than the write: must be refused
 
 	s.Require().Truef(c.Exists(key), "precondition: the guard must reject the stale delete in memory")
 

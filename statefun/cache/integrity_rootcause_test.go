@@ -120,9 +120,10 @@ func Test_RootCause_RehydrateDoesNotResurrectDeleted(t *testing.T) {
 			cs, cancel := loadStore(t, js, kvs, "resur_"+mode)
 			defer cancel()
 
-			writeEdge(cs, "dom/objects", "dom/obj", "obj", "__object", 1000, true)
+			stamp := time.Now().UnixNano()
+			writeEdge(cs, "dom/objects", "dom/obj", "obj", "__object", stamp, true)
 			requireEdgeWhole(t, cs, "dom/objects", "dom/obj", "obj", "__object", "after creation")
-			deleteEdge(cs, "dom/objects", "dom/obj", "obj", "__object", 2000, true)
+			deleteEdge(cs, "dom/objects", "dom/obj", "obj", "__object", stamp+1, true)
 			requireEdgeGone(t, cs, "dom/objects", "dom/obj", "obj", "__object", "after deletion")
 
 			waitKVDrained(t, cs)
