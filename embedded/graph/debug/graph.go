@@ -457,7 +457,7 @@ func LLAPIImportGraph(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statef
 		// Repair whatever is missing; correct pieces stay untouched.
 		crud.EnsureBuiltInSchema(ctx.Request, ctx.Domain)
 
-		lg.Logln(lg.InfoLevel, fmt.Sprintf("Import is done within %.2f sec", time.Since(t0).Seconds()))
+		lg.Logf(lg.InfoLevel, "Import is done within %.2f sec", time.Since(t0).Seconds())
 		om.AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONObject())).Reply()
 
 	default:

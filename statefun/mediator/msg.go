@@ -108,17 +108,12 @@ func (som OpMsg) ToJson() *easyjson.JSON {
 	return &reply
 }
 
+// The final reply determines the wire status, as it did when the SDK was
+// built with Go 1.21. The former pointer to a reused range variable happened
+// to produce that result; Go 1.22's per-iteration variables changed it.
 func GetSyncOpIntegratedStatusWithDefault(statuses []OpMsg, defaultStatus OpStatus) OpStatus {
-	var status *OpStatus = nil
-	for _, som := range statuses {
-		if status == nil {
-			status = &som.Status
-		} else {
-			*status = OpStatusMatrix[*status][som.Status]
-		}
+	if len(statuses) == 0 {
+		return defaultStatus
 	}
-	if status != nil {
-		return *status
-	}
-	return defaultStatus
+	return statuses[len(statuses)-1].Status
 }

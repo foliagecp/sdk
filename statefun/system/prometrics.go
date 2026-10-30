@@ -61,7 +61,7 @@ func NewPrometrics(pattern string, addr string) *Prometrics {
 			}
 
 			if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				lg.Logln(lg.FatalLevel, err.Error())
+				lg.Logf(lg.FatalLevel, "%s", err)
 			}
 		}()
 	}

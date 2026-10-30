@@ -56,6 +56,8 @@ Click [here](./docs/features.md) to see all features.
 
 ### Minimum Requirements
 
+Building the SDK and its samples requires Go 1.27 or later.
+
 **Native Install**
 
 Foliage platform native install requirements correspond to the NATS Jetstream installations requirements listed here:  

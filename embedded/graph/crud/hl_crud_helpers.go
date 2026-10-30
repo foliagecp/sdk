@@ -2,6 +2,7 @@ package crud
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -453,7 +454,7 @@ func findObjectType(ctx *sfPlugins.StatefunContextProcessor, objectID string) (s
 		return tp, nil
 	}
 
-	return "", fmt.Errorf(som.Details)
+	return "", errors.New(som.Details)
 }
 
 func findTypeObjects(ctx *sfPlugins.StatefunContextProcessor, typeName string) ([]string, error) {
@@ -469,7 +470,7 @@ func findTypeObjects(ctx *sfPlugins.StatefunContextProcessor, typeName string) (
 			return arr, nil
 		}
 	}
-	return nil, fmt.Errorf(som.Details)
+	return nil, errors.New(som.Details)
 }
 
 func getLinkBody(ctx *sfPlugins.StatefunContextProcessor, from, linkName string) (*easyjson.JSON, error) {
@@ -487,7 +488,7 @@ func getLinkBody(ctx *sfPlugins.StatefunContextProcessor, from, linkName string)
 		}
 		return nil, fmt.Errorf("'body' is not find")
 	}
-	return nil, fmt.Errorf(som.Details)
+	return nil, errors.New(som.Details)
 }
 
 // fromObjectId and toObjectId must be locked by key mutex for thread safety

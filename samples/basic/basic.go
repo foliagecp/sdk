@@ -85,10 +85,10 @@ func MasterFunction(executor sfPlugins.StatefunExecutor, ctx *sfPlugins.Statefun
 	if MasterFunctionJSPlugin {
 		if executor != nil {
 			if err := executor.BuildError(); err != nil {
-				lg.Logln(lg.ErrorLevel, err.Error())
+				lg.Logf(lg.ErrorLevel, "%s", err)
 			} else {
 				if err := executor.Run(ctx); err != nil {
-					lg.Logln(lg.ErrorLevel, err.Error())
+					lg.Logf(lg.ErrorLevel, "%s", err)
 				}
 			}
 		}

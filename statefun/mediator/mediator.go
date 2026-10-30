@@ -172,17 +172,6 @@ func (om *OpMediator) GetLastSyncOp() OpMsg {
 }
 
 func (om *OpMediator) GetStatus() OpStatus {
-	var status *OpStatus = nil
-	for _, som := range om.opMsgs {
-		if status == nil {
-			status = &som.Status
-		} else {
-			*status = OpStatusMatrix[*status][som.Status]
-		}
-	}
-	if status != nil {
-		return *status
-	}
 	return GetSyncOpIntegratedStatusWithDefault(om.opMsgs, SYNC_OP_STATUS_IDLE)
 }
 
