@@ -9,6 +9,7 @@ package statefun
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -134,4 +135,184 @@ func Test_WorkerPool_StopNonBlockingUnderStuckHandler_116(t *testing.T) {
 	require.NotNil(t, wp2)
 	require.Truef(t, wp != wp2, "ensureWorkerPool must replace a stopped pool with a new instance")
 	require.False(t, wp2.IsStopped(), "recreated pool must be live")
+}
+
+// A backlog for one stateful-function ID must not consume every worker while
+// all but one of them wait for that ID's execution mutex. Other IDs are
+// independent actors and must keep making progress.
+//
+// The queues are primed directly to make the scheduler state deterministic.
+// Going through sendMsg here would test a different problem: once the first
+// handler starts, sendMsg itself waits for the same per-ID mutex.
+func Test_WorkerPool_HotIDDoesNotStarveColdID(t *testing.T) {
+	const maxWorkers = 4
+
+	hotStarted := make(chan struct{})
+	coldHandled := make(chan struct{})
+	releaseHot := make(chan struct{})
+	var hotStartOnce, coldOnce, releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseHot) }) })
+
+	var hotID, coldID string
+	handler := func(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+		switch ctx.Self.ID {
+		case hotID:
+			hotStartOnce.Do(func() { close(hotStarted) })
+			<-releaseHot
+		case coldID:
+			coldOnce.Do(func() { close(coldHandled) })
+		}
+	}
+
+	var ft *FunctionType
+	_, srv := startWorkerPoolTestRuntime(t, func(rt *Runtime) {
+		hotID = rt.Domain.CreateObjectIDWithThisDomain("hot", false)
+		coldID = rt.Domain.CreateObjectIDWithThisDomain("cold", false)
+		cfg := *NewFunctionTypeConfig().
+			SetAllowedSignalProviders(sfPlugins.AutoSignalSelect).
+			SetWorkerPoolConfig(SFWorkerPoolConfig{
+				MinWorkers: 0, MaxWorkers: maxWorkers,
+				IdleTimeout: time.Minute, TaskQueueLen: 16,
+			})
+		ft = NewFunctionType(rt, "test.wp.fairness", handler, cfg)
+	})
+	defer srv.Shutdown()
+
+	wp := ft.sfWorkerPool.Load()
+	require.NotNil(t, wp)
+
+	newMsg := func() FunctionTypeMsg {
+		return FunctionTypeMsg{
+			Caller:          &sfPlugins.StatefunAddress{Typename: "test", ID: "caller"},
+			RefusalCallback: func(bool) {},
+			AckCallback:     func(bool) {},
+			Payload:         easyjson.NewJSONObject().GetPtr(),
+		}
+	}
+
+	hotQueue := make(chan FunctionTypeMsg, maxWorkers)
+	for i := 0; i < maxWorkers; i++ {
+		require.True(t, ft.TokenTryAcquire())
+		hotQueue <- newMsg()
+	}
+	ft.idHandlersChannel.Store(hotID, hotQueue)
+	ft.idHandlersLastMsgTime.Store(hotID, time.Now().UnixNano())
+	ft.activeIDChannels.Add(1)
+
+	coldQueue := make(chan FunctionTypeMsg, 1)
+	require.True(t, ft.TokenTryAcquire())
+	coldQueue <- newMsg()
+	ft.idHandlersChannel.Store(coldID, coldQueue)
+	ft.idHandlersLastMsgTime.Store(coldID, time.Now().UnixNano())
+	ft.activeIDChannels.Add(1)
+
+	// Keep submit blocked while notifications are ordered. The current manager
+	// will schedule every hot task before it sees cold; a fair manager keeps at
+	// most one hot task in flight and can immediately run cold on another worker.
+	wp.mu.Lock()
+	for i := 0; i < maxWorkers; i++ {
+		wp.pendingIds <- hotID
+	}
+	wp.pendingIds <- coldID
+	wp.mu.Unlock()
+
+	select {
+	case <-hotStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("hot handler did not start")
+	}
+
+	select {
+	case <-coldHandled:
+		// Desired behavior: an unrelated ID progresses while hot is blocked.
+	case <-time.After(500 * time.Millisecond):
+		releaseOnce.Do(func() { close(releaseHot) })
+		select {
+		case <-coldHandled:
+			// Confirms that cold was queued correctly and only lacked a worker.
+		case <-time.After(5 * time.Second):
+			t.Fatal("cold ID was never handled after releasing the hot ID")
+		}
+		t.Fatal("cold ID starved while workers waited for the hot ID mutex")
+	}
+}
+
+// NATS delivers callbacks for one asynchronous subscription serially. A
+// message for an ID whose handler is already running must therefore be cheap
+// to enqueue: if sendMsg waits for the handler's execution mutex, that callback
+// also prevents later messages for every other ID of the function type from
+// reaching the worker pool.
+func Test_JetStreamIngress_HotIDDoesNotBlockColdID(t *testing.T) {
+	hotStarted := make(chan struct{})
+	coldHandled := make(chan struct{})
+	releaseHot := make(chan struct{})
+	var hotStartOnce, coldOnce, releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseHot) }) })
+
+	var hotID, coldID string
+	handler := func(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+		switch ctx.Self.ID {
+		case hotID:
+			hotStartOnce.Do(func() { close(hotStarted) })
+			<-releaseHot
+		case coldID:
+			coldOnce.Do(func() { close(coldHandled) })
+		}
+	}
+
+	const functionType = "test.wp.jetstream-hol"
+	var ft *FunctionType
+	rt, srv := startWorkerPoolTestRuntime(t, func(rt *Runtime) {
+		hotID = rt.Domain.CreateObjectIDWithThisDomain("hot", false)
+		coldID = rt.Domain.CreateObjectIDWithThisDomain("cold", false)
+		cfg := *NewFunctionTypeConfig().
+			SetAllowedSignalProviders(sfPlugins.JetstreamGlobalSignal).
+			SetWorkerPoolConfig(SFWorkerPoolConfig{
+				MinWorkers: 2, MaxWorkers: 4,
+				IdleTimeout: time.Minute, TaskQueueLen: 16,
+			})
+		ft = NewFunctionType(rt, functionType, handler, cfg)
+	})
+	defer srv.Shutdown()
+	require.NotNil(t, ft)
+
+	publish := func(id string) {
+		subject := fmt.Sprintf(
+			DomainIngressSubjectsTmpl,
+			rt.Domain.name,
+			fmt.Sprintf("%s.%s.%s.%s", SignalPrefix, rt.Domain.name, functionType, id),
+		)
+		payload := easyjson.NewJSONObject()
+		require.NoError(t, rt.nc.Publish(subject,
+			buildNatsData(rt.Domain.name, "test", "caller", &payload, nil, nil)))
+		require.NoError(t, rt.nc.Flush())
+	}
+
+	// The first hot message starts and holds the per-ID execution mutex.
+	publish(hotID)
+	select {
+	case <-hotStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first hot JetStream message did not reach the handler")
+	}
+
+	// Both messages use the same JetStream subscription and are published in
+	// order. The second hot enqueue must not prevent cold from being delivered.
+	publish(hotID)
+	publish(coldID)
+
+	select {
+	case <-coldHandled:
+		// Desired behavior: ingress enqueue does not wait for handler execution.
+	case <-time.After(500 * time.Millisecond):
+		releaseOnce.Do(func() { close(releaseHot) })
+		select {
+		case <-coldHandled:
+			// Confirms publication and subscription setup: cold advances as soon
+			// as the callback blocked in sendMsg can acquire the hot-ID mutex.
+		case <-time.After(5 * time.Second):
+			t.Fatal("cold JetStream message was never handled after releasing the hot ID")
+		}
+		t.Fatal("cold ID was blocked in the JetStream subscription behind a hot ID enqueue")
+	}
 }
