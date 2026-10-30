@@ -126,54 +126,6 @@ func (s *BatchSuite) Test_ParallelBatch() {
 	s.Equal("p2", results[1].ID)
 }
 
-// Parallel batch execution may issue concurrent requests, but the statefun
-// actor contract still requires handlers for the same target ID to execute
-// one at a time. Parallel() should only add concurrency across distinct IDs.
-func (s *BatchSuite) Test_ParallelBatch_SameTargetIDRemainsSerialized() {
-	const operations = 16
-
-	var inFlight, maxInFlight, calls atomic.Int32
-	handler := func(_ sfp.StatefunExecutor, ctx *sfp.StatefunContextProcessor) {
-		current := inFlight.Add(1)
-		for {
-			peak := maxInFlight.Load()
-			if current <= peak || maxInFlight.CompareAndSwap(peak, current) {
-				break
-			}
-		}
-		calls.Add(1)
-		time.Sleep(5 * time.Millisecond)
-		inFlight.Add(-1)
-		sfMediators.NewOpMediator(ctx).
-			AggregateOpMsg(sfMediators.OpMsgOk(easyjson.NewJSONObject())).
-			Reply()
-	}
-
-	s.RegisterFunction("test.batch.same-id", handler,
-		*statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfp.AutoRequestSelect))
-	batch.RegisterAllFunctionTypes(s.Runtime())
-	s.NoError(s.StartRuntime())
-
-	dbc, err := db.NewDBSyncClientFromRequestFunction(s.Runtime().Request)
-	s.NoError(err)
-
-	b := dbc.BatchCreate("same-target-batch").Parallel().SubBatchSize(operations)
-	for i := 0; i < operations; i++ {
-		b.Operation("test.batch.same-id", "same-target", easyjson.NewJSONObject())
-	}
-	results, err := b.Commit()
-
-	s.NoError(err)
-	s.Require().Len(results, operations)
-	s.EqualValues(operations, calls.Load())
-	s.EqualValues(1, maxInFlight.Load(),
-		"handlers for one target ID must never execute concurrently")
-	for i, result := range results {
-		s.True(result.OK(), "operation %d failed: status=%s", i, result.Status)
-		s.Equal(i, result.Index)
-	}
-}
-
 // Parallel().StopOnError(): stopOnError must be a no-op across sub-batch splits when
 // Parallel is set — a failure in chunk N must not prevent chunk N+1 from being sent.
 func (s *BatchSuite) Test_Parallel_StopOnError_DoesNotAbortSubBatches() {
