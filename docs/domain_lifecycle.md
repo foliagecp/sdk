@@ -10,6 +10,17 @@ snapshots and external databases separately. Domain mismatch handling never
 resets, migrates, repairs or deletes domain data. No reset flag, function or
 administrator command is shipped.
 
+If another instance creates streams or consumers during validation, the SDK
+repeats the complete read-only check within its existing startup budget. It
+never accepts a partial inventory, rewrites a conflicting resource, or retries
+a confirmed domain mismatch as if it were a transient count change. If no
+complete snapshot can be obtained, startup fails with the timeout and inventory
+diagnostic instead of serving an unvalidated configuration.
+
+HA promotion renews the application-hook context under the same synchronization
+used by shutdown cancellation. Old generations are canceled, and a late
+promotion cannot create live application work after shutdown has begun.
+
 Call diagnostics preserve signatures, OpMsg/OpError layouts, JSON formats,
 successful results, routing, execution order and existing timeout behavior.
 Errors and logs identify the selected domain, function, object and transport.

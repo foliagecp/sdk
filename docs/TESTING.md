@@ -244,3 +244,25 @@ startup. The old embedded NATS 2.10.12 broker has a reservation-accounting race
 under concurrent stream creation; the SDK gate does not disable detection to
 hide it. SDK code stays instrumented, and runtime client/module dependencies
 are unchanged. Running the HA component tests therefore requires local Docker.
+
+
+## HA startup regression gate
+
+`tests/system/ha-startup-recovery/run.sh` reuses the Go domain and HA assertions
+in both full and `--system-only` runs, with `--race` propagated to the Go tests.
+It needs the local Docker socket to create pinned NATS test brokers. Runtimes
+start concurrently; both must finish startup before active ownership is
+measured. Startup errors are reported directly. Cleanup explicitly shuts down
+and joins each runtime before removing its broker, instead of relying on
+cancellation of a startup context.
+
+The inventory tests create a real compatible stream or consumer during a
+snapshot read, then assert that validation retries it. Controls cover a foreign
+domain, persistent incomplete listings and non-inventory read failures. Domain
+protection is kept fail-closed; no timeout or role-exclusivity assertion is
+relaxed.
+
+Shutdown-context controls also assert that renewal cancels the previous
+application generation and cannot revive work after graceful or emergency
+shutdown. Concurrent renewal/read/cancellation runs with the race detector;
+these assertions remain part of the HA system fixture.

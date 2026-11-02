@@ -69,6 +69,7 @@ run **sequentially** (one at a time) so they do not contend for ports/CPU.
 | `cache-graph-recovery` | synthetic WAL replay/publication, stale operations, partial deletion, read repair and concurrent trash-can restore; reuses Go assertions in Linux and honors `--race` |
 | `wal-restart-recovery` | committed data survives an ungraceful SIGKILL + restart |
 | `wal-ack-recovery` | NATS 2.12.4 orphan ACK after real SIGKILL and archive/restore; receipt-based repair, exact data verification and legacy refusal |
+| `ha-startup-recovery` | concurrent domain inventory changes, bounded fail-closed validation and HA startup/demotion/failover with observed startup errors and runtime cleanup; honors `--race` |
 | `ha-3-node` | leadership/failover across 3 runtimes; service continuity + no data loss |
 | `crud-soak` | sustained concurrent CRUD; runtime stays responsive; graph stays consistent |
 | `_lib/` | shared harness (compose helpers + the `assert` client) — not a test |
