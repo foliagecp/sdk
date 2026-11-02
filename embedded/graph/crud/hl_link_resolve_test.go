@@ -17,6 +17,7 @@ package crud_test
 // timing threshold on a loaded machine proves nothing.
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/clients/go/db"
 	"github.com/foliagecp/sdk/embedded/graph/crud"
+	"github.com/foliagecp/sdk/statefun"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/test"
 	"github.com/stretchr/testify/suite"
@@ -38,17 +40,74 @@ func TestLinkResolveTestSuite(t *testing.T) { suite.Run(t, new(LinkResolveTestSu
 
 func (s *LinkResolveTestSuite) boot() {
 	crud.RegisterAllFunctionTypes(s.Runtime())
-	s.NoError(s.StartRuntime())
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := s.CacheValue(crud.BUILT_IN_TYPES); err == nil {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	s.Require().NoError(s.startAndWaitForSchema())
 	dbc, err := db.NewDBSyncClientFromRequestFunction(s.Runtime().Request)
-	s.NoError(err)
+	s.Require().NoError(err)
 	s.cmdb = dbc.CMDB
+}
+
+// A built-in vertex appears before the schema's remaining force-create calls.
+// Wait for the whole hook, otherwise their recovery scans contaminate the
+// process-wide counters used to assert constant-cost link operations.
+func (s *LinkResolveTestSuite) startAndWaitForSchema() error {
+	ready := make(chan struct{})
+	s.Runtime().RegisterOnAfterStartFunction(func(context.Context, *statefun.Runtime) error {
+		close(ready)
+		return nil
+	}, false)
+	if err := s.StartRuntime(); err != nil {
+		return err
+	}
+	select {
+	case <-ready:
+		return nil
+	case <-time.After(20 * time.Second):
+		return fmt.Errorf("built-in schema did not finish within 20s")
+	}
+}
+
+// Hold the final built-in object registration after the roots already exist.
+// The old vertex-polling bootstrap returned at this point, allowing schema
+// recovery to add 22 unrelated scans while a 20-link hub was being measured.
+func (s *LinkResolveTestSuite) Test_StartupWaitsForCompleteSchema() {
+	crud.RegisterAllFunctionTypes(s.Runtime())
+	entered, release := make(chan struct{}), make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	statefun.NewFunctionType(s.Runtime(), "functions.graph.api.link.create", func(exec sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContextProcessor) {
+		if ctx.Self.ID == ctx.Domain.CreateObjectIDWithHubDomain(crud.BUILT_IN_OBJECTS, false) && ctx.Payload.GetByPath("name").AsStringDefault("") == crud.BUILT_IN_OBJECT_NAV {
+			close(entered)
+			<-release
+		}
+		crud.LLAPILinkCreate(exec, ctx)
+	}, *statefun.NewFunctionTypeConfig().SetAllowedRequestProviders(sfPlugins.AutoRequestSelect))
+
+	started := make(chan error, 1)
+	go func() { started <- s.startAndWaitForSchema() }()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		s.T().Fatal("schema did not reach the delayed registration")
+	}
+	s.True(s.Runtime().Domain.Cache().ExistsJson(s.SetThisDomainPreffix(crud.BUILT_IN_TYPES)), "a root vertex alone is not a completion signal")
+	select {
+	case err := <-started:
+		s.T().Fatalf("bootstrap returned before schema completion: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case err := <-started:
+		s.Require().NoError(err)
+	case <-time.After(10 * time.Second):
+		s.T().Fatal("bootstrap did not observe schema completion")
+	}
+	s.True(s.Runtime().Domain.Cache().ExistsJson(s.SetThisDomainPreffix(crud.BUILT_IN_OBJECT_NAV)))
 }
 
 // hub builds one from-vertex with `fanout` outgoing links, so a search over its

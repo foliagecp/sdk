@@ -7,7 +7,7 @@ cd "$(dirname "$0")/../../.."
 source scripts/_lib/linux-go-test.sh
 race_args=""
 if [ "${SDK_TEST_RACE:-0}" = 1 ]; then race_args="-race"; fi
-regressions='^Test_RecoveryFloor|^Test_ConditionalCreate|^Test_Shutdown_Retains|^Test_RootCause_RehydrateDoesNotResurrectDeleted$|^TestTrashCanTestSuite$|^TestCMDBClientContractTestSuite$/^Test_RootCause_Rejected|^TestLinkResolveTestSuite$/^Test_BareRemnant'
+regressions='^Test_RecoveryFloor|^Test_ConditionalCreate|^Test_Shutdown_Retains|^Test_RootCause_RehydrateDoesNotResurrectDeleted$|^TestTrashCanTestSuite$|^TestCMDBClientContractTestSuite$/^Test_RootCause_Rejected|^TestLinkResolveTestSuite$'
 sdk_go_test_in_linux -v -p 1 -count=1 $race_args -timeout=8m \
   ./statefun/cache ./embedded/graph/crud -run "$regressions"
 echo '>> cache-graph-recovery: PASS'
