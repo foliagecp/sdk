@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/foliagecp/easyjson"
-	"github.com/foliagecp/sdk/statefun/cache"
 	sfPlugins "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/stretchr/testify/require"
@@ -54,12 +53,7 @@ func Test_HA_DynamicFunctionType_ResubscribesAfterFailover(t *testing.T) {
 		}
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = rt.Start(ctx, cache.NewCacheConfig("hadomain_cache")) }()
-
-	require.Truef(t, waitForCond(30*time.Second, func() bool { return rt.IsReady() }),
-		"runtime must finish starting")
+	requireHARuntimesReady(t, launchHATestRuntime(t, rt))
 
 	// Dynamic single-instance FT — registered AFTER Start. Default config =>
 	// single-instance (multipleInstancesAllowed=false). This is the regression.
@@ -113,9 +107,8 @@ func Test_HA_DynamicFunctionType_ResubscribesAfterFailover(t *testing.T) {
 
 // Test_HA_DynamicFunctionType_FailoverToSecondInstance is the two-instance
 // failover (acceptance T1 + T3): the same dynamic single-instance FT is
-// registered on BOTH a live and a standby runtime (as the same osm-app binary on
-// every node does); only the active processes; when the active is killed the
-// standby is promoted and MUST subscribe its dynamically-registered FT and take
+// registered on BOTH a live and a standby runtime. Only the active processes;
+// when it is killed the standby is promoted and MUST subscribe its dynamically-registered FT and take
 // over processing — with no restart. Before the fix the promoted instance never
 // subscribed the dynamic FT (absent from its startup revisions map), so the
 // handler stayed dead after failover.
@@ -128,19 +121,16 @@ func Test_HA_DynamicFunctionType_FailoverToSecondInstance(t *testing.T) {
 	const fn = "fn.dynamic.failover2"
 	var activeHits, passiveHits atomic.Int64
 
-	newRT := func() (*Runtime, context.CancelFunc) {
+	newRT := func() (*Runtime, *haTestRuntime) {
 		cfg := NewRuntimeConfigSimple(url, "hadomain").SetKVMutexLifeTimeSec(4)
 		rt, err := NewRuntime(*cfg)
 		require.NoError(t, err)
-		ctx, cancel := context.WithCancel(context.Background())
-		go func() { _ = rt.Start(ctx, cache.NewCacheConfig("hadomain_cache")) }()
-		return rt, cancel
+		return rt, launchHATestRuntime(t, rt)
 	}
 
-	rtA, cancelA := newRT()
-	defer cancelA()
-	rtB, cancelB := newRT()
-	defer cancelB()
+	rtA, startedA := newRT()
+	rtB, startedB := newRT()
+	requireHARuntimesReady(t, startedA, startedB)
 
 	activeCount := func() int {
 		n := 0

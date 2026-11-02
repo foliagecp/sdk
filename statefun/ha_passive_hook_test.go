@@ -3,8 +3,8 @@ package statefun
 // Tests for RegisterOnBecamePassive — the active->passive teardown hook.
 //
 //   - Test_HA_OnBecamePassive_FiresOnDemotion drives a REAL demotion on an
-//     embedded NATS (by releasing the runtime's own KV lock) and asserts the
-//     callback fires exactly once with a deadline-bounded context.
+//     containerized NATS broker (by releasing the runtime's own KV lock). The
+//     callback must fire exactly once with a deadline-bounded context.
 //   - Test_OnBecamePassive_BoundedByTimeout asserts a callback that ignores its
 //     context cannot wedge the demotion path (the call returns at its deadline).
 
@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/foliagecp/sdk/statefun/cache"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/stretchr/testify/require"
 )
@@ -38,15 +37,7 @@ func Test_HA_OnBecamePassive_FiresOnDemotion(t *testing.T) {
 		passiveCount.Add(1)
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = rt.Start(ctx, cache.NewCacheConfig("hadomain_cache")) }()
-
-	// Wait until Start has brought the runtime up (isReady, an atomic, also
-	// establishes happens-before for Domain.kv, which Start initialises before
-	// it). IsActiveInstance is unusable as a gate here: it defaults to true.
-	require.Truef(t, waitForCond(30*time.Second, func() bool { return rt.IsReady() }),
-		"runtime must finish starting")
+	requireHARuntimesReady(t, launchHATestRuntime(t, rt))
 
 	// Force a real demotion: release the runtime's own KV lock from the outside.
 	// Done entirely KV-side (no race on the runtime's internal state): releasing a

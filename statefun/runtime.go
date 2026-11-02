@@ -103,9 +103,9 @@ type GracefulShutdown struct {
 	// phase so that the shutdown waits for all in-flight operations to finish.
 	phaseTransitionMu sync.RWMutex
 
-	cancelPhaseOne   context.CancelFunc
-	cancelPhaseTwo   context.CancelFunc
-	cancelPhaseThree context.CancelFunc
+	cancelPhaseOneFunc context.CancelFunc
+	cancelPhaseTwo     context.CancelFunc
+	cancelPhaseThree   context.CancelFunc
 
 	ctxPhaseOne   context.Context
 	ctxPhaseTwo   context.Context
@@ -419,7 +419,7 @@ func NewGracefulShutdown(rootCtx context.Context) *GracefulShutdown {
 
 	gs.setPhase(ShutdownPhaseNone)
 	gs.mu.Lock()
-	gs.ctxPhaseOne, gs.cancelPhaseOne = context.WithCancel(rootCtx)
+	gs.ctxPhaseOne, gs.cancelPhaseOneFunc = context.WithCancel(rootCtx)
 	gs.ctxPhaseTwo, gs.cancelPhaseTwo = context.WithCancel(rootCtx)
 	gs.ctxPhaseThree, gs.cancelPhaseThree = context.WithCancel(rootCtx)
 	gs.mu.Unlock()
@@ -451,15 +451,31 @@ func (gs *GracefulShutdown) phaseOneCtx() context.Context {
 	return gs.ctxPhaseOne
 }
 
+// cancelPhaseOne and resetPhaseOneCtx serialize access to the replaceable
+// context and cancel function. Shutdown must cancel the current generation.
+func (gs *GracefulShutdown) cancelPhaseOne() {
+	gs.mu.RLock()
+	defer gs.mu.RUnlock()
+	gs.cancelPhaseOneFunc()
+}
+
 func (gs *GracefulShutdown) resetPhaseOneCtx() {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
-	gs.ctxPhaseOne, gs.cancelPhaseOne = context.WithCancel(context.Background())
+	gs.cancelPhaseOneFunc()
+	// Promotion may race emergency shutdown, which cancels phase three without
+	// a phased drain. Inherit that parent so a late reset cannot revive work.
+	gs.ctxPhaseOne, gs.cancelPhaseOneFunc = context.WithCancel(gs.ctxPhaseThree)
+	if gs.currentPhase() != ShutdownPhaseNone {
+		gs.cancelPhaseOneFunc()
+	}
 }
 
-// cancelAllContexts force stops passive runtime
+// cancelAllContexts force stops passive runtime.
 func (gs *GracefulShutdown) cancelAllContexts() {
-	gs.cancelPhaseOne()
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	gs.cancelPhaseOneFunc()
 	gs.cancelPhaseTwo()
 	gs.cancelPhaseThree()
 }

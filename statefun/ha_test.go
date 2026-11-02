@@ -9,11 +9,9 @@ package statefun
 // stale lock expire) happens quickly and deterministically.
 
 import (
-	"context"
 	"testing"
 	"time"
 
-	"github.com/foliagecp/sdk/statefun/cache"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/stretchr/testify/require"
 )
@@ -35,21 +33,18 @@ func Test_HA_ActivePassive_ExclusivityAndRecovery(t *testing.T) {
 	}
 	url := newHABroker(t)
 
-	// Cancellable contexts so both runtimes' goroutines wind down at test end —
-	// otherwise they keep thrashing and destabilize sibling tests in the package.
-	newRT := func() (*Runtime, context.CancelFunc) {
+	// Launch both instances before waiting for readiness. The harness joins
+	// their shutdown before removing the broker at test cleanup.
+	newRT := func() (*Runtime, *haTestRuntime) {
 		cfg := NewRuntimeConfigSimple(url, "hadomain").SetKVMutexLifeTimeSec(4)
 		rt, err := NewRuntime(*cfg)
 		require.NoError(t, err)
-		ctx, cancel := context.WithCancel(context.Background())
-		go func() { _ = rt.Start(ctx, cache.NewCacheConfig("hadomain_cache")) }()
-		return rt, cancel
+		return rt, launchHATestRuntime(t, rt)
 	}
 
-	rtA, cancelA := newRT()
-	defer cancelA()
-	rtB, cancelB := newRT()
-	defer cancelB()
+	rtA, startedA := newRT()
+	rtB, startedB := newRT()
+	requireHARuntimesReady(t, startedA, startedB)
 
 	activeCount := func() int {
 		n := 0
