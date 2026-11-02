@@ -35,27 +35,13 @@ const (
 	shutdownLogInterval  = 5 * time.Second
 	shutdownMaxWait      = 30 * time.Second
 
-	// --- applyTransactionOps pipelining ---
-	//
-	// applyTransactionOpsChunkSize bounds how many WAL ops we
-	// pipeline through PublishAsync simultaneously before we wait
-	// for their PubAcks. The NATS Go client default for
-	// PublishAsyncMaxPending is 4000; we deliberately stay under
-	// that with safety room for other publishers on the same
-	// JetStream context (publishWALTransaction, ExportCommitter,
-	// callers' own KVPut). Picking too low penalises latency by
-	// adding extra wait barriers per transaction; picking too high
-	// risks "stalled" errors from nats.go when the pool fills.
-	//
-	// 1024 is a measured sweet spot: well below the global cap,
-	// large enough that for typical WAL transactions (10–500 ops)
-	// the whole transaction goes through in a single chunk.
-	applyTransactionOpsChunkSize = 1024
+	// Keep the WAL window below the runtime's async publisher limit. nats.go
+	// v1.37 starts stalling when the pending count reaches (not exceeds) it.
+	runtimePublishAsyncMaxPending = 256
+	applyTransactionOpsChunkSize  = runtimePublishAsyncMaxPending / 2
 
-	// applyTransactionOpsAckTimeout caps the wait for each chunk's
-	// PubAcks. Hitting this means NATS is unhealthy and the WAL
-	// message will be redelivered — applyTransactionOps is
-	// idempotent, so the retry will reapply the chunk cleanly.
+	// Bound publication backpressure and ACK collection together per window.
+	// Cancellation also interrupts waits for an earlier attempt's ACKs.
 	applyTransactionOpsAckTimeout = 30 * time.Second
 )
 
@@ -244,126 +230,110 @@ type pendingKVOp struct {
 	future nats.PubAckFuture
 }
 
-// applyTransactionOps applies a batch of WAL ops to the underlying
-// JetStream KV store, pipelining the publishes through PublishAsync
-// instead of paying one synchronous round-trip per op.
-//
-// Atomicity model — unchanged from the pre-pipeline implementation:
-//
-//   - JetStream provides no multi-key atomic write API. Each op is a
-//     standalone publish (PUT) or DEL tombstone publish.
-//
-//   - Atomicity is achieved at the WAL layer: we Ack the WAL
-//     transaction message only after every op in the batch has been
-//     acknowledged by the server. If any op fails or times out, we
-//     return error → WAL message is NOT Acked → JetStream redelivers
-//     → applyTransactionOps reruns the whole batch. Per-op reapply
-//     is idempotent (PUT overwrites the same value; DEL is a no-op
-//     against an already-deleted key).
-//
-//   - Per-op ordering within a single key inside a single
-//     transaction: typical WAL ops touch each key at most once per
-//     transaction (cache.SetValueJSON ↔ publishDirtyOp), so reorder
-//     between two writes to the same key from the same transaction is
-//     not a concern. If callers begin to write the same key multiple
-//     times within one transaction, that needs separate consideration
-//     (sequential per-key publish, or merge before publish).
-//
-// Pipelining mechanics:
-//
-//   - We issue up to applyTransactionOpsChunkSize PublishAsync calls
-//     before waiting for any acks. This stays well under the
-//     PublishAsyncMaxPending cap (default 4000) shared by every
-//     publisher on the JetStream context — so we don't starve
-//     concurrent subsystems (WAL publisher, ExportCommitter).
-//
-//   - After issuing a chunk we drain it via per-future select on
-//     Ok()/Err()/timeout. We deliberately do NOT use
-//     PublishAsyncComplete here because it waits for ALL outstanding
-//     futures on the JS context, including ones owned by other
-//     subsystems.
-//
-//   - A "stalled" error from PublishAsync (pool exhausted by
-//     concurrent publishers) is propagated as a normal error → WAL
-//     redelivery → retry. Self-healing.
-//
-// Expected throughput improvement vs the sequential KVPut loop:
-// roughly 5–10× on a local NATS server (RT ≈ 200µs, chunk of 1024
-// publishes shares one pipeline), and 15–25× on a remote NATS
-// (RT ≈ 5ms+).
+// applyTransactionOps pipelines bounded windows of KV writes in publish order.
+// Transaction size is independent of the in-flight limit. A failed attempt
+// leaves the WAL unacknowledged; its outstanding publishes must settle before
+// a retry sends any more writes. Only a fully acknowledged apply may produce
+// the completion receipt and ACK the WAL message.
 func (dm *Domain) applyTransactionOps(ctx context.Context, ops []cache.WALOp, txID string, sequence uint64) ([]walAppliedDelete, error) {
 	var deletes []walAppliedDelete
 	for start := 0; start < len(ops); start += applyTransactionOpsChunkSize {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		end := start + applyTransactionOpsChunkSize
-		if end > len(ops) {
-			end = len(ops)
+		end := min(start+applyTransactionOpsChunkSize, len(ops))
+		windowCtx, cancel := context.WithTimeout(ctx, applyTransactionOpsAckTimeout)
+		appliedDeletes, err := dm.applyWALWindow(windowCtx, ops[start:end], txID, start)
+		cancel()
+		if err != nil {
+			return nil, err
 		}
-
-		pending := make([]pendingKVOp, 0, end-start)
-		for _, op := range ops[start:end] {
-			if op.Key == "" {
-				continue
-			}
-			switch op.OpType {
-			case cache.OpTypePUT:
-				f, err := customNatsKv.KVPutAsync(dm.js, dm.kv, op.Key, op.Value)
-				if err != nil {
-					return nil, fmt.Errorf("KV apply (publish PUT) failed for key=%s in tx=%s: %w", op.Key, txID, err)
-				}
-				pending = append(pending, pendingKVOp{key: op.Key, opType: op.OpType, future: f})
-
-			case cache.OpTypeDelete:
-				f, err := customNatsKv.KVDeleteAsync(dm.js, dm.kv, op.Key)
-				if err != nil {
-					return nil, fmt.Errorf("KV apply (publish DEL) failed for key=%s in tx=%s: %w", op.Key, txID, err)
-				}
-				pending = append(pending, pendingKVOp{key: op.Key, opType: op.OpType, future: f})
-
-			default:
-				continue
-			}
-		}
-
-		// Drain the chunk's futures. Cap the wait globally per chunk
-		// so a stuck NATS does not block the consumer forever — WAL
-		// redelivery kicks in and reapplies on the next tick.
-		deadline := time.After(applyTransactionOpsAckTimeout)
-		for i, p := range pending {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case pa := <-p.future.Ok():
-				// A DEL is a marker the broker keeps until somebody removes
-				// it; the ack says where it landed, and the purger removes
-				// it by that sequence (cache/kv_tombstones.go).
-				if pa == nil || pa.Sequence == 0 {
-					return nil, fmt.Errorf("KV apply returned no durable revision in tx=%s", txID)
-				}
-				if p.opType == cache.OpTypeDelete {
-					deletes = append(deletes, walAppliedDelete{Key: p.key, Revision: pa.Sequence})
-				}
-
-			case err := <-p.future.Err():
-				// DEL tombstone publish never reports "not found":
-				// the server accepts the message regardless of prior
-				// state. So unlike the old SecureDeleteMsg path, we
-				// do not swallow "key not found" / "message not
-				// found" here — any error is a real publish failure
-				// and must trigger redelivery.
-				return nil, fmt.Errorf("KV apply ack failed in tx=%s at op %d (key=%s, type=%s): %w", txID, start+i, p.key, p.opType, err)
-
-			case <-deadline:
-				return nil, fmt.Errorf("KV apply ack timed out (%s) in tx=%s at op %d (key=%s, type=%s, pool may be saturated)",
-					applyTransactionOpsAckTimeout, txID, start+i, p.key, p.opType)
-			}
-		}
+		deletes = append(deletes, appliedDeletes...)
 		dm.recordWALApplyProgress(sequence, end)
 	}
-
 	return deletes, nil
+}
+
+func (dm *Domain) applyWALWindow(ctx context.Context, ops []cache.WALOp, txID string, start int) ([]walAppliedDelete, error) {
+	// The context owns a shared pending pool. In particular, cancellation or
+	// an early error in a previous attempt does not remove its sent messages.
+	// Do not clean up the publisher: that would discard their acknowledgements
+	// and fail other users of the same JetStream context.
+	if err := dm.waitForWALPublisher(ctx); err != nil {
+		return nil, fmt.Errorf("KV apply waiting for outstanding publishes in tx=%s: %w", txID, err)
+	}
+	pending := make([]pendingKVOp, 0, len(ops))
+	for _, op := range ops {
+		if op.Key == "" || (op.OpType != cache.OpTypePUT && op.OpType != cache.OpTypeDelete) {
+			continue
+		}
+		future, err := dm.publishWALOp(ctx, op)
+		if err != nil {
+			return nil, fmt.Errorf("KV apply (publish %s) failed for key=%s in tx=%s: %w", op.OpType, op.Key, txID, err)
+		}
+		pending = append(pending, pendingKVOp{key: op.Key, opType: op.OpType, future: future})
+	}
+	var deletes []walAppliedDelete
+	for i, p := range pending {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("KV apply ack wait in tx=%s at op %d (key=%s): %w", txID, start+i, p.key, ctx.Err())
+		case pa := <-p.future.Ok():
+			if pa == nil || pa.Sequence == 0 {
+				return nil, fmt.Errorf("KV apply returned no durable revision in tx=%s", txID)
+			}
+			// Preserve the exact durable DEL revision for receipt-backed purging.
+			if p.opType == cache.OpTypeDelete {
+				deletes = append(deletes, walAppliedDelete{Key: p.key, Revision: pa.Sequence})
+			}
+		case err := <-p.future.Err():
+			return nil, fmt.Errorf("KV apply ack failed in tx=%s at op %d (key=%s, type=%s): %w", txID, start+i, p.key, p.opType, err)
+		}
+	}
+	return deletes, ctx.Err()
+}
+
+func (dm *Domain) waitForWALPublisher(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-dm.js.PublishAsyncComplete():
+		return ctx.Err()
+	}
+}
+
+func (dm *Domain) publishWALOp(ctx context.Context, op cache.WALOp) (nats.PubAckFuture, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if dm.js.PublishAsyncPending() >= applyTransactionOpsChunkSize {
+			if err := dm.waitForWALPublisher(ctx); err != nil {
+				return nil, err
+			}
+		}
+		var future nats.PubAckFuture
+		var err error
+		if op.OpType == cache.OpTypePUT {
+			future, err = customNatsKv.KVPutAsync(dm.js, dm.kv, op.Key, op.Value)
+		} else {
+			future, err = customNatsKv.KVDeleteAsync(dm.js, dm.kv, op.Key)
+		}
+		// Another publisher can consume the shared capacity between the check
+		// and the publish. The legacy nats.go API exposes this one error only
+		// as text. It removes the unsent future, so retry just this operation
+		// after draining, within the same window deadline. Other errors still
+		// return to the WAL consumer for its normal retry handling.
+		if err == nil || err.Error() != "nats: stalled with too many outstanding async published messages" {
+			return future, err
+		}
+		if err := dm.waitForWALPublisher(ctx); err != nil {
+			return nil, err
+		}
+	}
 }
 
 func (dm *Domain) setKVConsistent(consistent bool) error {

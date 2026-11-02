@@ -161,7 +161,7 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 		return nil, err
 	}
 
-	jsOpts := []nats.JSOpt{nats.PublishAsyncMaxPending(256)}
+	jsOpts := []nats.JSOpt{nats.PublishAsyncMaxPending(runtimePublishAsyncMaxPending)}
 	if r.config.natsAPITimeoutSec > 0 {
 		// Raise the JetStream API request timeout (default ~5s) so KV-mutex
 		// Put/Update calls don't spuriously fail with "context deadline

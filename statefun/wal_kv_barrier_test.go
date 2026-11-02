@@ -67,7 +67,7 @@ func (s *WALKVBarrierTestSuite) Test_BarrierHoldsUntilTheLastTransactionIsInKV()
 	prefix := cs.GetStorePrefix() + "."
 
 	// Enough keys that the transaction takes real time to apply — the ops go
-	// to KV in chunks of 1024, each chunk waited on.
+	// to KV in bounded windows, each window waited on.
 	const (
 		rounds   = 3
 		perRound = 2000

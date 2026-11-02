@@ -266,3 +266,24 @@ Shutdown-context controls also assert that renewal cancels the previous
 application generation and cannot revive work after graceful or emergency
 shutdown. Concurrent renewal/read/cancellation runs with the race detector;
 these assertions remain part of the HA system fixture.
+
+
+## WAL backpressure regression gate
+
+`tests/system/wal-backpressure/run.sh` runs in full and `--system-only` modes,
+including `--race`. It uses a real embedded JetStream server in Linux Docker
+and intercepts KV PubAcks on the client connection before nats.go frees its
+pending slots. No broker data or ACK payloads are fabricated. The publisher
+uses the same 256-slot limit as the runtime. Holding ACKs longer than the
+client's default 200 ms stall timeout must not fail a large WAL transaction.
+
+The checks cover 2200 ordered PUT/DELETE operations, a full shared pending
+pool, concurrent publisher saturation, a rejected KV write and successful retry,
+cancellation/deadline expiry with a partially applied transaction, retry
+while old ACKs are still outstanding, and a disconnected publisher. They
+verify KV contents, retention of incomplete WAL records, absence of premature
+completion receipts and removal of WAL records only after a successful apply.
+The old 1024-operation burst fails the delayed-ACK regression at operation 256.
+The SDK now publishes bounded windows below the configured pending limit and
+waits for outstanding ACKs before retrying an incomplete attempt. Publication
+backpressure and ACK collection share a 30-second deadline per window.
