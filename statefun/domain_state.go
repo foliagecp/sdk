@@ -21,10 +21,13 @@ func domainMismatch(local, resource, actual, expected string) error {
 	return fmt.Errorf("%w: local domain %q, %s: found %s, expected %s; restore the previous domain configuration to reuse existing data, or plan a migration; if old data is disposable, stop all writers and manually reinitialize the affected installation storage (see docs/domain_lifecycle.md); the SDK has not modified existing state", ErrDomainStateMismatch, local, resource, actual, expected)
 }
 
+// errDomainInventoryChanged identifies an uncertain snapshot, not a domain conflict.
+var errDomainInventoryChanged = errors.New("domain inventory incomplete or changed while reading")
+
 // domainInventory fails closed: the old channel-based NATS listing API hides
 // errors. Count checks and bounded context prevent a partial list being used
 // as evidence that conflicting state is absent. A concurrent inventory change
-// is retried by the caller on its next startup attempt, not silently ignored.
+// is retried within the startup validation budget, never silently accepted.
 func domainInventory(ctx context.Context, js nats.JetStreamContext) ([]*nats.StreamInfo, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -44,7 +47,7 @@ func domainInventory(ctx context.Context, js nats.JetStreamContext) ([]*nats.Str
 		return nil, fmt.Errorf("verify domain inventory: %w", err)
 	}
 	if len(list) != before.Streams || len(list) != after.Streams {
-		return nil, fmt.Errorf("domain inventory incomplete or changed while reading: listed %d streams, account counts %d/%d; retry with stable JetStream", len(list), before.Streams, after.Streams)
+		return nil, fmt.Errorf("%w: listed %d streams, account counts %d/%d", errDomainInventoryChanged, len(list), before.Streams, after.Streams)
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Config.Name < list[j].Config.Name })
 	return list, nil
@@ -116,7 +119,7 @@ func checkRouterConsumers(ctx context.Context, js nats.JetStreamContext, info *n
 		return err
 	}
 	if count != info.State.Consumers {
-		return fmt.Errorf("incomplete consumer inventory for %s: listed %d, expected %d", info.Config.Name, count, info.State.Consumers)
+		return fmt.Errorf("%w: incomplete consumer inventory for %s: listed %d, expected %d", errDomainInventoryChanged, info.Config.Name, count, info.State.Consumers)
 	}
 	return nil
 }
@@ -124,6 +127,28 @@ func checkRouterConsumers(ctx context.Context, js nats.JetStreamContext, info *n
 func (r *Runtime) validateDomainState(ctx context.Context, cacheID string) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
+	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("validate domain state: %w", err)
+		}
+		err := r.validateDomainStateSnapshot(ctx, cacheID)
+		if !errors.Is(err, errDomainInventoryChanged) {
+			return err
+		}
+		// Another instance may be creating compatible resources while we
+		// inspect them. Repeat the entire read-only validation; incomplete
+		// snapshots never prove compatibility and real conflicts never retry.
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("validate domain state: %w; last inventory check: %w", ctx.Err(), err)
+		case <-timer.C:
+		}
+	}
+}
+
+func (r *Runtime) validateDomainStateSnapshot(ctx context.Context, cacheID string) error {
 	list, err := domainInventory(ctx, r.js)
 	if err != nil {
 		return err
@@ -153,7 +178,7 @@ func (r *Runtime) validateDomainState(ctx context.Context, cacheID string) error
 			return domainMismatch(r.Domain.name, "function stream "+name, fmt.Sprintf("subjects=%v sources=%v mirror=%v transform=%+v", info.Config.Subjects, info.Config.Sources, info.Config.Mirror, info.Config.SubjectTransform), want)
 		}
 	}
-	return nil
+	return ctx.Err()
 }
 
 func domainSourcesJSON(s []*nats.StreamSource) string { b, _ := json.Marshal(s); return string(b) }
