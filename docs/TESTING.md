@@ -287,3 +287,19 @@ The old 1024-operation burst fails the delayed-ACK regression at operation 256.
 The SDK now publishes bounded windows below the configured pending limit and
 waits for outstanding ACKs before retrying an incomplete attempt. Publication
 backpressure and ACK collection share a 30-second deadline per window.
+
+
+## Dynamic registration regression gate
+
+`Test_HA_DynamicRegistration_*` extends the existing HA system fixture with
+passive-first registration, expired/busy lease retry without promotion,
+lease renewal past its original TTL, concurrent function registration,
+registration rollback and deferred-subscription failure recovery. Controls
+exercise failover, promotion/shutdown while stream creation is blocked,
+existing subscription reuse and local calls during registry updates. A delayed
+subscription must not postpone demotion or leave the old instance subscribed.
+Promotion must retain subscription work deferred by concurrent registration,
+even when there is no single-instance lease retry to trigger it again.
+Tests use generated function names and pinned local NATS containers. They
+run as ordinary Go tests and through `ha-startup-recovery` in full and
+`--system-only` runs, with race instrumentation when requested.

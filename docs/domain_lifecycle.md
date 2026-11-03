@@ -21,6 +21,39 @@ HA promotion renews the application-hook context under the same synchronization
 used by shutdown cancellation. Old generations are canceled, and a late
 promotion cannot create live application work after shutdown has begun.
 
+## Dynamic function registration in HA
+
+`RegisterDynamicFunctionType` may be called on both active and passive
+runtimes after startup. A passive instance registers locally without taking
+the function's single-instance lease or starting subscriptions. The active
+instance records acquired leases for periodic refresh; a busy lease remains
+pending and is retried on lifecycle ticks, including after its TTL expires.
+The function starts serving once ownership is acquired, without requiring
+another HA promotion. Registration still succeeds locally while a lease is
+held elsewhere; this does not mean its subscriptions are already live.
+
+Registration, lease updates, subscription changes and demotion share internal
+synchronization. Slow stream creation does not expose a partially initialized
+function or block HA promotion. Pending registration I/O does not block the
+runtime lease refresher or postpone revoking a lost active role. Promotion
+retains pending subscription work across ticks while registration holds the
+lifecycle gate, including functions with no single-instance lease. A registration
+that loses its active role parks its function instead of leaving it subscribed.
+A failed registration releases its acquired
+lease and removes the local entry. A failed deferred subscription is retried;
+existing subscriptions are reused so retrying another function does not add
+extra signal consumers or request responders. Local calls take a synchronized
+registry snapshot during concurrent registration. Public registration and
+call signatures, function configuration and message formats are unchanged.
+
+The `Test_HA_DynamicRegistration_*` tests cover passive-first and concurrent
+registration, busy and expired leases, refresh past the original TTL, failure
+rollback, subscription retry, failover, promotion/shutdown during stream
+creation and local requests during registration. They also run through the
+HA system fixture in full, `--system-only` and `--race` modes.
+
+## Call diagnostics
+
 Call diagnostics preserve signatures, OpMsg/OpError layouts, JSON formats,
 successful results, routing, execution order and existing timeout behavior.
 Errors and logs identify the selected domain, function, object and transport.

@@ -103,6 +103,15 @@ func (r *Runtime) egress(egressProvider sfPlugins.EgressProvider, callerTypename
 	}
 }
 
+// Return a stable function pointer without holding the registry lock across
+// user code. Dynamic registration and rollback may update the map at any time.
+func (r *Runtime) registeredFunctionType(name string) (*FunctionType, bool) {
+	r.ftMu.RLock()
+	defer r.ftMu.RUnlock()
+	ft, ok := r.registeredFunctionTypes[name]
+	return ft, ok
+}
+
 /* return
 * 0 - ok
 * 1 - domain differs
@@ -112,7 +121,7 @@ func (r *Runtime) egress(egressProvider sfPlugins.EgressProvider, callerTypename
 func (r *Runtime) functionTypeIsReadyForGoLangCommunication(targetFunctionTypeName string, isRequest bool, targetID string) int {
 	var targetFT *FunctionType
 	if r.Domain.GetDomainFromObjectID(targetID) == r.Domain.name {
-		if ft, ok := r.registeredFunctionTypes[targetFunctionTypeName]; ok {
+		if ft, ok := r.registeredFunctionType(targetFunctionTypeName); ok {
 			targetFT = ft
 		} else {
 			return 2
@@ -169,9 +178,11 @@ func (r *Runtime) signal(signalProvider sfPlugins.SignalProvider, callerTypename
 	goLangLocalSignal := func() error {
 		switch r.functionTypeIsReadyForGoLangCommunication(targetTypename, false, targetID) {
 		case 0:
+			targetFT, exists := r.registeredFunctionType(targetTypename)
+			if !exists {
+				return fmt.Errorf("goLangLocalSignal: cannot request function with the typename %s via golang, not registered", targetTypename)
+			}
 			func() {
-				targetFT := r.registeredFunctionTypes[targetTypename]
-
 				// Do not send original data, prevents same data concurrent access from different functions
 				var payloadCopy *easyjson.JSON = nil
 				var optionsCopy *easyjson.JSON = nil
@@ -323,7 +334,10 @@ func (r *Runtime) request(requestProvider sfPlugins.RequestProvider, callerTypen
 	goLangLocalRequest := func() (*easyjson.JSON, error) {
 		switch r.functionTypeIsReadyForGoLangCommunication(targetTypename, true, targetID) {
 		case 0:
-			targetFT := r.registeredFunctionTypes[targetTypename]
+			targetFT, exists := r.registeredFunctionType(targetTypename)
+			if !exists {
+				return nil, fmt.Errorf("goLangLocalRequest: cannot request function with the typename %s via golang, not registered", targetTypename)
+			}
 			resultJSONChannel := make(chan *easyjson.JSON, 1)
 
 			// Do not send original data, prevents same data concurrent access from different functions

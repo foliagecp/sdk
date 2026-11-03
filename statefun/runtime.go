@@ -54,11 +54,17 @@ type Runtime struct {
 	js     nats.JetStreamContext
 	Domain *Domain
 
-	registeredFunctionTypes       map[string]*FunctionType
-	ftMu                          sync.RWMutex // protects registeredFunctionTypes
-	canRegisterNewFunctionType    bool
-	onAfterStartFunctionsWithMode []onAfterStartFunctionWithMode
-	onBecamePassiveFunctions      []OnBecamePassiveFunction
+	registeredFunctionTypes map[string]*FunctionType
+	ftMu                    sync.RWMutex // protects registeredFunctionTypes
+	// Serialize function lease bookkeeping and subscription changes with
+	// dynamic registration and HA demotion. Lock phaseTransitionMu first
+	// whenever a path may create subscriptions, then ftLifecycleMu, then ftMu.
+	ftLifecycleMu                   sync.Mutex
+	singleInstanceFunctionRevisions map[string]uint64
+	functionSubscriptionsPending    bool // protected by ftLifecycleMu; retry failed lifecycle subscriptions
+	canRegisterNewFunctionType      bool
+	onAfterStartFunctionsWithMode   []onAfterStartFunctionWithMode
+	onBecamePassiveFunctions        []OnBecamePassiveFunction
 
 	gt0  int64 // Global time 0 - time of the very first message receiving by any function type
 	glce int64 // Global last call ended - time of last call of last function handling id of any function type
@@ -115,10 +121,11 @@ type GracefulShutdown struct {
 // NewRuntime initializes a new Runtime instance with the given configuration.
 func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 	r := &Runtime{
-		config:                     config,
-		registeredFunctionTypes:    make(map[string]*FunctionType),
-		canRegisterNewFunctionType: true,
-		shutdown:                   make(chan struct{}),
+		config:                          config,
+		registeredFunctionTypes:         make(map[string]*FunctionType),
+		singleInstanceFunctionRevisions: make(map[string]uint64),
+		canRegisterNewFunctionType:      true,
+		shutdown:                        make(chan struct{}),
 		// Buffered (cap 1): the GC sends here when functions are ready to stop
 		// (runGarbageCollector). If a bounded graceful shutdown forces past the
 		// receive without reading, an unbuffered send would block the GC
@@ -325,7 +332,7 @@ func (r *Runtime) Start(ctx context.Context, cacheConfig *cache.Config) error {
 	r.Domain.Cache().SetWALWriteEnabled(r.IsActiveInstance())
 
 	// Handle single-instance functions.
-	singleInstanceFunctionRevisions := make(map[string]uint64)
+	singleInstanceFunctionRevisions := r.singleInstanceFunctionRevisions
 	if err := r.handleSingleInstanceFunctions(r.gs.ctxPhaseThree, singleInstanceFunctionRevisions); err != nil {
 		return err
 	}
@@ -805,6 +812,8 @@ func (r *Runtime) createStreams(ctx context.Context) error {
 
 // handleSingleInstanceFunctions manages single-instance function locks.
 func (r *Runtime) handleSingleInstanceFunctions(ctx context.Context, revisions map[string]uint64) error {
+	r.ftLifecycleMu.Lock()
+	defer r.ftLifecycleMu.Unlock()
 	// Snapshot under RLock to avoid holding it across KeyMutexLock (which does NATS I/O)
 	r.ftMu.RLock()
 	ftSnapshot := make([]*FunctionType, 0, len(r.registeredFunctionTypes))
@@ -837,6 +846,18 @@ func (r *Runtime) handleSingleInstanceFunctions(ctx context.Context, revisions m
 
 // startFunctionSubscriptions starts the function subscriptions based on the configuration.
 func (r *Runtime) startFunctionSubscriptions(ctx context.Context, revisions map[string]uint64) error {
+	r.gs.phaseTransitionMu.RLock()
+	defer r.gs.phaseTransitionMu.RUnlock()
+	r.ftLifecycleMu.Lock()
+	defer r.ftLifecycleMu.Unlock()
+	return r.startFunctionSubscriptionsLocked(ctx, revisions)
+}
+
+// The caller holds phaseTransitionMu for reading and ftLifecycleMu.
+func (r *Runtime) startFunctionSubscriptionsLocked(ctx context.Context, revisions map[string]uint64) error {
+	if !r.IsActiveInstance() || r.gs.currentPhase() != ShutdownPhaseNone || ctx.Err() != nil {
+		return ctx.Err()
+	}
 	// Snapshot under RLock to avoid holding it during NATS subscription I/O
 	r.ftMu.RLock()
 	ftSnapshot := make([]*FunctionType, 0, len(r.registeredFunctionTypes))
@@ -1123,6 +1144,8 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 
 	//release all functions
 	releaseAllLocks := func(ctx context.Context, runtime *Runtime, revisions map[string]uint64) {
+		runtime.ftLifecycleMu.Lock()
+		defer runtime.ftLifecycleMu.Unlock()
 		if runtime.IsActiveInstance() {
 			for ftName, revID := range revisions {
 				system.MsgOnErrorReturn(KeyMutexUnlock(ctx, runtime, system.GetHashStr(ftName), revID))
@@ -1158,6 +1181,9 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 		revToRelease := r.config.activeRevID
 		r.config.activeRevID = 0
 		r.activeInstanceMu.Unlock()
+		// Revoke serving permission before waiting for registration I/O.
+		// An in-flight registration observes this flag and parks its function.
+		r.ftLifecycleMu.Lock()
 		// Release our own runtime lock so a fresh acquisition (recovery, or
 		// another instance) does not have to wait out the full soft-TTL on a
 		// stale-but-unrefreshed lock. Best-effort: if the lock was already
@@ -1177,6 +1203,7 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 		// model has no continuous kv.Watch). Mark the cache dirty so the next
 		// promotion does a full RehydrateFromKV before serving requests.
 		r.cacheDirty.Store(true)
+		r.ftLifecycleMu.Unlock()
 
 		// Application-side teardown: now that statefun traffic is stopped and the
 		// cache is frozen, give registered callbacks a bounded window to stop
@@ -1184,6 +1211,8 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 		r.runOnBecamePassiveFunctions(ctx)
 	}
 
+	// Preserve promotion work when registration temporarily owns the gate.
+	subscribeRequired := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -1191,8 +1220,6 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 		case <-r.shutdown:
 			return
 		case <-ticker.C:
-			subscribeRequired := false
-
 			if r.config.activePassiveMode {
 				// Refresh runtime lock if held (active or activating)
 				if rev := r.getActiveRevID(); rev != 0 {
@@ -1312,45 +1339,65 @@ func (r *Runtime) runtimeLifecycleUpdater(ctx context.Context, revisions map[str
 				r.setActiveInstance(true)
 			}
 
-			tryLock := func(ftName string) {
-				newRevID, err := KeyMutexLock(ctx, r, system.GetHashStr(ftName), true)
-				if err == nil {
-					subscribeRequired = true
-					revisions[ftName] = newRevID
-					lg.Logf(lg.TraceLevel, "KeyMutexLock succeeded for %s", ftName)
+			func() {
+				// Registration may be waiting for a broker API. Keep refreshing
+				// the runtime lease instead of blocking this lifecycle ticker.
+				if !r.gs.phaseTransitionMu.TryRLock() {
+					return
 				}
-			}
+				defer r.gs.phaseTransitionMu.RUnlock()
+				if !r.ftLifecycleMu.TryLock() {
+					return
+				}
+				defer r.ftLifecycleMu.Unlock()
+				if r.gs.currentPhase() != ShutdownPhaseNone || ctx.Err() != nil {
+					return
+				}
 
-			if r.IsActiveInstance() {
-				for ftName, revID := range revisions {
-					if revID == 0 {
-						tryLock(ftName)
-						continue
-					}
-					newRevID, err := KeyMutexLockUpdate(ctx, r, system.GetHashStr(ftName), revID)
+				tryLock := func(ftName string) {
+					newRevID, err := KeyMutexLock(ctx, r, system.GetHashStr(ftName), true)
 					if err == nil {
+						subscribeRequired = true
 						revisions[ftName] = newRevID
-						continue
+						lg.Logf(lg.TraceLevel, "KeyMutexLock succeeded for %s", ftName)
 					}
-					// Function-level lock: both "already unlocked" and
-					// ErrMutexRevisionViolated mean we no longer own this
-					// per-function token. Drop our stale revision so the
-					// next tryLock starts fresh.
-					if errors.Is(err, ErrMutexRevisionViolated) ||
-						strings.Contains(err.Error(), "already unlocked") {
-						revisions[ftName] = 0
-						tryLock(ftName)
-						continue
-					}
-					lg.Logf(lg.ErrorLevel, "KeyMutexLockUpdate failed for %s: %v", ftName, err)
 				}
-			}
 
-			if subscribeRequired {
-				if err := r.startFunctionSubscriptions(ctx, revisions); err != nil {
-					lg.Logf(lg.ErrorLevel, "function subscriptions failed: %v", err)
+				if r.IsActiveInstance() {
+					for ftName, revID := range revisions {
+						if revID == 0 {
+							tryLock(ftName)
+							continue
+						}
+						newRevID, err := KeyMutexLockUpdate(ctx, r, system.GetHashStr(ftName), revID)
+						if err == nil {
+							revisions[ftName] = newRevID
+							continue
+						}
+						// Function-level lock: both "already unlocked" and
+						// ErrMutexRevisionViolated mean we no longer own this
+						// per-function token. Drop our stale revision so the
+						// next tryLock starts fresh.
+						if errors.Is(err, ErrMutexRevisionViolated) ||
+							strings.Contains(err.Error(), "already unlocked") {
+							revisions[ftName] = 0
+							tryLock(ftName)
+							continue
+						}
+						lg.Logf(lg.ErrorLevel, "KeyMutexLockUpdate failed for %s: %v", ftName, err)
+					}
 				}
-			}
+
+				if subscribeRequired || r.functionSubscriptionsPending {
+					err := r.startFunctionSubscriptionsLocked(ctx, revisions)
+					r.functionSubscriptionsPending = err != nil
+					subscribeRequired = false
+					if err != nil {
+						lg.Logf(lg.ErrorLevel, "function subscriptions failed: %v", err)
+					}
+				}
+
+			}()
 
 			// Run afterStart functions only once the runtime is ready to serve:
 			// they typically issue requests (e.g. cmdbSchemaPrepare creates the

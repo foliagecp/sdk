@@ -168,13 +168,12 @@ func NewFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHa
 //   - a function type with the same name is already registered,
 //   - JetStream stream / NATS subscription creation fails.
 //
-// On success the function type is fully operational: worker pool is running and NATS
-// subscriptions (according to the config) are live.
-//
-// Note: in active/passive HA mode this method will still register the function type
-// locally, but subscriptions will be created only when this instance is active.
-// If the instance is passive, subscriptions will be set up later by the lifecycle
-// updater when it transitions to active.
+// An active runtime starts subscriptions immediately if it can acquire the
+// single-instance lease. If another instance owns the lease, registration
+// succeeds locally and the lifecycle retries acquisition until it is available.
+// A passive HA runtime registers locally without taking a function lease or
+// subscribing. Its lifecycle acquires the lease and subscribes on promotion.
+// Acquired dynamic leases are refreshed and released like static leases.
 func RegisterDynamicFunctionType(runtime *Runtime, name string, logicHandler FunctionLogicHandler, config FunctionTypeConfig) (*FunctionType, error) {
 	if !runtime.isReady.Load() {
 		return nil, fmt.Errorf("runtime has not started yet; use NewFunctionType for compile-time registration")
@@ -186,8 +185,15 @@ func RegisterDynamicFunctionType(runtime *Runtime, name string, logicHandler Fun
 	runtime.gs.phaseTransitionMu.RLock()
 	defer runtime.gs.phaseTransitionMu.RUnlock()
 
-	if runtime.gs.currentPhase() != ShutdownPhaseNone {
+	if runtime.gs.currentPhase() != ShutdownPhaseNone || runtime.gs.ctxPhaseThree.Err() != nil {
 		return nil, fmt.Errorf("runtime is shutting down; cannot register new function type '%s'", name)
+	}
+
+	runtime.ftMu.RLock()
+	_, exists := runtime.registeredFunctionTypes[name]
+	runtime.ftMu.RUnlock()
+	if exists {
+		return nil, fmt.Errorf("function type '%s' is already registered", name)
 	}
 
 	ft := &FunctionType{
@@ -200,24 +206,6 @@ func RegisterDynamicFunctionType(runtime *Runtime, name string, logicHandler Fun
 		tokens:       *system.NewTokenBucket(config.functionWorkerPoolConfig.MaxWorkers + config.functionWorkerPoolConfig.TaskQueueLen),
 		shutdownCh:   make(chan struct{}, 1),
 	}
-	ft.sfWorkerPool.Store(NewSFWorkerPool(ft, config.functionWorkerPoolConfig))
-
-	// Register in map (check uniqueness atomically)
-	runtime.ftMu.Lock()
-	if _, exists := runtime.registeredFunctionTypes[name]; exists {
-		runtime.ftMu.Unlock()
-		return nil, fmt.Errorf("function type '%s' is already registered", name)
-	}
-	runtime.registeredFunctionTypes[name] = ft
-	runtime.ftMu.Unlock()
-
-	// Rollback helper in case any subsequent step fails
-	rollback := func() {
-		runtime.ftMu.Lock()
-		delete(runtime.registeredFunctionTypes, name)
-		runtime.ftMu.Unlock()
-	}
-
 	// Ensure JetStream stream exists for signal-enabled functions
 	if ft.config.IsSignalProviderAllowed(sfPlugins.JetstreamGlobalSignal) {
 		streamName := ft.getStreamName()
@@ -238,35 +226,83 @@ func RegisterDynamicFunctionType(runtime *Runtime, name string, logicHandler Fun
 				MaxBytes:  runtime.Domain.ftSC.maxBytes,
 				MaxAge:    runtime.Domain.ftSC.maxAge,
 			}); err != nil {
-				rollback()
 				return nil, fmt.Errorf("failed to create JetStream stream for function type '%s': %w", name, err)
 			}
 		}
 	}
 
-	// For single-instance FT: try to acquire the distributed lock.
-	// If lock is already taken by another runtime — register locally but don't subscribe.
-	singleInstanceLocked := true // true means "this instance owns the lock (or FT is multi-instance)"
+	runtime.ftLifecycleMu.Lock()
+	defer runtime.ftLifecycleMu.Unlock()
+	if runtime.gs.currentPhase() != ShutdownPhaseNone || runtime.gs.ctxPhaseThree.Err() != nil {
+		return nil, fmt.Errorf("runtime is shutting down; cannot register new function type '%s'", name)
+	}
+	runtime.ftMu.Lock()
+	if _, exists := runtime.registeredFunctionTypes[name]; exists {
+		runtime.ftMu.Unlock()
+		return nil, fmt.Errorf("function type '%s' is already registered", name)
+	}
+	ft.sfWorkerPool.Store(NewSFWorkerPool(ft, config.functionWorkerPoolConfig))
+	runtime.registeredFunctionTypes[name] = ft
+	runtime.ftMu.Unlock()
+
+	var revision uint64
+	releaseLease := func() {
+		if revision != 0 {
+			system.MsgOnErrorReturn(KeyMutexUnlock(runtime.gs.ctxPhaseThree, runtime, system.GetHashStr(name), revision))
+			revision = 0
+			runtime.singleInstanceFunctionRevisions[name] = 0
+		}
+	}
+	park := func() {
+		ft.stopSignalSubscription()
+		ft.stopRequestSubscription()
+		if wp := ft.sfWorkerPool.Load(); wp != nil {
+			wp.Stop()
+		}
+		releaseLease()
+	}
+	rollback := func() {
+		park()
+		delete(runtime.singleInstanceFunctionRevisions, name)
+		runtime.ftMu.Lock()
+		delete(runtime.registeredFunctionTypes, name)
+		runtime.ftMu.Unlock()
+	}
+
+	// Both acquired and contended leases must be visible to the lifecycle.
+	// Passive registration never competes for ownership in KV.
+	isActive := runtime.IsActiveInstance()
 	if !ft.config.multipleInstancesAllowed {
-		_, err := KeyMutexLock(runtime.gs.ctxPhaseThree, runtime, system.GetHashStr(name), true)
-		if err != nil {
-			if errors.Is(err, ErrMutexLocked) {
-				lg.Logf(lg.WarnLevel, "Dynamic function type '%s' is single-instance and already running on another runtime; registered locally but subscriptions not started", name)
-				singleInstanceLocked = false
-			} else {
+		runtime.singleInstanceFunctionRevisions[name] = 0
+		if isActive {
+			var err error
+			revision, err = KeyMutexLock(runtime.gs.ctxPhaseThree, runtime, system.GetHashStr(name), true)
+			if err != nil {
+				if errors.Is(err, ErrMutexLocked) {
+					lg.Logf(lg.WarnLevel, "Dynamic function type '%s' single-instance lock is held elsewhere; registered locally and will retry", name)
+					return ft, nil
+				}
 				rollback()
 				return nil, fmt.Errorf("failed to acquire single-instance lock for '%s': %w", name, err)
 			}
+			runtime.singleInstanceFunctionRevisions[name] = revision
 		}
 	}
-
-	// Start NATS subscriptions only if this runtime is active and (for single-instance) owns the lock.
-	isActive := runtime.IsActiveInstance()
-
-	if isActive && singleInstanceLocked {
+	if isActive {
+		if !runtime.IsActiveInstance() {
+			park()
+			return ft, nil
+		}
 		if err := ft.startSubscriptions(); err != nil {
 			rollback()
 			return nil, fmt.Errorf("failed to start subscriptions for function type '%s': %w", name, err)
+		}
+		if runtime.gs.ctxPhaseThree.Err() != nil {
+			rollback()
+			return nil, fmt.Errorf("runtime is shutting down; cannot register new function type '%s'", name)
+		}
+		if !runtime.IsActiveInstance() {
+			park()
 		}
 	}
 
@@ -295,12 +331,14 @@ func (ft *FunctionType) startSubscriptions() error {
 	// Re-activation path: the pool may have been stopped by a previous
 	// becomePassive. Make sure we have a working one before resubscribing.
 	ft.ensureWorkerPool()
-	if ft.config.IsSignalProviderAllowed(sfPlugins.JetstreamGlobalSignal) {
+	if ft.config.IsSignalProviderAllowed(sfPlugins.JetstreamGlobalSignal) &&
+		(ft.signalSubscription == nil || !ft.signalSubscription.IsValid()) {
 		if err := AddSignalSourceJetstreamQueuePushConsumer(ft); err != nil {
 			return err
 		}
 	}
-	if ft.config.IsRequestProviderAllowed(sfPlugins.NatsCoreGlobalRequest) {
+	if ft.config.IsRequestProviderAllowed(sfPlugins.NatsCoreGlobalRequest) &&
+		(ft.requestSubscription == nil || !ft.requestSubscription.IsValid()) {
 		if err := AddRequestSourceNatsCore(ft); err != nil {
 			return err
 		}
@@ -449,8 +487,8 @@ func (ft *FunctionType) workerTaskExecutor(id string, msg FunctionTypeMsg) {
 			DropFunctionContextsForID: func(id string, opTime int64) {
 				ft.runtime.dropAllFunctionTypesContextsForID(id, opTime)
 			},
-			Domain:                    ft.runtime.Domain,
-			Self:                      sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
+			Domain: ft.runtime.Domain,
+			Self:   sfPlugins.StatefunAddress{Typename: ft.name, ID: id},
 			ObjectSignal: func(signalProvider sfPlugins.SignalProvider, query sfPlugins.LinkQuery, typename string, id string, payload *easyjson.JSON, options *easyjson.JSON) (map[string]error, error) {
 				return ft.runtime.ObjectCallSignal(signalProvider, query, typename, id, payload, options)
 			},
