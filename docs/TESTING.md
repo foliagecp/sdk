@@ -303,3 +303,11 @@ even when there is no single-instance lease retry to trigger it again.
 Tests use generated function names and pinned local NATS containers. They
 run as ordinary Go tests and through `ha-startup-recovery` in full and
 `--system-only` runs, with race instrumentation when requested.
+
+
+The long WAL replay regression uses real KV writes, applied receipts and
+consumer ACKs with a controlled watchdog clock. It verifies that durable
+progress resets the stall deadline even when total replay exceeds that
+interval, and that delivery alone does not reset it. Broker scheduling is
+not required to fit a 120 ms test budget. Production recovery continues to
+use the real clock and poll ticker with its existing timeout.

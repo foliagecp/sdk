@@ -304,10 +304,17 @@ func (dm *Domain) remainingWALRecords(ctx context.Context) (uint64, error) {
 }
 
 func (dm *Domain) waitForWALRecovery(ctx context.Context, stallTimeout, pollInterval time.Duration) error {
-	consumer := CommitterDurableName + "-" + dm.kv.Bucket()
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
-	lastProgress := time.Now()
+	return dm.waitForWALRecoveryProgress(ctx, stallTimeout, ticker.C, time.Now)
+}
+
+// Keep the progress deadline independent of total replay duration. The supplied
+// clock and poll channel let tests exercise that rule without assigning a
+// sub-second performance requirement to real broker I/O.
+func (dm *Domain) waitForWALRecoveryProgress(ctx context.Context, stallTimeout time.Duration, polls <-chan time.Time, now func() time.Time) error {
+	consumer := CommitterDurableName + "-" + dm.kv.Bucket()
+	lastProgress := now()
 	lastApplied := dm.walProgress.Load()
 	var lastFloor uint64
 	var observed string
@@ -331,7 +338,7 @@ func (dm *Domain) waitForWALRecovery(ctx context.Context, stallTimeout, pollInte
 			} else {
 				applied := dm.walProgress.Load()
 				if info.AckFloor.Stream > lastFloor || applied != lastApplied {
-					lastProgress = time.Now()
+					lastProgress = now()
 					lastFloor = info.AckFloor.Stream
 					lastApplied = applied
 				}
@@ -357,13 +364,13 @@ func (dm *Domain) waitForWALRecovery(ctx context.Context, stallTimeout, pollInte
 				}
 			}
 		}
-		if time.Since(lastProgress) >= stallTimeout {
+		if now().Sub(lastProgress) >= stallTimeout {
 			return fmt.Errorf("%w: no durable apply or ACK progress for %s; stream=%s consumer=%s %s; last_read_error=%v; preserve WAL/KV and check broker health and transaction errors", ErrWALRecovery, stallTimeout, WALCommitsStreamName, consumer, observed, lastErr)
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
+		case <-polls:
 		}
 	}
 }

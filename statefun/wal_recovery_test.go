@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -273,28 +274,101 @@ func TestWALRecovery_BoundedWaitRequiresRealProgress(t *testing.T) {
 
 func TestWALRecovery_LongReplayWithProgressDoesNotTimeOut(t *testing.T) {
 	dm, ctx, _, _ := walTestDomain(t)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	sub := walTestSubscription(t, dm)
-	for i := 0; i < 5; i++ {
+	const transactions = 7
+	for i := 0; i < transactions; i++ {
 		walTestMessage(t, dm, []cache.WALOp{walTestPut(fmt.Sprint(i), "value")})
 	}
+	// Advance only the watchdog clock. KV writes, receipts and consumer ACKs
+	// still use a real broker; host scheduling is not a 120 ms correctness gate.
+	const stallTimeout = 120 * time.Millisecond
+	var elapsed atomic.Int64
+	base := time.Now()
+	polls := make(chan time.Time)
 	done := make(chan error, 1)
 	go func() {
-		for i := 0; i < 5; i++ {
-			msg, err := sub.NextMsg(time.Second)
-			if err != nil {
-				done <- err
-				return
-			}
-			time.Sleep(35 * time.Millisecond)
-			if err = dm.commitWALMessage(ctx, msg); err != nil {
-				done <- err
-				return
-			}
-		}
-		done <- nil
+		done <- dm.waitForWALRecoveryProgress(ctx, stallTimeout, polls, func() time.Time { return base.Add(time.Duration(elapsed.Load())) })
 	}()
-	require.NoError(t, dm.waitForWALRecovery(ctx, 120*time.Millisecond, 5*time.Millisecond))
-	require.NoError(t, <-done)
+	completed := false
+	for i := 0; i < transactions; i++ {
+		msg, err := sub.NextMsg(time.Second)
+		require.NoError(t, err)
+		require.NoError(t, dm.commitWALMessage(ctx, msg))
+		elapsed.Add(int64(35 * time.Millisecond))
+		select {
+		case polls <- base.Add(time.Duration(elapsed.Load())):
+		case err := <-done:
+			require.NoError(t, err)
+			require.Equal(t, transactions-1, i, "recovery must wait for every WAL transaction")
+			completed = true
+		case <-ctx.Done():
+			t.Fatal("recovery did not observe committed progress")
+		}
+	}
+	if !completed {
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-ctx.Done():
+			t.Fatal("recovery did not finish")
+		}
+	}
+	require.Greater(t, time.Duration(elapsed.Load()), stallTimeout, "total replay must exceed the stall interval")
+	for i := 0; i < transactions; i++ {
+		entry, err := dm.kv.Get(walTestPut(fmt.Sprint(i), "value").Key)
+		require.NoError(t, err)
+		require.Equal(t, "value", string(entry.Value()))
+	}
+}
+
+func TestWALRecovery_DeliveredRecordWithoutProgressStillTimesOut(t *testing.T) {
+	dm, ctx, _, _ := walTestDomain(t)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	sub := walTestSubscription(t, dm)
+	walTestMessage(t, dm, []cache.WALOp{walTestPut("uncommitted", "value")})
+	walTestNext(t, sub)
+	const stallTimeout = 120 * time.Millisecond
+	var elapsed atomic.Int64
+	base := time.Now()
+	observed := make(chan struct{})
+	done := make(chan error, 1)
+	polls := make(chan time.Time)
+	go func() {
+		first := true
+		done <- dm.waitForWALRecoveryProgress(ctx, stallTimeout, polls, func() time.Time {
+			result := base.Add(time.Duration(elapsed.Load()))
+			if first {
+				first = false
+				close(observed)
+			}
+			return result
+		})
+	}()
+	select {
+	case <-observed:
+	case <-ctx.Done():
+		t.Fatal("watchdog did not start")
+	}
+	elapsed.Store(int64(stallTimeout))
+	select {
+	case polls <- base.Add(stallTimeout):
+	case err := <-done:
+		require.ErrorIs(t, err, ErrWALRecovery)
+		require.ErrorContains(t, err, "no durable apply or ACK progress")
+		return
+	case <-ctx.Done():
+		t.Fatal("watchdog did not poll")
+	}
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, ErrWALRecovery)
+		require.ErrorContains(t, err, "no durable apply or ACK progress")
+	case <-ctx.Done():
+		t.Fatal("watchdog ignored a stalled replay")
+	}
 }
 
 func TestWALRecovery_ConsumerReadErrorNeverReportsDurability(t *testing.T) {
