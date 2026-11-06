@@ -10,6 +10,14 @@ snapshots and external databases separately. Domain mismatch handling never
 resets, migrates, repairs or deletes domain data. No reset flag, function or
 administrator command is shipped.
 
+The ingress stream takes hub signals from wherever the runtime that handles the
+domain routers decided, so only such a runtime checks the stream's hub API
+prefix against its own hub. A runtime started with routers off (for example a
+service that sets no hub and keeps the default) is still refused when the
+stream filters another domain's signals, but not because its hub setting
+differs from the router runtime's. SDK 0.5.7 and 0.5.8 refused it for that and
+did not start such runtimes in a domain whose hub is the JetStream domain.
+
 If another instance creates streams or consumers during validation, the SDK
 repeats the complete read-only check within its existing startup budget. It
 never accepts a partial inventory, rewrites a conflicting resource, or retries

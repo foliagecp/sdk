@@ -61,7 +61,9 @@ func sameSubjects(a, b []string) bool {
 	return reflect.DeepEqual(a, b)
 }
 
-func checkDomainStream(info *nats.StreamInfo, local, hub string) error {
+// ownsRouters says whether the checking runtime handles the domain routers and
+// therefore creates the ingress stream with its own hub as the source prefix.
+func checkDomainStream(info *nats.StreamInfo, local, hub string, ownsRouters bool) error {
 	c := info.Config
 	var want []string
 	switch c.Name {
@@ -80,10 +82,24 @@ func checkDomainStream(info *nats.StreamInfo, local, hub string) error {
 		valid := len(source) == 1 && source[0] != nil && source[0].Name == hubEventStreamName && source[0].FilterSubject == fmt.Sprintf(FromGlobalSignalTmpl, local, ">") && len(c.Subjects) == 0 && c.Mirror == nil && c.SubjectTransform == nil && len(source[0].SubjectTransforms) == 0
 		if valid {
 			ext := source[0].External
-			valid = (prefix == "" && ext == nil) || (prefix != "" && ext != nil && ext.APIPrefix == prefix && ext.DeliverPrefix == "")
+			switch {
+			case !ownsRouters:
+				// Where hub signals come from is the router runtime's choice. A
+				// runtime without routers (one that sets no hub keeps the default
+				// hub) only has to find its own domain's signals routed here.
+				valid = ext == nil || ext.DeliverPrefix == ""
+			case prefix == "":
+				valid = ext == nil
+			default:
+				valid = ext != nil && ext.APIPrefix == prefix && ext.DeliverPrefix == ""
+			}
 		}
 		if !valid {
-			return domainMismatch(local, c.Name, fmt.Sprintf("sources=%s subjects=%v mirror=%v transform=%+v", domainSourcesJSON(source), c.Subjects, c.Mirror, c.SubjectTransform), fmt.Sprintf("source=%s filter=signal.%s.> API prefix=%q", hubEventStreamName, local, prefix))
+			expected := fmt.Sprintf("source=%s filter=signal.%s.> API prefix=%q", hubEventStreamName, local, prefix)
+			if !ownsRouters {
+				expected = fmt.Sprintf("source=%s filter=signal.%s.> (API prefix chosen by the router runtime)", hubEventStreamName, local)
+			}
+			return domainMismatch(local, c.Name, fmt.Sprintf("sources=%s subjects=%v mirror=%v transform=%+v", domainSourcesJSON(source), c.Subjects, c.Mirror, c.SubjectTransform), expected)
 		}
 		return nil
 	default:
@@ -161,7 +177,7 @@ func (r *Runtime) validateDomainStateSnapshot(ctx context.Context, cacheID strin
 	}
 	r.ftMu.RUnlock()
 	for _, info := range list {
-		if err := checkDomainStream(info, r.Domain.name, r.Domain.hubDomainName); err != nil {
+		if err := checkDomainStream(info, r.Domain.name, r.Domain.hubDomainName, r.config.handlesDomainRouters); err != nil {
 			return err
 		}
 		if err := checkRouterConsumers(ctx, r.js, info, r.Domain.name); err != nil {

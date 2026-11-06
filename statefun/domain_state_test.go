@@ -124,10 +124,64 @@ func TestDomainState_RefusesStaleStateWithoutMutation(t *testing.T) {
 }
 func TestDomainState_RemoteHubAndLimitsAreNotLocalDomainMismatch(t *testing.T) {
 	info := &nats.StreamInfo{Config: nats.StreamConfig{Name: domainIngressStreamName, Sources: []*nats.StreamSource{{Name: hubEventStreamName, FilterSubject: "signal.edge.>", External: &nats.ExternalStream{APIPrefix: "$JS.hub.API"}}}}}
-	require.NoError(t, checkDomainStream(info, "edge", "hub"))
+	require.NoError(t, checkDomainStream(info, "edge", "hub", true))
 	info.Config.Sources[0].External.APIPrefix = "$JS.other.API"
-	require.ErrorIs(t, checkDomainStream(info, "edge", "hub"), ErrDomainStateMismatch)
-	require.NoError(t, checkDomainStream(&nats.StreamInfo{Config: nats.StreamConfig{Name: domainEgressStreamName, Subjects: []string{"$SE.edge.>"}, MaxMsgs: 1}}, "edge", "hub"))
+	require.ErrorIs(t, checkDomainStream(info, "edge", "hub", true), ErrDomainStateMismatch)
+	require.NoError(t, checkDomainStream(&nats.StreamInfo{Config: nats.StreamConfig{Name: domainEgressStreamName, Subjects: []string{"$SE.edge.>"}, MaxMsgs: 1}}, "edge", "hub", true))
+}
+func TestDomainState_IngressHubPrefixBelongsToRouterRuntime(t *testing.T) {
+	ingress := func(filter string, ext *nats.ExternalStream) *nats.StreamInfo {
+		return &nats.StreamInfo{Config: nats.StreamConfig{Name: domainIngressStreamName, Sources: []*nats.StreamSource{{Name: hubEventStreamName, FilterSubject: filter, External: ext}}}}
+	}
+	// The router runtime created the stream with the JetStream domain as hub;
+	// a runtime without routers keeps the default hub and still joins.
+	require.NoError(t, checkDomainStream(ingress("signal.site.>", nil), "site", "hub", false))
+	require.NoError(t, checkDomainStream(ingress("signal.edge.>", &nats.ExternalStream{APIPrefix: "$JS.other.API"}), "edge", "hub", false))
+	require.ErrorIs(t, checkDomainStream(ingress("signal.site.>", nil), "site", "hub", true), ErrDomainStateMismatch)
+	// Its own domain's filter is still required: a stale domain stays refused.
+	require.ErrorIs(t, checkDomainStream(ingress("signal.domain_old.>", nil), "site", "hub", false), ErrDomainStateMismatch)
+	require.ErrorIs(t, checkDomainStream(ingress("signal.edge.>", &nats.ExternalStream{APIPrefix: "$JS.hub.API", DeliverPrefix: "x"}), "edge", "hub", false), ErrDomainStateMismatch)
+}
+func TestDomainState_NonRouterRuntimeWithDefaultHubJoinsDomain(t *testing.T) {
+	if system.GlobalPrometrics == nil {
+		system.GlobalPrometrics = system.NewPrometrics("", "")
+	}
+	_, _, srv := domainTestNode(t, "site")
+	owner := domainTestRuntime(t, srv)
+	ownerReady := make(chan struct{})
+	owner.RegisterOnAfterStartFunction(func(context.Context, *Runtime) error { close(ownerReady); return nil }, false)
+	ownerDone := make(chan error, 1)
+	go func() { ownerDone <- owner.Start(context.Background(), cache.NewCacheConfig("owner")) }()
+	t.Cleanup(func() { owner.Shutdown(true) })
+	select {
+	case <-ownerReady:
+	case err := <-ownerDone:
+		t.Fatalf("router runtime startup failed: %v", err)
+	case <-time.After(15 * time.Second):
+		t.Fatal("router runtime startup timed out")
+	}
+	// A service runtime: no hub of its own, no routers.
+	cfg := NewRuntimeConfigSimple(srv.ClientURL(), "vault").SetDomainRoutersHandling(false).SetActivePassiveMode(false)
+	vault, err := NewRuntime(*cfg)
+	require.NoError(t, err)
+	t.Cleanup(vault.nc.Close)
+	require.NotEqual(t, vault.Domain.Name(), vault.Domain.HubDomainName())
+	NewFunctionType(vault, "test.domain.vault", func(_ sfp.StatefunExecutor, ctx *sfp.StatefunContextProcessor) { ctx.Reply.With(ctx.Payload) }, *NewFunctionTypeConfig().SetAllowedRequestProviders(sfp.NatsCoreGlobalRequest))
+	vaultReady := make(chan struct{})
+	vault.RegisterOnAfterStartFunction(func(context.Context, *Runtime) error { close(vaultReady); return nil }, false)
+	vaultDone := make(chan error, 1)
+	go func() { vaultDone <- vault.Start(context.Background(), cache.NewCacheConfig("vault")) }()
+	t.Cleanup(func() { vault.Shutdown(true) })
+	select {
+	case <-vaultReady:
+	case err := <-vaultDone:
+		t.Fatalf("runtime without routers refused a domain whose router runtime chose the hub: %v", err)
+	case <-time.After(15 * time.Second):
+		t.Fatal("runtime without routers startup timed out")
+	}
+	result, err := owner.Request(sfp.NatsCoreGlobalRequest, "test.domain.vault", "x", easyjson.NewJSONObjectWithKeyValue("value", easyjson.NewJSON("ok")).GetPtr(), nil, 5*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, "ok", result.GetByPath("value").AsStringDefault(""))
 }
 func TestDomainState_CancelledReadDoesNotPass(t *testing.T) {
 	_, _, srv := domainTestNode(t, "domain_new")
