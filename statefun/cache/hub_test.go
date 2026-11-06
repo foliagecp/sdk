@@ -8,12 +8,13 @@ package cache
 // вершину, и цена записи росла бы вместе с графом.
 //
 // Здесь проверяется, что этого не происходит: цена записи в хаб сравнима с
-// ценой записи в вершину об одной корзине, поток записей в хаб не отстаёт от
-// дерева, и ни одна связь при этом не теряется.
+// ценой записи в вершину об одной корзине, и ни одна связь при конкурентной
+// записи не теряется. Что поток записей в хаб не отстаёт от дерева, проверяет
+// гейт Test_Hub_ConcurrentThroughputGate в hub_perf_test.go (тег perf): это
+// замер, а замеру нужны условия, которых у корректностного прогона под -race нет.
 
 import (
 	"fmt"
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -102,72 +103,62 @@ func Test_Hub_SequentialWritesKeepEverything(t *testing.T) {
 		writes, took.Round(time.Millisecond), (took / writes).Round(time.Nanosecond))
 }
 
-// Test_Hub_ConcurrentThroughput — 64 горутины пишут различимые связи в один
-// хаб, в том числе в одну корзину. Ничего не теряется, и поток записей не
-// отстаёт от дерева более чем на пятую часть.
-func Test_Hub_ConcurrentThroughput(t *testing.T) {
-	const goroutines, perGoroutine = 64, 200
-	const total = goroutines * perGoroutine
-
-	run := func(mode string, prefill int) time.Duration {
-		restore := SetCacheModeForTest(mode)
-		defer restore()
-
-		best := time.Duration(1<<62 - 1)
-		for attempt := 0; attempt < 3; attempt++ {
-			cs := NewStoreForTest("hub_conc")
-			fillHub(cs, "dom/hub", prefill)
-
-			var wg sync.WaitGroup
-			started := time.Now()
-			for g := 0; g < goroutines; g++ {
-				wg.Add(1)
-				go func(g int) {
-					defer wg.Done()
-					for i := 0; i < perGoroutine; i++ {
-						// Имена чередуются так, что соседние по номеру
-						// попадают в разные корзины, а одинаковые по остатку —
-						// в одну: нужны обе ситуации сразу.
-						name := fmt.Sprintf("c%03d_%04d", g, i)
-						cs.SetValue("dom/hub.out.to."+name,
-							[]byte(fmt.Sprintf("t.dom/%s", name)), false, int64(2_000_000+g*perGoroutine+i))
-					}
-				}(g)
+// hubBurst — goroutines горутин пишут по perGoroutine различимых связей в хаб
+// dom/hub. Имена чередуются так, что соседние по номеру попадают в разные
+// корзины, а одинаковые по остатку — в одну: нужны обе ситуации сразу.
+func hubBurst(cs *Store, goroutines, perGoroutine int) {
+	var wg sync.WaitGroup
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < perGoroutine; i++ {
+				name := fmt.Sprintf("c%03d_%04d", g, i)
+				cs.SetValue("dom/hub.out.to."+name,
+					[]byte(fmt.Sprintf("t.dom/%s", name)), false, int64(2_000_000+g*perGoroutine+i))
 			}
-			wg.Wait()
-			took := time.Since(started)
+		}(g)
+	}
+	wg.Wait()
+}
 
-			// ничего не потеряно
-			missing := 0
-			for g := 0; g < goroutines; g++ {
-				for i := 0; i < perGoroutine; i++ {
-					name := fmt.Sprintf("c%03d_%04d", g, i)
-					v, err := cs.GetValue("dom/hub.out.to." + name)
-					if err != nil || string(v) != fmt.Sprintf("t.dom/%s", name) {
-						missing++
-					}
-				}
-			}
-			require.Zerof(t, missing, "режим %s: потеряно или испорчено %d связей из %d", mode, missing, total)
-			if took < best {
-				best = took
+// hubBurstMissing — сколько связей всплеска потеряно или испорчено.
+func hubBurstMissing(cs *Store, goroutines, perGoroutine int) int {
+	missing := 0
+	for g := 0; g < goroutines; g++ {
+		for i := 0; i < perGoroutine; i++ {
+			name := fmt.Sprintf("c%03d_%04d", g, i)
+			v, err := cs.GetValue("dom/hub.out.to." + name)
+			if err != nil || string(v) != fmt.Sprintf("t.dom/%s", name) {
+				missing++
 			}
 		}
-		return best
 	}
+	return missing
+}
 
-	prefill := defaultBucketLinks * 4
-	if v := os.Getenv("HUB_PREFILL"); v != "" {
-		fmt.Sscanf(v, "%d", &prefill)
+// Test_Hub_ConcurrentWritesKeepEverything — 64 горутины пишут различимые связи
+// в один хаб, в том числе в одну корзину, в обоих режимах: ничего не теряется.
+//
+// Время здесь не меряется. Прежний Test_Hub_ConcurrentThroughput сравнивал
+// режимы по одному замеру в ~150 мс под race detector и падал от загрузки
+// машины, а не от кода; сравнение скорости теперь делает
+// Test_Hub_ConcurrentThroughputGate (hub_perf_test.go, тег perf), этот тест
+// оставляет корректность там, где она нужнее всего, — под -race.
+func Test_Hub_ConcurrentWritesKeepEverything(t *testing.T) {
+	const goroutines, perGoroutine = 64, 200
+	for _, mode := range []string{"tree", "records"} {
+		func() {
+			restore := SetCacheModeForTest(mode)
+			defer restore()
+			for attempt := 0; attempt < 3; attempt++ {
+				cs := NewStoreForTest("hub_conc")
+				fillHub(cs, "dom/hub", defaultBucketLinks*4)
+				hubBurst(cs, goroutines, perGoroutine)
+				missing := hubBurstMissing(cs, goroutines, perGoroutine)
+				require.Zerof(t, missing, "режим %s: потеряно или испорчено %d связей из %d",
+					mode, missing, goroutines*perGoroutine)
+			}
+		}()
 	}
-	tree := run("tree", prefill)
-	records := run("records", prefill)
-	t.Logf("%d горутин по %d связей в один хаб:", goroutines, perGoroutine)
-	t.Logf("  дерево:  %s (%s на запись)", tree.Round(time.Millisecond), (tree / total).Round(time.Nanosecond))
-	t.Logf("  записи:  %s (%s на запись)", records.Round(time.Millisecond), (records / total).Round(time.Nanosecond))
-
-	// ТЗ: пропускная способность не ниже 80 % сегодняшней, то есть время не
-	// более чем на четверть больше.
-	require.Lessf(t, records, tree*5/4,
-		"пропускная способность записей (%s) ниже 80%% от дерева (%s)", records, tree)
 }

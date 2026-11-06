@@ -212,6 +212,11 @@ if [ "$EMBEDDED" -eq 1 ]; then
         printf "\ngate: nothing below floor %.2f that the noise cannot explain\n", floor
       }' "$PERF_EMBEDDED_CSV" || fail=1
     echo "=================================================================="
+    # The cache hub gate pairs and interleaves the modes itself and decides on
+    # the median of the pairs the machine did not disturb.
+    echo ">> gate: cache hub writes (statefun/cache, paired tree/records samples)"
+    go test -tags perf -count=1 -v -run '^Test_Hub_ConcurrentThroughputGate$' ./statefun/cache || fail=1
+    echo "=================================================================="
   else
   for s in $SCENARIOS; do
     suite="$(embedded_suite_for "$s")"

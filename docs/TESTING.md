@@ -305,6 +305,53 @@ run as ordinary Go tests and through `ha-startup-recovery` in full and
 `--system-only` runs, with race instrumentation when requested.
 
 
+## Cache hub throughput gate
+
+`Test_Hub_ConcurrentThroughputGate` (`statefun/cache/hub_perf_test.go`, build
+tag `perf`) requires concurrent writes into one hub to keep at least 80 % of
+the tree's throughput under the records representation. It replaced the timing
+half of `Test_Hub_ConcurrentThroughput`, which compared one best-of-three
+sample per mode, tree first, inside the race-instrumented correctness run.
+Those samples lasted about 150 ms under `-race` and 10 ms without it, so a
+busy moment of the machine decided the verdict. The correctness
+half stays in the ordinary suite as `Test_Hub_ConcurrentWritesKeepEverything`
+and runs under `-race`.
+
+The gate measures pairs of tree and records samples back to back, alternating
+which goes first; each sample is a series of bursts on fresh stores lasting at
+least 200 ms, with filling and garbage collection outside the timing. Before
+and after each pair it times the same hashing work on every P. A pair taken
+while the machine was more than 15 % slower than its best moment in the run is
+dropped; the verdict is the median records/tree ratio of the remaining pairs.
+Fewer than 8 clean pairs fail the run as `INCONCLUSIVE`, which says nothing
+about the code either way. Sustained load is not a drift: under it the pairs
+compare fairly, and records really lose more than the tree, because a bucket
+write holds its slot lock through decode and encode and a split holds the
+directory lock. The log prints how much of the nominal parallelism the machine
+gave, so a failure on a loaded runner can be told from one on an idle runner.
+The gate never runs under the race detector. It runs in phase 1b of
+`scripts/run-all-tests.sh` and in `scripts/run-perf-tests.sh --gate`.
+
+```sh
+go test -tags perf -count=1 -v -run '^Test_Hub_ConcurrentThroughputGate$' ./statefun/cache
+scripts/hub-gate-experiment.sh --ref v0.5.8-dev03112026 --runs 20   # the old check
+scripts/hub-gate-experiment.sh --ref HEAD --runs 10                 # the gate
+```
+
+The experiment runs a ref's check in a container limited to 4 CPUs, idle,
+with a sibling spinning on 2 cores (`steady`) and with that sibling spinning
+3 s on and 3 s off (`flap`):
+
+| check | idle | steady | flap |
+|---|---|---|---|
+| old, `-race`, 20 runs | 0 FAIL, median 1.01 | 2 FAIL, 1.12 | 6 FAIL, 0.91 |
+| gate, 10 runs | 10 PASS, median 1.09 | median 1.27: 5 FAIL, 2 INCONCLUSIVE | 10 PASS, 1.06 |
+
+Run alternately under one load, v0.5.6 and v0.5.8 failed the old check 3 and
+2 times out of 20: the hub write path did not change between them. Reducing
+what records lose under sustained CPU contention is separate work.
+
+
 The long WAL replay regression uses real KV writes, applied receipts and
 consumer ACKs with a controlled watchdog clock. It verifies that durable
 progress resets the stall deadline even when total replay exceeds that

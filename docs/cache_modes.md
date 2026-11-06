@@ -116,3 +116,10 @@ Read the `spread` column before believing a `ratio`: it says how much each mode
 varied against itself, and these scenarios swing between 1.2× and 6× on an idle
 laptop. The gate catches gross regressions and says plainly when it cannot see
 smaller ones.
+
+The same run includes the cache hub gate: 64 writers into one vertex, paired
+tree/records samples, pairs disturbed by the machine dropped (see
+[TESTING.md](./TESTING.md#cache-hub-throughput-gate)). On an idle machine
+records stay within 10 % of the tree there; under sustained CPU contention they
+lose about a quarter, because a bucket write holds its slot lock through decode
+and encode.
