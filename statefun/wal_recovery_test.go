@@ -577,6 +577,50 @@ func TestWALRecovery_ConsumerUpgradePreservesPendingPosition(t *testing.T) {
 	require.Equal(t, -1, after.Config.MaxDeliver)
 }
 
+// SDK v0.5.6 could leave this state behind: a transaction whose delivery
+// attempts ran out (max_deliver=5) stays in the work-queue stream, counted by
+// neither pending counter, and later transactions were applied over its keys.
+// Replaying it would write older values over newer ones and skipping it would
+// lose it, so after the upgrade startup keeps refusing to call KV consistent
+// and leaves both the record and KV as they are.
+func TestWALRecovery_RecordStrandedByExhaustedDeliveriesFailsClosed(t *testing.T) {
+	dm, ctx, _, _ := walTestDomain(t)
+	name := CommitterDurableName + "-" + dm.kv.Bucket()
+	info, err := dm.js.ConsumerInfo(WALCommitsStreamName, name)
+	require.NoError(t, err)
+	config := info.Config
+	config.MaxDeliver = 1
+	_, err = dm.js.UpdateConsumer(WALCommitsStreamName, &config)
+	require.NoError(t, err)
+	sub := walTestSubscription(t, dm)
+	walTestMessage(t, dm, []cache.WALOp{walTestPut("stranded", "old")})
+	walTestMessage(t, dm, []cache.WALOp{walTestPut("stranded", "new")})
+	require.NoError(t, walTestNext(t, sub).Nak())
+	require.NoError(t, dm.commitWALMessage(ctx, walTestNext(t, sub)))
+	require.Eventually(t, func() bool {
+		info, err := dm.js.ConsumerInfo(WALCommitsStreamName, name)
+		return err == nil && info.NumPending == 0 && info.NumAckPending == 0
+	}, 3*time.Second, 20*time.Millisecond)
+	remaining, err := dm.remainingWALRecords(ctx)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, remaining, "the exhausted record is still in the stream")
+
+	require.NoError(t, dm.prepareWALConsumer(ctx))
+	err = dm.waitForWALRecovery(ctx, 150*time.Millisecond, 10*time.Millisecond)
+	require.ErrorIs(t, err, ErrWALRecovery)
+	require.ErrorContains(t, err, "pending=0 ack_pending=0")
+	require.ErrorContains(t, err, "retained_records=1")
+	consistent, err := dm.isKVConsistent()
+	require.NoError(t, err)
+	require.False(t, consistent)
+	entry, err := dm.kv.Get("store.recovery/stranded")
+	require.NoError(t, err)
+	require.Equal(t, "new", string(entry.Value()), "the stranded transaction is not replayed over the newer value")
+	remaining, err = dm.remainingWALRecords(ctx)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, remaining, "the stranded record is not removed")
+}
+
 func TestWALRecovery_RecreatedKVRejectsOldReceipt(t *testing.T) {
 	dm, _, _, _ := walTestDomain(t)
 	sub := walTestSubscription(t, dm)
