@@ -83,6 +83,12 @@ func deleteIncomingLocalResidue(ctx *sfPlugins.StatefunContextProcessor, target,
 	if deletionKeysAreStale(ctx, keys, opTime) {
 		return fmt.Errorf("stale incoming-link deletion: %s", name)
 	}
+	// The body goes with the keys below; capture it first so link-delete
+	// triggers of a cascaded deletion still carry old_body.
+	var oldLinkBody *easyjson.JSON
+	if found && to == target && opStack != nil {
+		oldLinkBody, _ = c.GetValueJSON(fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, owner, name))
+	}
 	// Keep the incoming anchor until all other removals have succeeded.
 	for _, key := range keys[1:] {
 		if !deleteRecoveryKey(ctx, key, opTime) {
@@ -96,7 +102,7 @@ func deleteIncomingLocalResidue(ctx *sfPlugins.StatefunContextProcessor, target,
 		if kind == TO_TYPELINK {
 			cacheDeleteObjectType(owner)
 		}
-		addLinkOpToOpStack(opStack, "functions.graph.api.link.delete", owner, target, name, kind, nil, nil)
+		addLinkOpToOpStack(opStack, "functions.graph.api.link.delete", owner, target, name, kind, oldLinkBody, nil)
 	}
 	return nil
 }
