@@ -161,25 +161,29 @@ func TestDomainState_NonRouterRuntimeWithDefaultHubJoinsDomain(t *testing.T) {
 		t.Fatal("router runtime startup timed out")
 	}
 	// A service runtime: no hub of its own, no routers.
-	cfg := NewRuntimeConfigSimple(srv.ClientURL(), "vault").SetDomainRoutersHandling(false).SetActivePassiveMode(false)
-	vault, err := NewRuntime(*cfg)
+	cfg := NewRuntimeConfigSimple(srv.ClientURL(), "service").SetDomainRoutersHandling(false).SetActivePassiveMode(false)
+	svc, err := NewRuntime(*cfg)
 	require.NoError(t, err)
-	t.Cleanup(vault.nc.Close)
-	require.NotEqual(t, vault.Domain.Name(), vault.Domain.HubDomainName())
-	NewFunctionType(vault, "test.domain.vault", func(_ sfp.StatefunExecutor, ctx *sfp.StatefunContextProcessor) { ctx.Reply.With(ctx.Payload) }, *NewFunctionTypeConfig().SetAllowedRequestProviders(sfp.NatsCoreGlobalRequest))
-	vaultReady := make(chan struct{})
-	vault.RegisterOnAfterStartFunction(func(context.Context, *Runtime) error { close(vaultReady); return nil }, false)
-	vaultDone := make(chan error, 1)
-	go func() { vaultDone <- vault.Start(context.Background(), cache.NewCacheConfig("vault")) }()
-	t.Cleanup(func() { vault.Shutdown(true) })
+	t.Cleanup(svc.nc.Close)
+	require.NotEqual(t, svc.Domain.Name(), svc.Domain.HubDomainName())
+	NewFunctionType(svc, "test.domain.service", func(_ sfp.StatefunExecutor, ctx *sfp.StatefunContextProcessor) { ctx.Reply.With(ctx.Payload) }, *NewFunctionTypeConfig().SetAllowedRequestProviders(sfp.NatsCoreGlobalRequest))
+	svcReady := make(chan struct{})
+	svc.RegisterOnAfterStartFunction(func(context.Context, *Runtime) error { close(svcReady); return nil }, false)
+	svcDone := make(chan error, 1)
+	go func() { svcDone <- svc.Start(context.Background(), cache.NewCacheConfig("service")) }()
+	t.Cleanup(func() { svc.Shutdown(true) })
 	select {
-	case <-vaultReady:
-	case err := <-vaultDone:
+	case <-svcReady:
+	case err := <-svcDone:
 		t.Fatalf("runtime without routers refused a domain whose router runtime chose the hub: %v", err)
 	case <-time.After(15 * time.Second):
 		t.Fatal("runtime without routers startup timed out")
 	}
-	result, err := owner.Request(sfp.NatsCoreGlobalRequest, "test.domain.vault", "x", easyjson.NewJSONObjectWithKeyValue("value", easyjson.NewJSON("ok")).GetPtr(), nil, 5*time.Second)
+	// Ready means the service runtime has sent its subscription, not that the
+	// server holds it; the request goes out on owner's connection, so wait for
+	// the server first.
+	require.NoError(t, svc.nc.Flush())
+	result, err := owner.Request(sfp.NatsCoreGlobalRequest, "test.domain.service", "x", easyjson.NewJSONObjectWithKeyValue("value", easyjson.NewJSON("ok")).GetPtr(), nil, 5*time.Second)
 	require.NoError(t, err)
 	require.Equal(t, "ok", result.GetByPath("value").AsStringDefault(""))
 }
