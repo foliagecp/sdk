@@ -51,16 +51,16 @@ func Test_Compression_KeepsAnswers(t *testing.T) {
 		before[i] = fmt.Sprintf("%v|%d|%s", cs.Exists(k), cs.GetValueUpdateTime(k), getStr(cs, k))
 	}
 
-	require.Greater(t, cs.compactRecords(), 0, "записи обязаны были оставить корзины разобранными")
+	require.Greater(t, cs.compactRecords(), 0, "the writes must have left buckets decoded")
 	n := cs.compressRecords()
-	require.Greater(t, n, 0, "ни одна корзина не сжалась")
+	require.Greater(t, n, 0, "no bucket was compressed")
 
 	compressed, _ := cs.CompressionStatsForTest()
 	require.Greater(t, compressed, 0)
 
 	for i, k := range keys {
 		got := fmt.Sprintf("%v|%d|%s", cs.Exists(k), cs.GetValueUpdateTime(k), getStr(cs, k))
-		require.Equal(t, before[i], got, "сжатие изменило ответ по ключу %s", k)
+		require.Equal(t, before[i], got, "compression changed the answer for key %s", k)
 	}
 }
 
@@ -89,7 +89,7 @@ func Test_Compression_ReadPublishesRawBack(t *testing.T) {
 
 	after, _ := cs.CompressionStatsForTest()
 	require.Less(t, after, before,
-		"после чтения сжатых корзин должно остаться меньше сжатых: было %d, стало %d", before, after)
+		"reading compressed buckets must leave fewer of them compressed: was %d, now %d", before, after)
 }
 
 // Test_Compression_StaleDictionaryStillReads — a bucket compressed with the
@@ -115,7 +115,7 @@ func Test_Compression_StaleDictionaryStillReads(t *testing.T) {
 	// being written, not on what is already compressed
 	seedGraph(t, cs, 40, 16)
 	cs.compactRecords()
-	require.True(t, cs.trainDictionary(64), "словарь не обучился")
+	require.True(t, cs.trainDictionary(64), "the dictionary did not train")
 	_, ver1 := cs.CompressionStatsForTest()
 	require.Equal(t, uint32(1), ver1)
 	cs.compressRecords() // this time with the dictionary
@@ -129,12 +129,12 @@ func Test_Compression_StaleDictionaryStillReads(t *testing.T) {
 
 	// buckets compressed with no dictionary and with the first one must read
 	for _, k := range keysV0 {
-		require.True(t, cs.Exists(k), "потерян ключ %s после смены словаря", k)
+		require.True(t, cs.Exists(k), "key %s lost after the dictionary change", k)
 	}
 	for i := 0; i < 120; i++ {
 		v := fmt.Sprintf("dom/v-%05d", i)
 		for _, k := range cs.GetKeysByPattern(v + ".out.to.>") {
-			require.True(t, cs.Exists(k), "потерян ключ %s", k)
+			require.True(t, cs.Exists(k), "key %s lost", k)
 		}
 	}
 }
@@ -151,7 +151,7 @@ func Test_Compression_Ratio(t *testing.T) {
 	raw := cs.RecordsBytesForTest()
 
 	// without a dictionary
-	require.True(t, cs.trainDictionary(0) == false, "с пустой выборкой словарь обучаться не должен")
+	require.True(t, cs.trainDictionary(0) == false, "the dictionary must not train on an empty sample")
 	cs.compressRecords()
 	noDict := cs.RecordsBytesForTest()
 
@@ -162,13 +162,13 @@ func Test_Compression_Ratio(t *testing.T) {
 		cs.GetKeysByPattern(v + ".in.>")
 		cs.GetKeysByPattern(v + ".ltype.>")
 	}
-	require.True(t, cs.trainDictionary(256), "словарь не обучился")
+	require.True(t, cs.trainDictionary(256), "the dictionary did not train")
 	cs.compressRecords()
 	withDict := cs.RecordsBytesForTest()
 
-	t.Logf("сырые %d B, zstd без словаря %d B (%.2fx), zstd со словарём %d B (%.2fx)",
+	t.Logf("raw %d B, zstd without a dictionary %d B (%.2fx), zstd with a dictionary %d B (%.2fx)",
 		raw, noDict, float64(raw)/float64(noDict), withDict, float64(raw)/float64(withDict))
-	require.Less(t, noDict, raw, "сжатие обязано уменьшать объём")
+	require.Less(t, noDict, raw, "compression must reduce the size")
 }
 
 // Test_Compression_Off — with the flag off, nothing is compressed.
@@ -197,13 +197,13 @@ func Test_Compression_RetrainsOnDecay(t *testing.T) {
 	cs.compactRecords()
 
 	// the first time there is no dictionary — training must happen
-	require.True(t, cs.maybeTrainDictionary(256), "первый словарь не обучился")
+	require.True(t, cs.maybeTrainDictionary(256), "the first dictionary did not train")
 	trainedAt, _, retrains := DictionaryStatsForTest()
 	require.Equal(t, 1, retrains)
-	require.Greater(t, trainedAt, 1.0, "ратио при обучении: %.2f", trainedAt)
+	require.Greater(t, trainedAt, 1.0, "ratio at training: %.2f", trainedAt)
 
 	// on the same data there is no reason to retrain
-	require.False(t, cs.maybeTrainDictionary(256), "переобучился без причины")
+	require.False(t, cs.maybeTrainDictionary(256), "retrained without a reason")
 	_, _, retrains2 := DictionaryStatsForTest()
 	require.Equal(t, 1, retrains2)
 
@@ -222,18 +222,18 @@ func Test_Compression_RetrainsOnDecay(t *testing.T) {
 
 	if cs2.maybeTrainDictionary(256) {
 		_, _, retrains3 := DictionaryStatsForTest()
-		require.Equal(t, 2, retrains3, "переобучение обязано учитываться")
+		require.Equal(t, 2, retrains3, "a retrain must be counted")
 		require.Equal(t, uint32(2), recordCodec.dictVersion())
 	} else {
 		lastTrained, last, _ := DictionaryStatsForTest()
-		t.Logf("переобучения не потребовалось: ратио %.2f против %.2f при обучении", last, lastTrained)
+		t.Logf("no retrain was needed: ratio %.2f vs %.2f at training", last, lastTrained)
 	}
 
 	// and the first store's data still reads
 	for i := 0; i < 200; i++ {
 		v := fmt.Sprintf("dom/v-%05d", i)
 		for _, k := range cs.GetKeysByPattern(v + ".out.to.>") {
-			require.True(t, cs.Exists(k), "потерян ключ %s", k)
+			require.True(t, cs.Exists(k), "key %s lost", k)
 		}
 	}
 }
@@ -250,21 +250,21 @@ func Test_Maintenance_CompactsAndCompresses(t *testing.T) {
 	cs := NewStoreForTest("maintenance")
 	seedGraph(t, cs, 120, 20)
 
-	require.Greater(t, dirtyBucketsOf(cs), 0, "записи обязаны были оставить корзины разобранными")
+	require.Greater(t, dirtyBucketsOf(cs), 0, "the writes must have left buckets decoded")
 
 	// the only call is the one the runtime makes on a timer
 	cs.traverseCacheForMaintenance()
 
-	require.Zero(t, dirtyBucketsOf(cs), "обслуживание не уплотнило корзины")
+	require.Zero(t, dirtyBucketsOf(cs), "maintenance did not compact the buckets")
 	compressed, _ := cs.CompressionStatsForTest()
-	require.Greater(t, compressed, 0, "обслуживание не сжало ни одной корзины")
+	require.Greater(t, compressed, 0, "maintenance compressed no bucket")
 
 	// and the answers are unchanged
 	for i := 0; i < 120; i++ {
 		v := fmt.Sprintf("dom/v-%05d", i)
-		require.True(t, cs.Exists(v), "потеряно тело %s", v)
+		require.True(t, cs.Exists(v), "body %s lost", v)
 		keys := cs.GetKeysByPattern(v + ".out.to.>")
-		require.Len(t, keys, 20, "потеряны связи %s", v)
+		require.Len(t, keys, 20, "links of %s lost", v)
 	}
 }
 
@@ -290,24 +290,24 @@ func Test_ParsedBody_KeptFromSecondRead(t *testing.T) {
 
 	r, ok := cs.records.get("dom/v")
 	require.True(t, ok)
-	require.Nil(t, r.parsedBody.Load(), "до чтения разбора быть не должно")
+	require.Nil(t, r.parsedBody.Load(), "there must be no parse before a read")
 
 	first, err := cs.GetValueJSON("dom/v")
 	require.NoError(t, err)
 	require.Equal(t, float64(8), first.GetByPath("cpu").AsNumericDefault(-1))
-	require.Nil(t, r.parsedBody.Load(), "первое чтение не должно оставлять разбор")
+	require.Nil(t, r.parsedBody.Load(), "the first read must not keep a parse")
 
 	second, err := cs.GetValueJSON("dom/v")
 	require.NoError(t, err)
 	require.Equal(t, float64(8), second.GetByPath("cpu").AsNumericDefault(-1))
-	require.NotNil(t, r.parsedBody.Load(), "второе чтение обязано сохранить разбор")
+	require.NotNil(t, r.parsedBody.Load(), "the second read must keep the parse")
 
 	// each reader gets its own copy, and an edit by one is not seen by another
 	second.SetByPath("cpu", easyjson.NewJSON(999))
 	third, err := cs.GetValueJSON("dom/v")
 	require.NoError(t, err)
 	require.Equal(t, float64(8), third.GetByPath("cpu").AsNumericDefault(-1),
-		"правка одного читателя протекла к другому")
+		"one reader's edit leaked to another")
 }
 
 // Test_ParsedBody_AgesByUse — maintenance drops what was not accessed and keeps
@@ -329,23 +329,23 @@ func Test_ParsedBody_AgesByUse(t *testing.T) {
 	}
 	for i := 0; i < 4; i++ {
 		r, _ := cs.records.get(fmt.Sprintf("dom/v-%d", i))
-		require.NotNil(t, r.parsedBody.Load(), "тело %d должно быть разобрано", i)
+		require.NotNil(t, r.parsedBody.Load(), "body %d must be parsed", i)
 	}
 
 	// first pass: all of them were accessed — nothing is dropped
-	require.Zero(t, cs.ageParsedBodies(), "сброшено то, к чему только что обращались")
+	require.Zero(t, cs.ageParsedBodies(), "dropped what was just accessed")
 
 	// access only some of them
 	cs.GetValueJSON("dom/v-0") //nolint:errcheck
 	cs.GetValueJSON("dom/v-1") //nolint:errcheck
 
-	require.Equal(t, 2, cs.ageParsedBodies(), "должны были уйти ровно те два, к которым не обращались")
+	require.Equal(t, 2, cs.ageParsedBodies(), "exactly the two that were not accessed must have been dropped")
 
 	r0, _ := cs.records.get("dom/v-0")
 	r2, _ := cs.records.get("dom/v-2")
-	require.NotNil(t, r0.parsedBody.Load(), "горячее тело обязано было остаться")
-	require.Nil(t, r2.parsedBody.Load(), "холодное тело обязано было уйти")
-	require.False(t, r2.parsedBodySeen.Load(), "сброшенное тело обязано начать счёт заново")
+	require.NotNil(t, r0.parsedBody.Load(), "the hot body must have stayed")
+	require.Nil(t, r2.parsedBody.Load(), "the cold body must have been dropped")
+	require.False(t, r2.parsedBodySeen.Load(), "a dropped body must start its count over")
 
 	// and the answers are unchanged in both cases
 	for i := 0; i < 4; i++ {
@@ -371,11 +371,11 @@ func Test_ParsedBody_InvalidatedByWrite(t *testing.T) {
 	cs.SetValueJSON("dom/v", &second, false, 2)
 	got, _ = cs.GetValueJSON("dom/v")
 	require.Equal(t, float64(2), got.GetByPath("v").AsNumericDefault(-1),
-		"после записи читается прежнее тело")
+		"the previous body reads after a write")
 
 	cs.DeleteValue("dom/v", false, 3)
 	_, err := cs.GetValueJSON("dom/v")
-	require.Error(t, err, "после удаления тело не должно читаться")
+	require.Error(t, err, "the body must not read after a delete")
 }
 
 // Test_FullScan_DoesNotGrowTheCache — what a reader who comes and reads the
@@ -404,26 +404,26 @@ func Test_FullScan_DoesNotGrowTheCache(t *testing.T) {
 		}
 	}
 
-	require.Zero(t, cs.ParsedBodyCountForTest(), "до чтений разборов быть не должно")
+	require.Zero(t, cs.ParsedBodyCountForTest(), "there must be no parses before any reads")
 
 	scan()
 	require.Zerof(t, cs.ParsedBodyCountForTest(),
-		"один обход графа обязан не оставить после себя ни одного разбора")
+		"one graph walk must leave no parse behind")
 
 	scan()
 	require.Equal(t, vertices, cs.ParsedBodyCountForTest(),
-		"второй обход обязан разобрать всё — это и есть потолок")
+		"the second walk must parse everything: that is the ceiling")
 
 	scan()
 	scan()
 	require.Equal(t, vertices, cs.ParsedBodyCountForTest(),
-		"дальнейшие обходы обязаны упереться в тот же потолок, а не расти")
+		"further walks must hit the same ceiling, not grow")
 
 	// the reads have stopped — maintenance takes the memory back
 	cs.ageParsedBodies()
 	cs.ageParsedBodies()
 	require.Zerof(t, cs.ParsedBodyCountForTest(),
-		"после того как чтения прекратились, разборы обязаны быть отпущены")
+		"once the reads have stopped, the parses must be released")
 
 	// and the graph still reads
 	scan()

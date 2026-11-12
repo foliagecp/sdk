@@ -25,14 +25,14 @@ func Test_IntermediateNode_DoesNotBlockLaterWrite(t *testing.T) {
 
 	// Writing a key under the vertex creates the vertex's own node on the way.
 	require.True(t, cs.SetValue("dom/v.out.to.l1", []byte("t.dom/other"), false, 1000))
-	require.False(t, cs.Exists("dom/v"), "у вершины пока нет тела")
+	require.False(t, cs.Exists("dom/v"), "the vertex has no body yet")
 
 	// The vertex body, with a time certainly below the system clock but above
 	// the time of the operation that created the intermediate node.
 	body := easyjson.NewJSONObjectWithKeyValue("cpu", easyjson.NewJSON(8))
 	require.True(t, cs.SetValueJSON("dom/v", &body, false, 2000))
 
-	require.True(t, cs.Exists("dom/v"), "запись тела вершины потерялась")
+	require.True(t, cs.Exists("dom/v"), "the write of the vertex body was lost")
 	require.Equal(t, int64(2000), cs.GetValueUpdateTime("dom/v"))
 	got, err := cs.GetValueJSON("dom/v")
 	require.NoError(t, err)
@@ -58,13 +58,13 @@ func Test_IntermediateNode_GuardStillProtectsRealValues(t *testing.T) {
 	require.False(t, cs.SetValue("dom/v", []byte("старое"), false, 1000))
 	got, err := cs.GetValue("dom/v")
 	require.NoError(t, err)
-	require.Equal(t, "новое", string(got), "запись со старым временем не должна побеждать")
+	require.Equal(t, "новое", string(got), "a write with an older time must not win")
 
 	// after a delete, a late write does not resurrect the key
 	cs.DeleteValue("dom/v", false, 3000)
 	require.False(t, cs.Exists("dom/v"))
 	require.False(t, cs.SetValue("dom/v", []byte("воскрешение"), false, 2500))
-	require.False(t, cs.Exists("dom/v"), "запоздавшая запись воскресила удалённый ключ")
+	require.False(t, cs.Exists("dom/v"), "a late write resurrected the deleted key")
 }
 
 // Test_IntermediateNode_ConcurrentVertexWrite — the same scenario, but as it
@@ -104,5 +104,5 @@ func Test_IntermediateNode_ConcurrentVertexWrite(t *testing.T) {
 			lost++
 		}
 	}
-	require.Zero(t, lost, "потеряно тел вершин: %d из %d", lost, vertices)
+	require.Zero(t, lost, "vertex bodies lost: %d of %d", lost, vertices)
 }

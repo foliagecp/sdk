@@ -138,7 +138,7 @@ func randomOps(rng *rand.Rand, vertices, links, steps int) ([]storeOp, []storeQu
 func getStr(cs *Store, key string) string {
 	v, err := cs.GetValue(key)
 	if err != nil {
-		return "<нет>"
+		return "<absent>"
 	}
 	return string(v)
 }
@@ -179,12 +179,12 @@ func Test_Tiering_SameAnswers(t *testing.T) {
 			for i := range off {
 				if off[i] != on[i] {
 					if diffs < 10 {
-						t.Errorf("расхождение:\n  дерево: %s\n  запись: %s", off[i], on[i])
+						t.Errorf("mismatch:\n  tree:   %s\n  record: %s", off[i], on[i])
 					}
 					diffs++
 				}
 			}
-			require.Zero(t, diffs, "всего расхождений: %d из %d вопросов", diffs, len(off))
+			require.Zero(t, diffs, "total mismatches: %d of %d queries", diffs, len(off))
 		})
 	}
 }
@@ -203,7 +203,7 @@ func Test_Tiering_RuntimeKeysStayInTree(t *testing.T) {
 	cs.SetValueJSON("dom/v-lock", &body, false, 1)                 // object mutex
 	cs.SetValueJSON("functions.cmdb.api.x.dom/v", &body, false, 1) // context
 
-	require.Equal(t, 1, cs.RecordCountForTest(), "записью обязана стать только вершина")
+	require.Equal(t, 1, cs.RecordCountForTest(), "only the vertex must become a record")
 	require.True(t, cs.ExistsJson("dom/v-lock"))
 	require.True(t, cs.ExistsJson("functions.cmdb.api.x.dom/v"))
 	require.True(t, cs.ExistsJson("dom/v"))
@@ -228,12 +228,12 @@ func Test_Tiering_CompactionKeepsAnswers(t *testing.T) {
 	}
 
 	n := cs.compactRecords()
-	require.Greater(t, n, 0, "записи обязаны были оставить корзины разобранными")
+	require.Greater(t, n, 0, "the writes must have left decoded buckets behind")
 
 	for i, q := range qs {
-		require.Equal(t, before[i], q(cs), "уплотнение изменило ответ")
+		require.Equal(t, before[i], q(cs), "compaction changed an answer")
 	}
-	require.Zero(t, cs.compactRecords(), "повторное уплотнение не должно ничего находить")
+	require.Zero(t, cs.compactRecords(), "a second compaction must find nothing")
 }
 
 // Test_Tiering_ConcurrentWrites — concurrent writes through the public API.
@@ -263,13 +263,13 @@ func Test_Tiering_ConcurrentWrites(t *testing.T) {
 	for id := 0; id < goroutines*per; id++ {
 		name := fmt.Sprintf("l%05d", id)
 		key := fmt.Sprintf(kOutTo, "dom/hub", name)
-		require.True(t, cs.Exists(key), "потеряна связь %s", name)
+		require.True(t, cs.Exists(key), "link %s is lost", name)
 		v, err := cs.GetValue(key)
 		require.NoError(t, err)
 		require.Equal(t, "t."+fmt.Sprintf("dom/o%05d", id), string(v))
 	}
 	keys := cs.GetKeysByPattern("dom/hub.out.to.>")
-	require.Len(t, keys, goroutines*per, "перечисление не сходится с числом записей")
+	require.Len(t, keys, goroutines*per, "the listing does not match the number of writes")
 }
 
 // Test_Tiering_TreeStaysEmpty — a vertex that has moved into a record must
@@ -295,13 +295,13 @@ func Test_Tiering_TreeStaysEmpty(t *testing.T) {
 	require.Equal(t, 200, cs.RecordCountForTest())
 	st := cs.StatsForTest()
 	require.LessOrEqual(t, st.TotalNodes, 2,
-		"дерево обязано остаться пустым: %d узлов на 200 вершин в записях", st.TotalNodes)
+		"the tree must stay empty: %d nodes for 200 vertices held in records", st.TotalNodes)
 
 	// and service keys are still in the tree
 	body := easyjson.NewJSONObjectWithKeyValue("rev", easyjson.NewJSON(1))
 	cs.SetValueJSON("dom/v-000-lock", &body, false, now)
 	st = cs.StatsForTest()
-	require.Greater(t, st.TotalNodes, 1, "мьютекс объекта обязан лежать в дереве")
+	require.Greater(t, st.TotalNodes, 1, "the object mutex must live in the tree")
 }
 
 // Test_Rehydrate_ClearsRecords — a promotion from passive to active replaces
@@ -320,9 +320,9 @@ func Test_Rehydrate_ClearsRecords(t *testing.T) {
 
 	cs.records.reset()
 
-	require.Zero(t, cs.RecordCountForTest(), "записи обязаны были опустеть")
-	require.False(t, cs.Exists("dom/v.out.to.l1"), "связь пережила сброс")
-	require.False(t, cs.Exists("dom/v"), "тело пережило сброс")
+	require.Zero(t, cs.RecordCountForTest(), "the records must have been emptied")
+	require.False(t, cs.Exists("dom/v.out.to.l1"), "the link survived the reset")
+	require.False(t, cs.Exists("dom/v"), "the body survived the reset")
 
 	// and after the reset the world is built again
 	cs.SetValue("dom/v.out.to.l2", []byte("t.dom/y"), false, 20)
@@ -359,7 +359,7 @@ func Test_RecordGauges_ReportWhatIsHeld(t *testing.T) {
 	defer restore()
 
 	cs := NewStoreForTest("gauges")
-	require.Equal(t, recordStats{}, cs.recordStats(), "пустой кэш обязан показывать нули")
+	require.Equal(t, recordStats{}, cs.recordStats(), "an empty cache must report zeros")
 
 	body, _ := easyjson.JSONFromString(`{"name":"узел","cpu":8}`)
 	const vertices = 40
@@ -372,16 +372,16 @@ func Test_RecordGauges_ReportWhatIsHeld(t *testing.T) {
 	}
 
 	st := cs.recordStats()
-	require.Equal(t, vertices, st.vertices, "вершины")
-	require.Positive(t, st.bytes, "байты записей")
-	require.Positive(t, st.buckets, "корзины")
-	require.Positive(t, st.decoded, "запись обязана оставить корзину разобранной")
-	require.Zero(t, st.compressed, "без сжатия сжатых корзин быть не может")
-	require.Zero(t, st.parsedBodies, "до чтений разборов быть не должно")
+	require.Equal(t, vertices, st.vertices, "vertices")
+	require.Positive(t, st.bytes, "record bytes")
+	require.Positive(t, st.buckets, "buckets")
+	require.Positive(t, st.decoded, "a write must leave its bucket decoded")
+	require.Zero(t, st.compressed, "without compression there can be no compressed buckets")
+	require.Zero(t, st.parsedBodies, "there must be no parsed bodies before any reads")
 
 	// maintenance encodes what the write left behind
 	cs.compactRecords()
-	require.Zero(t, cs.recordStats().decoded, "после уплотнения разобранных корзин быть не должно")
+	require.Zero(t, cs.recordStats().decoded, "there must be no decoded buckets after compaction")
 
 	// two reads of a body leave it parsed, and the metric sees that
 	for round := 0; round < 2; round++ {
@@ -389,10 +389,10 @@ func Test_RecordGauges_ReportWhatIsHeld(t *testing.T) {
 			cs.GetValueJSON(fmt.Sprintf("dom/v-%03d", i)) //nolint:errcheck
 		}
 	}
-	require.Equal(t, vertices, cs.recordStats().parsedBodies, "разобранные тела")
+	require.Equal(t, vertices, cs.recordStats().parsedBodies, "parsed bodies")
 	cs.ageParsedBodies()
 	cs.ageParsedBodies()
-	require.Zero(t, cs.recordStats().parsedBodies, "остывшие тела обязаны исчезнуть из метрики")
+	require.Zero(t, cs.recordStats().parsedBodies, "cooled-down bodies must drop out of the metric")
 
 	// splits show as a growing bucket count — no separate counter is needed
 	before := cs.recordStats().buckets
@@ -400,7 +400,7 @@ func Test_RecordGauges_ReportWhatIsHeld(t *testing.T) {
 		cs.SetValue(fmt.Sprintf("dom/v-000.out.to.big%03d", l), []byte("t.dom/y"), false, 2)
 	}
 	require.Greater(t, cs.recordStats().buckets, before,
-		"корзины обязаны прибавиться — иначе по метрике не увидеть расщеплений")
+		"the bucket count must grow — otherwise the metric does not show splits")
 }
 
 // Test_RecordGauges_TreeReportsZero — in tree mode the record metrics must be
@@ -436,9 +436,9 @@ func Test_RecordGauges_Published(t *testing.T) {
 
 	value := func(name string, labels prometheus.Labels) float64 {
 		gv, err := system.GlobalPrometrics.EnsureGaugeVecSimple(name, "", labelNamesOf(labels))
-		require.NoErrorf(t, err, "метрика %s", name)
+		require.NoErrorf(t, err, "metric %s", name)
 		var m dto.Metric
-		require.NoErrorf(t, gv.With(labels).Write(&m), "метрика %s", name)
+		require.NoErrorf(t, gv.With(labels).Write(&m), "metric %s", name)
 		return m.GetGauge().GetValue()
 	}
 	id := prometheus.Labels{"id": cs.cacheConfig.id}
@@ -449,7 +449,7 @@ func Test_RecordGauges_Published(t *testing.T) {
 	require.Equal(t, float64(0), value("cache_record_parsed_bodies", id))
 	require.Equal(t, float64(1),
 		value("cache_mode", prometheus.Labels{"id": cs.cacheConfig.id, "mode": "records"}),
-		"режим обязан быть виден в метрике")
+		"the mode must be visible in the metric")
 	require.Equal(t, float64(0),
 		value("cache_mode", prometheus.Labels{"id": cs.cacheConfig.id, "mode": "tree"}))
 }
@@ -493,17 +493,17 @@ func Test_SweepRecords_RemovesWhatIsGone(t *testing.T) {
 	for i := 0; i < vertices; i++ {
 		create(i)
 	}
-	require.Equal(t, vertices+1, cs.RecordCountForTest(), "вершины и цель связей")
-	require.Zero(t, cs.sweepRecords(), "живые вершины выметать нельзя")
+	require.Equal(t, vertices+1, cs.RecordCountForTest(), "the vertices and the link target")
+	require.Zero(t, cs.sweepRecords(), "live vertices must not be swept")
 
 	for i := 0; i < vertices; i++ {
 		erase(i)
 	}
 	require.Equal(t, vertices+1, cs.RecordCountForTest(),
-		"до обслуживания записи ещё на месте — в них надгробия")
+		"before maintenance the records are still in place — they hold tombstones")
 
-	require.Equal(t, vertices+1, cs.sweepRecords(), "все опустевшие записи обязаны уйти")
-	require.Zero(t, cs.RecordCountForTest(), "индекс обязан опустеть")
+	require.Equal(t, vertices+1, cs.sweepRecords(), "every emptied record must go")
+	require.Zero(t, cs.RecordCountForTest(), "the index must become empty")
 
 	// and the graph builds again from scratch
 	for i := 0; i < vertices; i++ {
@@ -511,7 +511,7 @@ func Test_SweepRecords_RemovesWhatIsGone(t *testing.T) {
 	}
 	require.Equal(t, vertices+1, cs.RecordCountForTest())
 	for i := 0; i < vertices; i++ {
-		require.True(t, cs.Exists(fmt.Sprintf("dom/v-%02d.out.to.l1", i)), "связь %d", i)
+		require.True(t, cs.Exists(fmt.Sprintf("dom/v-%02d.out.to.l1", i)), "link %d", i)
 	}
 }
 
@@ -538,7 +538,7 @@ func Test_SweepRecords_CyclesReturnToBaseline(t *testing.T) {
 		// dom/tgt holds incoming links, so it survives the cycle; everything
 		// else must go.
 		require.LessOrEqualf(t, cs.RecordCountForTest(), 1,
-			"после цикла %d в индексе осталось %d записей", cycle, cs.RecordCountForTest())
+			"after cycle %d the index still holds %d records", cycle, cs.RecordCountForTest())
 	}
 }
 
@@ -568,21 +568,21 @@ func Test_SweepRecords_WriteIntoASweptRecordIsRepeated(t *testing.T) {
 			return
 		}
 		once = true
-		require.Equal(t, 1, cs.sweepRecords(), "выметание внутри окна обязано забрать запись")
+		require.Equal(t, 1, cs.sweepRecords(), "a sweep inside the window must remove the record")
 	}
 	defer func() { afterRecordFetchForTest = nil }()
 
 	require.True(t, cs.SetValue("dom/v.out.to.l2", []byte("t.dom/y"), false, 3))
-	require.True(t, once, "шов не сработал — окно не проверено")
-	require.True(t, first.retired.Load(), "старая запись обязана быть помечена")
+	require.True(t, once, "the seam did not fire — the window was not checked")
+	require.True(t, first.retired.Load(), "the old record must be marked retired")
 
 	v, err := cs.GetValue("dom/v.out.to.l2")
-	require.NoError(t, err, "запись, попавшая в вымётанную запись, потеряна")
+	require.NoError(t, err, "a write that landed in a swept record is lost")
 	require.Equal(t, "t.dom/y", string(v))
 
 	second, ok := cs.records.get("dom/v")
 	require.True(t, ok)
-	require.NotSame(t, first, second, "писать должны были уже в новую запись")
+	require.NotSame(t, first, second, "the write must have gone to the new record")
 }
 
 // Test_SweepRecords_SweepingAlongsideWritingLosesNothing — sweeping runs at
@@ -640,11 +640,11 @@ func Test_SweepRecords_SweepingAlongsideWritingLosesNothing(t *testing.T) {
 	close(stop)
 	sweeperWG.Wait()
 
-	require.Positive(t, atomic.LoadInt64(&sweeps), "выметание обязано было что-то забрать — иначе гонки не было")
+	require.Positive(t, atomic.LoadInt64(&sweeps), "the sweep must have removed something — otherwise there was no race")
 	for w := 0; w < writers; w++ {
 		key := fmt.Sprintf("dom/w-%02d.out.to.l%04d", w, rounds-1)
 		v, err := cs.GetValue(key)
-		require.NoErrorf(t, err, "последняя связь писателя %d потеряна", w)
+		require.NoErrorf(t, err, "the last link of writer %d is lost", w)
 		require.Equal(t, fmt.Sprintf("t.dom/tgt-%d-%d", w, rounds-1), string(v))
 	}
 }
@@ -676,11 +676,11 @@ func Test_Tiering_ExistsJsonNudgesLikeTheTree(t *testing.T) {
 				"dom/raw":             true,
 			}
 			for key := range nudged {
-				require.Truef(t, cs.ExistsJson(key), "%s существует", key)
+				require.Truef(t, cs.ExistsJson(key), "%s exists", key)
 			}
 			for key, want := range nudged {
 				got := strings.Contains(logs.String(), "key="+key+" is []byte, use Exists method")
-				require.Equalf(t, want, got, "подсказка для %s", key)
+				require.Equalf(t, want, got, "hint for %s", key)
 			}
 		})
 	}

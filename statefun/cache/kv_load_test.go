@@ -48,7 +48,7 @@ func Test_Load_ProbeNeverRulesOutAnObject(t *testing.T) {
 		jv, ok := easyjson.JSONFromBytes(b)
 		if ok && jv.IsObject() {
 			require.Truef(t, looksLikeJSONObject(b),
-				"предфильтр отверг то, что разбор считает объектом: %q", c)
+				"the prefilter rejected what the parser takes for an object: %q", c)
 		}
 	}
 }
@@ -180,14 +180,14 @@ func Test_KVLoad_RecordsAnswerAsTree(t *testing.T) {
 	defer cancel()
 	asRecords := snapshot(cs, keys)
 
-	require.Positive(t, cs.RecordCountForTest(), "загрузка обязана была построить записи")
+	require.Positive(t, cs.RecordCountForTest(), "the load must have built records")
 	for _, k := range keys {
-		require.Equalf(t, asTree[k].exists, asRecords[k].exists, "существование %s", k)
-		require.Equalf(t, asTree[k].existsJSON, asRecords[k].existsJSON, "тип JSON %s", k)
-		require.Equalf(t, asTree[k].hasTime, asRecords[k].hasTime, "время %s", k)
-		require.Equalf(t, len(asTree[k].value), len(asRecords[k].value), "длина значения %s", k)
+		require.Equalf(t, asTree[k].exists, asRecords[k].exists, "existence of %s", k)
+		require.Equalf(t, asTree[k].existsJSON, asRecords[k].existsJSON, "JSON type of %s", k)
+		require.Equalf(t, asTree[k].hasTime, asRecords[k].hasTime, "update time of %s", k)
+		require.Equalf(t, len(asTree[k].value), len(asRecords[k].value), "value length of %s", k)
 		if len(asTree[k].value) > 0 {
-			require.Equalf(t, asTree[k].value, asRecords[k].value, "значение %s", k)
+			require.Equalf(t, asTree[k].value, asRecords[k].value, "value of %s", k)
 		}
 	}
 	for _, p := range []string{"dom/hub.out.to.>", "dom/hub.ltype.>", "dom/hub.out.index.>", "dom/v-00001.in.>"} {
@@ -201,7 +201,7 @@ func Test_KVLoad_RecordsAnswerAsTree(t *testing.T) {
 		got := cs.GetKeysByPattern(p)
 		sort.Strings(want)
 		sort.Strings(got)
-		require.Equalf(t, want, got, "перечисление по %s", p)
+		require.Equalf(t, want, got, "keys listed by %s", p)
 	}
 }
 
@@ -256,12 +256,12 @@ func peakDuringLoad(load func()) (peakMB, finalMB, churnMB float64, gcs uint32) 
 // but what the records cost shows only this way.
 func Test_KVLoad_PeakMemory(t *testing.T) {
 	if testing.Short() {
-		t.Skip("длинный: поднимает NATS и грузит десятки тысяч ключей")
+		t.Skip("long: starts NATS and loads tens of thousands of keys")
 	}
 	js, kvs := newKVForTest(t, "peak")
 	entries, keys := kvGraph(15000, 30000)
 	fillKV(t, kvs, entries)
-	t.Logf("ключей в KV: %d", len(keys))
+	t.Logf("keys in KV: %d", len(keys))
 
 	// --- part 1: does everything get through a real load
 	for _, mode := range []string{"tree", "records"} {
@@ -273,7 +273,7 @@ func Test_KVLoad_PeakMemory(t *testing.T) {
 				missing++
 			}
 		}
-		require.Zerof(t, missing, "режим %s потерял %d ключей из %d при загрузке", mode, missing, len(keys))
+		require.Zerof(t, missing, "mode %s lost %d of %d keys in the load", mode, missing, len(keys))
 		cancel()
 		restore()
 	}
@@ -311,12 +311,12 @@ func Test_KVLoad_PeakMemory(t *testing.T) {
 	// First at the default setting — as it will be in production.
 	treePeak, treeFinal, treeChurn := measure("tree")
 	recPeak, recFinal, recChurn := measure("records")
-	t.Logf("GOGC по умолчанию — дерево: пик %.1f MB, живого %.1f MB, выделено %.1f MB",
+	t.Logf("default GOGC — tree:    peak %.1f MB, live %.1f MB, allocated %.1f MB",
 		treePeak, treeFinal, treeChurn)
-	t.Logf("GOGC по умолчанию — записи: пик %.1f MB, живого %.1f MB, выделено %.1f MB",
+	t.Logf("default GOGC — records: peak %.1f MB, live %.1f MB, allocated %.1f MB",
 		recPeak, recFinal, recChurn)
 	require.Lessf(t, recFinal, treeFinal,
-		"записи (%.1f MB) обязаны занимать меньше дерева (%.1f MB)", recFinal, treeFinal)
+		"records (%.1f MB) must take less than the tree (%.1f MB)", recFinal, treeFinal)
 
 	// And now with a collector that actually collects.
 	//
@@ -341,9 +341,9 @@ func Test_KVLoad_PeakMemory(t *testing.T) {
 
 	treePeak, _, _ = measure("tree")
 	recPeak, _, _ = measure("records")
-	t.Logf("GOGC=50 — дерево: пик %.1f MB, записи: пик %.1f MB", treePeak, recPeak)
+	t.Logf("GOGC=50 — tree: peak %.1f MB, records: peak %.1f MB", treePeak, recPeak)
 	require.Lessf(t, recPeak, treePeak,
-		"Н-5: пик загрузки в записях (%.1f MB) обязан быть ниже пика дерева (%.1f MB)", recPeak, treePeak)
+		"the load peak in records mode (%.1f MB) must be below the tree's (%.1f MB)", recPeak, treePeak)
 }
 
 // Test_Rehydrate_KVIsTheWholeTruth — a passive→active promotion must yield
@@ -360,7 +360,7 @@ func Test_Rehydrate_KVIsTheWholeTruth(t *testing.T) {
 
 	cs, cancel := loadStore(t, js, kvs, "rehydrate_cache")
 	defer cancel()
-	require.True(t, cs.Exists("dom/v-00007"), "вершина обязана была загрузиться")
+	require.True(t, cs.Exists("dom/v-00007"), "the vertex must have loaded")
 	require.True(t, cs.Exists("dom/hub.out.to.l00007"))
 
 	// another active node deletes a vertex and a link while we are passive
@@ -376,15 +376,15 @@ func Test_Rehydrate_KVIsTheWholeTruth(t *testing.T) {
 	require.NoError(t, cs.RehydrateFromKV(context.Background()))
 
 	for _, k := range gone {
-		require.Falsef(t, cs.Exists(k), "удалённое в KV пережило повышение: %s", k)
+		require.Falsef(t, cs.Exists(k), "a key deleted in KV survived the promotion: %s", k)
 	}
-	require.True(t, cs.Exists(added), "появившееся в KV не доехало до повышения")
+	require.True(t, cs.Exists(added), "a key added to KV is missing after the promotion")
 
 	// everything else is in place and reads
 	for _, k := range keys {
 		if k == gone[0] || k == gone[1] || k == gone[2] {
 			continue
 		}
-		require.Truef(t, cs.Exists(k), "регидратация потеряла ключ %s", k)
+		require.Truef(t, cs.Exists(k), "rehydration lost key %s", k)
 	}
 }

@@ -28,10 +28,10 @@ func Test_CacheMode_Presets(t *testing.T) {
 		{"zstd+dict", true, true, true, "zstd-dict"},
 	} {
 		restore := SetCacheModeForTest(c.mode)
-		require.Equal(t, c.tiering, tieringEnabled(), "режим %q: ярус", c.mode)
-		require.Equal(t, c.compress, compressionEnabled(), "режим %q: сжатие", c.mode)
-		require.Equal(t, c.dict, dictionaryEnabled(), "режим %q: словарь", c.mode)
-		require.Equal(t, c.name, CacheMode(), "режим %q: как называется", c.mode)
+		require.Equal(t, c.tiering, tieringEnabled(), "mode %q: tiering", c.mode)
+		require.Equal(t, c.compress, compressionEnabled(), "mode %q: compression", c.mode)
+		require.Equal(t, c.dict, dictionaryEnabled(), "mode %q: dictionary", c.mode)
+		require.Equal(t, c.name, CacheMode(), "mode %q: reported name", c.mode)
 		restore()
 	}
 }
@@ -39,7 +39,7 @@ func Test_CacheMode_Presets(t *testing.T) {
 func Test_CacheMode_UnknownFallsBackToTree(t *testing.T) {
 	restore := SetCacheModeForTest("чепуха")
 	defer restore()
-	require.False(t, tieringEnabled(), "неизвестное значение обязано оставить дерево")
+	require.False(t, tieringEnabled(), "an unknown value must keep the tree")
 	require.Equal(t, "tree", CacheMode())
 }
 
@@ -47,21 +47,21 @@ func Test_CacheMode_UnknownFallsBackToTree(t *testing.T) {
 // than the preset.
 func Test_CacheMode_IndividualSettingWins(t *testing.T) {
 	require.False(t, resolveBool("CACHE_TIERING_ABSENT_IN_ENV", "on", false),
-		"без переменной берётся пресет")
+		"without the variable the preset applies")
 	require.True(t, resolveBool("CACHE_TIERING_ABSENT_IN_ENV", "on", true),
-		"без переменной берётся пресет")
+		"without the variable the preset applies")
 
 	t.Setenv("CACHE_MODE_TEST_KNOB", "on")
 	require.True(t, resolveBool("CACHE_MODE_TEST_KNOB", "on", false),
-		"названная переменная обязана перебить пресет")
+		"a variable set in the environment must override the preset")
 
 	t.Setenv("CACHE_MODE_TEST_KNOB", "off")
 	require.False(t, resolveBool("CACHE_MODE_TEST_KNOB", "on", true),
-		"названная переменная обязана перебить пресет и в обратную сторону")
+		"a variable set in the environment must override the preset in the other direction too")
 
 	t.Setenv("CACHE_MODE_TEST_KNOB", "  ")
 	require.True(t, resolveBool("CACHE_MODE_TEST_KNOB", "on", true),
-		"пустое значение — это не выбор, берётся пресет")
+		"an empty value is not a choice — the preset applies")
 }
 
 // Test_CacheMode_Restores — the helper puts everything back as it was.
@@ -70,7 +70,7 @@ func Test_CacheMode_Restores(t *testing.T) {
 	restore := SetCacheModeForTest("zstd-dict")
 	require.Equal(t, "zstd-dict", CacheMode())
 	restore()
-	require.Equal(t, before, CacheMode(), "режим не вернулся к исходному")
+	require.Equal(t, before, CacheMode(), "the mode did not return to the original")
 }
 
 // Test_CacheMode_ZeroSamplesMeansNoDictionary — a zero sample also means
@@ -85,8 +85,8 @@ func Test_CacheMode_ZeroSamplesMeansNoDictionary(t *testing.T) {
 	dictSampleLimit = 0
 	defer func() { dictSampleLimit = prev }()
 
-	require.False(t, dictionaryEnabled(), "учиться не на чем — словаря быть не должно")
-	require.Equal(t, "zstd", CacheMode(), "отчёт о режиме обязан согласоваться с настройками")
+	require.False(t, dictionaryEnabled(), "nothing to train on — there must be no dictionary")
+	require.Equal(t, "zstd", CacheMode(), "the reported mode must agree with the settings")
 }
 
 // Test_CacheMode_DefaultIsRecords — the default is pinned by a test: it
@@ -94,18 +94,18 @@ func Test_CacheMode_ZeroSamplesMeansNoDictionary(t *testing.T) {
 // deployment that configured nothing gets.
 func Test_CacheMode_DefaultIsRecords(t *testing.T) {
 	require.Equal(t, modeRecords, parseCacheMode(defaultCacheMode),
-		"умолчание обязано быть режимом записей")
+		"the default must be the records mode")
 	require.Equal(t, modeRecords, parseCacheMode(""),
-		"незаданная переменная обязана давать то же, что умолчание")
+		"an unset variable must give the same as the default")
 
 	restore := SetCacheModeForTest(defaultCacheMode)
 	defer restore()
-	require.True(t, tieringEnabled(), "по умолчанию вершины обязаны храниться записями")
-	require.False(t, compressionEnabled(), "сжатие по умолчанию не включается: оно вдвое дороже на наполнении")
+	require.True(t, tieringEnabled(), "by default vertices must be stored as records")
+	require.False(t, compressionEnabled(), "compression is off by default: it makes filling the cache twice as expensive")
 	require.Equal(t, "records", CacheMode())
 
 	// And the tree must stay one step away from here.
 	back := SetCacheModeForTest("tree")
-	require.False(t, tieringEnabled(), "CACHE_MODE=tree обязан возвращать прежнее поведение")
+	require.False(t, tieringEnabled(), "CACHE_MODE=tree must bring back the previous behavior")
 	back()
 }

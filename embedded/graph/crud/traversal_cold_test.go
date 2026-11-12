@@ -92,7 +92,7 @@ func (s *ColdTraversalTestSuite) coldTraversal(hub, linkType string, want int) t
 		ids, err := s.dbc.Query.JPGQLCtraQuery(hub, query)
 		took := time.Since(started)
 		s.Require().NoError(err)
-		s.Require().Lenf(ids, want, "обход обязан вернуть все %d вершин", want)
+		s.Require().Lenf(ids, want, "the traversal must return all %d vertices", want)
 		if took < best {
 			best = took
 		}
@@ -123,7 +123,7 @@ func (s *ColdTraversalTestSuite) cacheWalk(hub string, want int) time.Duration {
 		}
 		took := time.Since(started)
 		// want + 1: every object also has a __type link to its type.
-		s.Require().Equalf(want+1, n, "кэш обязан отдать все %d связей хаба", want+1)
+		s.Require().Equalf(want+1, n, "the cache must return all %d of the hub's links", want+1)
 		if took < best {
 			best = took
 		}
@@ -154,17 +154,17 @@ func (s *ColdTraversalTestSuite) Test_ColdTraversal() {
 		query := s.coldTraversal(hub, prefix+"_rel", n)
 
 		vertices, bytes, buckets, compressed, _, parsed := cs.RecordStatsForTest()
-		s.T().Logf("режим %s, %d вершин:", cache.CacheMode(), n)
-		s.T().Logf("  обход по кэшу:   %s (%s на связь)",
+		s.T().Logf("mode %s, %d vertices:", cache.CacheMode(), n)
+		s.T().Logf("  cache walk:    %s (%s per link)",
 			walk.Round(time.Microsecond), (walk / time.Duration(n)).Round(time.Nanosecond))
-		s.T().Logf("  запрос JPGQL:    %s (%s на вершину)",
+		s.T().Logf("  JPGQL query:   %s (%s per vertex)",
 			query.Round(time.Millisecond), (query / time.Duration(n)).Round(time.Microsecond))
-		s.T().Logf("  записей %d, байт %d, корзин %d, из них сжатых %d, тел разобрано %d",
+		s.T().Logf("  %d records, %d bytes, %d buckets (%d of them compressed), %d bodies parsed",
 			vertices, bytes, buckets, compressed, parsed)
 
 		// A cold traversal reads links, not bodies, so it has no reason to
 		// parse bodies — and it must not leave them parsed behind it.
 		s.Require().Zerof(parsed,
-			"обход по связям оставил %d разобранных тел — он их не читает", parsed)
+			"the traversal over links left %d bodies parsed — it does not read them", parsed)
 	}
 }

@@ -100,7 +100,7 @@ func (s hubGateSample) add(o hubGateSample) hubGateSample {
 
 func (s hubGateSample) String() string {
 	w := float64(max(s.writes, 1))
-	return fmt.Sprintf("%s, %.1f аллокаций, %.0f Б", (s.took / time.Duration(max(s.writes, 1))).Round(time.Nanosecond),
+	return fmt.Sprintf("%s, %.1f allocations, %.0f B", (s.took / time.Duration(max(s.writes, 1))).Round(time.Nanosecond),
 		float64(s.mallocs)/w, float64(s.bytes)/w)
 }
 
@@ -208,8 +208,8 @@ func median(sorted []float64) float64 {
 
 func Test_Hub_ConcurrentThroughputGate(t *testing.T) {
 	if raceEnabled {
-		t.Skip("гейт скорости не запускается под race detector: инструментированный код меряет не то, " +
-			"что работает в проде; корректность всплеска под -race проверяет Test_Hub_ConcurrentWritesKeepEverything")
+		t.Skip("the throughput gate does not run under the race detector: instrumented code measures something " +
+			"other than what runs in production; Test_Hub_ConcurrentWritesKeepEverything checks the burst's correctness under -race")
 	}
 	prefill := defaultBucketLinks * 4
 	if v := os.Getenv("HUB_PREFILL"); v != "" {
@@ -221,9 +221,9 @@ func Test_Hub_ConcurrentThroughputGate(t *testing.T) {
 	hubGateMeasure("tree", 0, prefill)
 	hubGateMeasure("records", 0, prefill)
 
-	t.Logf("паспорт: %s", hubGatePassport())
-	t.Logf("замер: %d горутин × %d связей в хаб из %d связей; всплесков в замере не меньше %d, "+
-		"пока их суммарное время не достигнет %s — замер покрывает много периодов планировщика, а не долю одного",
+	t.Logf("environment: %s", hubGatePassport())
+	t.Logf("sample: %d goroutines × %d links into a hub of %d links; at least %d bursts per sample, "+
+		"until their total time reaches %s — a sample covers many scheduler periods, not a fraction of one",
 		gateGoroutines, gatePerGoroutine, prefill, gateMinBursts, gateSampleFloor)
 	parallelStart := cpuParallelism()
 
@@ -248,20 +248,20 @@ func Test_Hub_ConcurrentThroughputGate(t *testing.T) {
 		}
 	}
 
-	t.Logf("%4s  %-7s  %9s  %9s  %13s  %7s", "пара", "первым", "дерево", "записи", "записи/дерево", "разброс")
+	t.Logf("%4s  %-7s  %9s  %9s  %13s  %7s", "pair", "first", "tree", "records", "records/tree", "spread")
 	for i, p := range pairs {
 		mark := ""
 		if p.spread() > gateSpreadLimit {
-			mark = "  отброшена: машина изменилась внутри пары"
+			mark = "  dropped: the machine changed within the pair"
 		}
 		t.Logf("%4d  %-7s  %9s  %9s  %13.3f  %7.2f%s", i+1, p.first,
 			p.tree.took.Round(time.Millisecond), p.records.took.Round(time.Millisecond), p.ratio(), p.spread(), mark)
 	}
 
 	if len(ok) < gateMinClean {
-		t.Fatalf("INCONCLUSIVE: внутри %d пар из %d машина менялась больше чем на %.0f%%, "+
-			"чистых пар %d при нужных %d. Такой прогон ничего не говорит о коде ни в одну сторону — "+
-			"повторите на машине без посторонней нагрузки.",
+		t.Fatalf("INCONCLUSIVE: within %d of %d pairs the machine changed by more than %.0f%%; "+
+			"%d clean pairs, %d needed. Such a run says nothing about the code either way — "+
+			"repeat it on a machine without outside load.",
 			len(pairs)-len(ok), len(pairs), (gateSpreadLimit-1)*100, len(ok), gateMinClean)
 	}
 	ratios := make([]float64, 0, len(ok))
@@ -272,16 +272,16 @@ func Test_Hub_ConcurrentThroughputGate(t *testing.T) {
 	}
 	sort.Float64s(ratios)
 	med := median(ratios)
-	parallel := fmt.Sprintf("машина отдавала %.0f%% / %.0f%% номинальной параллельности в начале / в конце",
+	parallel := fmt.Sprintf("the machine gave %.0f%% / %.0f%% of its nominal parallelism at the start / at the end",
 		parallelStart*100, cpuParallelism()*100)
-	t.Logf("чистых пар %d из %d; записи/дерево: мин %.3f, медиана %.3f, макс %.3f; порог медианы %.2f",
+	t.Logf("clean pairs %d of %d; records/tree: min %.3f, median %.3f, max %.3f; median threshold %.2f",
 		len(ok), len(pairs), ratios[0], med, ratios[len(ratios)-1], gateRatioLimit)
-	t.Logf("на запись: дерево %s; записи %s", tree, records)
+	t.Logf("per write: tree %s; records %s", tree, records)
 	t.Logf("%s", parallel)
 	if med > gateRatioLimit {
-		t.Fatalf("пропускная способность записей ниже 80%% дерева: медиана отношения %.3f по %d чистым парам (порог %.2f); %s. "+
-			"Под постоянной нагрузкой на CPU записи теряют больше дерева — это свойство кода, а не шум; "+
-			"сравнение с порогом ТЗ делайте на машине без посторонней нагрузки.",
+		t.Fatalf("records throughput is below 80%% of the tree's: median records/tree ratio %.3f over %d clean pairs (threshold %.2f); %s. "+
+			"Under sustained CPU load records lose more than the tree — a property of the code, not noise; "+
+			"compare against the threshold on a machine without outside load.",
 			med, len(ok), gateRatioLimit, parallel)
 	}
 }

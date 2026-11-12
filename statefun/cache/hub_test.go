@@ -64,19 +64,19 @@ func Test_Hub_WriteCostDoesNotGrowWithTheHub(t *testing.T) {
 
 	perSmall := perWrite(small, "dom/small", 0, 2000)
 	perBig := perWrite(big, "dom/big", 0, 2000)
-	t.Logf("вершина из %d связей: %s на запись", defaultBucketLinks, perSmall)
-	t.Logf("хаб из %d связей:  %s на запись", hubSize, perBig)
+	t.Logf("vertex of %d links: %s per write", defaultBucketLinks, perSmall)
+	t.Logf("hub of %d links: %s per write", hubSize, perBig)
 
 	// The hub is 334 times larger. The spec requires "no more"; with a margin
 	// for machine noise and for the hub's deeper directory, the threshold is
 	// three times: rewriting the whole vertex would give three hundred.
 	require.Lessf(t, perBig, perSmall*3,
-		"запись в хаб (%s) дороже записи в маленькую вершину (%s) — цена растёт с размером вершины",
+		"a hub write (%s) costs more than a write into a small vertex (%s) — the cost grows with the vertex size",
 		perBig, perSmall)
 
 	// A hub write costs no more than 100 µs on top of a write today.
 	require.Lessf(t, perBig-perSmall, 100*time.Microsecond,
-		"Н-4: запись в хаб дороже на %s", perBig-perSmall)
+		"a hub write costs %s more than a write into a small vertex; the limit is 100 µs", perBig-perSmall)
 }
 
 // Test_Hub_SequentialWritesKeepEverything: ten thousand sequential writes into
@@ -97,12 +97,12 @@ func Test_Hub_SequentialWritesKeepEverything(t *testing.T) {
 	for i := 0; i < writes; i++ {
 		key := fmt.Sprintf("dom/hub.out.to.l%05d", i)
 		v, err := cs.GetValue(key)
-		require.NoErrorf(t, err, "связь %d потеряна", i)
-		require.Equalf(t, fmt.Sprintf("t.dom/tgt-%05d", i), string(v), "связь %d испорчена", i)
+		require.NoErrorf(t, err, "link %d is lost", i)
+		require.Equalf(t, fmt.Sprintf("t.dom/tgt-%05d", i), string(v), "link %d is corrupted", i)
 	}
 	require.Len(t, cs.GetKeysByPattern("dom/hub.out.to.>"), writes,
-		"перечисление обязано вернуть все связи хаба")
-	t.Logf("%d последовательных записей в хаб за %s (%s на запись)",
+		"the listing must return every link of the hub")
+	t.Logf("%d sequential writes into the hub in %s (%s per write)",
 		writes, took.Round(time.Millisecond), (took / writes).Round(time.Nanosecond))
 }
 
@@ -160,7 +160,7 @@ func Test_Hub_ConcurrentWritesKeepEverything(t *testing.T) {
 				fillHub(cs, "dom/hub", defaultBucketLinks*4)
 				hubBurst(cs, goroutines, perGoroutine)
 				missing := hubBurstMissing(cs, goroutines, perGoroutine)
-				require.Zerof(t, missing, "режим %s: потеряно или испорчено %d связей из %d",
+				require.Zerof(t, missing, "mode %s: %d of %d links lost or corrupted",
 					mode, missing, goroutines*perGoroutine)
 			}
 		}()

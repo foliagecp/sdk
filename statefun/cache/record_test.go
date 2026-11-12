@@ -88,7 +88,7 @@ func Test_Record_RoundTrip(t *testing.T) {
 			for i := 0; i < n; i++ {
 				want := mkOut(i)
 				got, ok := r.lookupOutLink(want.Name)
-				require.True(t, ok, "исходящая %s", want.Name)
+				require.True(t, ok, "outgoing link %s", want.Name)
 				require.Equal(t, want.To.Value, got.To.Value)
 				require.Equal(t, want.To.Time, got.To.Time)
 
@@ -100,7 +100,7 @@ func Test_Record_RoundTrip(t *testing.T) {
 
 				wi := mkIn(i)
 				gi, ok := r.lookupInLink(wi.From, wi.Name)
-				require.True(t, ok, "входящая %s", wi.From)
+				require.True(t, ok, "incoming link %s", wi.From)
 				require.Equal(t, wi.Type, gi.Type)
 				require.Equal(t, wi.UpdateTime, gi.UpdateTime)
 			}
@@ -115,7 +115,7 @@ func Test_Record_RoundTrip(t *testing.T) {
 			r.rangeOutLinks(func(l outLink) bool { seen[l.Name]++; return true })
 			require.Len(t, seen, n)
 			for _, c := range seen {
-				require.Equal(t, 1, c, "связь перечислена дважды")
+				require.Equal(t, 1, c, "a link was enumerated twice")
 			}
 
 			seenIn := map[string]int{}
@@ -164,7 +164,7 @@ func Test_Record_WriteThrough(t *testing.T) {
 	// deletion
 	require.True(t, deleteOutLinkForTest(r, upd, 2000))
 	_, ok = r.lookupOutLink(upd.Name)
-	require.False(t, ok, "удалённая связь не должна читаться")
+	require.False(t, ok, "a deleted link must not read")
 
 	// the rest are still in place
 	for i := 0; i < 10; i++ {
@@ -172,7 +172,7 @@ func Test_Record_WriteThrough(t *testing.T) {
 			continue
 		}
 		_, ok := r.lookupOutLink(mkOut(i).Name)
-		require.True(t, ok, "связь %d потерялась", i)
+		require.True(t, ok, "link %d was lost", i)
 	}
 }
 
@@ -184,7 +184,7 @@ func Test_Record_LastWriterWins(t *testing.T) {
 	// a write with a time older than the current one is ignored
 	old := mkOut(1)
 	old.To = subValue{Value: "type-1.dom/stale", Time: 0, Live: true}
-	require.False(t, putOutLinkForTest(r, old), "старая запись не должна применяться")
+	require.False(t, putOutLinkForTest(r, old), "an older write must not apply")
 	got, _ := r.lookupOutLink(name)
 	require.Equal(t, mkOut(1).target(), got.target())
 
@@ -192,7 +192,7 @@ func Test_Record_LastWriterWins(t *testing.T) {
 	require.True(t, deleteOutLinkForTest(r, mkOut(1), 500))
 	late := mkOut(1)
 	late.To.Time = 499
-	require.False(t, putOutLinkForTest(r, late), "запоздавшая запись воскресила удалённую связь")
+	require.False(t, putOutLinkForTest(r, late), "a late write resurrected the deleted link")
 	_, ok := r.lookupOutLink(name)
 	require.False(t, ok)
 
@@ -209,7 +209,7 @@ func Test_Record_LastWriterWins(t *testing.T) {
 	require.True(t, r.deleteBody(20))
 	_, _, ok = r.bodyBytes()
 	require.False(t, ok)
-	require.False(t, r.putBody([]byte(`{"a":2}`), 19, true), "запоздавшая запись воскресила тело")
+	require.False(t, r.putBody([]byte(`{"a":2}`), 19, true), "a late write resurrected the body")
 	require.True(t, r.putBody([]byte(`{"a":2}`), 21, true))
 	body, _, ok := r.bodyBytes()
 	require.True(t, ok)
@@ -222,19 +222,19 @@ func Test_Record_SplitKeepsEverything(t *testing.T) {
 
 	const n = 5000
 	for i := 0; i < n; i++ {
-		require.True(t, putOutLinkForTest(r, mkOut(i)), "исходящая %d", i)
-		require.True(t, r.putInLink(mkIn(i)), "входящая %d", i)
+		require.True(t, putOutLinkForTest(r, mkOut(i)), "outgoing link %d", i)
+		require.True(t, r.putInLink(mkIn(i)), "incoming link %d", i)
 	}
-	require.Greater(t, int(r.out.Load().depth), 0, "справочник обязан был вырасти")
+	require.Greater(t, int(r.out.Load().depth), 0, "the directory must have grown")
 
 	for i := 0; i < n; i++ {
 		got, ok := r.lookupOutLink(mkOut(i).Name)
-		require.True(t, ok, "после расщепления потерялась исходящая %d", i)
+		require.True(t, ok, "outgoing link %d was lost after the split", i)
 		require.Equal(t, mkOut(i).target(), got.target())
 
 		wi := mkIn(i)
 		_, ok = r.lookupInLink(wi.From, wi.Name)
-		require.True(t, ok, "после расщепления потерялась входящая %d", i)
+		require.True(t, ok, "incoming link %d was lost after the split", i)
 	}
 
 	// enumeration gives exactly n, no repeats (buckets share directory slots)
@@ -242,13 +242,13 @@ func Test_Record_SplitKeepsEverything(t *testing.T) {
 	r.rangeOutLinks(func(l outLink) bool { seen[l.Name]++; return true })
 	require.Len(t, seen, n)
 	for name, c := range seen {
-		require.Equal(t, 1, c, "%s перечислена %d раз", name, c)
+		require.Equal(t, 1, c, "%s enumerated %d times", name, c)
 	}
 
 	// no bucket is left overfull
 	r.out.Load().each(func(b *bucket) bool {
 		require.LessOrEqual(t, b.entryCount(), 2*defaultBucketLinks,
-			"корзина осталась вдвое больше предела — расщепление не сработало")
+			"a bucket is still over twice the limit: the split did not happen")
 		return true
 	})
 }
@@ -271,11 +271,11 @@ func Test_Record_ConcurrentWritesLoseNothing(t *testing.T) {
 			for i := 0; i < perGoroutine; i++ {
 				id := g*perGoroutine + i
 				if !putOutLinkForTest(r, mkOut(id)) {
-					t.Errorf("исходящая %d отвергнута", id)
+					t.Errorf("outgoing link %d rejected", id)
 					return
 				}
 				if !r.putInLink(mkIn(id)) {
-					t.Errorf("входящая %d отвергнута", id)
+					t.Errorf("incoming link %d rejected", id)
 					return
 				}
 			}
@@ -286,17 +286,17 @@ func Test_Record_ConcurrentWritesLoseNothing(t *testing.T) {
 	total := goroutines * perGoroutine
 	for i := 0; i < total; i++ {
 		got, ok := r.lookupOutLink(mkOut(i).Name)
-		require.True(t, ok, "потеряна исходящая %d", i)
+		require.True(t, ok, "outgoing link %d lost", i)
 		require.Equal(t, mkOut(i).target(), got.target())
 
 		wi := mkIn(i)
 		_, ok = r.lookupInLink(wi.From, wi.Name)
-		require.True(t, ok, "потеряна входящая %d", i)
+		require.True(t, ok, "incoming link %d lost", i)
 	}
 
 	count := 0
 	r.rangeOutLinks(func(outLink) bool { count++; return true })
-	require.Equal(t, total, count, "перечисление не сходится с числом записанных связей")
+	require.Equal(t, total, count, "the enumeration does not match the number of links written")
 }
 
 // Test_Record_ConcurrentReadWrite — readers work without locks while buckets
@@ -319,7 +319,7 @@ func Test_Record_ConcurrentReadWrite(t *testing.T) {
 				}
 				n := rng.Intn(200)
 				if _, _, ok := r.lookupOutTarget(mkOut(n).Name); !ok {
-					t.Errorf("читатель не нашёл связь %d", n)
+					t.Errorf("a reader did not find link %d", n)
 					return
 				}
 			}
@@ -334,7 +334,7 @@ func Test_Record_ConcurrentReadWrite(t *testing.T) {
 
 	for i := 0; i < 2000; i++ {
 		_, ok := r.lookupOutLink(mkOut(i).Name)
-		require.True(t, ok, "потеряна связь %d", i)
+		require.True(t, ok, "link %d lost", i)
 	}
 }
 
@@ -354,7 +354,7 @@ func Benchmark_Record_Write(b *testing.B) {
 				l := mkOut(i % n)
 				l.To.Time = int64(1_000_000 + i)
 				if !putOutLinkForTest(r, l) {
-					b.Fatal("отвергнуто")
+					b.Fatal("rejected")
 				}
 			}
 		})
@@ -374,7 +374,7 @@ func Benchmark_Record_Read(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				if _, _, ok := r.lookupOutTarget(names[i%n]); !ok {
-					b.Fatal("не найдено")
+					b.Fatal("not found")
 				}
 			}
 		})
@@ -389,27 +389,27 @@ func Test_Record_CompactBuckets(t *testing.T) {
 		require.True(t, putOutLinkForTest(r, mkOut(i)))
 		require.True(t, r.putInLink(mkIn(i)))
 	}
-	require.Greater(t, r.dirtyBuckets(), 0, "записи обязаны были оставить корзины разобранными")
+	require.Greater(t, r.dirtyBuckets(), 0, "the writes must have left buckets decoded")
 
 	before := map[string]outLink{}
 	r.rangeOutLinks(func(l outLink) bool { before[l.Name] = l; return true })
 
 	encoded := r.compactBuckets()
 	require.Greater(t, encoded, 0)
-	require.Equal(t, 0, r.dirtyBuckets(), "после уплотнения разобранных корзин быть не должно")
+	require.Equal(t, 0, r.dirtyBuckets(), "no decoded bucket must remain after compaction")
 
 	after := map[string]outLink{}
 	r.rangeOutLinks(func(l outLink) bool { after[l.Name] = l; return true })
 	require.Equal(t, len(before), len(after))
 	for name, l := range before {
 		got, ok := after[name]
-		require.True(t, ok, "%s пропала при уплотнении", name)
+		require.True(t, ok, "%s vanished during compaction", name)
 		require.Equal(t, l.To.Value, got.To.Value)
 		require.Equal(t, l.To.Time, got.To.Time)
 	}
 	for i := 0; i < n; i++ {
 		_, ok := r.lookupOutLink(mkOut(i).Name)
-		require.True(t, ok, "после уплотнения не читается %d", i)
+		require.True(t, ok, "%d does not read after compaction", i)
 		wi := mkIn(i)
 		_, ok = r.lookupInLink(wi.From, wi.Name)
 		require.True(t, ok)
@@ -438,11 +438,11 @@ func Test_Record_CompactionReturnsMemory(t *testing.T) {
 			r.compactBuckets()
 			clean := r.approxBytes()
 
-			t.Logf("%d связей: разобранные %d B, уплотнённые %d B, %.2fx",
+			t.Logf("%d links: decoded %d B, compacted %d B, %.2fx",
 				links, dirty, clean, float64(dirty)/float64(clean))
-			require.Less(t, clean, dirty, "уплотнение обязано возвращать память")
+			require.Less(t, clean, dirty, "compaction must return memory")
 			require.Less(t, float64(clean), 0.6*float64(dirty),
-				"уплотнение вернуло меньше 40 %% — форма записи не окупается")
+				"compaction returned less than 40%: the record layout does not pay off")
 		})
 	}
 }
@@ -471,17 +471,17 @@ func Test_Record_PairKeyIsIndependent(t *testing.T) {
 	// delete the pair, leaving the link live
 	require.True(t, r.deletePair("t1", "dom/a", 20))
 	_, ok = r.lookupPair("t1", "dom/a")
-	require.False(t, ok, "ключ пары обязан исчезнуть")
+	require.False(t, ok, "the pair key must be gone")
 	_, ok = r.lookupOutLink("l1")
-	require.True(t, ok, "связь удалять никто не просил")
+	require.True(t, ok, "nobody asked to delete the link")
 
 	// the guard holds here too
 	require.False(t, r.putPair(pairEntry{Type: "t1", Target: "dom/a", Name: "l1", UpdateTime: 19}),
-		"запоздавшая запись воскресила ключ пары")
+		"a late write resurrected the pair key")
 	require.True(t, r.putPair(pairEntry{Type: "t1", Target: "dom/a", Name: "l2", UpdateTime: 21}))
 	p, ok = r.lookupPair("t1", "dom/a")
 	require.True(t, ok)
-	require.Equal(t, "l2", p.Name, "победить обязана последняя запись")
+	require.Equal(t, "l2", p.Name, "the last write must win")
 
 	// two links on one pair: as in the tree, the pair keeps the last one's name
 	require.True(t, r.setOutTo("a", "t2.dom/b", 30))
@@ -571,11 +571,11 @@ func Test_ParseTail_MatchesSplit(t *testing.T) {
 	for _, tail := range tails {
 		wk, wa, wb := parseTailBySplit(tail)
 		gk, ga, gb := parseTail(tail)
-		require.Equalf(t, wk, gk, "вид хвоста %q", tail)
-		require.Equalf(t, wa, ga, "первый токен %q", tail)
-		require.Equalf(t, wb, gb, "второй токен %q", tail)
+		require.Equalf(t, wk, gk, "tail kind %q", tail)
+		require.Equalf(t, wa, ga, "first token %q", tail)
+		require.Equalf(t, wb, gb, "second token %q", tail)
 	}
-	t.Logf("сверено хвостов: %d", len(tails))
+	t.Logf("tails compared: %d", len(tails))
 }
 
 func Benchmark_ParseTail(b *testing.B) {
@@ -619,7 +619,7 @@ func Test_KeysByPattern_PinnedPrefixDoesNotScanTheVertex(t *testing.T) {
 				name := fmt.Sprintf("l%05d", i%links)
 				got := r.keysByPattern("dom/v", "dom/v.out.index."+name+".>")
 				if len(got) != 2 {
-					t.Fatalf("связь %s: ожидались индекс типа и метка, получено %v", name, got)
+					t.Fatalf("link %s: expected a type index and a tag, got %v", name, got)
 				}
 			}
 			if d := time.Since(started); d < best {
@@ -632,14 +632,14 @@ func Test_KeysByPattern_PinnedPrefixDoesNotScanTheVertex(t *testing.T) {
 	const small, large = 100, 3000
 	perSmall := ask(build(small), small, 2000)
 	perLarge := ask(build(large), large, 2000)
-	t.Logf("вершина из %d связей: %s на вопрос", small, perSmall)
-	t.Logf("вершина из %d связей: %s на вопрос", large, perLarge)
+	t.Logf("vertex with %d links: %s per query", small, perSmall)
+	t.Logf("vertex with %d links: %s per query", large, perLarge)
 
 	// The vertex is 30 times larger. A fivefold margin keeps the test from
 	// failing on machine noise, yet still catches a return of the scan, which
 	// would give thirty.
 	require.Lessf(t, perLarge, perSmall*5,
-		"ответ про одну связь подорожал с ростом вершины: %s против %s — значит вернулся перебор",
+		"an answer about one link got costlier as the vertex grew: %s vs %s, so the scan is back",
 		perLarge, perSmall)
 }
 
@@ -649,6 +649,6 @@ func Test_KeysByPattern_PinnedPrefixDoesNotScanTheVertex(t *testing.T) {
 // maximum directory depth it does not come at all.
 func Test_SpareFor_NeverBelowWhatIsHeld(t *testing.T) {
 	for n := 0; n < 4*defaultBucketLinks+10; n++ {
-		require.GreaterOrEqualf(t, spareFor(n), n, "запас для %d записей оказался меньше их числа", n)
+		require.GreaterOrEqualf(t, spareFor(n), n, "the spare capacity for %d entries is below their count", n)
 	}
 }

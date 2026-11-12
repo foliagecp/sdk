@@ -144,16 +144,16 @@ func Test_Record_MatchesTree(t *testing.T) {
 
 					wantVal, wantErr := cs.GetValue(key)
 					gotVal, gotOK := r.get(tail)
-					require.NoError(t, wantErr, "дерево не знает свой же ключ %s", key)
-					require.True(t, gotOK, "запись не знает ключ %s", key)
-					require.Equal(t, len(wantVal), len(gotVal), "длина значения %s", key)
+					require.NoError(t, wantErr, "the tree does not know its own key %s", key)
+					require.True(t, gotOK, "the record does not know key %s", key)
+					require.Equal(t, len(wantVal), len(gotVal), "length of value %s", key)
 					if len(wantVal) > 0 {
-						require.Equal(t, wantVal, gotVal, "значение %s", key)
+						require.Equal(t, wantVal, gotVal, "value of %s", key)
 					}
 
-					require.Equal(t, cs.Exists(key), r.exists(tail), "существование %s", key)
+					require.Equal(t, cs.Exists(key), r.exists(tail), "existence of %s", key)
 					require.Equal(t, cs.GetValueUpdateTime(key), r.updateTime(tail),
-						"время обновления %s", key)
+						"update time of %s", key)
 				}
 
 				// --- absent keys are absent in both
@@ -166,9 +166,9 @@ func Test_Record_MatchesTree(t *testing.T) {
 					id + ".in.нет.нет",
 				} {
 					_, tail := splitVertexKey(key)
-					require.False(t, cs.Exists(key), "дерево нашло несуществующий %s", key)
-					require.False(t, r.exists(tail), "запись нашла несуществующий %s", key)
-					require.Equal(t, int64(-1), r.updateTime(tail), "время у несуществующего %s", key)
+					require.False(t, cs.Exists(key), "the tree found the nonexistent %s", key)
+					require.False(t, r.exists(tail), "the record found the nonexistent %s", key)
+					require.Equal(t, int64(-1), r.updateTime(tail), "time of the nonexistent %s", key)
 				}
 
 				// --- listing by patterns
@@ -191,7 +191,7 @@ func Test_Record_MatchesTree(t *testing.T) {
 					got := r.keysByPattern(id, p)
 					sort.Strings(want)
 					sort.Strings(got)
-					require.Equal(t, want, got, "шаблон %s (вершина %s)", p, id)
+					require.Equal(t, want, got, "pattern %s (vertex %s)", p, id)
 				}
 			}
 		})
@@ -253,7 +253,7 @@ func Test_Record_MatchesTree_AfterMutations(t *testing.T) {
 				continue
 			}
 			require.False(t, r.setOutTo(prev.Name, "stale.dom/stale", prev.To.Time-1),
-				"шаг %d: запись сквозь приняла старое время", step)
+				"step %d: the record accepted a write with an older time", step)
 		}
 
 		if step%97 != 0 {
@@ -264,14 +264,14 @@ func Test_Record_MatchesTree_AfterMutations(t *testing.T) {
 			nm := fmt.Sprintf("l%03d", n)
 			key := fmt.Sprintf(kOutTo, id, nm)
 			_, tail := splitVertexKey(key)
-			require.Equal(t, cs.Exists(key), r.exists(tail), "шаг %d: существование %s", step, key)
+			require.Equal(t, cs.Exists(key), r.exists(tail), "step %d: existence of %s", step, key)
 			if cs.Exists(key) {
 				wantVal, _ := cs.GetValue(key)
 				gotVal, _ := r.get(tail)
-				require.Equal(t, wantVal, gotVal, "шаг %d: значение %s", step, key)
+				require.Equal(t, wantVal, gotVal, "step %d: value of %s", step, key)
 			}
 			require.Equal(t, cs.GetValueUpdateTime(key), r.updateTime(tail),
-				"шаг %d: время %s", step, key)
+				"step %d: time of %s", step, key)
 		}
 	}
 }

@@ -124,6 +124,7 @@ for profile in $PROFILES; do
   log="$RESULTS/hub-gate-${REF_NAME}-${profile}.log"
   if [ "$KIND" = old ]; then
     # One ratio per run: records over tree, from the two lines the test logs.
+    # The patterns match these lines exactly as those refs print them.
     awk -v p="$profile" "$SORT_AWK"'
       /@@RUN/ { runs++ }
       /дерево:/ { for (i = 1; i <= NF; i++) if ($i ~ /ms$/) { sub(/ms$/, "", $i); tree = $i; break } }
@@ -134,12 +135,16 @@ for profile in $PROFILES; do
         printf "%-8s %5d %5d %6s %6.2f/%-6.2f  one sample per mode, tree first\n", p, runs, fail, "-", r[int((n - 1) / 2)], r[n - 1]
       }' "$log"
   else
+    # Clean pairs and the median per run, from the summary line
+    # "clean pairs 15 of 15; records/tree: min ..., median 1.100, max ...; median threshold 1.25".
+    # The gate as released in v0.5.9 prints that line in its original wording;
+    # it is matched too.
     awk -v p="$profile" "$SORT_AWK"'
       /@@RUN/ { runs++ }
-      /чистых пар .* из .*медиана/ {
+      /clean pairs [0-9]+ of [0-9]+;|чистых пар [0-9]+ из [0-9]+;/ {
         for (i = 1; i <= NF; i++) {
-          if ($i == "пар") clean += $(i + 1)
-          if ($i == "медиана") { v = $(i + 1); sub(/,$/, "", v); m[n++] = v + 0 }
+          if ($i == "pairs" || $i == "пар") clean += $(i + 1)
+          if (($i == "median" || $i == "медиана") && $(i + 1) ~ /^[0-9]/) { v = $(i + 1); sub(/,$/, "", v); m[n++] = v + 0 }
         }
       }
       /--- FAIL: Test_Hub_ConcurrentThroughputGate/ { fail++ }

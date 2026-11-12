@@ -43,7 +43,7 @@ func (s *InventoryRebuildTestSuite) waitForVertex(id string, timeout time.Durati
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	s.T().Fatalf("вершина %q не появилась за %s", id, timeout)
+	s.T().Fatalf("vertex %q did not appear within %s", id, timeout)
 }
 
 // bodyOf — a body in the form an inventory sends it: a few discovery fields,
@@ -84,7 +84,7 @@ func (s *InventoryRebuildTestSuite) Test_RebuildRewritesOnlyWhatChanged() {
 	before := make([]int64, total)
 	for i := range before {
 		before[i] = timeOf(i)
-		s.Require().GreaterOrEqual(before[i], int64(0), "вершина %d не записалась", i)
+		s.Require().GreaterOrEqual(before[i], int64(0), "vertex %d was not written", i)
 	}
 	bytesBefore := cs.RecordsBytesForTest()
 
@@ -102,15 +102,15 @@ func (s *InventoryRebuildTestSuite) Test_RebuildRewritesOnlyWhatChanged() {
 	// --- what should have happened
 	for i := 0; i < total-changed; i++ {
 		s.Require().Equalf(before[i], timeOf(i),
-			"вершина %d не менялась, но была переписана — проверка на no-op не сработала", i)
+			"vertex %d did not change but was rewritten — the no-op check did not fire", i)
 	}
 	for i := total - changed; i < total; i++ {
 		s.Require().Greaterf(timeOf(i), before[i],
-			"вершина %d изменилась, но записи не произошло", i)
+			"vertex %d changed, but no write happened", i)
 		got, err := s.dbc.CMDB.ObjectRead(fmt.Sprintf("srv-%03d", i))
 		s.Require().NoError(err)
 		s.Require().Equal("v3.1", got.GetByPath("body.firmware").AsStringDefault(""),
-			"новое значение не доехало до вершины %d", i)
+			"the new value did not reach vertex %d", i)
 	}
 
 	// --- what it costs
@@ -156,18 +156,18 @@ func (s *InventoryRebuildTestSuite) Test_RebuildRewritesOnlyWhatChanged() {
 	}
 	for i := 0; i < total; i++ {
 		s.Require().Equalf(atRest[i], timeOf(i),
-			"повторная отправка того же тела переписала вершину %d", i)
+			"resending the same body rewrote vertex %d", i)
 	}
 
 	bytesAfter := cs.RecordsBytesForTest()
 	perUnchanged := unchangedTook / total
 	perChanged := changedTook / total
-	s.T().Logf("режим %s: %d вершин, из них изменилось %d", cache.CacheMode(), total, changed)
-	s.T().Logf("  проход без изменений: %s на вершину (всего %s)",
+	s.T().Logf("mode %s: %d vertices, %d of them changed", cache.CacheMode(), total, changed)
+	s.T().Logf("  pass without changes: %s per vertex (total %s)",
 		perUnchanged.Round(time.Nanosecond), unchangedTook.Round(time.Millisecond))
-	s.T().Logf("  проход с изменениями: %s на вершину (всего %s)",
+	s.T().Logf("  pass with changes:    %s per vertex (total %s)",
 		perChanged.Round(time.Nanosecond), changedTook.Round(time.Millisecond))
-	s.T().Logf("  байт в записях: %d -> %d", bytesBefore, bytesAfter)
+	s.T().Logf("  bytes in records: %d -> %d", bytesBefore, bytesAfter)
 
 	// The real guarantee — an unchanged body is not rewritten — is asserted
 	// above, per vertex, on the update times. This line is the coarse cost
@@ -178,13 +178,13 @@ func (s *InventoryRebuildTestSuite) Test_RebuildRewritesOnlyWhatChanged() {
 	// observed). A pass that stopped skipping unchanged vertices would be
 	// dearer by much more than this margin.
 	s.Require().Lessf(perUnchanged, perChanged*3/2,
-		"проход по неизменившимся (%s на вершину) обязан быть дешевле прохода с записью (%s)",
+		"a pass over unchanged vertices (%s per vertex) must be cheaper than a pass that writes (%s)",
 		perUnchanged, perChanged)
 	// Bytes are a records measurement: a tree holds the graph in nodes and
 	// reports none, so on CACHE_MODE=tree both numbers are zero and there is
 	// nothing to compare. Everything above this line is asked of both.
 	if cache.CacheMode() != "tree" {
 		s.Require().Lessf(bytesAfter, bytesBefore*3/2,
-			"перезапись графа не должна раздувать записи: было %d, стало %d", bytesBefore, bytesAfter)
+			"rewriting the graph must not bloat the records: was %d, now %d", bytesBefore, bytesAfter)
 	}
 }
