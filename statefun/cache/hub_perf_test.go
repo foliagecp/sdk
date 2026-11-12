@@ -70,6 +70,7 @@ const (
 	gateMaxPairs     = 30
 	gateDriftLimit   = 1.15
 	gateSampleFloor  = 200 * time.Millisecond
+	gateMinBursts    = 3
 )
 
 type hubGateSample struct {
@@ -95,20 +96,28 @@ type hubGatePair struct {
 	tree, records hubGateSample
 }
 
-func (p hubGatePair) ratio() float64 { return float64(p.records.took) / float64(p.tree.took) }
+func (s hubGateSample) perWrite() float64 { return float64(s.took) / float64(max(s.writes, 1)) }
+
+// ratio — во сколько раз запись в режиме записей дольше, чем в дереве. Замеры
+// пары могут состоять из разного числа всплесков, поэтому сравнивается время
+// одной записи.
+func (p hubGatePair) ratio() float64 { return p.records.perWrite() / p.tree.perWrite() }
 
 // drift — во сколько раз машина вокруг пары медленнее, чем в лучший момент прогона.
 func (p hubGatePair) drift(best time.Duration) float64 {
 	return float64(max(p.pre, p.post)) / float64(best)
 }
 
-// hubGateMeasure — bursts всплесков в режиме mode, каждый на свежем хранилище.
-func hubGateMeasure(mode string, bursts, prefill int) hubGateSample {
+// hubGateMeasure — всплески в режиме mode, каждый на свежем хранилище, пока
+// их суммарное время не достигнет floor, и не меньше gateMinBursts. Число
+// всплесков не задаётся заранее: рабочий всплеск бывает быстрее прогревочного,
+// и посчитанное по прогреву число давало замеры короче floor.
+func hubGateMeasure(mode string, floor time.Duration, prefill int) hubGateSample {
 	restore := SetCacheModeForTest(mode)
 	defer restore()
 	var s hubGateSample
 	var before, after runtime.MemStats
-	for b := 0; b < bursts; b++ {
+	for b := 0; b < gateMinBursts || s.took < floor; b++ {
 		cs := NewStoreForTest("hub_gate")
 		fillHub(cs, "dom/hub", prefill)
 		runtime.GC()
@@ -190,15 +199,14 @@ func Test_Hub_ConcurrentThroughputGate(t *testing.T) {
 		fmt.Sscanf(v, "%d", &prefill)
 	}
 
-	// Разогрев, он же размер замера: всплесков столько, чтобы замер покрывал
-	// много периодов планировщика, а не долю одного.
-	warm := hubGateMeasure("tree", 1, prefill)
-	hubGateMeasure("records", 1, prefill)
-	bursts := max(3, int(gateSampleFloor/max(warm.took, time.Millisecond))+1)
+	// Разогрев: первые всплески медленнее рабочих и в замеры не идут.
+	hubGateMeasure("tree", 0, prefill)
+	hubGateMeasure("records", 0, prefill)
 
 	t.Logf("паспорт: %s", hubGatePassport())
-	t.Logf("замер: %d горутин × %d связей в хаб из %d связей, %d всплесков на замер",
-		gateGoroutines, gatePerGoroutine, prefill, bursts)
+	t.Logf("замер: %d горутин × %d связей в хаб из %d связей; всплесков в замере не меньше %d, "+
+		"пока их суммарное время не достигнет %s — замер покрывает много периодов планировщика, а не долю одного",
+		gateGoroutines, gatePerGoroutine, prefill, gateMinBursts, gateSampleFloor)
 	parallelStart := cpuParallelism()
 
 	var pairs []hubGatePair
@@ -216,11 +224,11 @@ func Test_Hub_ConcurrentThroughputGate(t *testing.T) {
 		p := hubGatePair{first: "tree", pre: cpuCapacity()}
 		if len(pairs)%2 == 1 {
 			p.first = "records"
-			p.records = hubGateMeasure("records", bursts, prefill)
-			p.tree = hubGateMeasure("tree", bursts, prefill)
+			p.records = hubGateMeasure("records", gateSampleFloor, prefill)
+			p.tree = hubGateMeasure("tree", gateSampleFloor, prefill)
 		} else {
-			p.tree = hubGateMeasure("tree", bursts, prefill)
-			p.records = hubGateMeasure("records", bursts, prefill)
+			p.tree = hubGateMeasure("tree", gateSampleFloor, prefill)
+			p.records = hubGateMeasure("records", gateSampleFloor, prefill)
 		}
 		p.post = cpuCapacity()
 		best = min(best, p.pre, p.post)

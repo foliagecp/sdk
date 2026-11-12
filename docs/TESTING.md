@@ -323,7 +323,10 @@ and runs under `-race`.
 
 The gate measures pairs of tree and records samples back to back, alternating
 which goes first; each sample is a series of bursts on fresh stores lasting at
-least 200 ms, with filling and garbage collection outside the timing. Before
+least 200 ms, with filling and garbage collection outside the timing. A sample
+adds bursts until it reaches 200 ms rather than running a count calibrated on
+the warm-up, which is slower than the measured bursts, so the two modes of a
+pair may run different numbers of bursts and are compared per write. Before
 and after each pair it times the same hashing work on every P. A pair taken
 while the machine was more than 15 % slower than its best moment in the run is
 dropped; the verdict is the median records/tree ratio of the remaining pairs.
