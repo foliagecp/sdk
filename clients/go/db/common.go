@@ -136,6 +136,29 @@ func buildNatsData(callerTypename string, callerID string, payload *easyjson.JSO
 	return data.ToBytes()
 }
 
+// connectClient opens the connection a client built from a NATS URL sends its
+// requests over. It reconnects the way the runtime's own connection does: with
+// no limit on attempts, at nats.go's default interval. Under nats.go's default
+// limit of 60 attempts the connection closed for good about two minutes into an
+// outage, and every later request failed until the process restarted, while
+// the runtime beside it recovered.
+//
+// Only reconnection changes. The first connection is still a single attempt,
+// so a client created while NATS is unreachable fails at once, as before. A
+// request made during an outage waits for its timeout, as it already did for
+// the first two minutes.
+//
+// extra options are applied after these; tests use them to shorten the waits.
+func connectClient(natsURL string, extra ...nats.Option) (*nats.Conn, error) {
+	opts := []nats.Option{
+		nats.MaxReconnects(-1),
+		nats.ReconnectHandler(func(nc *nats.Conn) {
+			logger.Logf(logger.WarnLevel, "db client: NATS reconnected (%d reconnects so far)", nc.Stats().Reconnects)
+		}),
+	}
+	return nats.Connect(natsURL, append(opts, extra...)...)
+}
+
 func getRequestFunc(nc *nats.Conn, NatsRequestTimeoutSec int, HubDomainName string) sfp.SFRequestFunc {
 	return func(r sfp.RequestProvider, targetTypename string, targetID string, payload *easyjson.JSON, options *easyjson.JSON, timeout ...time.Duration) (result *easyjson.JSON, callErr error) {
 		targetDomain := HubDomainName

@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	sfp "github.com/foliagecp/sdk/statefun/plugins"
-	"github.com/nats-io/nats.go"
 )
 
 type DBSyncClient struct {
@@ -14,9 +13,13 @@ type DBSyncClient struct {
 	Query   QuerySyncClient
 }
 
+// NewDBSyncClient connects to NATS at NatsURL. Like the runtime's connection, it
+// reconnects after an outage of any length, so the client works again once
+// NATS is back; the first connection is a single attempt and fails at once
+// if NATS is unreachable.
 func NewDBSyncClient(NatsURL string, NatsRequestTimeoutSec int, HubDomainName string) (DBSyncClient, error) {
 	var err error
-	nc, err := nats.Connect(NatsURL)
+	nc, err := connectClient(NatsURL)
 	if err != nil {
 		return DBSyncClient{}, err
 	}

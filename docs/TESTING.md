@@ -67,7 +67,10 @@ are the only non-pass/fail items (they measure, they do not gate).
   touching KV — all on a controlled watchdog clock.
 - **`statefun/cache`** — `store_value_lazy_test.go`, `backup_barrier_test.go`.
 - **`statefun/system`** — `keymutex_timeout_test.go`.
-- **`clients/go/db`** — `common_test.go`.
+- **`clients/go/db`** — `common_test.go`. `reconnect_test.go`: a client built
+  from a NATS URL reconnects without a limit, like the runtime, and works again
+  after an outage that outlasts nats.go's default 60 attempts, while its first
+  connection still fails at once.
 - **`tests/integration/e2e/test/{nats,runtime}`**,
   **`tests/integration/export/pg_{high,low}_level/dumper`** — testcontainers
   E2E (real NATS / Postgres).

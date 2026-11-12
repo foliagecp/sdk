@@ -8,7 +8,6 @@ import (
 	sfMediators "github.com/foliagecp/sdk/statefun/mediator"
 	sfp "github.com/foliagecp/sdk/statefun/plugins"
 	"github.com/foliagecp/sdk/statefun/system"
-	"github.com/nats-io/nats.go"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -21,9 +20,13 @@ type GraphSyncClient struct {
 	readFlight *singleflight.Group
 }
 
+// NewGraphSyncClient connects to NATS at NatsURL. Like the runtime's connection, it
+// reconnects after an outage of any length, so the client works again once
+// NATS is back; the first connection is a single attempt and fails at once
+// if NATS is unreachable.
 func NewGraphSyncClient(NatsURL string, NatsRequestTimeoutSec int, HubDomainName string) (GraphSyncClient, error) {
 	var err error
-	nc, err := nats.Connect(NatsURL)
+	nc, err := connectClient(NatsURL)
 	if err != nil {
 		return GraphSyncClient{}, err
 	}
