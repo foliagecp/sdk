@@ -271,8 +271,8 @@ func tieredVertex(key string) (vertexKey, bool) {
 }
 
 // recordIndex holds the records of a store. The root index of vertices is
-// always fully in memory (Ф-1): asking about a key of a vertex that does not
-// exist touches no record at all.
+// always fully in memory: asking about a key of a vertex that does not exist
+// touches no record at all.
 type recordIndex struct {
 	mu sync.RWMutex
 	m  map[string]*vertexRecord

@@ -7,15 +7,15 @@ import (
 	"github.com/foliagecp/sdk/statefun/system"
 )
 
-// JSON определяет тип данных, представляющий JSON-объект
+// JSON is a JSON object as a GraphQL scalar.
 type JSON map[string]interface{}
 
-// MarshalGQL сериализует JSON в формат, используемый GraphQL
+// MarshalGQL writes the object in the form GraphQL expects.
 func (j JSON) MarshalGQL(w io.Writer) {
 	system.MsgOnErrorReturn(json.NewEncoder(w).Encode(j))
 }
 
-// UnmarshalGQL десериализует данные из формата GraphQL в JSON
+// UnmarshalGQL reads a GraphQL value into the object.
 func (j *JSON) UnmarshalGQL(v interface{}) error {
 	data, err := json.Marshal(v)
 	if err != nil {

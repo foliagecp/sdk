@@ -1,8 +1,9 @@
 package cache
 
-// CACHE_MODE — пресет поверх частных настроек, а не замена им: он задаёт, чему
-// они равны по умолчанию, а названная в окружении частная настройка побеждает.
-// Так развёртывание, уже передающее CACHE_TIERING, ведёт себя ровно как прежде.
+// CACHE_MODE is a preset over the individual settings, not a replacement for
+// them: it sets what they default to, and an individual setting named in the
+// environment wins. So a deployment already passing CACHE_TIERING behaves
+// exactly as before.
 
 import (
 	"testing"
@@ -18,8 +19,8 @@ func Test_CacheMode_Presets(t *testing.T) {
 		name              string
 	}{
 		{"tree", false, false, false, "tree"},
-		// Пусто — это не выбор дерева, а отсутствие выбора: то же, что не
-		// задавать переменную вовсе, а умолчание — записи.
+		// Empty is not a choice of the tree but the absence of a choice: the
+		// same as not setting the variable at all, and the default is records.
 		{"", true, false, false, "records"},
 		{"records", true, false, false, "records"},
 		{"zstd", true, true, false, "zstd"},
@@ -42,7 +43,8 @@ func Test_CacheMode_UnknownFallsBackToTree(t *testing.T) {
 	require.Equal(t, "tree", CacheMode())
 }
 
-// Test_CacheMode_IndividualSettingWins — частная настройка сильнее пресета.
+// Test_CacheMode_IndividualSettingWins — an individual setting is stronger
+// than the preset.
 func Test_CacheMode_IndividualSettingWins(t *testing.T) {
 	require.False(t, resolveBool("CACHE_TIERING_ABSENT_IN_ENV", "on", false),
 		"без переменной берётся пресет")
@@ -62,7 +64,7 @@ func Test_CacheMode_IndividualSettingWins(t *testing.T) {
 		"пустое значение — это не выбор, берётся пресет")
 }
 
-// Test_CacheMode_Restores — вспомогательная функция возвращает всё как было.
+// Test_CacheMode_Restores — the helper puts everything back as it was.
 func Test_CacheMode_Restores(t *testing.T) {
 	before := CacheMode()
 	restore := SetCacheModeForTest("zstd-dict")
@@ -71,8 +73,8 @@ func Test_CacheMode_Restores(t *testing.T) {
 	require.Equal(t, before, CacheMode(), "режим не вернулся к исходному")
 }
 
-// Test_CacheMode_ZeroSamplesMeansNoDictionary — нулевая выборка это тоже
-// «без словаря», и отчёт о режиме обязан это отражать.
+// Test_CacheMode_ZeroSamplesMeansNoDictionary — a zero sample also means
+// "no dictionary", and the reported mode must reflect that.
 func Test_CacheMode_ZeroSamplesMeansNoDictionary(t *testing.T) {
 	restore := SetCacheModeForTest("zstd-dict")
 	defer restore()
@@ -87,9 +89,9 @@ func Test_CacheMode_ZeroSamplesMeansNoDictionary(t *testing.T) {
 	require.Equal(t, "zstd", CacheMode(), "отчёт о режиме обязан согласоваться с настройками")
 }
 
-// Test_CacheMode_DefaultIsRecords — умолчание закреплено тестом: сменить его
-// молча нельзя, а именно им определяется, что получит развёртывание, которое
-// ничего не настраивало.
+// Test_CacheMode_DefaultIsRecords — the default is pinned by a test: it
+// cannot be changed silently, and it is exactly what decides what a
+// deployment that configured nothing gets.
 func Test_CacheMode_DefaultIsRecords(t *testing.T) {
 	require.Equal(t, modeRecords, parseCacheMode(defaultCacheMode),
 		"умолчание обязано быть режимом записей")
@@ -102,7 +104,7 @@ func Test_CacheMode_DefaultIsRecords(t *testing.T) {
 	require.False(t, compressionEnabled(), "сжатие по умолчанию не включается: оно вдвое дороже на наполнении")
 	require.Equal(t, "records", CacheMode())
 
-	// И дерево обязано оставаться в одном движении отсюда.
+	// And the tree must stay one step away from here.
 	back := SetCacheModeForTest("tree")
 	require.False(t, tieringEnabled(), "CACHE_MODE=tree обязан возвращать прежнее поведение")
 	back()

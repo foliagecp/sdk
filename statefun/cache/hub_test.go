@@ -1,17 +1,19 @@
 package cache
 
-// Тест 3 из ТЗ: хаб.
+// Hub tests.
 //
-// В настоящем графе есть вершина `objects`, к которой сходится всё — на
-// эталонном дампе 10 692 связи. Формат записи держит связи в корзинах именно
-// ради неё: без корзин запись одной связи в такую вершину переписывала бы всю
-// вершину, и цена записи росла бы вместе с графом.
+// A real graph has a vertex `objects` that everything converges on: 10 692
+// links on the reference dump. The record format keeps links in buckets
+// precisely because of it: without buckets, writing one link into such a
+// vertex would rewrite the whole vertex, and the cost of a write would grow
+// with the graph.
 //
-// Здесь проверяется, что этого не происходит: цена записи в хаб сравнима с
-// ценой записи в вершину об одной корзине, и ни одна связь при конкурентной
-// записи не теряется. Что поток записей в хаб не отстаёт от дерева, проверяет
-// гейт Test_Hub_ConcurrentThroughputGate в hub_perf_test.go (тег perf): это
-// замер, а замеру нужны условия, которых у корректностного прогона под -race нет.
+// These tests check that this does not happen: a write into a hub costs about
+// as much as a write into a vertex of one bucket, and no link is lost under
+// concurrent writes. That write throughput into a hub under records keeps up
+// with the tree is checked by the gate Test_Hub_ConcurrentThroughputGate in
+// hub_perf_test.go (tag perf): that is a measurement, and a measurement needs
+// conditions that a correctness run under -race does not have.
 
 import (
 	"fmt"
@@ -22,7 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// hubSize — размер хаба `objects` на эталонном дампе.
+// hubSize is the size of the `objects` hub on the reference dump.
 const hubSize = 10692
 
 func fillHub(cs *Store, id string, links int) {
@@ -31,7 +33,7 @@ func fillHub(cs *Store, id string, links int) {
 	}
 }
 
-// perWrite — цена одной записи связи, лучшая из трёх попыток.
+// perWrite is the cost of writing one link, the best of three attempts.
 func perWrite(cs *Store, id string, from, count int) time.Duration {
 	best := time.Duration(1<<62 - 1)
 	for attempt := 0; attempt < 3; attempt++ {
@@ -48,8 +50,9 @@ func perWrite(cs *Store, id string, from, count int) time.Duration {
 	return best
 }
 
-// Test_Hub_WriteCostDoesNotGrowWithTheHub — запись связи в хаб из 10 692 связей
-// не должна стоить заметно больше записи в вершину об одной корзине.
+// Test_Hub_WriteCostDoesNotGrowWithTheHub: writing a link into a hub of 10 692
+// links must not cost noticeably more than writing into a vertex of one
+// bucket.
 func Test_Hub_WriteCostDoesNotGrowWithTheHub(t *testing.T) {
 	restore := SetCacheModeForTest("records")
 	defer restore()
@@ -64,20 +67,20 @@ func Test_Hub_WriteCostDoesNotGrowWithTheHub(t *testing.T) {
 	t.Logf("вершина из %d связей: %s на запись", defaultBucketLinks, perSmall)
 	t.Logf("хаб из %d связей:  %s на запись", hubSize, perBig)
 
-	// Хаб в 334 раза больше. Требование ТЗ — «не больше»; с запасом на шум
-	// машины и на то, что справочник хаба глубже, берём трёхкратный порог:
-	// перезапись всей вершины дала бы три сотни.
+	// The hub is 334 times larger. The spec requires "no more"; with a margin
+	// for machine noise and for the hub's deeper directory, the threshold is
+	// three times: rewriting the whole vertex would give three hundred.
 	require.Lessf(t, perBig, perSmall*3,
 		"запись в хаб (%s) дороже записи в маленькую вершину (%s) — цена растёт с размером вершины",
 		perBig, perSmall)
 
-	// Н-4: не более 100 мкс сверх сегодняшней записи.
+	// A hub write costs no more than 100 µs on top of a write today.
 	require.Lessf(t, perBig-perSmall, 100*time.Microsecond,
 		"Н-4: запись в хаб дороже на %s", perBig-perSmall)
 }
 
-// Test_Hub_SequentialWritesKeepEverything — десять тысяч последовательных
-// записей в хаб: все они на месте, ни одна не потеряна при расщеплениях.
+// Test_Hub_SequentialWritesKeepEverything: ten thousand sequential writes into
+// a hub are all in place, and none is lost in splits.
 func Test_Hub_SequentialWritesKeepEverything(t *testing.T) {
 	restore := SetCacheModeForTest("records")
 	defer restore()
@@ -103,9 +106,10 @@ func Test_Hub_SequentialWritesKeepEverything(t *testing.T) {
 		writes, took.Round(time.Millisecond), (took / writes).Round(time.Nanosecond))
 }
 
-// hubBurst — goroutines горутин пишут по perGoroutine различимых связей в хаб
-// dom/hub. Имена чередуются так, что соседние по номеру попадают в разные
-// корзины, а одинаковые по остатку — в одну: нужны обе ситуации сразу.
+// hubBurst has goroutines goroutines each write perGoroutine distinct links
+// into the hub dom/hub. Names alternate so that neighbours by number land in
+// different buckets and those with the same remainder land in one: both
+// situations are needed at once.
 func hubBurst(cs *Store, goroutines, perGoroutine int) {
 	var wg sync.WaitGroup
 	for g := 0; g < goroutines; g++ {
@@ -122,7 +126,7 @@ func hubBurst(cs *Store, goroutines, perGoroutine int) {
 	wg.Wait()
 }
 
-// hubBurstMissing — сколько связей всплеска потеряно или испорчено.
+// hubBurstMissing counts the links of a burst that are lost or corrupted.
 func hubBurstMissing(cs *Store, goroutines, perGoroutine int) int {
 	missing := 0
 	for g := 0; g < goroutines; g++ {
@@ -137,14 +141,14 @@ func hubBurstMissing(cs *Store, goroutines, perGoroutine int) int {
 	return missing
 }
 
-// Test_Hub_ConcurrentWritesKeepEverything — 64 горутины пишут различимые связи
-// в один хаб, в том числе в одну корзину, в обоих режимах: ничего не теряется.
+// Test_Hub_ConcurrentWritesKeepEverything: 64 goroutines write distinct links
+// into one hub, including into one bucket, in both modes, and nothing is lost.
 //
-// Время здесь не меряется. Прежний Test_Hub_ConcurrentThroughput сравнивал
-// режимы по одному замеру в ~150 мс под race detector и падал от загрузки
-// машины, а не от кода; сравнение скорости теперь делает
-// Test_Hub_ConcurrentThroughputGate (hub_perf_test.go, тег perf), этот тест
-// оставляет корректность там, где она нужнее всего, — под -race.
+// Time is not measured here. The old Test_Hub_ConcurrentThroughput compared the
+// modes by one sample of ~150 ms under the race detector and failed because of
+// machine load, not because of the code; Test_Hub_ConcurrentThroughputGate
+// (hub_perf_test.go, tag perf) now compares speed, and this test keeps
+// correctness where it is needed most: under -race.
 func Test_Hub_ConcurrentWritesKeepEverything(t *testing.T) {
 	const goroutines, perGoroutine = 64, 200
 	for _, mode := range []string{"tree", "records"} {

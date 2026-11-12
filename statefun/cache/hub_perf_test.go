@@ -2,60 +2,66 @@
 
 package cache
 
-// Тест 3 из ТЗ, вторая половина: поток записей в хаб не отстаёт от дерева.
+// Hub tests, second half: write throughput into a hub under records keeps up
+// with the tree.
 //
-// Порог прежний: записи не медленнее дерева больше чем на четверть, то есть
-// пропускная способность не ниже 80 %. Меняется способ замера, потому что
-// прежний (Test_Hub_ConcurrentThroughput до 0.5.9) не отличал код от машины:
+// The threshold is unchanged: records are no more than a quarter slower than
+// the tree, that is, they keep at least 80 % of its throughput. What changes is
+// how it is measured, because the old check (Test_Hub_ConcurrentThroughput
+// before 0.5.9) could not tell the code from the machine:
 //
-//   - Один замер на режим, лучший из трёх, сначала дерево, потом записи. Окно —
-//     около 150 мс под race detector и около 10 мс без него: короче или равно
-//     периоду планировщика, так что замедление машины в момент одного замера
-//     целиком доставалось одному режиму.
-//   - Под постоянной конкуренцией за CPU записи и правда теряют больше дерева:
-//     запись в корзину держит замок своего слота на всё декодирование и
-//     кодирование, расщепление корзины — замок справочника, и вытесненный
-//     держатель замка задерживает остальные 63 горутины; на запись уходит
-//     вдвое больше памяти (680 Б против 360). Прежний тест превращал и шум, и
-//     это свойство в случайный FAIL — одинаково на 0.5.6 и 0.5.8.
+//   - One sample per mode, the best of three, tree first, then records. The
+//     window is about 150 ms under the race detector and about 10 ms without
+//     it: no longer than a scheduler period, so a slowdown of the machine
+//     during one sample fell entirely on one mode.
+//   - Under sustained CPU contention records really do lose more than the
+//     tree: a bucket write holds its slot lock through the whole decode and
+//     encode, a bucket split holds the directory lock, and a preempted lock
+//     holder delays the other 63 goroutines; a write takes twice the memory
+//     (680 B against 360). The old check turned both the noise and this
+//     property into a random FAIL, alike on 0.5.6 and 0.5.8.
 //
-// Замеры scripts/hub-gate-experiment.sh (контейнер на 4 CPU, сосед на 2 ядра):
-// прежний тест под -race — простой 0 FAIL из 20, постоянная нагрузка 2, мигающая
-// 6; этот гейт — простой 10 PASS из 10 (медиана 1,09), мигающая 10 из 10 (1,06),
-// постоянная — медиана 1,27: свойство кода под нагрузкой, а не шум. С
-// отбраковкой по разбросу внутри пары, по 5 прогонов: простой 5 PASS (1,10),
-// мигающая 5 PASS (1,13), постоянная 5 FAIL (1,29) при 42–51 % номинальной
-// параллельности; чистых пар 15 в каждом прогоне.
+// Measured with scripts/hub-gate-experiment.sh (a container with 4 CPUs, a
+// sibling on 2 cores): the old check under -race gives 0 FAIL out of 20 idle,
+// 2 under steady load, 6 under flap; this gate gives 10 PASS out of 10 idle
+// (median 1.09), 10 out of 10 under flap (1.06), and a median of 1.27 under
+// steady load: a property of the code under load, not noise. With pairs
+// dropped by their spread, 5 runs each: idle 5 PASS (1.10), flap 5 PASS
+// (1.13), steady 5 FAIL (1.29) at 42–51 % of the nominal parallelism; 15 clean
+// pairs in every run.
 //
-// Теперь:
+// Now:
 //
-//   - Замер — пара «дерево, записи» подряд, порядок в паре чередуется. Каждый
-//     замер — серия всплесков на свежих хранилищах суммарно не короче
-//     gateSampleFloor; заполнение хаба и сборка мусора вне замера.
-//   - До пары, между её двумя замерами и после меряется пропускная способность
-//     машины: одна и та же работа на всех P. Если в самый медленный из этих трёх
-//     моментов машина медленнее, чем в самый быстрый, больше чем на
-//     gateSpreadLimit, пара отбрасывается: её замеры шли на разной машине, и
-//     отношение говорит о машине, а не о коде. Пара на ровно медленной машине
-//     сравнима — отношение сокращает абсолютную скорость, — поэтому постоянная
-//     нагрузка не отбраковывается. Сравнение с лучшим моментом всего прогона,
-//     с которого гейт начинал, отбрасывало и такие пары, а на виртуальной машине
-//     с соседями по гипервизору — почти все.
-//   - Решение — по медиане отношений чистых пар. Если чистых пар меньше
-//     gateMinClean, прогон падает как INCONCLUSIVE: он не доказывает ни
-//     регрессию, ни её отсутствие.
-//   - Под race detector гейт не запускается: инструментированный код меряет не
-//     то, что работает в проде. Корректность того же всплеска под -race
-//     проверяет Test_Hub_ConcurrentWritesKeepEverything.
+//   - A measurement is a pair of tree and records samples back to back; the
+//     order within the pair alternates. Each sample is a series of bursts on
+//     fresh stores lasting at least gateSampleFloor in total; filling the hub
+//     and garbage collection stay outside the timing.
+//   - Before the pair, between its two samples and after it, the gate measures
+//     the machine's throughput: the same work on every P. If the machine at
+//     the slowest of these three moments is slower than at the fastest by
+//     more than gateSpreadLimit, the pair is dropped: its samples ran on
+//     different machines, and the ratio speaks of the machine, not of the
+//     code. A pair on a uniformly slow machine is comparable, since the ratio
+//     cancels absolute speed, so sustained load is not a reason to drop a
+//     pair. Comparing against the fastest moment of the whole run, which is
+//     how the gate started, dropped such pairs too, and on a virtual machine
+//     sharing its hypervisor with neighbours it dropped almost all of them.
+//   - The verdict is the median ratio of the clean pairs. With fewer than
+//     gateMinClean clean pairs the run fails as INCONCLUSIVE: it proves
+//     neither a regression nor its absence.
+//   - The gate does not run under the race detector: instrumented code
+//     measures something other than what runs in production. The correctness
+//     of the same burst under -race is checked by
+//     Test_Hub_ConcurrentWritesKeepEverything.
 //
-// Запуск:
+// To run it:
 //
 //	go test -tags perf -count=1 -v -run '^Test_Hub_ConcurrentThroughputGate$' ./statefun/cache
 //
-// Он же входит в scripts/run-perf-tests.sh --gate и в фазу 1b
-// scripts/run-all-tests.sh — там только отчётом: вердикт печатается, но общий
-// прогон не роняет. Как воспроизвести прежний FAIL и проверить гейт под
-// нагрузкой, описывает scripts/hub-gate-experiment.sh.
+// It is also part of scripts/run-perf-tests.sh --gate and of phase 1b of
+// scripts/run-all-tests.sh, where it only reports: the verdict is printed, but
+// the whole run does not fail on it. scripts/hub-gate-experiment.sh describes
+// how to reproduce the old FAIL and check the gate under load.
 
 import (
 	"crypto/sha256"
@@ -106,21 +112,21 @@ type hubGatePair struct {
 
 func (s hubGateSample) perWrite() float64 { return float64(s.took) / float64(max(s.writes, 1)) }
 
-// ratio — во сколько раз запись в режиме записей дольше, чем в дереве. Замеры
-// пары могут состоять из разного числа всплесков, поэтому сравнивается время
-// одной записи.
+// ratio is how many times longer a write takes under records than in the
+// tree. The two samples of a pair may consist of different numbers of bursts,
+// so the time of one write is compared.
 func (p hubGatePair) ratio() float64 { return p.records.perWrite() / p.tree.perWrite() }
 
-// spread — во сколько раз машина в самый медленный момент пары (до неё, между
-// замерами, после) медленнее, чем в самый быстрый.
+// spread is how many times slower the machine is at the slowest moment of the
+// pair (before it, between its samples, after it) than at the fastest.
 func (p hubGatePair) spread() float64 {
 	return float64(max(p.pre, p.mid, p.post)) / float64(min(p.pre, p.mid, p.post))
 }
 
-// hubGateMeasure — всплески в режиме mode, каждый на свежем хранилище, пока
-// их суммарное время не достигнет floor, и не меньше gateMinBursts. Число
-// всплесков не задаётся заранее: рабочий всплеск бывает быстрее прогревочного,
-// и посчитанное по прогреву число давало замеры короче floor.
+// hubGateMeasure runs bursts in mode, each on a fresh store, until their total
+// time reaches floor, and no fewer than gateMinBursts. The number of bursts is
+// not fixed in advance: a measured burst can be faster than a warm-up one, and
+// a count calibrated on the warm-up gave samples shorter than floor.
 func hubGateMeasure(mode string, floor time.Duration, prefill int) hubGateSample {
 	restore := SetCacheModeForTest(mode)
 	defer restore()
@@ -142,18 +148,20 @@ func hubGateMeasure(mode string, floor time.Duration, prefill int) hubGateSample
 	return s
 }
 
-// cpuCapacity — сколько машина сейчас тратит на одну и ту же работу на всех P:
-// хеширование без общих данных и замков. Её разброс внутри пары и есть «машина
-// изменилась» — соседний процесс, троттлинг квоты, другой контейнер. Лучший из
-// трёх коротких замеров: единичная заминка планировщика в самой калибровке —
-// не сдвиг, а занятая соседом машина держится дольше трёх замеров.
+// cpuCapacity is how long the machine currently takes for the same work on
+// every P: hashing with no shared data and no locks. Its spread within a pair
+// is exactly "the machine changed": a neighbouring process, quota throttling,
+// another container. It is the best of three short samples: a single scheduler
+// hiccup during the calibration itself is not a shift, while a machine taken
+// by a neighbour stays that way longer than three samples.
 func cpuCapacity() time.Duration { return cpuWork(runtime.GOMAXPROCS(0)) }
 
-// cpuParallelism — какую долю номинальной параллельности машина отдаёт сейчас:
-// та же работа на одной горутине и на каждой из GOMAXPROCS. На свободной машине
-// около 1 (на SMT меньше), под соседом, занявшим часть ядер, — заметно меньше.
-// Перемены внутри пары гейт видит сам; постоянную нагрузку — только так, поэтому
-// число печатается рядом с вердиктом, но вердикт не меняет.
+// cpuParallelism is the share of the nominal parallelism the machine gives
+// right now: the same work on one goroutine and on each of GOMAXPROCS. On an
+// idle machine it is about 1 (less on SMT); with a neighbour holding some of
+// the cores it is noticeably less. The gate sees changes within a pair by
+// itself; it sees sustained load only this way, so the number is printed next
+// to the verdict but does not change it.
 func cpuParallelism() float64 {
 	return float64(cpuWork(1)) / float64(cpuWork(runtime.GOMAXPROCS(0)))
 }
@@ -208,7 +216,8 @@ func Test_Hub_ConcurrentThroughputGate(t *testing.T) {
 		fmt.Sscanf(v, "%d", &prefill)
 	}
 
-	// Разогрев: первые всплески медленнее рабочих и в замеры не идут.
+	// Warm-up: the first bursts are slower than the measured ones and do not
+	// go into the samples.
 	hubGateMeasure("tree", 0, prefill)
 	hubGateMeasure("records", 0, prefill)
 

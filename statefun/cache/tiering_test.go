@@ -1,8 +1,8 @@
 package cache
 
-// Ворота этапа 2A: с выключенным и включённым ярусом Store обязан отвечать
-// одинаково. Тест ходит только через публичные методы — то есть проверяет
-// ровно то, что видят CRUD и JPGQL.
+// A gate for tiering: with tiering off and on, Store must answer the same.
+// The test goes only through public methods — that is, it checks exactly
+// what CRUD and JPGQL see.
 
 import (
 	"bytes"
@@ -23,11 +23,11 @@ import (
 	"sync/atomic"
 )
 
-// storeOp — одна операция над кэшем, применимая к любому Store.
+// storeOp is one operation on the cache that applies to any Store.
 type storeOp func(cs *Store)
 
-// storeQuery — один вопрос к кэшу; ответ приводится к строке, чтобы сравнивать
-// два хранилища, не зная их устройства.
+// storeQuery is one question to the cache. The answer is reduced to a string
+// to compare two stores without knowing how they are built.
 type storeQuery func(cs *Store) string
 
 func randomOps(rng *rand.Rand, vertices, links, steps int) ([]storeOp, []storeQuery) {
@@ -46,12 +46,12 @@ func randomOps(rng *rand.Rand, vertices, links, steps int) ([]storeOp, []storeQu
 		name, lt, to := lname(n), ltype(n), tgt(n)
 
 		switch rng.Intn(10) {
-		case 0: // тело вершины
+		case 0: // vertex body
 			body := easyjson.NewJSONObjectWithKeyValue("n", easyjson.NewJSON(rng.Intn(100)))
 			ops = append(ops, func(cs *Store) { cs.SetValueJSON(v, &body, false, t) })
-		case 1: // удалить тело
+		case 1: // delete the body
 			ops = append(ops, func(cs *Store) { cs.DeleteValue(v, false, t) })
-		case 2, 3, 4: // создать связь целиком, как это делает CRUD
+		case 2, 3, 4: // create a whole link, the way CRUD does
 			ops = append(ops, func(cs *Store) {
 				cs.SetValue(fmt.Sprintf(kOutTo, v, name), []byte(lt+"."+to), false, t)
 				cs.SetValue(fmt.Sprintf(kOutBody, v, name), []byte(`{"w":1}`), false, t)
@@ -60,7 +60,7 @@ func randomOps(rng *rand.Rand, vertices, links, steps int) ([]storeOp, []storeQu
 				cs.SetValue(fmt.Sprintf(kIndexTag, v, name, "tag0"), nil, false, t)
 				cs.SetValue(fmt.Sprintf(kInLink, to, v, name), []byte(lt), false, t)
 			})
-		case 5: // удалить связь целиком
+		case 5: // delete a whole link
 			ops = append(ops, func(cs *Store) {
 				for _, k := range cs.GetKeysByPattern(fmt.Sprintf("%s.out.index.%s.>", v, name)) {
 					cs.DeleteValue(k, false, t)
@@ -70,21 +70,21 @@ func randomOps(rng *rand.Rand, vertices, links, steps int) ([]storeOp, []storeQu
 				cs.DeleteValue(fmt.Sprintf(kOutTo, v, name), false, t)
 				cs.DeleteValue(fmt.Sprintf(kInLink, to, v, name), false, t)
 			})
-		case 6: // добавить тег
+		case 6: // add a tag
 			tag := fmt.Sprintf("tag%d", rng.Intn(3))
 			ops = append(ops, func(cs *Store) {
 				cs.SetValue(fmt.Sprintf(kIndexTag, v, name, tag), nil, false, t)
 			})
-		case 7: // снять тег
+		case 7: // remove a tag
 			tag := fmt.Sprintf("tag%d", rng.Intn(3))
 			ops = append(ops, func(cs *Store) {
 				cs.DeleteValue(fmt.Sprintf(kIndexTag, v, name, tag), false, t)
 			})
-		case 8: // запоздавшая запись — оба обязаны отвергнуть одинаково
+		case 8: // a late write — both must reject it the same way
 			ops = append(ops, func(cs *Store) {
 				cs.SetValue(fmt.Sprintf(kOutTo, v, name), []byte("stale.dom/stale"), false, t-1000)
 			})
-		case 9: // ключ рантайма — обязан остаться в дереве в обоих режимах
+		case 9: // a runtime key — must stay in the tree in both modes
 			ops = append(ops, func(cs *Store) {
 				body := easyjson.NewJSONObjectWithKeyValue("rev", easyjson.NewJSON(t))
 				cs.SetValueJSON(v+"-lock", &body, false, t)
@@ -159,7 +159,8 @@ func runOps(t *testing.T, mode string, ops []storeOp, qs []storeQuery) []string 
 	return out
 }
 
-// Test_Tiering_SameAnswers — главный тест: ярус ничего не меняет снаружи.
+// Test_Tiering_SameAnswers — the main test: tiering changes nothing seen from
+// outside.
 func Test_Tiering_SameAnswers(t *testing.T) {
 	for _, cfg := range []struct{ vertices, links, steps int }{
 		{3, 4, 200},
@@ -188,8 +189,9 @@ func Test_Tiering_SameAnswers(t *testing.T) {
 	}
 }
 
-// Test_Tiering_RuntimeKeysStayInTree — контексты и объектные мьютексы записями
-// не становятся: они короткоживущие и горячие, и форматом записи не описываются.
+// Test_Tiering_RuntimeKeysStayInTree — contexts and object mutexes do not
+// become records: they are short-lived and hot, and the record format does
+// not describe them.
 func Test_Tiering_RuntimeKeysStayInTree(t *testing.T) {
 	restore := SetCacheModeForTest("records")
 	defer restore()
@@ -197,9 +199,9 @@ func Test_Tiering_RuntimeKeysStayInTree(t *testing.T) {
 	cs := NewStoreForTest("runtime")
 	body := easyjson.NewJSONObjectWithKeyValue("a", easyjson.NewJSON(1))
 
-	cs.SetValueJSON("dom/v", &body, false, 1)                      // вершина
-	cs.SetValueJSON("dom/v-lock", &body, false, 1)                 // мьютекс объекта
-	cs.SetValueJSON("functions.cmdb.api.x.dom/v", &body, false, 1) // контекст
+	cs.SetValueJSON("dom/v", &body, false, 1)                      // vertex
+	cs.SetValueJSON("dom/v-lock", &body, false, 1)                 // object mutex
+	cs.SetValueJSON("functions.cmdb.api.x.dom/v", &body, false, 1) // context
 
 	require.Equal(t, 1, cs.RecordCountForTest(), "записью обязана стать только вершина")
 	require.True(t, cs.ExistsJson("dom/v-lock"))
@@ -207,8 +209,8 @@ func Test_Tiering_RuntimeKeysStayInTree(t *testing.T) {
 	require.True(t, cs.ExistsJson("dom/v"))
 }
 
-// Test_Tiering_CompactionKeepsAnswers — уплотнение из обхода обслуживания
-// ничего не меняет в ответах.
+// Test_Tiering_CompactionKeepsAnswers — compaction from the maintenance pass
+// changes nothing in the answers.
 func Test_Tiering_CompactionKeepsAnswers(t *testing.T) {
 	restore := SetCacheModeForTest("records")
 	defer restore()
@@ -234,7 +236,7 @@ func Test_Tiering_CompactionKeepsAnswers(t *testing.T) {
 	require.Zero(t, cs.compactRecords(), "повторное уплотнение не должно ничего находить")
 }
 
-// Test_Tiering_ConcurrentWrites — параллельная запись через публичный API.
+// Test_Tiering_ConcurrentWrites — concurrent writes through the public API.
 func Test_Tiering_ConcurrentWrites(t *testing.T) {
 	restore := SetCacheModeForTest("records")
 	defer restore()
@@ -270,8 +272,8 @@ func Test_Tiering_ConcurrentWrites(t *testing.T) {
 	require.Len(t, keys, goroutines*per, "перечисление не сходится с числом записей")
 }
 
-// Test_Tiering_TreeStaysEmpty — вершина, ушедшая в запись, не должна
-// одновременно расти поддеревом: иначе память не экономится, а тратится дважды.
+// Test_Tiering_TreeStaysEmpty — a vertex that has moved into a record must
+// not also grow a subtree: otherwise memory is not saved but spent twice.
 func Test_Tiering_TreeStaysEmpty(t *testing.T) {
 	restore := SetCacheModeForTest("records")
 	defer restore()
@@ -295,15 +297,16 @@ func Test_Tiering_TreeStaysEmpty(t *testing.T) {
 	require.LessOrEqual(t, st.TotalNodes, 2,
 		"дерево обязано остаться пустым: %d узлов на 200 вершин в записях", st.TotalNodes)
 
-	// а служебные ключи по-прежнему в дереве
+	// and service keys are still in the tree
 	body := easyjson.NewJSONObjectWithKeyValue("rev", easyjson.NewJSON(1))
 	cs.SetValueJSON("dom/v-000-lock", &body, false, now)
 	st = cs.StatsForTest()
 	require.Greater(t, st.TotalNodes, 1, "мьютекс объекта обязан лежать в дереве")
 }
 
-// Test_Rehydrate_ClearsRecords — повышение из пассивного в активные заменяет
-// мир целиком: то, что было удалено, пока узел молчал, не должно ожить.
+// Test_Rehydrate_ClearsRecords — a promotion from passive to active replaces
+// the whole world: what was deleted while the node was silent must not come
+// back to life.
 func Test_Rehydrate_ClearsRecords(t *testing.T) {
 	restore := SetCacheModeForTest("records")
 	defer restore()
@@ -321,14 +324,15 @@ func Test_Rehydrate_ClearsRecords(t *testing.T) {
 	require.False(t, cs.Exists("dom/v.out.to.l1"), "связь пережила сброс")
 	require.False(t, cs.Exists("dom/v"), "тело пережило сброс")
 
-	// и мир после сброса собирается заново
+	// and after the reset the world is built again
 	cs.SetValue("dom/v.out.to.l2", []byte("t.dom/y"), false, 20)
 	require.True(t, cs.Exists("dom/v.out.to.l2"))
 	require.False(t, cs.Exists("dom/v.out.to.l1"))
 }
 
-// Test_GetValueJSON_DistinguishesAbsentFromInvalid — «нет ключа» и «есть, но не
-// JSON» это разные ответы, и запись обязана различать их так же, как дерево.
+// Test_GetValueJSON_DistinguishesAbsentFromInvalid — "no key" and "present,
+// but not JSON" are different answers, and a record must tell them apart the
+// same way the tree does.
 func Test_GetValueJSON_DistinguishesAbsentFromInvalid(t *testing.T) {
 	for _, mode := range []string{"tree", "records"} {
 		t.Run(mode, func(t *testing.T) {
@@ -347,9 +351,9 @@ func Test_GetValueJSON_DistinguishesAbsentFromInvalid(t *testing.T) {
 	}
 }
 
-// Test_RecordGauges_ReportWhatIsHeld — метрики обязаны показывать то, что
-// действительно лежит в кэше, и меняться вместе с ним. Без этого переключённое
-// умолчание невидимо в бою.
+// Test_RecordGauges_ReportWhatIsHeld — the metrics must show what is actually
+// held in the cache, and change along with it. Without that, the switched
+// default is invisible in production.
 func Test_RecordGauges_ReportWhatIsHeld(t *testing.T) {
 	restore := SetCacheModeForTest("records")
 	defer restore()
@@ -375,11 +379,11 @@ func Test_RecordGauges_ReportWhatIsHeld(t *testing.T) {
 	require.Zero(t, st.compressed, "без сжатия сжатых корзин быть не может")
 	require.Zero(t, st.parsedBodies, "до чтений разборов быть не должно")
 
-	// обслуживание кодирует то, что оставила запись
+	// maintenance encodes what the write left behind
 	cs.compactRecords()
 	require.Zero(t, cs.recordStats().decoded, "после уплотнения разобранных корзин быть не должно")
 
-	// два чтения тела оставляют разбор, и метрика это видит
+	// two reads of a body leave it parsed, and the metric sees that
 	for round := 0; round < 2; round++ {
 		for i := 0; i < vertices; i++ {
 			cs.GetValueJSON(fmt.Sprintf("dom/v-%03d", i)) //nolint:errcheck
@@ -390,7 +394,7 @@ func Test_RecordGauges_ReportWhatIsHeld(t *testing.T) {
 	cs.ageParsedBodies()
 	require.Zero(t, cs.recordStats().parsedBodies, "остывшие тела обязаны исчезнуть из метрики")
 
-	// расщепления видны как рост числа корзин — отдельного счётчика не нужно
+	// splits show as a growing bucket count — no separate counter is needed
 	before := cs.recordStats().buckets
 	for l := 0; l < 200; l++ {
 		cs.SetValue(fmt.Sprintf("dom/v-000.out.to.big%03d", l), []byte("t.dom/y"), false, 2)
@@ -399,8 +403,8 @@ func Test_RecordGauges_ReportWhatIsHeld(t *testing.T) {
 		"корзины обязаны прибавиться — иначе по метрике не увидеть расщеплений")
 }
 
-// Test_RecordGauges_TreeReportsZero — в режиме дерева метрики записей обязаны
-// быть нулями, а не отсутствовать: провал в графике неотличим от поломки сбора.
+// Test_RecordGauges_TreeReportsZero — in tree mode the record metrics must be
+// zeros, not absent: a gap in a graph cannot be told from broken collection.
 func Test_RecordGauges_TreeReportsZero(t *testing.T) {
 	restore := SetCacheModeForTest("tree")
 	defer restore()
@@ -413,9 +417,9 @@ func Test_RecordGauges_TreeReportsZero(t *testing.T) {
 	require.Equal(t, "tree", CacheMode())
 }
 
-// Test_RecordGauges_Published — метрики обязаны действительно доезжать до
-// Prometheus под теми именами, под которыми их ищут в дашборде. Опечатка в
-// имени иначе замечается только тогда, когда график понадобился.
+// Test_RecordGauges_Published — the metrics must actually reach Prometheus
+// under the names the dashboard looks them up by. Otherwise a typo in a name
+// is noticed only when the graph is needed.
 func Test_RecordGauges_Published(t *testing.T) {
 	if system.GlobalPrometrics == nil {
 		system.GlobalPrometrics = system.NewPrometrics("", "")
@@ -459,9 +463,9 @@ func labelNamesOf(l prometheus.Labels) []string {
 	return names
 }
 
-// Test_SweepRecords_RemovesWhatIsGone — вершина, которой больше нет, не должна
-// оставлять после себя запись. Без этого нагрузка «создать — удалить» растит
-// индекс на одну запись за каждую удалённую вершину и не отдаёт её никогда.
+// Test_SweepRecords_RemovesWhatIsGone — a vertex that no longer exists must
+// not leave a record behind. Without this, a "create, delete" workload grows
+// the index by one record per deleted vertex and never gives it back.
 func Test_SweepRecords_RemovesWhatIsGone(t *testing.T) {
 	restore := SetCacheModeForTest("records")
 	defer restore()
@@ -501,7 +505,7 @@ func Test_SweepRecords_RemovesWhatIsGone(t *testing.T) {
 	require.Equal(t, vertices+1, cs.sweepRecords(), "все опустевшие записи обязаны уйти")
 	require.Zero(t, cs.RecordCountForTest(), "индекс обязан опустеть")
 
-	// и граф снова строится с нуля
+	// and the graph builds again from scratch
 	for i := 0; i < vertices; i++ {
 		create(i)
 	}
@@ -511,8 +515,8 @@ func Test_SweepRecords_RemovesWhatIsGone(t *testing.T) {
 	}
 }
 
-// Test_SweepRecords_CyclesReturnToBaseline — повторение цикла «создать —
-// удалить — обслужить» обязано возвращать индекс к исходному, а не расти.
+// Test_SweepRecords_CyclesReturnToBaseline — repeating the "create, delete,
+// maintain" cycle must bring the index back to where it started, not grow it.
 func Test_SweepRecords_CyclesReturnToBaseline(t *testing.T) {
 	restore := SetCacheModeForTest("records")
 	defer restore()
@@ -531,25 +535,27 @@ func Test_SweepRecords_CyclesReturnToBaseline(t *testing.T) {
 			cs.DeleteValue(id+".out.to.l1", false, int64(cycle*10+2))
 		}
 		cs.RunMaintenanceForTest()
-		// dom/tgt держит входящие связи, поэтому переживает цикл; всё
-		// остальное обязано уйти.
+		// dom/tgt holds incoming links, so it survives the cycle; everything
+		// else must go.
 		require.LessOrEqualf(t, cs.RecordCountForTest(), 1,
 			"после цикла %d в индексе осталось %d записей", cycle, cs.RecordCountForTest())
 	}
 }
 
-// Test_SweepRecords_WriteIntoASweptRecordIsRepeated — запись, попавшая ровно в
-// окно между взятием записи и обращением к ней, не должна пропасть.
+// Test_SweepRecords_WriteIntoASweptRecordIsRepeated — a write that lands
+// exactly in the window between fetching a record and accessing it must not
+// be lost.
 //
-// Окно шириной в наносекунды, и никакая конкуренция не воспроизводит его по
-// требованию: без шва тест проходил и с выключенным повтором, то есть не
-// проверял ничего. Здесь выметание происходит внутри окна намеренно.
+// The window is nanoseconds wide, and no amount of concurrency reproduces it
+// on demand: without the seam the test passed even with the repeat turned
+// off, so it checked nothing. Here the sweep happens inside the window on
+// purpose.
 func Test_SweepRecords_WriteIntoASweptRecordIsRepeated(t *testing.T) {
 	restore := SetCacheModeForTest("records")
 	defer restore()
 
 	cs := NewStoreForTest("sweep_window")
-	// пустая запись: связь создана и тут же удалена
+	// an empty record: a link is created and deleted right away
 	cs.SetValue("dom/v.out.to.l1", []byte("t.dom/x"), false, 1)
 	cs.DeleteValue("dom/v.out.to.l1", false, 2)
 	first, ok := cs.records.get("dom/v")
@@ -579,12 +585,12 @@ func Test_SweepRecords_WriteIntoASweptRecordIsRepeated(t *testing.T) {
 	require.NotSame(t, first, second, "писать должны были уже в новую запись")
 }
 
-// Test_SweepRecords_SweepingAlongsideWritingLosesNothing — выметание идёт
-// одновременно с записью и ничего не ломает.
+// Test_SweepRecords_SweepingAlongsideWritingLosesNothing — sweeping runs at
+// the same time as writing and breaks nothing.
 //
-// Точное окно этот тест не воспроизводит — оно слишком узко, для него есть
-// тест со швом выше. Здесь проверяется другое: выметание, работающее вперемешку
-// с записями и удалениями, оставляет граф целым.
+// This test does not reproduce the exact window — it is too narrow, and the
+// test with the seam above covers it. This one checks something else: a sweep
+// interleaved with writes and deletes leaves the graph whole.
 func Test_SweepRecords_SweepingAlongsideWritingLosesNothing(t *testing.T) {
 	restore := SetCacheModeForTest("records")
 	defer restore()
@@ -621,7 +627,7 @@ func Test_SweepRecords_SweepingAlongsideWritingLosesNothing(t *testing.T) {
 				name := fmt.Sprintf("%s.out.to.l%04d", id, r)
 				cs.SetValue(name, []byte(fmt.Sprintf("t.dom/tgt-%d-%d", w, r)), false, ts)
 				ts++
-				if r < rounds-1 { // последнюю оставляем жить
+				if r < rounds-1 { // the last one is left alive
 					cs.DeleteValue(name, false, ts)
 					ts++
 				}
@@ -629,7 +635,7 @@ func Test_SweepRecords_SweepingAlongsideWritingLosesNothing(t *testing.T) {
 		}(w)
 	}
 
-	// Выметание живёт ровно столько же, сколько писатели.
+	// The sweeper lives exactly as long as the writers.
 	writersWG.Wait()
 	close(stop)
 	sweeperWG.Wait()
@@ -643,11 +649,12 @@ func Test_SweepRecords_SweepingAlongsideWritingLosesNothing(t *testing.T) {
 	}
 }
 
-// Test_Tiering_ExistsJsonNudgesLikeTheTree — запись хранит байтами всё, кроме
-// тела, но подсказку «используй Exists» ExistsJson обязан давать там же, где её
-// даёт дерево. Тело связи — JSON: подсказки нет, иначе каждое чтение объекта,
-// которое проверяет его связь type, пишет WARN. Цель связи и тело, записанное
-// байтами, — не JSON: подсказка есть. Существование сообщается всегда.
+// Test_Tiering_ExistsJsonNudgesLikeTheTree — a record stores everything but
+// the body as bytes, yet ExistsJson must give the "use Exists" hint exactly
+// where the tree gives it. A link body is JSON: no hint, or else every object
+// read that checks its type link writes a WARN. A link target and a body
+// written as bytes are not JSON: the hint is given. Existence is always
+// reported.
 func Test_Tiering_ExistsJsonNudgesLikeTheTree(t *testing.T) {
 	for _, mode := range []string{"tree", "records"} {
 		t.Run(mode, func(t *testing.T) {
@@ -679,7 +686,7 @@ func Test_Tiering_ExistsJsonNudgesLikeTheTree(t *testing.T) {
 	}
 }
 
-// warnBuffer — буфер, в который логгер пишет из любых горутин.
+// warnBuffer is a buffer the logger writes to from any goroutine.
 type warnBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -697,8 +704,8 @@ func (w *warnBuffer) String() string {
 	return w.buf.String()
 }
 
-// captureWarnings направляет глобальный логгер в буфер до конца теста и
-// возвращает его к настройкам по умолчанию после.
+// captureWarnings points the global logger at a buffer until the end of the
+// test and returns it to the default settings afterwards.
 func captureWarnings(t *testing.T) *warnBuffer {
 	w := &warnBuffer{}
 	lg.GetLogger().SetOptions(w, lg.WarnLevel, false, false)

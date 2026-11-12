@@ -110,7 +110,7 @@ func Test_Record_RoundTrip(t *testing.T) {
 			_, ok = r.lookupInLink("нет", "такой")
 			require.False(t, ok)
 
-			// перечисление отдаёт ровно то, что положили, по одному разу
+			// enumeration yields exactly what was put in, each once
 			seen := map[string]int{}
 			r.rangeOutLinks(func(l outLink) bool { seen[l.Name]++; return true })
 			require.Len(t, seen, n)
@@ -147,26 +147,26 @@ func Test_Record_LookupByTypeTarget(t *testing.T) {
 func Test_Record_WriteThrough(t *testing.T) {
 	r := buildRecord(t, 10)
 
-	// новая связь
+	// a new link
 	nl := outLink{Name: "link-new", To: subValue{Value: "t.dom/x", Time: 100, Live: true}}
 	require.True(t, putOutLinkForTest(r, nl))
 	got, ok := r.lookupOutLink("link-new")
 	require.True(t, ok)
 	require.Equal(t, "dom/x", got.target())
 
-	// замена существующей
+	// replacing an existing one
 	upd := mkOut(3)
 	upd.To = subValue{Value: "type-3.dom/moved", Time: 1000, Live: true}
 	require.True(t, putOutLinkForTest(r, upd))
 	got, _ = r.lookupOutLink(upd.Name)
 	require.Equal(t, "dom/moved", got.target())
 
-	// удаление
+	// deletion
 	require.True(t, deleteOutLinkForTest(r, upd, 2000))
 	_, ok = r.lookupOutLink(upd.Name)
 	require.False(t, ok, "удалённая связь не должна читаться")
 
-	// остальные на месте
+	// the rest are still in place
 	for i := 0; i < 10; i++ {
 		if i == 3 {
 			continue
@@ -176,19 +176,19 @@ func Test_Record_WriteThrough(t *testing.T) {
 	}
 }
 
-// Test_Record_LastWriterWins — страж, ради которого существуют надгробия.
+// Test_Record_LastWriterWins — the guard that tombstones exist for.
 func Test_Record_LastWriterWins(t *testing.T) {
 	r := buildRecord(t, 4)
 	name := mkOut(1).Name
 
-	// запись со временем старше текущего игнорируется
+	// a write with a time older than the current one is ignored
 	old := mkOut(1)
 	old.To = subValue{Value: "type-1.dom/stale", Time: 0, Live: true}
 	require.False(t, putOutLinkForTest(r, old), "старая запись не должна применяться")
 	got, _ := r.lookupOutLink(name)
 	require.Equal(t, mkOut(1).target(), got.target())
 
-	// после удаления запоздавшая запись не воскрешает связь
+	// after a delete, a late write does not resurrect the link
 	require.True(t, deleteOutLinkForTest(r, mkOut(1), 500))
 	late := mkOut(1)
 	late.To.Time = 499
@@ -196,14 +196,14 @@ func Test_Record_LastWriterWins(t *testing.T) {
 	_, ok := r.lookupOutLink(name)
 	require.False(t, ok)
 
-	// а более новая — воскрешает, это законно
+	// but a newer one does, and that is legitimate
 	fresh := mkOut(1)
 	fresh.To.Time = 501
 	require.True(t, putOutLinkForTest(r, fresh))
 	_, ok = r.lookupOutLink(name)
 	require.True(t, ok)
 
-	// тело: тот же страж
+	// the body: the same guard
 	require.False(t, r.putBody([]byte(`{"a":1}`), 0, true))
 	require.True(t, r.putBody([]byte(`{"a":1}`), 10, true))
 	require.True(t, r.deleteBody(20))
@@ -216,7 +216,7 @@ func Test_Record_LastWriterWins(t *testing.T) {
 	require.Equal(t, `{"a":2}`, body)
 }
 
-// Test_Record_SplitKeepsEverything — расщепление не теряет связей.
+// Test_Record_SplitKeepsEverything — a split loses no links.
 func Test_Record_SplitKeepsEverything(t *testing.T) {
 	r := newVertexRecord(vertexData{BodyTime: 1}, defaultBucketLinks)
 
@@ -237,7 +237,7 @@ func Test_Record_SplitKeepsEverything(t *testing.T) {
 		require.True(t, ok, "после расщепления потерялась входящая %d", i)
 	}
 
-	// перечисление — ровно n, без повторов (корзины делят слоты справочника)
+	// enumeration gives exactly n, no repeats (buckets share directory slots)
 	seen := map[string]int{}
 	r.rangeOutLinks(func(l outLink) bool { seen[l.Name]++; return true })
 	require.Len(t, seen, n)
@@ -245,7 +245,7 @@ func Test_Record_SplitKeepsEverything(t *testing.T) {
 		require.Equal(t, 1, c, "%s перечислена %d раз", name, c)
 	}
 
-	// ни одна корзина не осталась переполненной
+	// no bucket is left overfull
 	r.out.Load().each(func(b *bucket) bool {
 		require.LessOrEqual(t, b.entryCount(), 2*defaultBucketLinks,
 			"корзина осталась вдвое больше предела — расщепление не сработало")
@@ -253,11 +253,11 @@ func Test_Record_SplitKeepsEverything(t *testing.T) {
 	})
 }
 
-// Test_Record_ConcurrentWritesLoseNothing — тест на потерю обновления.
+// Test_Record_ConcurrentWritesLoseNothing — a test for a lost update.
 //
-// Проверяется счётчиками, а не гонкой: два писателя, изменившие разные связи
-// одной корзины, оба декодируют старый блок, и второй затирает первого. Гонки
-// данных при этом нет, поэтому -race такую ошибку не видит.
+// It is checked by counting, not as a race: two writers that changed different
+// links of one bucket both decode the old block, and the second overwrites the
+// first. There is no data race in that, so -race does not see such a bug.
 func Test_Record_ConcurrentWritesLoseNothing(t *testing.T) {
 	r := newVertexRecord(vertexData{BodyTime: 1}, defaultBucketLinks)
 
@@ -299,8 +299,8 @@ func Test_Record_ConcurrentWritesLoseNothing(t *testing.T) {
 	require.Equal(t, total, count, "перечисление не сходится с числом записанных связей")
 }
 
-// Test_Record_ConcurrentReadWrite — читатели работают без локов, пока корзины
-// подменяются под ними.
+// Test_Record_ConcurrentReadWrite — readers work without locks while buckets
+// are replaced under them.
 func Test_Record_ConcurrentReadWrite(t *testing.T) {
 	r := buildRecord(t, 200)
 
@@ -339,10 +339,11 @@ func Test_Record_ConcurrentReadWrite(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// стоимость
+// cost
 // ---------------------------------------------------------------------------
 
-// Benchmark_Record_Write — Ф-5: стоимость записи не зависит от степени.
+// Benchmark_Record_Write: the cost of a write does not depend on the vertex's
+// degree.
 func Benchmark_Record_Write(b *testing.B) {
 	for _, n := range []int{8, 1000, 10691} {
 		b.Run(fmt.Sprintf("degree=%d", n), func(b *testing.B) {
@@ -380,7 +381,7 @@ func Benchmark_Record_Read(b *testing.B) {
 	}
 }
 
-// Test_Record_CompactBuckets — уплотнение возвращает память и не меняет ответов.
+// Test_Record_CompactBuckets — compaction returns memory and changes no answer.
 func Test_Record_CompactBuckets(t *testing.T) {
 	r := newVertexRecord(vertexData{BodyTime: 1}, defaultBucketLinks)
 	const n = 2000
@@ -414,16 +415,16 @@ func Test_Record_CompactBuckets(t *testing.T) {
 		require.True(t, ok)
 	}
 
-	// повторное уплотнение — ничего не делает
+	// a second compaction does nothing
 	require.Equal(t, 0, r.compactBuckets())
 }
 
-// Test_Record_CompactionReturnsMemory — уплотнение возвращает память.
+// Test_Record_CompactionReturnsMemory — compaction returns memory.
 //
-// Утверждение на детерминированной оценке, а не на размере кучи: замер кучи
-// внутри одного процесса зависит от того, что успел сделать сборщик, и такой
-// тест падает через раз. approxBytes считает то, что действительно хранится, —
-// и это же та оценка, которой пользуется регулятор бюджета.
+// The assertion rests on a deterministic estimate, not on the heap size: a heap
+// measurement inside one process depends on what the collector has managed to
+// do, and such a test fails every other run. approxBytes counts what is
+// actually stored — and it is the same estimate the budget regulator uses.
 func Test_Record_CompactionReturnsMemory(t *testing.T) {
 	for _, links := range []int{40, 400, 4000} {
 		t.Run(fmt.Sprintf("links=%d", links), func(t *testing.T) {
@@ -450,11 +451,12 @@ func runtimeGC()             { runtime.GC(); runtime.GC() }
 func runtimeKeepAlive(v any) { runtime.KeepAlive(v) }
 func heapAllocNow() uint64   { var ms runtime.MemStats; runtime.ReadMemStats(&ms); return ms.HeapAlloc }
 
-// Test_Record_PairKeyIsIndependent — ключ (тип, цель) → имя живёт своей жизнью.
+// Test_Record_PairKeyIsIndependent — the (type, target) → name key has a life
+// of its own.
 //
-// Ради этого он и хранится отдельной таблицей: CRUD удаляет его сам, когда у
-// связи меняется тип или цель, и вывести такое состояние из таблицы связей
-// нельзя — вывод нашёл бы живую связь и вернул её имя.
+// That is why it is kept in a separate table: CRUD deletes it itself when a
+// link's type or target changes, and that state cannot be derived from the
+// link table — a derivation would find the live link and return its name.
 func Test_Record_PairKeyIsIndependent(t *testing.T) {
 	r := newVertexRecord(vertexData{BodyTime: 1}, defaultBucketLinks)
 
@@ -466,14 +468,14 @@ func Test_Record_PairKeyIsIndependent(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "l1", p.Name)
 
-	// удалить пару, оставив связь живой
+	// delete the pair, leaving the link live
 	require.True(t, r.deletePair("t1", "dom/a", 20))
 	_, ok = r.lookupPair("t1", "dom/a")
 	require.False(t, ok, "ключ пары обязан исчезнуть")
 	_, ok = r.lookupOutLink("l1")
 	require.True(t, ok, "связь удалять никто не просил")
 
-	// страж действует и здесь
+	// the guard holds here too
 	require.False(t, r.putPair(pairEntry{Type: "t1", Target: "dom/a", Name: "l1", UpdateTime: 19}),
 		"запоздавшая запись воскресила ключ пары")
 	require.True(t, r.putPair(pairEntry{Type: "t1", Target: "dom/a", Name: "l2", UpdateTime: 21}))
@@ -481,22 +483,22 @@ func Test_Record_PairKeyIsIndependent(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "l2", p.Name, "победить обязана последняя запись")
 
-	// две связи на одну пару: в дереве остаётся имя последней
+	// two links on one pair: as in the tree, the pair keeps the last one's name
 	require.True(t, r.setOutTo("a", "t2.dom/b", 30))
 	require.True(t, r.putPair(pairEntry{Type: "t2", Target: "dom/b", Name: "a", UpdateTime: 30}))
 	require.True(t, r.setOutTo("b", "t2.dom/b", 31))
 	require.True(t, r.putPair(pairEntry{Type: "t2", Target: "dom/b", Name: "b", UpdateTime: 31}))
 	p, _ = r.lookupPair("t2", "dom/b")
 	require.Equal(t, "b", p.Name)
-	// обе связи при этом на месте
+	// both links are still in place
 	_, ok = r.lookupOutLink("a")
 	require.True(t, ok)
 	_, ok = r.lookupOutLink("b")
 	require.True(t, ok)
 }
 
-// parseTailBySplit — прежняя реализация через strings.Split, оставленная как
-// эталон: новая обязана отвечать ровно то же на любом хвосте.
+// parseTailBySplit — the former implementation via strings.Split, kept as the
+// reference: the new one must answer exactly the same for any tail.
 func parseTailBySplit(tail string) (tailKind, string, string) {
 	if tail == "" {
 		return tailBody, "", ""
@@ -542,7 +544,7 @@ func Test_ParseTail_MatchesSplit(t *testing.T) {
 	tokens := []string{"", "out", "in", "to", "body", "index", "type", "tag", "ltype",
 		"l001", "dom/v-1", "__object", "имя", "a.b", "."}
 	var tails []string
-	// все хвосты длиной до четырёх токенов плюс настоящие формы
+	// every tail of three tokens, plus the real forms
 	var build func(prefix string, depth int)
 	build = func(prefix string, depth int) {
 		if depth == 0 {
@@ -589,14 +591,15 @@ func Benchmark_ParseTailBySplit(b *testing.B) {
 	}
 }
 
-// Test_KeysByPattern_PinnedPrefixDoesNotScanTheVertex — вопрос про одну связь
-// не должен стоить перебора всех связей вершины.
+// Test_KeysByPattern_PinnedPrefixDoesNotScanTheVertex — a question about one
+// link must not cost a scan of every link of the vertex.
 //
-// Движок запросов спрашивает индексы каждой связи по очереди, шаблоном
-// `<вершина>.out.index.<имя>.>`. Пока перечисление отвечало на такой вопрос
-// обходом всех связей, обход хаба стоил квадрат от их числа: на тысяче связей
-// запрос JPGQL занимал 205 мс против 2 мс у дерева. Здесь проверяется само
-// свойство: цена ответа не растёт вместе с размером вершины.
+// The query engine asks for the indexes of each link in turn, with the pattern
+// `<vertex>.out.index.<name>.>`. While enumeration answered such a question by
+// walking every link, walking a hub cost the square of their number: with a
+// thousand links a JPGQL query took 205 ms against 2 ms for the tree. This
+// checks the property itself: the cost of an answer does not grow with the
+// size of the vertex.
 func Test_KeysByPattern_PinnedPrefixDoesNotScanTheVertex(t *testing.T) {
 	build := func(links int) *vertexRecord {
 		r := newVertexRecord(vertexData{BodyTime: -1}, defaultBucketLinks)
@@ -632,17 +635,18 @@ func Test_KeysByPattern_PinnedPrefixDoesNotScanTheVertex(t *testing.T) {
 	t.Logf("вершина из %d связей: %s на вопрос", small, perSmall)
 	t.Logf("вершина из %d связей: %s на вопрос", large, perLarge)
 
-	// Вершина в 30 раз больше. Пятикратный запас — чтобы тест не сыпался от
-	// шума машины, но ловил возвращение перебора, который дал бы тридцать.
+	// The vertex is 30 times larger. A fivefold margin keeps the test from
+	// failing on machine noise, yet still catches a return of the scan, which
+	// would give thirty.
 	require.Lessf(t, perLarge, perSmall*5,
 		"ответ про одну связь подорожал с ростом вершины: %s против %s — значит вернулся перебор",
 		perLarge, perSmall)
 }
 
-// Test_SpareFor_NeverBelowWhatIsHeld — запас ёмкости не имеет права оказаться
-// меньше того, что уже лежит в корзине: make() с такой ёмкостью паникует. А
-// перерасти потолок корзина может — расщепление идёт после записи, и на
-// предельной глубине справочника не идёт вовсе.
+// Test_SpareFor_NeverBelowWhatIsHeld — the spare capacity must never be less
+// than what the bucket already holds: make() with such a capacity panics. And a
+// bucket can outgrow its ceiling — a split comes after the write, and at the
+// maximum directory depth it does not come at all.
 func Test_SpareFor_NeverBelowWhatIsHeld(t *testing.T) {
 	for n := 0; n < 4*defaultBucketLinks+10; n++ {
 		require.GreaterOrEqualf(t, spareFor(n), n, "запас для %d записей оказался меньше их числа", n)

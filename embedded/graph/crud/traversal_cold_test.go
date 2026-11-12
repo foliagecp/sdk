@@ -1,17 +1,17 @@
 package crud_test
 
-// Тест 7 из ТЗ: обход.
+// Traversal.
 //
-// JPGQL-запрос, проходящий по холодным вершинам — то есть по таким, к которым
-// с прошлого прохода обслуживания никто не обращался: корзины упакованы в
-// байты, а в режиме со сжатием ещё и сжаты, тела не разобраны. Это худший для
-// записей случай чтения и лучший для дерева, у которого холодного состояния
-// нет вовсе — оно всё всегда держит разобранным.
+// A JPGQL query that walks cold vertices — that is, ones nobody has touched
+// since the last maintenance pass: their buckets are packed into bytes, and
+// in the compressing mode compressed as well, and their bodies are not
+// parsed. This is the worst read case for records and the best for the tree,
+// which has no cold state at all — it always keeps everything parsed.
 //
-// Цифры печатаются для отчёта; тест же требует только того, что от него можно
-// требовать независимо от машины: обход обязан вернуть весь граф в любом
-// режиме, и холодный обход обязан оставить после себя тёплые записи, а не
-// разрастись.
+// The numbers are printed for the report; the test itself demands only what
+// can be demanded of it regardless of the machine: the traversal must return
+// the whole graph in every mode, and a cold traversal must leave warm records
+// behind it, not bloated ones.
 
 import (
 	"fmt"
@@ -55,7 +55,7 @@ func (s *ColdTraversalTestSuite) bootstrap() {
 	s.dbc = dbc
 }
 
-// buildFan строит хаб с n исходящими связями одного типа и возвращает его id.
+// buildFan builds a hub with n out-links of one type and returns its id.
 func (s *ColdTraversalTestSuite) buildFan(prefix string, n int) string {
 	cmdb := s.dbc.CMDB
 	typeName := prefix + "_t"
@@ -77,14 +77,14 @@ func (s *ColdTraversalTestSuite) buildFan(prefix string, n int) string {
 	return hub
 }
 
-// coldTraversal остужает кэш и меряет обход, лучший из трёх — каждый раз
-// заново остудив.
+// coldTraversal cools the cache and measures the traversal, best of three —
+// cooling it afresh each time.
 func (s *ColdTraversalTestSuite) coldTraversal(hub, linkType string, want int) time.Duration {
 	cs := s.Runtime().Domain.Cache()
 	query := fmt.Sprintf(".*[l:type('%s')]", linkType)
 	best := time.Duration(1<<62 - 1)
 	for attempt := 0; attempt < 3; attempt++ {
-		// два прохода: первый гасит признаки обращения, второй отпускает
+		// two passes: the first clears the access marks, the second releases
 		cs.RunMaintenanceForTest()
 		cs.RunMaintenanceForTest()
 
@@ -100,9 +100,9 @@ func (s *ColdTraversalTestSuite) coldTraversal(hub, linkType string, want int) t
 	return best
 }
 
-// cacheWalk — вклад самого кэша в обход: перечислить связи хаба и прочитать
-// цель каждой, по холодному. Это то, что мы меняли, без движка запросов
-// вокруг.
+// cacheWalk — the cache's own share of a traversal: list the hub's links and
+// read the target of each, cold. This is what we changed, without the query
+// engine around it.
 func (s *ColdTraversalTestSuite) cacheWalk(hub string, want int) time.Duration {
 	cs := s.Runtime().Domain.Cache()
 	domHub := s.SetThisDomainPreffix(hub)
@@ -122,7 +122,7 @@ func (s *ColdTraversalTestSuite) cacheWalk(hub string, want int) time.Duration {
 			}
 		}
 		took := time.Since(started)
-		// want + 1: у всякого объекта есть ещё связь __type на свой тип.
+		// want + 1: every object also has a __type link to its type.
 		s.Require().Equalf(want+1, n, "кэш обязан отдать все %d связей хаба", want+1)
 		if took < best {
 			best = took
@@ -137,11 +137,12 @@ func (s *ColdTraversalTestSuite) Test_ColdTraversal() {
 
 	sizes := []int{1000}
 	if os.Getenv("TRAVERSAL_BIG") != "" {
-		// Десять тысяч вершин ТЗ просит, но сквозной запрос по ним занимает
-		// двадцать секунд, и почти всё это — движок запросов: он делает около
-		// восьми обращений на вершину, и с ростом графа их становится больше,
-		// а не столько же. Держать это в обычном прогоне значит платить
-		// двадцать секунд за измерение чужой работы.
+		// The target is ten thousand vertices, but an end-to-end
+		// query over them takes twenty seconds, and almost all of that is the
+		// query engine: it makes about eight accesses per vertex, and as the
+		// graph grows there are more of them, not the same number. Keeping
+		// this in the regular run means paying twenty seconds to measure
+		// someone else's work.
 		sizes = append(sizes, 10000)
 	}
 
@@ -161,8 +162,8 @@ func (s *ColdTraversalTestSuite) Test_ColdTraversal() {
 		s.T().Logf("  записей %d, байт %d, корзин %d, из них сжатых %d, тел разобрано %d",
 			vertices, bytes, buckets, compressed, parsed)
 
-		// Холодный обход читает связи, а не тела, поэтому разбирать тела ему
-		// незачем — и он не должен оставлять их разобранными после себя.
+		// A cold traversal reads links, not bodies, so it has no reason to
+		// parse bodies — and it must not leave them parsed behind it.
 		s.Require().Zerof(parsed,
 			"обход по связям оставил %d разобранных тел — он их не читает", parsed)
 	}

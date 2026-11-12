@@ -1,17 +1,17 @@
 package crud_test
 
-// Тест 6 из ТЗ: запись-интенсивный проход.
+// A write-intensive pass.
 //
-// Инвентаризация приходит и переписывает граф целиком, хотя изменилась в нём
-// малая часть. Это самый частый вид нагрузки на запись, и именно им ТЗ
-// проверяет, достаточно ли варианта A (все вершины — записи, все записи
-// сквозные) или нужен вариант B с горячим по записи набором. Условие простое:
-// то, что не изменилось, не должно порождать записи вообще — ни в кэше, ни в
-// журнале, ни в триггерах.
+// An inventory arrives and rewrites the whole graph, although only a small
+// part of it has changed. This is the most common kind of write load, and it
+// is the load that decides whether option A (every vertex is a record, every
+// record is write-through) is enough or option B, with a write-hot set, is
+// needed. The condition is simple: what has not changed must produce no
+// writes at all — not in the cache, not in the WAL, not in the triggers.
 //
-// Проверка структурная, а не по секундомеру: время цикла зависит от машины, а
-// «не изменившаяся вершина не переписана» — нет. Время всё равно печатается,
-// потому что ради него всё и делалось.
+// The check is structural, not by stopwatch: the cycle time depends on the
+// machine, and "an unchanged vertex is not rewritten" does not. The time is
+// printed anyway, because it is what all of this was done for.
 
 import (
 	"fmt"
@@ -46,8 +46,8 @@ func (s *InventoryRebuildTestSuite) waitForVertex(id string, timeout time.Durati
 	s.T().Fatalf("вершина %q не появилась за %s", id, timeout)
 }
 
-// bodyOf — тело в том виде, в каком его шлёт инвентаризация: несколько полей
-// обнаружения, из которых меняется одно и только у части вершин.
+// bodyOf — a body in the form an inventory sends it: a few discovery fields,
+// of which one changes, and only on some of the vertices.
 func bodyOf(i, generation int) easyjson.JSON {
 	b := easyjson.NewJSONObject()
 	b.SetByPath("name", easyjson.NewJSON(fmt.Sprintf("srv-%03d", i)))
@@ -69,7 +69,7 @@ func (s *InventoryRebuildTestSuite) Test_RebuildRewritesOnlyWhatChanged() {
 	cmdb := dbc.CMDB
 
 	const total = 500
-	const changed = total / 2 // вторая половина меняется
+	const changed = total / 2 // the second half changes
 
 	s.NoError(cmdb.TypeCreate("srv"))
 	for i := 0; i < total; i++ {
@@ -88,18 +88,18 @@ func (s *InventoryRebuildTestSuite) Test_RebuildRewritesOnlyWhatChanged() {
 	}
 	bytesBefore := cs.RecordsBytesForTest()
 
-	// --- проход инвентаризации: первая половина без изменений
+	// --- the inventory pass: the first half unchanged
 	for i := 0; i < total-changed; i++ {
 		b := bodyOf(i, 0)
 		s.NoError(cmdb.ObjectUpdate(fmt.Sprintf("srv-%03d", i), b, false, "srv"))
 	}
-	// --- вторая половина с изменением одного поля
+	// --- the second half with one field changed
 	for i := total - changed; i < total; i++ {
 		b := bodyOf(i, 1)
 		s.NoError(cmdb.ObjectUpdate(fmt.Sprintf("srv-%03d", i), b, false, "srv"))
 	}
 
-	// --- что должно было произойти
+	// --- what should have happened
 	for i := 0; i < total-changed; i++ {
 		s.Require().Equalf(before[i], timeOf(i),
 			"вершина %d не менялась, но была переписана — проверка на no-op не сработала", i)
@@ -113,12 +113,12 @@ func (s *InventoryRebuildTestSuite) Test_RebuildRewritesOnlyWhatChanged() {
 			"новое значение не доехало до вершины %d", i)
 	}
 
-	// --- чего это стоит
+	// --- what it costs
 	//
-	// Меряется полным проходом, а не половиной: половины идут одна за другой,
-	// и первая платит за прогрев, из-за чего no-op выходил дороже записи —
-	// ровно наоборот действительности. Отсюда прогревочный проход и лучшее из
-	// трёх, как в остальных замерах.
+	// Measured over a full pass, not a half: the halves run one after the
+	// other, and the first pays for the warm-up, which made a no-op come out
+	// dearer than a write — exactly the reverse of reality. Hence the warm-up
+	// pass and the best of three, as in the other measurements.
 	generation := 1
 	pass := func(gen int) time.Duration {
 		started := time.Now()
@@ -128,7 +128,7 @@ func (s *InventoryRebuildTestSuite) Test_RebuildRewritesOnlyWhatChanged() {
 		}
 		return time.Since(started)
 	}
-	pass(generation) // прогрев: после него весь граф в поколении 1
+	pass(generation) // warm-up: after it the whole graph is at generation 1
 
 	best := func(f func() time.Duration) time.Duration {
 		out := time.Duration(1<<62 - 1)
@@ -145,7 +145,7 @@ func (s *InventoryRebuildTestSuite) Test_RebuildRewritesOnlyWhatChanged() {
 		return pass(generation)
 	})
 
-	// и проход без изменений действительно ничего не переписал
+	// and a pass with no changes really rewrote nothing
 	atRest := make([]int64, total)
 	for i := range atRest {
 		atRest[i] = timeOf(i)

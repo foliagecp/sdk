@@ -1,14 +1,15 @@
 package cache
 
-// Этап 4: загрузка из KV и регидратация HA.
+// Loading from KV and HA rehydration.
 //
-// KV читается ровно дважды за жизнь процесса — при старте и при повышении
-// passive→active, — и оба раза читается целиком. Поэтому здесь проверяется не
-// скорость произвольного чтения, а три вещи: что режим записей отвечает после
-// загрузки ровно то же, что дерево; что пик памяти при загрузке определяется
-// записями, а не тем, влез бы граф деревом (Н-5); и что повышение роли даёт
-// тот же граф, что холодный старт, — то есть удалённое, пока узел молчал, не
-// оживает.
+// KV is read exactly twice in the life of a process — at startup and on a
+// passive→active promotion — and both times it is read in full. So what is
+// checked here is not the speed of random reads but three things: that
+// records mode answers exactly what the tree answers after a load; that the
+// peak memory of a load is set by the records, not by whether the graph
+// would fit as a tree; and that a promotion yields the same graph as a cold
+// start — that is, what was deleted while the node was silent does not come
+// back to life.
 
 import (
 	"context"
@@ -28,10 +29,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Test_Load_ProbeNeverRulesOutAnObject — дешёвый предфильтр загрузки обязан
-// только отсеивать заведомо не-JSON. Если разбор считает значение объектом,
-// предфильтр не имеет права сказать «нет»: иначе тело вершины после рестарта
-// сменит тип и ExistsJson начнёт врать.
+// Test_Load_ProbeNeverRulesOutAnObject — the load's cheap prefilter may only
+// weed out what is certainly not JSON. If the parser takes a value for an
+// object, the prefilter has no right to say "no": otherwise a vertex body
+// changes type after a restart and ExistsJson starts to lie.
 func Test_Load_ProbeNeverRulesOutAnObject(t *testing.T) {
 	corpus := []string{
 		``, ` `, `{}`, `{"a":1}`, ` {"a":1} `, "\n\t{\"a\":1}\n", "{}\n",
@@ -52,10 +53,10 @@ func Test_Load_ProbeNeverRulesOutAnObject(t *testing.T) {
 	}
 }
 
-// --- обвязка со встроенным NATS -------------------------------------------
+// --- harness with an embedded NATS ----------------------------------------
 
-// lastTestNatsURL — адрес сервера, поднятого последним вызовом newKVForTest,
-// для теста, которому нужно второе соединение к нему же.
+// lastTestNatsURL — the address of the server started by the last call to
+// newKVForTest, for a test that needs a second connection to the same server.
 var lastTestNatsURL string
 
 func newKVForTest(t *testing.T, bucket string) (nats.JetStreamContext, nats.KeyValue) {
@@ -85,8 +86,8 @@ func newKVForTest(t *testing.T, bucket string) (nats.JetStreamContext, nats.KeyV
 	return js, kvs
 }
 
-// kvGraph — то, что лежит в KV: пары ключ→значение ровно тех форм, что пишет
-// CRUD. Возвращает и список ключей, чтобы тест мог спросить каждый.
+// kvGraph — what lies in KV: key→value pairs of exactly the shapes CRUD
+// writes. It also returns the list of keys, so a test can ask about each one.
 func kvGraph(vertices, hubLinks int) (map[string][]byte, []string) {
 	out := map[string][]byte{}
 	put := func(k string, v []byte) { out[k] = v }
@@ -96,7 +97,7 @@ func kvGraph(vertices, hubLinks int) (map[string][]byte, []string) {
 		put(id, []byte(fmt.Sprintf(
 			`{"name":"узел %d","cpu":%d,"tags":["a","b"],"meta":{"x":%d,"y":null}}`, i, i%64, i)))
 	}
-	// хаб: одна вершина, к которой сходится всё
+	// hub: one vertex that everything converges on
 	for i := 0; i < hubLinks; i++ {
 		name := fmt.Sprintf("l%05d", i)
 		tgt := fmt.Sprintf("dom/v-%05d", i%vertices)
@@ -124,7 +125,7 @@ func fillKV(t *testing.T, kvs nats.KeyValue, entries map[string][]byte) {
 	}
 }
 
-// answers — весь наблюдаемый ответ хранилища по списку ключей.
+// answers — the store's whole observable answer over a list of keys.
 type answer struct {
 	value      []byte
 	exists     bool
@@ -154,10 +155,10 @@ func loadStore(t *testing.T, js nats.JetStreamContext, kvs nats.KeyValue, id str
 	return cs, cancel
 }
 
-// Test_KVLoad_RecordsAnswerAsTree — после настоящей загрузки из KV режим
-// записей обязан отвечать на каждый ключ ровно как дерево. Это те же ворота,
-// что и дифференциальный тест, но пройденные через реальный путь загрузки, с
-// его пробой типа значения.
+// Test_KVLoad_RecordsAnswerAsTree — after a real load from KV, records mode
+// must answer every key exactly as the tree does. This is the same gate as
+// the differential test, but passed through the real load path, with its
+// probe of the value type.
 func Test_KVLoad_RecordsAnswerAsTree(t *testing.T) {
 	js, kvs := newKVForTest(t, "agree")
 	entries, keys := kvGraph(200, 400)
@@ -204,7 +205,7 @@ func Test_KVLoad_RecordsAnswerAsTree(t *testing.T) {
 	}
 }
 
-// peakDuringLoad меряет максимум занятой кучи, пока идёт загрузка.
+// peakDuringLoad measures the maximum heap in use while a load runs.
 func peakDuringLoad(load func()) (peakMB, finalMB, churnMB float64, gcs uint32) {
 	runtime.GC()
 	var ms runtime.MemStats
@@ -244,14 +245,15 @@ func peakDuringLoad(load func()) (peakMB, finalMB, churnMB float64, gcs uint32) 
 		float64(ms.TotalAlloc-baseChurn) / (1 << 20), ms.NumGC - baseGC
 }
 
-// Test_KVLoad_PeakMemory — тест 5 из ТЗ, в двух частях.
+// Test_KVLoad_PeakMemory — the peak memory of a load, in two parts.
 //
-// Первая: граф с хабом действительно грузится из KV и все ключи читаются.
-// Вторая: тот же поток записей применяется напрямую, без NATS, и меряется пик.
-// Разделение не для удобства — пик настоящей загрузки на три четверти состоит
-// из машинерии клиента NATS, общей для обоих режимов, и на её фоне разница
-// между режимами тонет в шуме. Н-5 говорит про «записи + загрузочный буфер +
-// индекс»; буфер общий, а вот что стоят записи — видно только так.
+// The first: a graph with a hub really loads from KV and every key reads.
+// The second: the same stream of writes is applied directly, without NATS,
+// and the peak is measured. The split is not for convenience: three quarters
+// of a real load's peak is NATS client machinery, common to both modes, and
+// against it the difference between the modes drowns in noise. The load peak
+// is required to be "records + load buffer + index"; the buffer is common,
+// but what the records cost shows only this way.
 func Test_KVLoad_PeakMemory(t *testing.T) {
 	if testing.Short() {
 		t.Skip("длинный: поднимает NATS и грузит десятки тысяч ключей")
@@ -261,7 +263,7 @@ func Test_KVLoad_PeakMemory(t *testing.T) {
 	fillKV(t, kvs, entries)
 	t.Logf("ключей в KV: %d", len(keys))
 
-	// --- часть 1: всё ли доезжает через настоящую загрузку
+	// --- part 1: does everything get through a real load
 	for _, mode := range []string{"tree", "records"} {
 		restore := SetCacheModeForTest(mode)
 		cs, cancel := loadStore(t, js, kvs, "peak_"+mode)
@@ -276,7 +278,7 @@ func Test_KVLoad_PeakMemory(t *testing.T) {
 		restore()
 	}
 
-	// --- часть 2: чего стоит применить тот же поток
+	// --- part 2: what applying the same stream costs
 	apply := func(cs *Store) {
 		now := int64(1)
 		for _, k := range keys {
@@ -306,7 +308,7 @@ func Test_KVLoad_PeakMemory(t *testing.T) {
 		return bestPeak, bestFinal, bestChurn
 	}
 
-	// Сперва при настройке по умолчанию — как оно и будет в бою.
+	// First at the default setting — as it will be in production.
 	treePeak, treeFinal, treeChurn := measure("tree")
 	recPeak, recFinal, recChurn := measure("records")
 	t.Logf("GOGC по умолчанию — дерево: пик %.1f MB, живого %.1f MB, выделено %.1f MB",
@@ -316,23 +318,24 @@ func Test_KVLoad_PeakMemory(t *testing.T) {
 	require.Lessf(t, recFinal, treeFinal,
 		"записи (%.1f MB) обязаны занимать меньше дерева (%.1f MB)", recFinal, treeFinal)
 
-	// А теперь — при сборщике, который действительно собирает.
+	// And now with a collector that actually collects.
 	//
-	// Пик при GOGC=100 говорит не о том, сколько загрузке НУЖНО, а о том,
-	// сколько мусора среда согласна подержать: она копит до удвоения живого, а
-	// живое у записей вдвое меньше, поэтому и планка ниже — но выделяют они на
-	// 14 % больше, и при щедрой планке садятся чуть выше дерева. Стоит
-	// сборщику начать собирать, как разница проступает: дерево упирается в пол
-	// собственного живого и ниже не идёт ни при какой настройке, а записи
-	// продолжают падать к своему. Замерено на этом самом графе:
+	// The peak at GOGC=100 says not how much a load NEEDS but how much
+	// garbage the runtime is willing to hold: it accumulates up to double the
+	// live heap, and the records' live heap is half as large, so their
+	// threshold is lower too — but they allocate 14% more, and with a
+	// generous threshold they land slightly above the tree. Once the collector
+	// starts collecting, the difference shows: the tree hits the floor of its
+	// own live heap and goes no lower at any setting, while the records keep
+	// falling towards theirs. Measured on this very graph:
 	//
-	//	GOGC   дерево   записи
-	//	 100    83.2     90.3
-	//	  50    63.2     57.2
-	//	  25    62.6     48.9
+	//	GOGC    tree   records
+	//	 100    83.2      90.3
+	//	  50    63.2      57.2
+	//	  25    62.6      48.9
 	//
-	// Это и есть Н-5: пик загрузки определяется записями, а не тем, влез бы
-	// граф деревом.
+	// This is the property under test: the load peak is set by the records,
+	// not by whether the graph would fit as a tree.
 	prev := debug.SetGCPercent(50)
 	defer debug.SetGCPercent(prev)
 
@@ -343,10 +346,10 @@ func Test_KVLoad_PeakMemory(t *testing.T) {
 		"Н-5: пик загрузки в записях (%.1f MB) обязан быть ниже пика дерева (%.1f MB)", recPeak, treePeak)
 }
 
-// Test_Rehydrate_KVIsTheWholeTruth — повышение passive→active обязано дать тот
-// же граф, что холодный старт. Пока узел молчал, другой активный удалил
-// вершину; после регидратации её не должно быть — загрузка несёт только то,
-// что есть, и сама по себе про удаление не говорит ничего.
+// Test_Rehydrate_KVIsTheWholeTruth — a passive→active promotion must yield
+// the same graph as a cold start. While the node was silent, another active
+// node deleted a vertex; after rehydration it must be gone — a load carries
+// only what exists, and by itself says nothing about deletes.
 func Test_Rehydrate_KVIsTheWholeTruth(t *testing.T) {
 	restore := SetCacheModeForTest("records")
 	defer restore()
@@ -360,12 +363,12 @@ func Test_Rehydrate_KVIsTheWholeTruth(t *testing.T) {
 	require.True(t, cs.Exists("dom/v-00007"), "вершина обязана была загрузиться")
 	require.True(t, cs.Exists("dom/hub.out.to.l00007"))
 
-	// другой активный удаляет вершину и связь, пока мы пассивны
+	// another active node deletes a vertex and a link while we are passive
 	gone := []string{"dom/v-00007", "dom/hub.out.to.l00007", "dom/hub.ltype.__object.dom/v-00007"}
 	for _, k := range gone {
 		require.NoError(t, kvs.Delete(KVStorePrefix+"."+k))
 	}
-	// и добавляет вершину, которой мы не видели
+	// and adds a vertex we have not seen
 	added := "dom/v-99999"
 	_, err := kvs.Put(KVStorePrefix+"."+added, []byte(`{"name":"после"}`))
 	require.NoError(t, err)
@@ -377,7 +380,7 @@ func Test_Rehydrate_KVIsTheWholeTruth(t *testing.T) {
 	}
 	require.True(t, cs.Exists(added), "появившееся в KV не доехало до повышения")
 
-	// всё остальное на месте и читается
+	// everything else is in place and reads
 	for _, k := range keys {
 		if k == gone[0] || k == gone[1] || k == gone[2] {
 			continue

@@ -559,8 +559,8 @@ func (r *vertexRecord) eachKeyOfEntry(kind tailKind, name, head, full string, fn
 // depth, anything else is an exact key. Only keys that exist are returned.
 func (r *vertexRecord) keysByPattern(vertexID, pattern string) []string {
 	// An empty result is an empty slice, not nil: Store.GetKeysByPattern builds
-	// its result with make(), and Ф-2 asks for the same answer, not an
-	// equivalent one.
+	// its result with make(), and a record must give the tree's answer itself,
+	// not an equivalent one.
 	out := []string{}
 
 	id, tail := splitVertexKey(pattern)

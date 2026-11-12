@@ -1,11 +1,11 @@
 package cache
 
-// Дифференциальный тест этапа 1: одни и те же операции над деревом и над
-// записью обязаны давать один и тот же ответ.
+// A differential test: the same operations on the tree and on a record must
+// give the same answer.
 //
-// Раскладка ключей продублирована из embedded/graph/crud/common.go: тот пакет
-// зависит от этого, и импортировать его сюда нельзя. Если раскладка изменится,
-// этот тест должен упасть — в этом и смысл.
+// The key layout is duplicated from embedded/graph/crud/common.go: that
+// package depends on this one, so it cannot be imported here. If the layout
+// changes, this test must fail — that is the point.
 
 import (
 	"fmt"
@@ -25,7 +25,7 @@ const (
 	kInLink    = "%s.in.%s.%s"
 )
 
-// diffVertex — вершина, которую кладём в оба представления.
+// diffVertex is a vertex that is put into both representations.
 type diffVertex struct {
 	id   string
 	body []byte
@@ -68,7 +68,7 @@ func randomDiffVertex(rng *rand.Rand, id string, maxLinks int) diffVertex {
 	return v
 }
 
-// writeToTree кладёт вершину в дерево так, как это делает CRUD.
+// writeToTree puts a vertex into the tree the way CRUD does.
 func writeToTree(cs *Store, v diffVertex) {
 	if v.body != nil {
 		cs.SetValue(v.id, v.body, false, 1)
@@ -98,7 +98,7 @@ func recordOf(v diffVertex) *vertexRecord {
 	}, defaultBucketLinks)
 }
 
-// allKeysOf перечисляет каждый ключ, который вершина занимает в дереве.
+// allKeysOf lists every key the vertex occupies in the tree.
 func allKeysOf(v diffVertex) []string {
 	var keys []string
 	if v.body != nil {
@@ -138,7 +138,7 @@ func Test_Record_MatchesTree(t *testing.T) {
 				writeToTree(cs, v)
 				r := recordOf(v)
 
-				// --- каждый существующий ключ отвечает одинаково
+				// --- every existing key answers the same
 				for _, key := range allKeysOf(v) {
 					_, tail := splitVertexKey(key)
 
@@ -156,7 +156,7 @@ func Test_Record_MatchesTree(t *testing.T) {
 						"время обновления %s", key)
 				}
 
-				// --- отсутствующие ключи одинаково отсутствуют
+				// --- absent keys are absent in both
 				for _, key := range []string{
 					id + ".out.to.нет",
 					id + ".out.body.нет",
@@ -171,7 +171,7 @@ func Test_Record_MatchesTree(t *testing.T) {
 					require.Equal(t, int64(-1), r.updateTime(tail), "время у несуществующего %s", key)
 				}
 
-				// --- перечисление по шаблонам
+				// --- listing by patterns
 				patterns := []string{
 					id + ".out.to.*",
 					id + ".out.to.>",
@@ -198,8 +198,8 @@ func Test_Record_MatchesTree(t *testing.T) {
 	}
 }
 
-// Test_Record_MatchesTree_AfterMutations — то же, но после случайной череды
-// записей и удалений в обоих представлениях.
+// Test_Record_MatchesTree_AfterMutations — the same, but after a random
+// series of writes and deletes in both representations.
 func Test_Record_MatchesTree_AfterMutations(t *testing.T) {
 	rng := rand.New(rand.NewSource(4092026))
 	const id = "dom/v"
@@ -215,7 +215,7 @@ func Test_Record_MatchesTree_AfterMutations(t *testing.T) {
 		name := fmt.Sprintf("l%03d", rng.Intn(120))
 
 		switch rng.Intn(4) {
-		case 0, 1: // записать связь
+		case 0, 1: // write a link
 			lt := fmt.Sprintf("t%d", rng.Intn(3))
 			tgt := fmt.Sprintf("dom/tgt-%02d", rng.Intn(20))
 			if prev, ok := live[name]; ok {
@@ -233,7 +233,7 @@ func Test_Record_MatchesTree_AfterMutations(t *testing.T) {
 			require.True(t, r.setOutIndexType(name, lt, now, true))
 			live[name] = outLink{Name: name, To: subValue{Value: lt + "." + tgt, Time: now, Live: true}}
 
-		case 2: // удалить связь
+		case 2: // delete a link
 			prev, ok := live[name]
 			if !ok {
 				continue
@@ -247,7 +247,7 @@ func Test_Record_MatchesTree_AfterMutations(t *testing.T) {
 			require.True(t, r.setOutIndexType(prev.Name, plt, now, false))
 			delete(live, name)
 
-		case 3: // запоздавшая запись — обязана быть отвергнута обоими
+		case 3: // a late write — both must reject it
 			prev, ok := live[name]
 			if !ok {
 				continue
@@ -259,7 +259,7 @@ func Test_Record_MatchesTree_AfterMutations(t *testing.T) {
 		if step%97 != 0 {
 			continue
 		}
-		// сверяем оба представления целиком
+		// compare both representations in full
 		for n := 0; n < 120; n++ {
 			nm := fmt.Sprintf("l%03d", n)
 			key := fmt.Sprintf(kOutTo, id, nm)
