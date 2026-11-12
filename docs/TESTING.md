@@ -342,10 +342,21 @@ write holds its slot lock through decode and encode and a split holds the
 directory lock. The log prints how much of the nominal parallelism the machine
 gave, so a failure on a loaded runner can be told from one on an idle runner.
 The gate never runs under the race detector. It runs in phase 1b of
-`scripts/run-all-tests.sh`, which reports its verdict without failing the run:
-on a shared or loaded runner the verdict describes the machine as much as the
-code. `scripts/run-perf-tests.sh --gate` and the direct `go test` below fail
-on it.
+`scripts/run-all-tests.sh`, which reports its verdict as PASS, FAIL or
+INCONCLUSIVE without failing the run: on a shared or loaded runner the verdict
+describes the machine as much as the code. `go test` itself reports
+INCONCLUSIVE as a failing test, and `scripts/run-perf-tests.sh --gate` and the
+direct `go test` below fail on it.
+
+What the gate needs from the machine is steadiness, not speed. A pair takes
+about half a second, and at least 8 of the 30 pairs must run with the
+machine's speed changing by no more than 15 % within them; whatever changes
+the speed for a fraction of a second at a time leaves too few, and the run is
+INCONCLUSIVE. A machine slowed down evenly keeps its pairs, but under sustained
+outside load records really lose more than the tree, so the threshold is
+judged on a machine with nothing else running. For a verdict, run the gate on
+its own, as below, rather than reading phase 1b, which starts right after the
+heaviest phase of the run.
 
 ```sh
 go test -tags perf -count=1 -v -run '^Test_Hub_ConcurrentThroughputGate$' ./statefun/cache
