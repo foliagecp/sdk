@@ -10,11 +10,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	customNatsKv "github.com/foliagecp/sdk/embedded/nats/kv"
 	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/nats-io/nats.go"
+	"golang.org/x/sync/errgroup"
 )
 
 // ErrWALRecovery means that replay cannot establish a consistent KV state.
@@ -354,7 +356,7 @@ func (dm *Domain) waitForWALRecoveryProgress(ctx context.Context, stallTimeout t
 						if err := dm.walTerminalError(); err != nil {
 							return err
 						}
-						if err := dm.restoreWALDeletes(ctx); err != nil {
+						if err := dm.restoreWALDeletes(ctx, stallTimeout, now); err != nil {
 							return err
 						}
 						return dm.setKVConsistent(true)
@@ -513,59 +515,179 @@ func (dm *Domain) recordPrunedWALReceipts(seq uint64) error {
 	return fmt.Errorf("WAL receipt retention boundary changed concurrently; cleanup deferred")
 }
 
+// Each proven delete costs one read through the stream leader. Rebuilding a
+// large model leaves hundreds of thousands of them in the receipt window, so
+// the reads run concurrently.
+const walDeleteVerifyWorkers = 32
+
+// walDeleteCheck is the newest proven delete of one key and the WAL sequence
+// whose receipt proves it.
+type walDeleteCheck struct {
+	walAppliedDelete
+	sequence uint64
+}
+
+// A value the newest proven delete of a key keeps is newer than every older
+// delete of that key as well, so only the newest one decides.
+func collectWALDeletes(newest map[string]walDeleteCheck, r *walReceipt) {
+	for _, deletion := range r.Deletes {
+		if current, ok := newest[deletion.Key]; !ok || deletion.Revision > current.Revision {
+			newest[deletion.Key] = walDeleteCheck{deletion, r.Sequence}
+		}
+	}
+}
+
+func sortedWALDeleteChecks(newest map[string]walDeleteCheck) []walDeleteCheck {
+	checks := make([]walDeleteCheck, 0, len(newest))
+	for _, check := range newest {
+		checks = append(checks, check)
+	}
+	sort.Slice(checks, func(i, j int) bool {
+		if checks[i].sequence != checks[j].sequence {
+			return checks[i].sequence < checks[j].sequence
+		}
+		return checks[i].Key < checks[j].Key
+	})
+	return checks
+}
+
 // A delete marker can be reclaimed while an older value still exists in the
 // broker's recovery files. Record the delete's KV revision before reclaiming
 // it, so recovery can remove a resurrected older value without deleting a
 // legitimate later PUT. The conditional delete closes the read/write race.
-func (dm *Domain) repairWALDeletes(ctx context.Context, receipt *walReceipt) error {
-	for _, deletion := range receipt.Deletes {
-		for attempt := 0; ; attempt++ {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			entry, err := dm.readWALKV(ctx, deletion.Key)
-			if errors.Is(err, nats.ErrKeyNotFound) || errors.Is(err, nats.ErrKeyDeleted) {
-				break
-			}
-			if err != nil {
-				return fmt.Errorf("verify delete in WAL sequence %d: %w", receipt.Sequence, err)
-			}
-			if entry.Sequence > deletion.Revision {
-				break
-			}
-			if attempt >= 5 {
-				return fmt.Errorf("delete revision changed repeatedly during WAL recovery")
-			}
-			err = dm.kv.Delete(deletion.Key, nats.LastRevision(entry.Sequence))
-			if errors.Is(err, nats.ErrKeyExists) {
-				continue
-			}
-			if err != nil {
-				return fmt.Errorf("restore proven delete in WAL sequence %d: %w", receipt.Sequence, err)
-			}
-			dm.walProgress.Add(1)
+func (dm *Domain) repairWALDelete(ctx context.Context, check walDeleteCheck) error {
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		entry, err := dm.readWALKV(ctx, check.Key)
+		if errors.Is(err, nats.ErrKeyNotFound) || errors.Is(err, nats.ErrKeyDeleted) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("verify delete in WAL sequence %d: %w", check.sequence, err)
+		}
+		if entry.Sequence > check.Revision {
+			return nil
+		}
+		if attempt >= 5 {
+			return fmt.Errorf("delete revision changed repeatedly during WAL recovery")
+		}
+		err = dm.kv.Delete(check.Key, nats.LastRevision(entry.Sequence))
+		if errors.Is(err, nats.ErrKeyExists) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("restore proven delete in WAL sequence %d: %w", check.sequence, err)
+		}
+		dm.walProgress.Add(1)
+		return nil
+	}
+}
+
+// repairWALDeleteChecks keeps at most walDeleteVerifyWorkers reads in flight;
+// the first failure stops the rest. settled is called after each key.
+func (dm *Domain) repairWALDeleteChecks(ctx context.Context, checks []walDeleteCheck, settled func()) error {
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(walDeleteVerifyWorkers)
+	for _, check := range checks {
+		if gctx.Err() != nil {
 			break
 		}
+		g.Go(func() error {
+			if err := dm.repairWALDelete(gctx, check); err != nil {
+				return err
+			}
+			settled()
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+func (dm *Domain) repairWALDeletes(ctx context.Context, receipt *walReceipt) error {
+	newest := make(map[string]walDeleteCheck, len(receipt.Deletes))
+	collectWALDeletes(newest, receipt)
+	return dm.repairWALDeleteChecks(ctx, sortedWALDeleteChecks(newest), func() {})
+}
+
+// walStallWatch cancels a recovery phase that stops making progress. Like the
+// replay wait, it bounds how long nothing happens, not how long the phase takes.
+type walStallWatch struct {
+	now    func() time.Time
+	last   atomic.Int64
+	cancel context.CancelCauseFunc
+	done   chan struct{}
+}
+
+func watchWALStall(ctx context.Context, timeout time.Duration, now func() time.Time) (context.Context, *walStallWatch) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	w := &walStallWatch{now: now, cancel: cancel, done: make(chan struct{})}
+	w.progress()
+	go func() {
+		ticker := time.NewTicker(max(timeout/4, time.Millisecond))
+		defer ticker.Stop()
+		for {
+			select {
+			case <-w.done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if w.now().Sub(time.Unix(0, w.last.Load())) >= timeout {
+					cancel(fmt.Errorf("%w: no progress for %s", ErrWALRecovery, timeout))
+					return
+				}
+			}
+		}
+	}()
+	return ctx, w
+}
+
+func (w *walStallWatch) progress() { w.last.Store(w.now().UnixNano()) }
+
+// stop ends the watch and returns the stall it fired for, if any: a phase it
+// stopped must report that, not the bare cancellation its reads observed.
+func (w *walStallWatch) stop(ctx context.Context) error {
+	close(w.done)
+	stall := context.Cause(ctx)
+	w.cancel(nil)
+	if errors.Is(stall, ErrWALRecovery) {
+		return stall
 	}
 	return nil
 }
 
-func (dm *Domain) restoreWALDeletes(ctx context.Context) error {
-	scanCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
+// Every start re-checks the proven deletes still in the receipt window: one
+// read per deleted key. After a large rebuild that is far more than any fixed
+// budget allows, so this phase, like replay, fails only when it stops making
+// progress for stallTimeout.
+func (dm *Domain) restoreWALDeletes(ctx context.Context, stallTimeout time.Duration, now func() time.Time) (err error) {
+	ctx, watch := watchWALStall(ctx, stallTimeout, now)
+	var receipts int
+	var checks []walDeleteCheck
+	var verified atomic.Int64
+	defer func() {
+		if stall := watch.stop(ctx); stall != nil && err != nil {
+			err = fmt.Errorf("%w restoring applied deletes (%d receipts read, %d of %d deleted keys verified); preserve WAL/KV and check broker health", stall, receipts, verified.Load(), len(checks))
+		}
+	}()
 	prefix := walReceiptPrefix + dm.walReceiptGeneration() + "."
-	watcher, err := dm.kv.Watch(prefix+">", nats.IgnoreDeletes(), nats.Context(scanCtx))
+	watcher, err := dm.kv.Watch(prefix+">", nats.IgnoreDeletes(), nats.Context(ctx))
 	if err != nil {
 		return err
 	}
 	defer watcher.Stop()
 	// Finish the snapshot before writes: newly repaired delete markers are not
 	// receipt entries and must never change the inventory being validated.
-	var receipts []*walReceipt
+	newest := map[string]walDeleteCheck{}
 	for {
 		select {
-		case <-scanCtx.Done():
-			return scanCtx.Err()
+		case <-ctx.Done():
+			return ctx.Err()
 		case entry, ok := <-watcher.Updates():
 			if !ok {
 				return fmt.Errorf("WAL receipt replay ended before its snapshot completed")
@@ -573,6 +695,7 @@ func (dm *Domain) restoreWALDeletes(ctx context.Context) error {
 			if entry == nil {
 				goto complete
 			}
+			watch.progress()
 			if entry.Key() == dm.walPrunedKey() {
 				continue
 			}
@@ -591,16 +714,14 @@ func (dm *Domain) restoreWALDeletes(ctx context.Context) error {
 			if txTime, err := strconv.ParseInt(receipt.TxID, 10, 64); err == nil {
 				dm.cache.RecordCommittedTx(txTime)
 			}
-			if len(receipt.Deletes) > 0 {
-				receipts = append(receipts, &receipt)
-			}
+			receipts++
+			collectWALDeletes(newest, &receipt)
 		}
 	}
 complete:
-	for _, receipt := range receipts {
-		if err := dm.repairWALDeletes(scanCtx, receipt); err != nil {
-			return err
-		}
-	}
-	return nil
+	checks = sortedWALDeleteChecks(newest)
+	return dm.repairWALDeleteChecks(ctx, checks, func() {
+		verified.Add(1)
+		watch.progress()
+	})
 }

@@ -61,6 +61,10 @@ are the only non-pass/fail items (they measure, they do not gate).
   `wal_recovery_test.go` covers applied receipts before ACK, safe redelivery,
   invalid evidence, storage failures, progress deadlines, receipt pruning,
   conditional delete reconciliation and cache reload after WAL replay.
+  `wal_restore_deletes_test.go` covers the startup re-check of proven deletes:
+  the newest proof of a key decides, a re-check longer than the stall interval
+  completes while it progresses, and a stalled one fails closed without
+  touching KV — all on a controlled watchdog clock.
 - **`statefun/cache`** — `store_value_lazy_test.go`, `backup_barrier_test.go`.
 - **`statefun/system`** — `keymutex_timeout_test.go`.
 - **`clients/go/db`** — `common_test.go`.

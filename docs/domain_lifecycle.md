@@ -108,6 +108,14 @@ not newer than the proven delete. The write is conditional on the observed
 revision, so a later legitimate PUT is preserved. Startup reloads the working
 cache after replay and delete reconciliation, before serving functions.
 
+Every start repeats that check for each delete recorded in the retained
+receipts: one stream-leader read per key, only the newest proven delete of a
+key counting, up to 32 reads in flight. After a rebuild of a large model this
+is hundreds of thousands of keys and can take longer than 30 seconds. Like
+replay, the check is bounded by progress, not by total time: it fails with an
+error matching `statefun.ErrWALRecovery` only after 30 seconds without a
+receipt read or a key settled, and then leaves KV as it found it.
+
 Consumer delivery attempts are unlimited for the KV committer, with progress
 heartbeats during a large apply or backup pause. Invalid transactions are kept
 in WAL and reported as errors. Startup refuses to mark KV consistent while
