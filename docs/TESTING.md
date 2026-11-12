@@ -342,7 +342,10 @@ write holds its slot lock through decode and encode and a split holds the
 directory lock. The log prints how much of the nominal parallelism the machine
 gave, so a failure on a loaded runner can be told from one on an idle runner.
 The gate never runs under the race detector. It runs in phase 1b of
-`scripts/run-all-tests.sh` and in `scripts/run-perf-tests.sh --gate`.
+`scripts/run-all-tests.sh`, which reports its verdict without failing the run:
+on a shared or loaded runner the verdict describes the machine as much as the
+code. `scripts/run-perf-tests.sh --gate` and the direct `go test` below fail
+on it.
 
 ```sh
 go test -tags perf -count=1 -v -run '^Test_Hub_ConcurrentThroughputGate$' ./statefun/cache

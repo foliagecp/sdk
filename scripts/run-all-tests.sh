@@ -4,7 +4,8 @@
 #
 # Phase 1 (now):     Go tests (unit / component / integration) via `go test`.
 # Phase 1b:          performance gates (-tags perf), never under the race
-#                    detector: the cache hub throughput gate.
+#                    detector: the cache hub throughput gate. Report only:
+#                    its verdict does not fail this run.
 # Phase 2 (planned): docker-compose system tests, executed one by one.
 #
 # See docs/TESTING.md for the full picture, the test map and the roadmap.
@@ -47,7 +48,7 @@ for i in "${!ARGS[@]}"; do
     --system-only) SYSTEM_ONLY=1 ;;
     --cache-mode)  CACHE_MODE_ARG="${ARGS[$((i+1))]:-}" ;;
     --cache-mode=*) CACHE_MODE_ARG="${arg#*=}" ;;
-    -h|--help)     sed -n '2,24p' "$SELF"; exit 0 ;;
+    -h|--help)     sed -n '2,26p' "$SELF"; exit 0 ;;
     *)
       # the value of --cache-mode, already consumed above
       [ "$i" -gt 0 ] && [ "${ARGS[$((i-1))]}" = "--cache-mode" ] && continue
@@ -122,14 +123,18 @@ if [ "$SYSTEM_ONLY" -eq 0 ]; then
   # code) and without the other packages competing for the CPU. The gate drops
   # pairs measured while the machine changed and says INCONCLUSIVE rather than
   # blaming the code when too few pairs are left.
+  #
+  # Here its verdict is reported and does not fail the run: on a shared or
+  # loaded runner it describes the machine as much as the code, and a
+  # functional run must not turn red over it. scripts/run-perf-tests.sh --gate
+  # still fails on it.
   echo "=================================================================="
-  echo "Phase 1b: performance gates  (go test -tags perf -run '^Test_Hub_ConcurrentThroughputGate\$' ./statefun/cache — no race detector)"
+  echo "Phase 1b: performance gates  (go test -tags perf -run '^Test_Hub_ConcurrentThroughputGate\$' ./statefun/cache — no race detector, report only)"
   echo "=================================================================="
   if go test -tags perf -count=1 -v -run '^Test_Hub_ConcurrentThroughputGate$' ./statefun/cache; then
     echo ">> performance gates: PASS"
   else
-    echo ">> performance gates: FAIL"
-    fail=1
+    echo ">> performance gates: FAIL (report only, does not fail this run; see docs/TESTING.md \"Cache hub throughput gate\")"
   fi
 fi
 

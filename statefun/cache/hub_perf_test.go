@@ -53,7 +53,8 @@ package cache
 //	go test -tags perf -count=1 -v -run '^Test_Hub_ConcurrentThroughputGate$' ./statefun/cache
 //
 // Он же входит в scripts/run-perf-tests.sh --gate и в фазу 1b
-// scripts/run-all-tests.sh. Как воспроизвести прежний FAIL и проверить гейт под
+// scripts/run-all-tests.sh — там только отчётом: вердикт печатается, но общий
+// прогон не роняет. Как воспроизвести прежний FAIL и проверить гейт под
 // нагрузкой, описывает scripts/hub-gate-experiment.sh.
 
 import (
