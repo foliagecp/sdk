@@ -5,13 +5,17 @@ package cache
 // ровно то, что видят CRUD и JPGQL.
 
 import (
+	"bytes"
 	"fmt"
 	"math/rand"
+	"os"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/foliagecp/easyjson"
+	lg "github.com/foliagecp/sdk/statefun/logger"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -637,4 +641,67 @@ func Test_SweepRecords_SweepingAlongsideWritingLosesNothing(t *testing.T) {
 		require.NoErrorf(t, err, "последняя связь писателя %d потеряна", w)
 		require.Equal(t, fmt.Sprintf("t.dom/tgt-%d-%d", w, rounds-1), string(v))
 	}
+}
+
+// Test_Tiering_ExistsJsonNudgesLikeTheTree — запись хранит байтами всё, кроме
+// тела, но подсказку «используй Exists» ExistsJson обязан давать там же, где её
+// даёт дерево. Тело связи — JSON: подсказки нет, иначе каждое чтение объекта,
+// которое проверяет его связь type, пишет WARN. Цель связи и тело, записанное
+// байтами, — не JSON: подсказка есть. Существование сообщается всегда.
+func Test_Tiering_ExistsJsonNudgesLikeTheTree(t *testing.T) {
+	for _, mode := range []string{"tree", "records"} {
+		t.Run(mode, func(t *testing.T) {
+			restore := SetCacheModeForTest(mode)
+			defer restore()
+
+			cs := NewStoreForTest("exists-json-" + mode)
+			body := easyjson.NewJSONObject()
+			cs.SetValueJSON("dom/v", &body, false, 1)
+			cs.SetValueJSON(fmt.Sprintf(kOutBody, "dom/v", "type"), &body, false, 1)
+			cs.SetValue(fmt.Sprintf(kOutTo, "dom/v", "type"), []byte("__type.dom/t"), false, 1)
+			cs.SetValue("dom/raw", []byte("raw"), false, 1)
+
+			logs := captureWarnings(t)
+			nudged := map[string]bool{
+				"dom/v":               false,
+				"dom/v.out.body.type": false,
+				"dom/v.out.to.type":   true,
+				"dom/raw":             true,
+			}
+			for key := range nudged {
+				require.Truef(t, cs.ExistsJson(key), "%s существует", key)
+			}
+			for key, want := range nudged {
+				got := strings.Contains(logs.String(), "key="+key+" is []byte, use Exists method")
+				require.Equalf(t, want, got, "подсказка для %s", key)
+			}
+		})
+	}
+}
+
+// warnBuffer — буфер, в который логгер пишет из любых горутин.
+type warnBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (w *warnBuffer) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.Write(p)
+}
+
+func (w *warnBuffer) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+// captureWarnings направляет глобальный логгер в буфер до конца теста и
+// возвращает его к настройкам по умолчанию после.
+func captureWarnings(t *testing.T) *warnBuffer {
+	w := &warnBuffer{}
+	lg.GetLogger().SetOptions(w, lg.WarnLevel, false, false)
+	t.Cleanup(func() { lg.GetLogger().SetOptions(os.Stdout, lg.InfoLevel, true, false) })
+	return w
 }

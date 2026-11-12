@@ -1624,7 +1624,7 @@ func (cs *Store) ExistsJson(key string) bool {
 			if !r.existsParsed(vk.kind, vk.a, vk.b) {
 				return false
 			}
-			if !vk.isBody() || !r.bodyIsJSON() {
+			if recordValueIsBytes(vk, r) {
 				lg.Logf(lg.WarnLevel, "Value for key=%s is []byte, use Exists method", key)
 			}
 			return true

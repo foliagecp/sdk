@@ -229,6 +229,25 @@ type vertexKey struct {
 // isBody says the key is the vertex body itself rather than one of its links.
 func (vk vertexKey) isBody() bool { return vk.kind == tailBody }
 
+// recordValueIsBytes says whether the tree would hold this key's value as
+// []byte rather than JSON, so that a record nudges ExistsJson callers exactly
+// where the tree does. A record keeps every value but the body as bytes, so
+// its storage cannot answer this; the key's shape can:
+//   - the body carries a flag saying whether it was written as JSON;
+//   - a link body is JSON by contract: written with SetValueJSON, and a load
+//     restores it as JSON;
+//   - the link target, type, index and in-link keys hold plain strings.
+func recordValueIsBytes(vk vertexKey, r *vertexRecord) bool {
+	switch vk.kind {
+	case tailBody:
+		return !r.bodyIsJSON()
+	case tailOutBody:
+		return false
+	default:
+		return true
+	}
+}
+
 // tieredVertex resolves a key to the vertex it belongs to, and says whether the
 // key is a graph vertex key at all.
 func tieredVertex(key string) (vertexKey, bool) {
