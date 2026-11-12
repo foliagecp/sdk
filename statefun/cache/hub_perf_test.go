@@ -22,18 +22,25 @@ package cache
 // Замеры scripts/hub-gate-experiment.sh (контейнер на 4 CPU, сосед на 2 ядра):
 // прежний тест под -race — простой 0 FAIL из 20, постоянная нагрузка 2, мигающая
 // 6; этот гейт — простой 10 PASS из 10 (медиана 1,09), мигающая 10 из 10 (1,06),
-// постоянная — медиана 1,27: свойство кода под нагрузкой, а не шум.
+// постоянная — медиана 1,27: свойство кода под нагрузкой, а не шум. С
+// отбраковкой по разбросу внутри пары, по 5 прогонов: простой 5 PASS (1,10),
+// мигающая 5 PASS (1,13), постоянная 5 FAIL (1,29) при 42–51 % номинальной
+// параллельности; чистых пар 15 в каждом прогоне.
 //
 // Теперь:
 //
 //   - Замер — пара «дерево, записи» подряд, порядок в паре чередуется. Каждый
 //     замер — серия всплесков на свежих хранилищах суммарно не короче
 //     gateSampleFloor; заполнение хаба и сборка мусора вне замера.
-//   - До и после каждой пары меряется пропускная способность машины: одна и та
-//     же работа на всех P. Пара, вокруг которой она хуже лучшей за прогон
-//     больше чем на gateDriftLimit, отбрасывается: её отношение говорит о
-//     машине, а не о коде. Постоянная нагрузка сдвигом не считается — пары под
-//     ней сравнимы между собой, и отношение под ней настоящее.
+//   - До пары, между её двумя замерами и после меряется пропускная способность
+//     машины: одна и та же работа на всех P. Если в самый медленный из этих трёх
+//     моментов машина медленнее, чем в самый быстрый, больше чем на
+//     gateSpreadLimit, пара отбрасывается: её замеры шли на разной машине, и
+//     отношение говорит о машине, а не о коде. Пара на ровно медленной машине
+//     сравнима — отношение сокращает абсолютную скорость, — поэтому постоянная
+//     нагрузка не отбраковывается. Сравнение с лучшим моментом всего прогона,
+//     с которого гейт начинал, отбрасывало и такие пары, а на виртуальной машине
+//     с соседями по гипервизору — почти все.
 //   - Решение — по медиане отношений чистых пар. Если чистых пар меньше
 //     gateMinClean, прогон падает как INCONCLUSIVE: он не доказывает ни
 //     регрессию, ни её отсутствие.
@@ -68,7 +75,7 @@ const (
 	gateCleanPairs   = 15
 	gateMinClean     = 8
 	gateMaxPairs     = 30
-	gateDriftLimit   = 1.15
+	gateSpreadLimit  = 1.15
 	gateSampleFloor  = 200 * time.Millisecond
 	gateMinBursts    = 3
 )
@@ -91,9 +98,9 @@ func (s hubGateSample) String() string {
 }
 
 type hubGatePair struct {
-	first         string
-	pre, post     time.Duration
-	tree, records hubGateSample
+	first          string
+	pre, mid, post time.Duration
+	tree, records  hubGateSample
 }
 
 func (s hubGateSample) perWrite() float64 { return float64(s.took) / float64(max(s.writes, 1)) }
@@ -103,9 +110,10 @@ func (s hubGateSample) perWrite() float64 { return float64(s.took) / float64(max
 // одной записи.
 func (p hubGatePair) ratio() float64 { return p.records.perWrite() / p.tree.perWrite() }
 
-// drift — во сколько раз машина вокруг пары медленнее, чем в лучший момент прогона.
-func (p hubGatePair) drift(best time.Duration) float64 {
-	return float64(max(p.pre, p.post)) / float64(best)
+// spread — во сколько раз машина в самый медленный момент пары (до неё, между
+// замерами, после) медленнее, чем в самый быстрый.
+func (p hubGatePair) spread() float64 {
+	return float64(max(p.pre, p.mid, p.post)) / float64(min(p.pre, p.mid, p.post))
 }
 
 // hubGateMeasure — всплески в режиме mode, каждый на свежем хранилище, пока
@@ -134,7 +142,7 @@ func hubGateMeasure(mode string, floor time.Duration, prefill int) hubGateSample
 }
 
 // cpuCapacity — сколько машина сейчас тратит на одну и ту же работу на всех P:
-// хеширование без общих данных и замков. Её сдвиг за время пары и есть «машина
+// хеширование без общих данных и замков. Её разброс внутри пары и есть «машина
 // изменилась» — соседний процесс, троттлинг квоты, другой контейнер. Лучший из
 // трёх коротких замеров: единичная заминка планировщика в самой калибровке —
 // не сдвиг, а занятая соседом машина держится дольше трёх замеров.
@@ -143,7 +151,7 @@ func cpuCapacity() time.Duration { return cpuWork(runtime.GOMAXPROCS(0)) }
 // cpuParallelism — какую долю номинальной параллельности машина отдаёт сейчас:
 // та же работа на одной горутине и на каждой из GOMAXPROCS. На свободной машине
 // около 1 (на SMT меньше), под соседом, занявшим часть ядер, — заметно меньше.
-// Сдвиг между парами гейт видит сам; постоянную нагрузку — только так, поэтому
+// Перемены внутри пары гейт видит сам; постоянную нагрузку — только так, поэтому
 // число печатается рядом с вердиктом, но вердикт не меняет.
 func cpuParallelism() float64 {
 	return float64(cpuWork(1)) / float64(cpuWork(runtime.GOMAXPROCS(0)))
@@ -209,48 +217,42 @@ func Test_Hub_ConcurrentThroughputGate(t *testing.T) {
 		gateGoroutines, gatePerGoroutine, prefill, gateMinBursts, gateSampleFloor)
 	parallelStart := cpuParallelism()
 
-	var pairs []hubGatePair
-	best := time.Duration(1<<62 - 1)
-	clean := func() []hubGatePair {
-		var out []hubGatePair
-		for _, p := range pairs {
-			if p.drift(best) <= gateDriftLimit {
-				out = append(out, p)
-			}
-		}
-		return out
-	}
-	for len(pairs) < gateMaxPairs && len(clean()) < gateCleanPairs {
+	var pairs, ok []hubGatePair
+	for len(pairs) < gateMaxPairs && len(ok) < gateCleanPairs {
 		p := hubGatePair{first: "tree", pre: cpuCapacity()}
+		second := "records"
 		if len(pairs)%2 == 1 {
-			p.first = "records"
-			p.records = hubGateMeasure("records", gateSampleFloor, prefill)
-			p.tree = hubGateMeasure("tree", gateSampleFloor, prefill)
-		} else {
-			p.tree = hubGateMeasure("tree", gateSampleFloor, prefill)
-			p.records = hubGateMeasure("records", gateSampleFloor, prefill)
+			p.first, second = "records", "tree"
 		}
+		a := hubGateMeasure(p.first, gateSampleFloor, prefill)
+		p.mid = cpuCapacity()
+		b := hubGateMeasure(second, gateSampleFloor, prefill)
 		p.post = cpuCapacity()
-		best = min(best, p.pre, p.post)
+		p.tree, p.records = a, b
+		if p.first == "records" {
+			p.tree, p.records = b, a
+		}
 		pairs = append(pairs, p)
+		if p.spread() <= gateSpreadLimit {
+			ok = append(ok, p)
+		}
 	}
 
-	t.Logf("%4s  %-7s  %9s  %9s  %13s  %5s", "пара", "первым", "дерево", "записи", "записи/дерево", "сдвиг")
+	t.Logf("%4s  %-7s  %9s  %9s  %13s  %7s", "пара", "первым", "дерево", "записи", "записи/дерево", "разброс")
 	for i, p := range pairs {
 		mark := ""
-		if p.drift(best) > gateDriftLimit {
-			mark = "  отброшена: машина изменилась"
+		if p.spread() > gateSpreadLimit {
+			mark = "  отброшена: машина изменилась внутри пары"
 		}
-		t.Logf("%4d  %-7s  %9s  %9s  %13.3f  %5.2f%s", i+1, p.first,
-			p.tree.took.Round(time.Millisecond), p.records.took.Round(time.Millisecond), p.ratio(), p.drift(best), mark)
+		t.Logf("%4d  %-7s  %9s  %9s  %13.3f  %7.2f%s", i+1, p.first,
+			p.tree.took.Round(time.Millisecond), p.records.took.Round(time.Millisecond), p.ratio(), p.spread(), mark)
 	}
 
-	ok := clean()
 	if len(ok) < gateMinClean {
-		t.Fatalf("INCONCLUSIVE: машина вокруг %d пар из %d была медленнее лучшего момента больше чем на %.0f%%, "+
+		t.Fatalf("INCONCLUSIVE: внутри %d пар из %d машина менялась больше чем на %.0f%%, "+
 			"чистых пар %d при нужных %d. Такой прогон ничего не говорит о коде ни в одну сторону — "+
 			"повторите на машине без посторонней нагрузки.",
-			len(pairs)-len(ok), len(pairs), (gateDriftLimit-1)*100, len(ok), gateMinClean)
+			len(pairs)-len(ok), len(pairs), (gateSpreadLimit-1)*100, len(ok), gateMinClean)
 	}
 	ratios := make([]float64, 0, len(ok))
 	var tree, records hubGateSample

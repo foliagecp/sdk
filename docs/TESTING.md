@@ -327,11 +327,16 @@ least 200 ms, with filling and garbage collection outside the timing. A sample
 adds bursts until it reaches 200 ms rather than running a count calibrated on
 the warm-up, which is slower than the measured bursts, so the two modes of a
 pair may run different numbers of bursts and are compared per write. Before
-and after each pair it times the same hashing work on every P. A pair taken
-while the machine was more than 15 % slower than its best moment in the run is
-dropped; the verdict is the median records/tree ratio of the remaining pairs.
-Fewer than 8 clean pairs fail the run as `INCONCLUSIVE`, which says nothing
-about the code either way. Sustained load is not a drift: under it the pairs
+the pair, between its two samples and after it, the gate times the same
+hashing work on every P. A pair whose slowest of these three moments is more
+than 15 % slower than its fastest is dropped: its two samples did not run on
+the same machine. The verdict is the median records/tree ratio of the
+remaining pairs. Fewer than 8 clean pairs fail the run as `INCONCLUSIVE`,
+which says nothing about the code either way. A pair taken on a uniformly
+slower machine is kept, since the ratio cancels absolute speed; the gate first
+compared every pair against the run's fastest moment instead, which dropped
+such pairs too and on a VM sharing its host left almost none. Sustained load
+is therefore not a reason to drop a pair: under it the pairs
 compare fairly, and records really lose more than the tree, because a bucket
 write holds its slot lock through decode and encode and a split holds the
 directory lock. The log prints how much of the nominal parallelism the machine
@@ -352,7 +357,16 @@ with a sibling spinning on 2 cores (`steady`) and with that sibling spinning
 | check | idle | steady | flap |
 |---|---|---|---|
 | old, `-race`, 20 runs | 0 FAIL, median 1.01 | 2 FAIL, 1.12 | 6 FAIL, 0.91 |
-| gate, 10 runs | 10 PASS, median 1.09 | median 1.27: 5 FAIL, 2 INCONCLUSIVE | 10 PASS, 1.06 |
+| gate as first released, 10 runs | 10 PASS, median 1.09 | median 1.27: 5 FAIL, 2 INCONCLUSIVE | 10 PASS, 1.06 |
+| same, samples of at least 200 ms, 5 runs | 5 PASS, 1.11; 15 clean pairs | 1.24: 1 FAIL, 1 INCONCLUSIVE; 13.2 | 5 PASS, 1.09; 11.4 |
+| gate, pairs judged within themselves, 5 runs | 5 PASS, 1.10; 15 clean pairs | 1.29: 5 FAIL; 15 | 5 PASS, 1.13; 15 |
+
+Judged within themselves, pairs reach 15 clean in every run of every profile.
+Under the steady sibling the machine gave 42–51 % of its nominal parallelism
+and the verdict is a consistent FAIL at a median of 1.29 — what records lose
+under sustained contention, which dropping every pair slower than the run's
+fastest moment had partly hidden. Under flap, pairs taken entirely while the
+sibling ran count too, which raises the median from 1.09 to 1.13.
 
 Run alternately under one load, v0.5.6 and v0.5.8 failed the old check 3 and
 2 times out of 20: the hub write path did not change between them. Reducing
