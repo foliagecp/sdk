@@ -19,6 +19,7 @@ import (
 
 	"github.com/foliagecp/easyjson"
 
+	customNatsKv "github.com/foliagecp/sdk/embedded/nats/kv"
 	"github.com/foliagecp/sdk/statefun/system"
 	"github.com/nats-io/nats.go"
 )
@@ -815,32 +816,23 @@ func (cs *Store) loadFromKV(ctx context.Context) error {
 	// from a version that did not remove them, or a shutdown that cut the
 	// purger off with work queued. It is not data; it is handed to the
 	// purger, which removes it by its own sequence and nothing after it.
-	w, err := cs.kv.Watch(cs.cacheConfig.kvStorePrefix + ".>")
-	if err != nil {
-		return fmt.Errorf("kv.Watch: %w", err)
+	//
+	// The purger is held for the length of the load: startup loads the bucket
+	// twice, and the second load would otherwise read while the markers the
+	// first one reported are being removed from under it. The walk is the
+	// bucket's own rather than nats.go's Watch for the same reason, from the
+	// other side: a removal by another instance must not leave the load
+	// waiting for an end that is never reported (KVWalkLatest).
+	if cs.tombstones != nil {
+		defer cs.tombstones.holdForLoad()()
 	}
-	defer func() { system.MsgOnErrorReturn(w.Stop()) }()
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case entry, ok := <-w.Updates():
-			if !ok {
-				return fmt.Errorf("kv watcher channel closed unexpectedly during load")
+	err := customNatsKv.KVWalkLatest(ctx, cs.js, cs.kv, cs.cacheConfig.kvStorePrefix+".>",
+		func(storeKey string, valueBytes []byte, revision uint64, deleted bool) {
+			if deleted {
+				cs.NoteKVTombstone(storeKey, revision)
+				return
 			}
-			if entry == nil {
-				// Publish the boundary only after the entire snapshot has loaded.
-				// No handlers run until recovery completes, so it also covers
-				// keys missing from this snapshot, including deleted vertices.
-				cs.recoveryFloor.Store(max(cs.recoveryFloor.Load(), system.GetCurrentTimeNs()))
-				return nil
-			}
-			if op := entry.Operation(); op == nats.KeyValueDelete || op == nats.KeyValuePurge {
-				cs.NoteKVTombstone(entry.Key(), entry.Revision())
-				continue
-			}
-			key := cs.fromStoreKey(entry.Key())
-			valueBytes := entry.Value()
+			key := cs.fromStoreKey(storeKey)
 			// A trusted snapshot must not be rejected as an old user write,
 			// even if the wall clock moved back since the previous recovery.
 			now := max(system.GetCurrentTimeNs(), cs.recoveryFloor.Load())
@@ -865,12 +857,19 @@ func (cs *Store) loadFromKV(ctx context.Context) error {
 			if looksLikeJSONObject(valueBytes) {
 				if jv, ok := easyjson.JSONFromBytes(valueBytes); ok && jv.IsObject() {
 					cs.SetValueJSON(key, &jv, false, now)
-					continue
+					return
 				}
 			}
 			cs.SetValue(key, valueBytes, false, now)
-		}
+		})
+	if err != nil {
+		return fmt.Errorf("load from KV: %w", err)
 	}
+	// Publish the boundary only after the entire snapshot has loaded.
+	// No handlers run until recovery completes, so it also covers
+	// keys missing from this snapshot, including deleted vertices.
+	cs.recoveryFloor.Store(max(cs.recoveryFloor.Load(), system.GetCurrentTimeNs()))
+	return nil
 }
 
 // AcceptsOperationTime reports whether a mutation belongs to the current

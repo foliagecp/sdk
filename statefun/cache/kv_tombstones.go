@@ -79,6 +79,14 @@ type tombstonePurger struct {
 	// clean bucket would see zero while the requests are still out.
 	inFlight atomic.Int64
 
+	// loading is held for writing by a load of the bucket and for reading by
+	// every removal request, so no marker leaves the stream while a load is
+	// reading it. A message removed ahead of the load's consumer is counted as
+	// pending and never delivered, and the broker serves removals and a
+	// last-per-subject consumer of a large stream together badly: requests
+	// wait for the consumer to go.
+	loading sync.RWMutex
+
 	purged  atomic.Int64
 	dropped atomic.Int64
 
@@ -89,6 +97,13 @@ type tombstonePurger struct {
 
 func newTombstonePurger(js nats.JetStreamContext, kv nats.KeyValue, id string) *tombstonePurger {
 	return &tombstonePurger{js: js, kv: kv, id: id, wake: make(chan struct{}, 1)}
+}
+
+// holdForLoad stops removal requests until the returned release is called. It
+// waits for the requests already out.
+func (p *tombstonePurger) holdForLoad() (release func()) {
+	p.loading.Lock()
+	return p.loading.Unlock
 }
 
 // note queues the marker at seq under key for removal. Never blocks: the
@@ -183,7 +198,10 @@ func (p *tombstonePurger) purge(ctx context.Context, batch []kvTombstone) []kvTo
 					mu.Unlock()
 					continue
 				}
-				if err := customNatsKv.KVPurgeTombstone(p.js, p.kv, t.key, t.seq); err != nil {
+				p.loading.RLock()
+				err := customNatsKv.KVPurgeTombstone(p.js, p.kv, t.key, t.seq)
+				p.loading.RUnlock()
+				if err != nil {
 					t.attempts++
 					if t.attempts < tombstonePurgeAttempts {
 						mu.Lock()

@@ -339,3 +339,39 @@ func Test_Purger_RemovesWhatItIsTold(t *testing.T) {
 	require.Empty(t, deleteMarkers(t, kvs, KVStorePrefix))
 	require.EqualValues(t, n/2, streamMsgs(t, js, kvs), "the live keys are all still there")
 }
+
+// Test_Purger_SendsNothingWhileALoadHoldsIt — a load of the bucket holds the
+// purger: markers reported meanwhile stay in the stream until the load is done,
+// and are removed after it.
+func Test_Purger_SendsNothingWhileALoadHoldsIt(t *testing.T) {
+	js, kvs := newKVForTest(t, "held")
+	const n = 100
+	seqs := map[string]uint64{}
+	for i := 0; i < n; i++ {
+		k := fmt.Sprintf("%s.dom/h-%03d", KVStorePrefix, i)
+		_, err := kvs.Put(k, []byte("v"))
+		require.NoError(t, err)
+		seqs[k] = markerSeq(t, js, kvs, k)
+	}
+
+	p := newTombstonePurger(js, kvs, "held")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.run(ctx)
+
+	release := p.holdForLoad()
+	for k, s := range seqs {
+		p.note(k, s)
+	}
+	time.Sleep(500 * time.Millisecond)
+	require.EqualValues(t, n, streamMsgs(t, js, kvs), "no marker may leave the stream while a load holds the purger")
+	require.EqualValues(t, 0, p.purged.Load())
+
+	release()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) && p.pending() > 0 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	require.Equal(t, 0, p.pending())
+	require.EqualValues(t, n, p.purged.Load(), "and all of them leave once it is released")
+}

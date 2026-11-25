@@ -581,22 +581,19 @@ func (dm *Domain) publishStartupSnapshot(ctx context.Context) error {
 	watchCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	watcher, err := dm.kv.Watch(pattern, nats.IgnoreDeletes(), nats.Context(watchCtx))
-	if err != nil {
-		return fmt.Errorf("startup snapshot watch: %w", err)
-	}
-	defer watcher.Stop()
-
 	var ops []WALOp
-	for entry := range watcher.Updates() {
-		if entry == nil {
-			break // nil = all historical entries delivered
+	err := kv.KVWalkLatest(watchCtx, dm.js, dm.kv, pattern, func(key string, value []byte, _ uint64, deleted bool) {
+		if deleted {
+			return
 		}
 		ops = append(ops, WALOp{
 			OpType: cache.OpTypePUT,
-			Key:    entry.Key(),
-			Value:  entry.Value(),
+			Key:    key,
+			Value:  value,
 		})
+	})
+	if err != nil {
+		return fmt.Errorf("startup snapshot walk: %w", err)
 	}
 
 	if len(ops) == 0 {
