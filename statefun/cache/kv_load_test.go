@@ -205,6 +205,32 @@ func Test_KVLoad_RecordsAnswerAsTree(t *testing.T) {
 	}
 }
 
+// settleHeap collects until the heap has stopped shrinking. What a finished
+// part of a test leaves behind goes in steps — goroutines end, finalizers run,
+// what they held is freed — and a base taken in the middle of that makes
+// everything measured against it look smaller than it is.
+func settleHeap() {
+	const (
+		quiet  = 1 << 20 // a pass that frees less than this freed nothing
+		steady = 3       // passes in a row that must free nothing
+	)
+	var ms runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&ms)
+	prev, calm := ms.HeapAlloc, 0
+	for pass := 0; pass < 100 && calm < steady; pass++ {
+		time.Sleep(50 * time.Millisecond)
+		runtime.GC()
+		runtime.ReadMemStats(&ms)
+		if ms.HeapAlloc+quiet > prev {
+			calm++
+		} else {
+			calm = 0
+		}
+		prev = ms.HeapAlloc
+	}
+}
+
 // peakDuringLoad measures the maximum heap in use while a load runs.
 func peakDuringLoad(load func()) (peakMB, finalMB, churnMB float64, gcs uint32) {
 	runtime.GC()
@@ -258,25 +284,43 @@ func Test_KVLoad_PeakMemory(t *testing.T) {
 	if testing.Short() {
 		t.Skip("long: starts NATS and loads tens of thousands of keys")
 	}
-	js, kvs := newKVForTest(t, "peak")
 	entries, keys := kvGraph(15000, 30000)
-	fillKV(t, kvs, entries)
 	t.Logf("keys in KV: %d", len(keys))
 
 	// --- part 1: does everything get through a real load
-	for _, mode := range []string{"tree", "records"} {
-		restore := SetCacheModeForTest(mode)
-		cs, cancel := loadStore(t, js, kvs, "peak_"+mode)
-		missing := 0
-		for _, k := range keys {
-			if !cs.Exists(k) {
-				missing++
+	//
+	// A subtest, so that its broker is shut down before anything is measured:
+	// part 2 measures the heap of the whole process, and what part 1 leaves
+	// there must be gone by then, not on its way out. A cancelled store is
+	// released a moment after its cancellation and the broker drops what it
+	// cached of the bucket two seconds after the load; either one leaving in
+	// the middle of a measurement is subtracted from what the measured store
+	// seems to hold.
+	var loaded []<-chan struct{}
+	require.True(t, t.Run("load", func(t *testing.T) {
+		js, kvs := newKVForTest(t, "peak")
+		fillKV(t, kvs, entries)
+		for _, mode := range []string{"tree", "records"} {
+			restore := SetCacheModeForTest(mode)
+			cs, cancel := loadStore(t, js, kvs, "peak_"+mode)
+			missing := 0
+			for _, k := range keys {
+				if !cs.Exists(k) {
+					missing++
+				}
 			}
+			require.Zerof(t, missing, "mode %s lost %d of %d keys in the load", mode, missing, len(keys))
+			gone := make(chan struct{})
+			runtime.SetFinalizer(cs, func(*Store) { close(gone) })
+			loaded = append(loaded, gone)
+			cancel()
+			restore()
 		}
-		require.Zerof(t, missing, "mode %s lost %d of %d keys in the load", mode, missing, len(keys))
-		cancel()
-		restore()
+	}))
+	for _, gone := range loaded {
+		requireReleased(t, gone)
 	}
+	settleHeap()
 
 	// --- part 2: what applying the same stream costs
 	apply := func(cs *Store) {
