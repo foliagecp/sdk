@@ -336,6 +336,18 @@ func Test_KVLoad_PeakMemory(t *testing.T) {
 	//
 	// This is the property under test: the load peak is set by the records,
 	// not by whether the graph would fit as a tree.
+	//
+	// Not under the race detector. There sync.Pool drops one Put in four, and
+	// each drop costs the key check a new regexp backtracker with its 32 KB
+	// vector: about 8 KB of garbage per key written, 1 GB over this graph and
+	// the same in both modes (a race run allocated 1243 MB as a tree and 1246
+	// as records). The collector's cycles then follow that garbage, and the
+	// peak says nothing about either representation. What the detector is
+	// here for — the load itself and the live heap above — has already run.
+	if raceEnabled {
+		t.Log("race detector: the peak comparison is skipped, its garbage is not the cache's")
+		return
+	}
 	prev := debug.SetGCPercent(50)
 	defer debug.SetGCPercent(prev)
 
