@@ -1316,16 +1316,31 @@ func NewCacheStore(ctx context.Context, cacheConfig *Config, js nats.JetStreamCo
 			}
 
 			tg := cs.getTransactionGenerator()
-			if tg == nil {
-				if time.Since(lastWALNotReadyLogAt) >= skipLogInterval {
-					le.Tracef(ctx, "WAL is not ready, skip this iteration")
-					lastWALNotReadyLogAt = time.Now()
+			if tg == nil || !cs.walWriteEnabled.Load() {
+				// A store cancelled while it may publish nothing has no flush
+				// to perform, so the writer ends here. Without this it slept
+				// in this branch for the rest of the process and kept the
+				// whole store reachable: a store with no generator, or one of
+				// a passive instance, was never released after its
+				// cancellation.
+				//
+				// Nothing is published on the way out: a passive instance
+				// must not write to the WAL another instance owns. And Synced
+				// stays open, as it did while the writer slept here — it
+				// means "everything was flushed", which this exit cannot
+				// claim.
+				if cs.ctx.Err() != nil {
+					if cs.HasPendingWrites() {
+						le.Warnf(ctx, "cache writer stopped with WAL writes off; pending operations were not published")
+					}
+					return
 				}
-				time.Sleep(100 * time.Millisecond)
-				continue
-			}
-			if !cs.walWriteEnabled.Load() {
-				if time.Since(lastWALDisabledLogAt) >= skipLogInterval {
+				if tg == nil {
+					if time.Since(lastWALNotReadyLogAt) >= skipLogInterval {
+						le.Tracef(ctx, "WAL is not ready, skip this iteration")
+						lastWALNotReadyLogAt = time.Now()
+					}
+				} else if time.Since(lastWALDisabledLogAt) >= skipLogInterval {
 					le.Tracef(ctx, "WAL writes are disabled, skip this iteration")
 					lastWALDisabledLogAt = time.Now()
 				}
