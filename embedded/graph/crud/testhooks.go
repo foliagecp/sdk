@@ -27,6 +27,14 @@ func TypeEdgeCacheSizeForTest() int {
 	return syncMapLenForTest(&type2TypeObjectLinkTypeCache)
 }
 
+// CachedObjectsLinkTypeForTest returns the objects-link type the process holds
+// for the fromType -> toType types link, valid or not, and "" when it holds
+// none.
+func CachedObjectsLinkTypeForTest(fromType, toType string) string {
+	entry, _ := cacheLoadTypeEdge(fromType, toType)
+	return entry.linkType
+}
+
 // TypeObjectTriggersCacheSizeForTest returns the number of entries in the
 // package-global typeObjectTriggersCache.
 func TypeObjectTriggersCacheSizeForTest() int {
@@ -58,7 +66,7 @@ func syncMapLenForTest(m *sync.Map) int {
 // comparable baseline.
 func ResetPackageCachesForTest() {
 	clearSyncMapForTest(&objectTypeCache)
-	clearSyncMapForTest(&type2TypeObjectLinkTypeCache)
+	cachePurgeTypeEdges()
 	clearSyncMapForTest(&typeObjectTriggersCache)
 	clearSyncMapForTest(&typesLinkTriggersCache)
 	clearSyncMapForTest(&typeHRNFieldCache)

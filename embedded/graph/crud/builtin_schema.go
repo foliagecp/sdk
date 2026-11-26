@@ -200,9 +200,9 @@ func EnsureBuiltInSchema(request sfPlugins.SFRequestFunc, domain sfPlugins.Domai
 // snapshot restore) a stale entry makes CRUD reason about a graph that no
 // longer exists — e.g. resolving an object's type to one the import replaced.
 func PurgeSchemaCaches() {
+	cachePurgeTypeEdges()
 	for _, m := range []*sync.Map{
 		&objectTypeCache,
-		&type2TypeObjectLinkTypeCache,
 		&typeObjectTriggersCache,
 		&typesLinkTriggersCache,
 		&typeHRNFieldCache,

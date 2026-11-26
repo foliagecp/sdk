@@ -984,9 +984,9 @@ func CreateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	operationKeysMutexUnlock(ctx)
 
 	if om.GetStatus() == sfMediators.SYNC_OP_STATUS_OK {
-		cacheSetTypeEdge(selfID, toType, objectLinkType)
 		executeMetaTypesLinkTriggers(ctx, selfID, toType, objectLinkType, nil, readLinkBodyFromCache(ctx, selfID, toType), 0)
 	}
+	cacheDeleteTypeEdge(selfID, toType)
 	// A new TypesLink may carry a triggers section in its body —
 	// invalidate any negative entry produced by a prior failed lookup.
 	cacheInvalidateLinkTriggers(selfID, toType)
@@ -1037,9 +1037,8 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 
 		objectLinkType := ""
 		// selfID, not the raw ctx.Self.ID: a salted invocation (`id===hash`)
-		// would otherwise make the helper cacheSetTypeEdge the result under
-		// the SALTED fromType — a permanent entry no clean-name purge path
-		// (cachePurgeTypeEdgesForType / cacheDeleteTypeEdge) ever removes.
+		// names no vertex of the store, and the helper reads the types link,
+		// and files what it read, under the name it is given.
 		if olt, e := getObjectsLinkTypeFromTypesLink(ctx, selfID, toType); e == nil {
 			objectLinkType = olt
 		} else {
@@ -1062,13 +1061,10 @@ func UpdateTypesLink(_ sfPlugins.StatefunExecutor, ctx *sfPlugins.StatefunContex
 	metaNew := readLinkBodyFromCache(ctx, selfID, toType) // snapshot after update, still under lock
 	operationKeysMutexUnlock(ctx)
 
-	if om.GetStatus() == sfMediators.SYNC_OP_STATUS_OK {
-		if ctx.Payload.PathExists("body.type") {
-			if newLT, ok := ctx.Payload.GetByPath("body.type").AsString(); ok && newLT != "" {
-				cacheSetTypeEdge(selfID, toType, newLT)
-			}
-		}
-	}
+	// Whatever the update did to the declared objects-link type, nothing read
+	// before it may answer after it. The store's update time says the same;
+	// this covers a write that left the time as it was.
+	cacheDeleteTypeEdge(selfID, toType)
 	// Body may carry a triggers section change — drop cached entry so
 	// the next dispatch reloads.
 	cacheInvalidateLinkTriggers(selfID, toType)

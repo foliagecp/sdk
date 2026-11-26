@@ -194,9 +194,14 @@ func readVertexBodyFromCache(ctx *sfPlugins.StatefunContextProcessor, vertexID s
 // cache (fromVertexID domain-prefixed; linkName as stored, i.e. domain stripped),
 // or nil if absent. Used to snapshot TypesLink bodies for meta triggers without
 // the NATS link.read that getLinkBody performs.
+// typesLinkBodyKey is the store key of the body of the link fromVertexID keeps
+// under linkName.
+func typesLinkBodyKey(ctx *sfPlugins.StatefunContextProcessor, fromVertexID, linkName string) string {
+	return fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, fromVertexID, ctx.Domain.GetObjectIDWithoutDomain(linkName))
+}
+
 func readLinkBodyFromCache(ctx *sfPlugins.StatefunContextProcessor, fromVertexID, linkName string) *easyjson.JSON {
-	key := fmt.Sprintf(OutLinkBodyKeyPrefPattern+KeySuff1Pattern, fromVertexID, ctx.Domain.GetObjectIDWithoutDomain(linkName))
-	if b, err := ctx.Domain.Cache().GetValueJSON(key); err == nil {
+	if b, err := ctx.Domain.Cache().GetValueJSON(typesLinkBodyKey(ctx, fromVertexID, linkName)); err == nil {
 		return b
 	}
 	return nil

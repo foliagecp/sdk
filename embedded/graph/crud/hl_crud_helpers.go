@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/foliagecp/easyjson"
 	"github.com/foliagecp/sdk/statefun"
@@ -37,8 +38,24 @@ const (
 var (
 	// key: objectID -> typeID
 	objectTypeCache sync.Map
-	// key: fromType -> *sync.Map(toType -> objectLinkType)
+	// key: fromType -> *sync.Map(toType -> typeEdgeEntry)
+	//
+	// The objects-link type a types link declares, kept so that an object link
+	// operation does not parse the types link body to learn one field of it.
+	//
+	// An entry is never trusted on its own word. For a types link of this
+	// domain it carries the store's update time of the body it was read from,
+	// and is used only while the store still reports that time: whoever
+	// changes the body, and however, changes the time. For a types link of
+	// another domain, whose changes this process is not told about, it is
+	// used for typeEdgeTTL from the moment its read began.
 	type2TypeObjectLinkTypeCache sync.Map
+	// typeEdgeFill serializes the two things that must not interleave: a
+	// reader storing what it read, and an invalidation. typeEdgeGeneration
+	// counts the invalidations, so a read that began before one cannot store
+	// after it.
+	typeEdgeFill       sync.Mutex
+	typeEdgeGeneration atomic.Uint64
 
 	// Trigger caches for the executeTriggersFromLLOpStack hot path.
 	// Without these, every op in the LL op-stack costs a full
@@ -151,19 +168,60 @@ func cacheGetObjectType(objectID string) (string, bool) {
 func cacheSetObjectType(objectID, typeID string) { objectTypeCache.Store(objectID, typeID) }
 func cacheDeleteObjectType(objectID string)      { objectTypeCache.Delete(objectID) }
 
-func cacheGetTypeEdge(fromType, toType string) (string, bool) {
+// typeEdgeTTL is how long this process may keep resolving a types link of
+// another domain to the objects-link type it read: a change made there is seen
+// here no later than this after it.
+var typeEdgeTTL = 5 * time.Second
+
+// typeEdgeEntry is an objects-link type and what it is valid against: the
+// store's update time of the types link body (this domain's types links), or
+// the moment the read that produced it began (another domain's).
+type typeEdgeEntry struct {
+	linkType string
+	version  int64
+	readAt   time.Time
+}
+
+func cacheLoadTypeEdge(fromType, toType string) (typeEdgeEntry, bool) {
 	if v, ok := type2TypeObjectLinkTypeCache.Load(fromType); ok {
 		if m, ok := v.(*sync.Map); ok {
-			if lt, ok := m.Load(toType); ok {
-				if s, ok := lt.(string); ok && s != "" {
-					return s, true
+			if e, ok := m.Load(toType); ok {
+				if entry, ok := e.(typeEdgeEntry); ok && entry.linkType != "" {
+					return entry, true
 				}
 			}
 		}
 	}
+	return typeEdgeEntry{}, false
+}
+
+// cacheGetTypeEdge answers for a types link of another domain while the entry
+// is younger than typeEdgeTTL.
+func cacheGetTypeEdge(fromType, toType string) (string, bool) {
+	if entry, ok := cacheLoadTypeEdge(fromType, toType); ok && time.Since(entry.readAt) < typeEdgeTTL {
+		return entry.linkType, true
+	}
 	return "", false
 }
-func cacheSetTypeEdge(fromType, toType, linkType string) {
+
+// cacheGetLocalTypeEdge answers for a types link of this domain while the
+// store still reports the update time the entry was read at.
+func cacheGetLocalTypeEdge(fromType, toType string, version int64) (string, bool) {
+	if entry, ok := cacheLoadTypeEdge(fromType, toType); ok && entry.version == version {
+		return entry.linkType, true
+	}
+	return "", false
+}
+
+// cacheFillTypeEdge stores what a read that began in generation returned. A
+// read overtaken by an invalidation stores nothing: what it read may be what
+// the invalidation was for.
+func cacheFillTypeEdge(fromType, toType string, entry typeEdgeEntry, generation uint64) {
+	typeEdgeFill.Lock()
+	defer typeEdgeFill.Unlock()
+	if typeEdgeGeneration.Load() != generation {
+		return
+	}
 	var m *sync.Map
 	if v, ok := type2TypeObjectLinkTypeCache.Load(fromType); ok {
 		m, _ = v.(*sync.Map)
@@ -172,16 +230,31 @@ func cacheSetTypeEdge(fromType, toType, linkType string) {
 		m = &sync.Map{}
 		type2TypeObjectLinkTypeCache.Store(fromType, m)
 	}
-	m.Store(toType, linkType)
+	m.Store(toType, entry)
 }
+
+// cacheDeleteTypeEdge drops one types link, and the fromType with its last.
 func cacheDeleteTypeEdge(fromType, toType string) {
+	typeEdgeFill.Lock()
+	defer typeEdgeFill.Unlock()
+	typeEdgeGeneration.Add(1)
 	if v, ok := type2TypeObjectLinkTypeCache.Load(fromType); ok {
 		if m, ok := v.(*sync.Map); ok {
 			m.Delete(toType)
+			empty := true
+			m.Range(func(_, _ any) bool { empty = false; return false })
+			if empty {
+				type2TypeObjectLinkTypeCache.Delete(fromType)
+			}
 		}
 	}
 }
+
+// cachePurgeTypeEdgesForType drops every types link from or to the type.
 func cachePurgeTypeEdgesForType(typeID string) {
+	typeEdgeFill.Lock()
+	defer typeEdgeFill.Unlock()
+	typeEdgeGeneration.Add(1)
 	// outcome
 	type2TypeObjectLinkTypeCache.Delete(typeID)
 	// income
@@ -189,6 +262,18 @@ func cachePurgeTypeEdgesForType(typeID string) {
 		if m, ok := v.(*sync.Map); ok {
 			m.Delete(typeID)
 		}
+		return true
+	})
+}
+
+// cachePurgeTypeEdges drops every cached types link and turns away the reads
+// still in flight.
+func cachePurgeTypeEdges() {
+	typeEdgeFill.Lock()
+	defer typeEdgeFill.Unlock()
+	typeEdgeGeneration.Add(1)
+	type2TypeObjectLinkTypeCache.Range(func(k, _ any) bool {
+		type2TypeObjectLinkTypeCache.Delete(k)
 		return true
 	})
 }
@@ -654,11 +739,56 @@ func resolveLinkBetweenTwoObjectsByTypePrefix(ctx *sfPlugins.StatefunContextProc
 	return "", "", false
 }
 
+// getObjectsLinkTypeFromTypesLink is the type the objects of fromType link to
+// the objects of toType with, as the fromType -> toType types link declares it.
+//
+// For a types link of this domain the answer is always the one in the domain's
+// store: the cached type is used only while the store reports the same update
+// time for the body it came from, so whatever UpdateTypesLink wrote is what
+// the next call returns, in this process and in the one that takes over from
+// it. A types link of another domain may be up to typeEdgeTTL behind.
 func getObjectsLinkTypeFromTypesLink(ctx *sfPlugins.StatefunContextProcessor, fromType, toType string) (string, error) {
+	if ctx.Domain.GetDomainFromObjectID(fromType) != ctx.Domain.Name() {
+		return cachedObjectsLinkType(fromType, toType, func() (string, error) {
+			return readObjectsLinkTypeFromTypesLink(ctx, fromType, toType)
+		})
+	}
+
+	// The time first, then the body: the body is then at least as new as the
+	// time it is filed under, and a change in between only costs one more read.
+	generation := typeEdgeGeneration.Load()
+	version := ctx.Domain.Cache().GetValueUpdateTime(typesLinkBodyKey(ctx, fromType, toType))
+	if version >= 0 {
+		if lt, ok := cacheGetLocalTypeEdge(fromType, toType, version); ok {
+			return lt, nil
+		}
+		if body := readLinkBodyFromCache(ctx, fromType, toType); body != nil {
+			if linkType, ok := body.GetByPath("type").AsString(); ok {
+				cacheFillTypeEdge(fromType, toType, typeEdgeEntry{linkType: linkType, version: version}, generation)
+				return linkType, nil
+			}
+		}
+	}
+	// Not in the store as a types link with a type: let link.read say why.
+	return readObjectsLinkTypeFromTypesLink(ctx, fromType, toType)
+}
+
+// cachedObjectsLinkType answers from the cache while the entry is fresh and
+// otherwise reads, storing the result for the next typeEdgeTTL.
+func cachedObjectsLinkType(fromType, toType string, read func() (string, error)) (string, error) {
 	if lt, ok := cacheGetTypeEdge(fromType, toType); ok {
 		return lt, nil
 	}
+	readAt, generation := time.Now(), typeEdgeGeneration.Load()
+	linkType, err := read()
+	if err != nil {
+		return "", err
+	}
+	cacheFillTypeEdge(fromType, toType, typeEdgeEntry{linkType: linkType, readAt: readAt}, generation)
+	return linkType, nil
+}
 
+func readObjectsLinkTypeFromTypesLink(ctx *sfPlugins.StatefunContextProcessor, fromType, toType string) (string, error) {
 	linkBody, err := getLinkBody(ctx, fromType, toType)
 	if err != nil {
 		return "", err
@@ -668,8 +798,6 @@ func getObjectsLinkTypeFromTypesLink(ctx *sfPlugins.StatefunContextProcessor, fr
 	if !ok {
 		return "", fmt.Errorf("type of a link was not defined in link type")
 	}
-
-	cacheSetTypeEdge(fromType, toType, linkType)
 	return linkType, nil
 }
 

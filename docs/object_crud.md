@@ -340,13 +340,24 @@ Replies include a `payload` object containing:
   "body": { /* optional */ },
   "tags": ["<string>"],
   "upsert": <bool>,
+  "object_type": "<string>",   // with upsert: the objects-link type to declare
   "replace": <bool>
 }
 ```
 
 * Maps to `functions.graph.api.link.update.<type_id>` with proper fields.
+* With `upsert`, `object_type` replaces the objects-link type the types link
+  declares; without it the declared type is kept.
 
 **Response:** Pass-through update result.
+
+**When a changed `object_type` takes effect.** Object links between the two
+types are created and looked up under the type the types link declares at that
+moment. In the domain that holds the types (the hub domain) the type a runtime
+holds is checked against the graph on every operation, so the change applies
+to the very next one. A runtime of another domain keeps what it read for up to
+5 seconds and resolves the new type no later than that after the change. Object links that
+already exist keep the type they were created with.
 
 ---
 
